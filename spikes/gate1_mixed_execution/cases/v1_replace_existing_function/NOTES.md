@@ -22,14 +22,22 @@
 `host/main.dart` 的 `_tryActivatePatch` 是占位。真正要探索的是**如何把 `f` 的 Function 入口
 切到解释器里的 `fPatched`**。候选路径（Gate 1 要逐一试）：
 
-1. **VM 内部 API / 钩子**：Dart VM 里 `Function` 对象持有 entry point（`interpreter.cc` +
-   `runtime/vm/object.h` 的 `Function::SetInstructions` / entry-point 字段）。在
-   `--dart-dynamic-modules` 运行时里，探索能否在启动期把 `f` 的 entry 指向解释器 stub。
-   **大概率需要给 VM 打一个实验性补丁**——这正是 spike 的意义所在。
-2. **dispatch table 重定向**：若 `f` 通过虚调用/接口调用进入（V2 会专门测），改 dispatch table
-   项即可，无需碰机器码。静态直调（本用例 V1）最难，因为调用点是 pc-relative 硬编码。
-3. **观察官方 example 的加载路径**：`internal.loadDynamicModule` 内部如何把字节码函数挂进
-   isolate，能否复用同一挂载点把既有 `CanonicalName` 的实体指向新字节码。
+1. **VM 内部 entry-point 字段（首选切入点）**：已核对源码——
+   - `Function`/`Code` 持有 `entry_point`（`runtime/vm/object.h:2326`
+     `DEFINE_NON_POINTER_FIELD_ACCESSORS(uword, entry_point)`）。**间接调用**（虚/接口/闭包）
+     经该字段跳转。
+   - 解释器调用接口：`Interpreter::Call(const Function&, argdesc, args, thread)`
+     （`runtime/vm/interpreter.h`，`#if defined(DART_DYNAMIC_MODULES)` 下）。
+   - VM 已有 `is_declared_in_bytecode()` 与一批 `*_bytecode` 已知对象（object.h:540~569），
+     说明"函数带字节码、经解释器执行"这条路径 VM 本身支持。
+   - **实验手法**：启动期把 `f` 的 `entry_point`（及缓存的 Code）改指向"进入解释器执行 f' 字节码"
+     的 stub。**大概率需给 VM 打实验补丁**——这正是 spike 的意义。
+2. **dispatch table 重定向**：若 `f` 经虚调用/接口调用进入（V2 专测），改 dispatch table 项即可，
+   无需碰机器码。**静态直调（本用例 V1）最难**：`g` 对 `f` 的调用是 pc-relative 硬编码到 `f` 的
+   机器码，**不经 entry_point 字段**——所以仅改 entry_point 无法重定向 V1 的直调，必须让 `g` 也转解释
+   （传递闭包向上蔓延的第一手证据）。**V1 要实测的正是这一点。**
+3. **观察官方 example 的加载路径**：`internal.loadDynamicModule` 内部如何把字节码函数挂进 isolate，
+   能否复用同一挂载点，把既有 `CanonicalName` 实体指向新字节码。
 
 ## 三种调用形态（V2，产出"传递闭包边界"矩阵）
 
