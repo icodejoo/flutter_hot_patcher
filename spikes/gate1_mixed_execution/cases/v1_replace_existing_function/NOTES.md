@@ -68,3 +68,13 @@ dart2bytecode）。宿主 AOT 编译（含 `f`/`g`），补丁 `f_patch.dart` �
 - [ ] V1 静态直调替换可观测生效
 - [ ] V2 三形态矩阵 / V3 异常 / V4 GC / V5 压测
 - [ ] iOS(arm64) 真机复验
+
+## 工作约定（硬性）
+
+遇到任何机制/接口/行为不确定，**先查源码与官方文档，基于证据推进，不猜**：
+- dart-lang/sdk（`runtime/vm/*`、`pkg/dynamic_modules`、`pkg/dart2bytecode`、`pkg/vm`、`runtime/docs/*`）
+- flutter/flutter（engine 集成、`shell/*`）
+- pub.dev（包 API 与文档）
+- GitHub issue/PR/commit（设计意图、变更历史）
+
+每个关键判断在 NOTES/结论里标注来源（文件:行 或 URL），便于复核。
