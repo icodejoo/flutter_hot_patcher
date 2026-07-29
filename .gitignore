@@ -1,0 +1,17 @@
+# Dart / Flutter
+.dart_tool/
+.packages
+build/
+*.dill
+*.snapshot
+*.bytecode
+
+# Spike vendored sources (拉取的外部源码，不入库)
+spikes/**/vendor/
+
+# Spike build/run artifacts
+spikes/**/results/*.local
+
+# OS
+.DS_Store
+Thumbs.db
