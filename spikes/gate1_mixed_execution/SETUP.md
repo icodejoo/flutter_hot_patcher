@@ -122,6 +122,12 @@ cd ~/dart/sdk
 - **首次 `fetch dart` 很大很慢**：耐心等；断网续传用 `gclient sync`。
 - **WSL2 文件系统**：源码与产物放 Linux 原生盘（`~`），别放 `/mnt/c`。
 - **版本漂移**：`dart2bytecode`/解释器是实验特性，不同 SDK commit 行为可能变；固定一个 commit 做整个 Gate。
+- **Windows PATH 泄漏 → depot_tools SSL 失败**：WSL 默认把 Windows PATH（含 `/mnt/c/.../curl.exe`）注入 Linux 环境，
+  depot_tools 引导 cipd/vpython 时会挑到 Windows curl，报 `SSL certificate problem: unable to get local issuer certificate`。
+  解法（已内建进 `wsl_a2_fetch.sh`）：用纯 Linux PATH（剔除 `/mnt/c/*`）+ 显式 `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`。
+  **不要**为此改 `/etc/wsl.conf` 后 `wsl --shutdown`——见下条。
+- **慎用 `wsl --shutdown`**：本机上执行后 `LxssManager` 服务曾卡在 `StopPending`，其 svchost 处于不可中断内核态等待，
+  连 SYSTEM 都 kill 不掉、`vmcompute` 重启也无效，只能重启 Windows 才能恢复 WSL。PATH/SSL 问题在脚本内解决即可，无需重启 WSL。
 
 ---
 
