@@ -44,3 +44,31 @@ low_pc=0x144ba8  key=.../liba.dart :: foo  (line 7)
   再比（base 与 patch 若在同目录构建则天然一致）。
 - 这是 spike 级 canonical key（源文件+名）。正式 linker 的 CanonicalName 应从 Kernel
   `.dill` 取规范的 库URI→类→成员 路径；源文件 URI 与之一一对应，spike 用它等价且够用。
+
+## P3 集成结论（已把 P0 落进 diff_linker，并实测精确度）
+
+`tools/diff_linker.py` 已加：`--base-debug/--patch-debug`（DWARF canonical map）+
+`--base-src-root/--patch-src-root`（剥掉 build 目录前缀，让同一 app 文件在两版 key 一致；
+`v6_v7_v8/run_case.sh` 把两版都编成同一相对文件名 `app.dart`）。**关键坑**：canonical key
+含绝对源路径，若两版文件名/路径不同则同一函数不对齐（byte-changed=0、闭包炸 22.9%）——
+必须归一化源根。
+
+再加一个**无损精化**：撞名 key（同 file+name 多份，来自泛型多次实例化/匿名闭包/DWARF
+未覆盖回退裸名）若两版**归一化签名多重集相同**即判等价，只有多重集不同才保守播种。
+这不是 `--optimistic` 那种"假设理想对齐"，是 sound 的（多重集相同=确实没变）。
+
+在真实规模程序（2936 函数）上，**保守模式**（不作弊）实测：
+
+| 用例 | 撞名 key | 其中已变(播种) | 闭包 | =ground truth? |
+|---|---|---|---|---|
+| v6_devirt | 287 | 0（多重集相同全清） | 3（Sq.area+useShape+main） | ✅ |
+| v7_inline | 287 | 0 | 3（callerA/callerB+main） | ✅ |
+| v8_realfix | 287 | 0 | 5（clampPct/shipping+discount/total/main） | ✅ |
+
+→ **CanonicalName(源文件+名) + 多重集精化，保守模式下把闭包精确塌缩到 ground truth**
+（对比裸名保守：v8 是 673/22.9%）。命门在 spike 层被兑现：287 个 SDK 撞名全部因"未改→
+多重集相同"被 sound 地判等价，不再污染闭包。这是 P1/P2 大样本精确度测量的对齐地基。
+
+**残留边界**：287 撞名靠"未改"侥幸清掉——若某个 SDK 泛型/闭包**真改了**且落在撞名 key 上，
+多重集会不同、只能保守把该 key 全部实例转解释（无法定位是哪一份）。正式 linker 要靠 Kernel
+CanonicalName + 实例化签名精确区分。对"改 app 自己代码"的主场景（app 函数不撞名）无影响。
