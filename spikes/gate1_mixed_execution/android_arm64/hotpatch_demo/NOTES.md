@@ -66,6 +66,35 @@ hotpatch_demo/
 - [ ] **没有**在设备上跑过 `install.sh`/`push_patch.sh`/`restart.sh`（设备
       当时未连接）——这是设备接回来之后要做的事。
 
+## 结果（2026-07-30）：真机全流程 PASS
+
+设备重新连接后，三步 + 二次发布验证全部按预期跑通：
+
+```
+$ ./install.sh
+BEFORE: g() got: ORIGINAL
+(no patch file ... — running baseline, nothing to activate)
+
+$ ./push_patch.sh patch_v1/f_patch.dart
+==> Patch pushed.
+
+$ ./restart.sh
+BEFORE: g() got: ORIGINAL
+  loaded patch bytecode ... as a closure
+  patched call-site to target fAlt(), icache flushed
+AFTER:  g() got: PATCHED-V1-HOTFIX
+
+$ ./push_patch.sh patch_v2/f_patch.dart   # 不重装 app，只推一个新文件
+$ ./restart.sh
+AFTER:  g() got: PATCHED-V2-FOLLOWUP-FIX   # 第二次独立发布，同样生效
+```
+
+**踩坑**：`DART_SDK_SRC=... ADB=... ./push_patch.sh xxx && ./restart.sh` 这种写法
+里，`VAR=value` 前缀只对**紧跟着的那一个命令**生效，不会顺着 `&&` 传给下一条命令
+——这是 bash 本身的行为，不是这几个脚本的 bug。用 `./restart.sh` 时如果 `adb` 不在
+默认 `PATH` 上，记得单独重新导出一次 `ADB=...`，或者把 `export ADB=...` 放在
+单独一行而不是内联前缀。
+
 ## 设备接回来之后，跑这三条命令
 
 ```bash
@@ -120,4 +149,5 @@ AFTER:  g() got: PATCHED-V1-HOTFIX
 ## 状态
 
 - [x] 代码写好，编译层面干跑验证通过
-- [ ] 设备接回来后，真机跑通 install → push_patch → restart 全流程（下一步）
+- [x] **真机跑通 install → push_patch → restart 全流程**（2026-07-30）
+- [x] 验证"装一次、独立发布多次"：换一个不同的补丁，不重装 app，重启即生效
