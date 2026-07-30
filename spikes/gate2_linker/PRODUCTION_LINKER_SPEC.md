@@ -20,8 +20,8 @@ spike 工具会继续保留其价值——它的**测量 harness + ground-truth 
 
 | # | 需求 | 对应 REVIEW | 说明 |
 |---|---|---|---|
-| **R1 CanonicalName 对齐** | 从 Kernel `.dill` 取 库URI→类→成员 唯一路径对齐新旧版本函数；**实例级**（含 decl_line/column 区分同名闭包/重载） | S3、命门 | 替代源文件路径代理与无序多重集；混淆/文件移动/版本升级天然免疫（Kernel 名与 ELF 名解耦） |
-| **R2 对象池精确比对** | 解析快照对象池，逐 slot 比对两版同一 canonical slot 的常量内容 | S1 | 修"改 String/double/const 只动池、指令不变"的整类漏判；注意别做成新漏报源 |
+| **R1 CanonicalName 对齐** | 从 Kernel `.dill` 取 库URI→类→成员 唯一路径对齐新旧版本函数；**实例级**（含 decl_line/column 区分同名闭包/重载） | S3、命门 | 替代源文件路径代理与无序多重集；混淆/文件移动/版本升级天然免疫（Kernel 名与 ELF 名解耦）。**spike 级探索已证伪一条捷径**（`r2_pool_probe/NOTES.md`）：`gen_snapshot --disassemble` 的函数名仍是 `file:///...` 绝对路径，跟 DWARF 方案同源，不会白给库 URI——R1 必须走 Kernel `.dill` 二进制解析（CFE/kernel-service AST），是独立工程量 |
+| **R2 对象池精确比对** | 解析快照对象池，逐 slot 比对两版同一 canonical slot 的常量内容 | S1 | 修"改 String/double/const 只动池、指令不变"的整类漏判；注意别做成新漏报源。**spike 级探索已验证可行机制**（`r2_pool_probe/NOTES.md`）：非 product `gen_snapshot --disassemble --code_comments` 会吐出独立的 `ObjectPool len:N` 完整列表，含每个 slot 的原始内容（数值常量给 IEEE754 位模式）；实测 `const fee=0.07→0.08` 场景——调用指令逐字节不变（复现 S1 漏判)，但各自 build 自己的池列表在同一 slot 显示 1.07→1.08，解码正确。**不必逆向对象池二进制布局**，复用 VM 自带诊断输出即可 |
 | **R3 调用边完备提取** | 边提取包含：目标**身份**（并入条件1）、二级/unchecked 入口按地址区间归属、尾调 jmp、以及**间接/虚调/闭包/tear-off/池介导**调用的显式边界契约 | S2、S4、S5、B1、B2 | 静态侧对每个不可静态解析的转移点，要么建保守边、要么产出"运行时必须重定向此点"的义务清单并逐条核验 |
 | **R4 ICF/去重感知** | 从 Kernel 层做 ICF 感知对齐；被折叠函数不得丢 key；`removed`/折叠导致 key 消失时保守播种其调用方或硬失败 | S6、S7 | 修"被改函数折叠进 removed、从不播种、无告警"红线 |
 | **R5 cid/dispatch/vtable 布局稳定化** | 消费 cid/dispatch table/vtable 元数据；类声明集合变化导致 slot 平移时，即便无函数字节变也须检测并处理（SPEC §4.3 cid 稳定化） | 批判#3 | 红线：字节没变但虚调用派发错乱，当前模型完全看不见 |
@@ -40,6 +40,14 @@ spike 工具会继续保留其价值——它的**测量 harness + ground-truth 
   （疑似 strip）→告警；`removed` 非空→告警（S6）；multiset 清除撞名→告警（S3）。
 - **文档/标签**：docstring 同步多重集策略与"归一化文本非逐字节"；`--optimistic` 标注为"下界、不可
   用于生成补丁"；`--list` 的 propagated 口径修正 + 单列 ambiguous-changed 段。
+
+## 2.5 spike 级硬缺口探索（不投入正式研发、仅验证可行性，见 R1/R2 表格）
+
+`r2_pool_probe/NOTES.md`：R2（对象池比对）验证**可行**、找到具体机制（复用 VM 诊断反汇编器，
+非 product `gen_snapshot --disassemble --code_comments` 自带的 ObjectPool 文本列表）；R1
+（Kernel CanonicalName）证伪了一条设想的捷径（disassemble 输出不会白给库 URI），确认仍需
+Kernel `.dill` 解析这块独立工程。均未接入 diff_linker 或投入正式建设——遵循"iOS 门后再建"的
+既定顺序，这轮只回答"硬缺口有没有可行路径"。
 
 ## 3. 排序与投入（对"上生产"负责的路径）
 
