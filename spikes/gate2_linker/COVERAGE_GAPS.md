@@ -26,10 +26,12 @@ Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测
 3. **const 内联 / 被广泛使用的 const**：✅ 已测——改 `const K` 被内联进每个使用点、逐个作条件1
    命中，完备。**残留风险**：若 const 入对象池、改动只体现为池 slot 值，会撞 normalize 池通配
    漏报（tools/NOTES），真 linker 需精确 slot→常量映射。
-4. **混淆构建(--obfuscate) / strip release**：✅ **已测——不破坏对齐（重要正面结论）**。
-   `--save-debugging-info` 的 DWARF **保留真实名字**（崩溃符号化用途），按真名对齐即可；混淆的
-   标识符字符串在对象池里、被 normalize 通配。P1 样本混淆构建实测 closure==ground truth、
-   漏判/误报 0。前提：保留 release 的 debug 文件（标准做法）。→ 无需混淆映射表做对齐。
+4. **混淆构建(--obfuscate)**：✅ 已测（单次 P1 语料、同源同布局）——`--save-debugging-info` 的
+   DWARF **保留真实名字**，按真名对齐即可，混淆字符串在池里被通配，closure==ground truth。
+   **订正（见 REVIEW_diff_linker.md #14）**：这是单次语料结论，**跨构建**混淆名漂移会改 call-site
+   文本、可能塌陷精度，未测。**strip release ⚠ 从未真测**（见 REVIEW #9）：工具结构上需**未 strip**
+   的快照（逐函数 ELF 符号）；生产的已 strip `libapp.so` 只剩 ~4 blob 符号 → 逐函数差分失效。
+   （本条曾误记为"strip release ✅ 已测"，实为过度声明，已订正。）
 5. **dart:ffi（底层）**：✅ 已测（`ffi_case`）——Struct 字段偏移访问、FFI 值算术、
    `Pointer.fromFunction` 回调都正常差分，且改回调函数会级联到编译器生成的 native trampoline
    `_FfiCallbackcb`。**未测**：Struct **布局变更**（FFI 版 V9，影响所有访问者偏移）。
