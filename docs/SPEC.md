@@ -12,8 +12,8 @@
 - Dart AOT snapshot 采用 clustered serialization（`runtime/vm/app_snapshot.cc`，48 种 `XxxSerializationCluster`），对象引用是全局 ref 数组的逻辑下标，顺序随堆遍历（Trace）而非源码声明。
 - Kernel（`.dill`）是 AOT 之前的 AST 中间表示，每个实体带 `CanonicalName`（库 URI→类→成员的稳定路径标识），格式见 `pkg/kernel/binary.md`。
 - Dart 官方字节码解释器 `runtime/vm/interpreter.cc` 现存于主干，`--dart-dynamic-modules` 编译开关开启；配套 `dart2bytecode` 编译器可将 Dart 编译为字节码。均 BSD。
-- Shorebird 的 Engine 集成层开源（`shorebirdtech/engine`，`shell/common/shorebird/`），可参考思路；其 Dart VM fork（含 linker + 解释器改造）闭源。
-- Shorebird 运行时更新器 `updater`（Rust）开源，含下载/校验/回滚/黑名单状态机，可直接参考。
+- Shorebird 的 Engine 集成层代码公开可见；其 Dart VM fork（含 linker + 解释器改造）闭源，本项目不涉及、不使用。
+- Shorebird 运行时更新器 `updater`（Rust）开源，本项目 Updater 对齐其能力范围（下载/校验/回滚/黑名单）自行设计实现。
 
 ## 1. 系统总览
 
@@ -37,13 +37,13 @@
 
 | 组件 | 来源策略 | 说明 |
 |---|---|---|
-| Updater（下载/校验/回滚） | **参考 `updater`(Rust) 自实现** | 相对独立，唯一"接近拿来即用"的开源件 |
-| Engine 集成/胶水层 | **基于官方 Flutter Engine 自写，参考 Shorebird 思路** | 不 fork Shorebird 引擎——其接口对接自家闭源 VM，与我方核心接口对不上 |
-| 字节码解释器 | **用官方 `interpreter.cc`**（非 Shorebird 版） | `--dart-dynamic-modules` 开启，BSD |
+| Updater（下载/校验/回滚） | **对齐 `updater`(Rust) 能力范围，自实现** | 相对独立，唯一"接近拿来即用"的开源件 |
+| Engine 集成/胶水层 | **基于官方 Flutter Engine 自写，对齐 Shorebird 的能力定位** | 不 fork Shorebird 引擎——其接口对接自家闭源 VM，与我方核心接口对不上 |
+| 字节码解释器 | **用官方 `interpreter.cc`** | `--dart-dynamic-modules` 开启，BSD |
 | 字节码编译器 | **用官方 `dart2bytecode`** | BSD |
 | **Linker（逐函数替换 + 编译期约束）** | **纯自研，无可 fork 对象** | 本项目唯一的核心黑盒，火力集中于此 |
 
-> 结论：不"fork Shorebird 全家桶补窟窿"，而是"fork 官方 Dart/Flutter + 参考 Shorebird 开源件学思路 + 自研那道墙"。接口自洽，法律更干净。
+> 结论：不 fork Shorebird 的产物，而是 fork 官方 Dart/Flutter + 对齐 Shorebird 已开源组件的能力范围 + 自研核心难点。接口自洽。
 
 ## 3. 核心难点分解
 
@@ -114,7 +114,7 @@ Linker 的输出不是"变化函数列表"，而是**新程序的完整入口表
 
 ### 运行时启动流程
 
-参考 Shorebird 开源引擎的生命周期插入点（`shell/common/shorebird/shorebird.cc` 思路）：
+对齐 Shorebird 已开源引擎的生命周期插入点设计：
 
 1. 引擎启动时，Updater 检查 next-boot 补丁路径。
 2. 基线机器码池（iOS 上通过类似 `SnapshotsDataHandle` 的机制暴露四块 blob）与补丁数据同时就绪。

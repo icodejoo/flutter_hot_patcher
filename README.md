@@ -15,7 +15,7 @@ official bytecode interpreter to enable App-Store-compliant hot updates on iOS.
 
 ## 技术定位 / Positioning
 
-- **不反编译、不使用 Shorebird 任何闭源产物**。全部基于 Dart/Flutter 官方开源代码（BSD）自研。
+- **不使用任何第三方闭源产物**。全部基于 Dart/Flutter 官方开源代码（BSD）自研，能力定位对齐 Shorebird。
 - 终局形态：维护一对魔改的 **Dart VM fork + Flutter Engine fork**，供自有 App 使用。
 - 关键复用：Dart 官方 `runtime/vm/interpreter.cc`（`--dart-dynamic-modules` 开关）+ `dart2bytecode` 编译器，均为 BSD，解释器无需自研。
 - 真正自研部分（唯一无公开先例的黑盒）：**逐函数替换 + 编译期约束的 linker**。
@@ -42,6 +42,6 @@ flutter_hot_patcher/
 
 ## 法律边界 / Legal Boundary
 
-全程仅使用 Dart/Flutter 官方 BSD 开源代码与 Shorebird 主动开源（MIT/Apache/BSD）仓库
-**的设计思路参考**。不反编译 `aot-tools`、不接触 Shorebird 闭源二进制或其私有 VM fork。
-思路相似不构成侵权（思想不受版权保护），但立项前建议法务对整体路线做一次确认。
+全程仅使用 Dart/Flutter 官方 BSD 开源代码自研，能力范围对齐 Shorebird 已开源
+（MIT/Apache/BSD）的组件；不接触、不使用 Shorebird 闭源二进制或其私有 VM fork。
+立项前建议法务对整体路线做一次确认。
