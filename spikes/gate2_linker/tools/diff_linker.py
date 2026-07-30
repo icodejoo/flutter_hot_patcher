@@ -100,7 +100,6 @@ def parse_snapshot(path, addr_map=None):
     out = subprocess.check_output(['objdump', '-d', path]).decode(errors='replace')
     funcs = {}
     cur_block = None
-    ended = False
     for line in out.splitlines():
         h = re.match(r'^([0-9a-f]+) <(.+)>:$', line)
         if h:
@@ -108,10 +107,9 @@ def parse_snapshot(path, addr_map=None):
             key = addr_map.get(addr, h.group(2))  # canonical key or bare name
             cur_block = []
             funcs.setdefault(key, []).append(cur_block)
-            ended = False
             continue
         m = re.match(r'\s+[0-9a-f]+:\t([0-9a-f ]+?)\t(.*)', line)
-        if not m or cur_block is None or ended:
+        if not m or cur_block is None:
             continue
         raw, mnem = m.group(1).strip(), m.group(2).strip()
         if not raw:
@@ -122,8 +120,11 @@ def parse_snapshot(path, addr_map=None):
             taddr = int(cm.group(1), 16)
             target = addr_map.get(taddr, cm.group(2))  # canonical key or bare name
         cur_block.append((raw, mnem, target))
-        if mnem.startswith('ret'):
-            ended = True
+    # NB: a block runs to the NEXT symbol header — we deliberately do NOT stop at
+    # the first `ret`. Multi-return functions (async state machines, early
+    # returns, branchy code) have real code AFTER their first ret; truncating
+    # there silently dropped those changes -> missed diffs (unsound). Trailing
+    # inter-function padding is filtered in sig() (int3/nop).
     return funcs
 
 # Normalize one instruction's disassembly text to strip relocation/drift noise
@@ -152,7 +153,8 @@ def normalize(mnem):
 # aren't trimmed by stop-at-ret, so their trailing inter-function 0xcc padding
 # leaks in and its count varies with layout — pure noise.
 def sig(block):
-    return ' | '.join(normalize(m) for _, m, _ in block if not m.startswith('int3'))
+    return ' | '.join(normalize(m) for _, m, _ in block
+                      if not m.startswith('int3') and not m.startswith('nop'))
 
 # Direct-call target names appearing in any block of a function.
 def all_targets(blocks):

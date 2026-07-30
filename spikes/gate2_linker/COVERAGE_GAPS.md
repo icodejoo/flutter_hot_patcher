@@ -12,16 +12,20 @@ Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测
 
 ## 高风险（可能破坏完备性 / 冲击当前 keying，优先补）
 
-1. **async / await / Stream / 生成器(sync*/async*)**：async 体降级成**状态机 + 多个合成
-   闭包符号**。改动落在合成符号里、调用者经 Future/Stream 机制间接衔接——闭包是否完备进闭包、
-   级联是否正确，完全未验。真实 app async 无处不在，这是最大功能盲区。P1 已知故意跳过。
-2. **tear-off（方法撕裂）**：P2 实测 `onTap: increment` 这个 tear-off 在闭包改动时**没有级联**
-   到 build。需确认：被撕裂的**方法本身**改了时，tear-off 出的闭包 entry 会不会仍指向旧实现
-   → **潜在完备性漏洞**（V2 处理过 closure entry_point 重定向，但 linker 对 tear-off 的分类
-   判定没测）。这条要专门做一个"改被撕裂方法"的用例证伪。
-3. **const 内联 / 被广泛使用的 const**：改一个 `const`/`static const` 值会被**内联进每个使用
-   点**（const 折叠，ICF 的对偶）。linker 必须抓到**所有**使用者（否则跑旧值=Bug）。这是继
-   ICF 之后第二个"编译期展开导致改动扩散"的机制，未测，完备性风险高。
+> **已补测（`p3b_completeness/`）**：#1 async ✅、#2 tear-off ✅、#3 const 内联 ✅。async 用例
+> **暴露并修复了一个 diff-linker 完备性 bug**——`parse_snapshot` 曾在首个 `ret` 截断函数块，
+> async 的真实 `return` 在其后被丢 → 漏判；已改为块到下一符号头。此 bug 影响**任何多返回点/
+> 提前 return/分支 return 的函数**，比单个 async 用例更重要。P1/v6/v7/v8 回归全 PASS 无变化。
+
+1. **async / await / Stream / 生成器(sync*/async*)**：✅ async 已测（暴露并修复首-ret 截断漏判）。
+   Stream/`sync*`/`async*` 仍未测。
+2. **tear-off（方法撕裂）**：✅ 已测——改被撕裂的**方法本身**被完备捕获（target 双入口经多重集
+   捕获；`_held` 单态被去虚化 → direct/useHeld 均级联）。P2 那次"不级联"是因改的是 setState
+   闭包体、方法本身没变，属正确。**运行时注意**：补丁前已缓存旧 entry 的 tear-off 闭包需 V2 式
+   entry 重定向刷新（运行时缓存失效项，非 diff-linker 完备性问题）。
+3. **const 内联 / 被广泛使用的 const**：✅ 已测——改 `const K` 被内联进每个使用点、逐个作条件1
+   命中，完备。**残留风险**：若 const 入对象池、改动只体现为池 slot 值，会撞 normalize 池通配
+   漏报（tools/NOTES），真 linker 需精确 slot→常量映射。
 4. **混淆构建(--obfuscate) / strip release**：当前 CanonicalName 靠 DWARF 里的函数名。release
    常开混淆→名字被改/剥离→**DWARF 对齐直接失效**。生产必须改用混淆映射表或 Kernel 层对齐。
    这是"后验 DWARF 方案"的部署级硬伤，必须在正式研发前定方案。
