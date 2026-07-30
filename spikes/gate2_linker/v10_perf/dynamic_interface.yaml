@@ -1,0 +1,8 @@
+# V10 perf: declare dart:core callable from the patch, so the interpreted
+# kernel can call real library functions (string interpolation, int.parse)
+# whose Functions AOT tree-shaking would otherwise not keep resolvable by name
+# (gate1-vm-spike skill §6). This is the official dynamic-modules way to let a
+# patch call host/library APIs. Only dart:core is needed here — no custom host
+# library — so no --filesystem-scheme is required.
+callable:
+  - library: 'dart:core'

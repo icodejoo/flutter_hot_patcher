@@ -1,0 +1,18 @@
+# Contract: what the host exposes to the dynamic module (patch).
+# Shape is extendable and its area() overridable; callable includes dart:core
+# (this is the key that lets the patch allocate a new class — the V3 "new class
+# allocation needs Object() constructor linked to dart:core" gap).
+extendable:
+  - library: 'shared/shared.dart'
+    class: 'Shape'
+
+can-be-overridden:
+  - library: 'shared/shared.dart'
+    class: 'Shape'
+    member: 'area'
+
+callable:
+  - library: 'dart:core'
+  - library: 'shared/shared.dart'
+    class: 'Shape'
+    member: ''
