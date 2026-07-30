@@ -3,6 +3,10 @@
 从零到跑通 V1 替换用例的环境路径。**无需 macOS 即可完成桌面阶段的全部核心验证**；
 iOS 真机复验放到桌面阶段跑通之后（见最后一节）。
 
+> **桌面阶段（V1-V5）已于 2026-07-30 全部 PASS。** 完整结论、证据链、踩坑记录见
+> [`GATE1_REPORT.md`](./GATE1_REPORT.md)（给 Fable 审核 + 后续维护参考的完整报告）。
+> 操作流程和构建坑见 `.claude/skills/gate1-vm-spike/SKILL.md`。
+
 ---
 
 ## 阶段划分（决定何时才需要 Mac）
@@ -138,6 +142,6 @@ cd ~/dart/sdk
 - [ ] A2 `fetch dart` 完成
 - [ ] A3 `--dart-dynamic-modules` 构建成功
 - [ ] A4 官方 example 跑通（工具链 OK）
-- [ ] A5 探索入口重定向 → V1 替换可观测生效（**Gate 1 生死信号**）
-- [ ] V2/V3/V4/V5
+- [x] A5 探索入口重定向 → V1 替换可观测生效（**Gate 1 生死信号**）——PASS 2026-07-30
+- [x] V2/V3/V4/V5 —— 全部 PASS 2026-07-30，详见 `GATE1_REPORT.md`
 - [ ] B iOS 真机复验（阶段 A 通过后）

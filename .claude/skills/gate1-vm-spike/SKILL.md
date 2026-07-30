@@ -9,6 +9,10 @@ description: "Gate 1 混合执行 spike 的完整操作流程与踩坑记录：W
 是从多次实测里提炼出来的，目的是让"重新走一遍流程"不用再绕路。核心结论、证据链、
 矩阵放在各用例的 `NOTES.md` 里，本文件只管"怎么做、坑在哪"。
 
+**完整的结论性报告**（串联 PRD/SPEC 背景、V1-V5 全部证据链、踩坑、结论，给 Fable
+审核和后续维护参考用）在 [`GATE1_REPORT.md`](../../../spikes/gate1_mixed_execution/GATE1_REPORT.md)。
+要看"Gate 1 到底证明了什么"，先看那份报告；要"照着操作"，看本文件。
+
 先读 `spikes/gate1_mixed_execution/SETUP.md` 了解整体阶段划分（A 桌面验证 / B iOS 真机），
 本 skill 是 A 阶段（WSL2）的操作细节补充。
 
