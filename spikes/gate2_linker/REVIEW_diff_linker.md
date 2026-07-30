@@ -2,7 +2,10 @@
      8 维度评审 → 每发现对抗验证 → 综合 + 完备性批判。
      发现 59 条，验证存活 52 条（REFUTED 已剔除）。 -->
 
-I have everything I need — the full source, NOTES.md, and COVERAGE_GAPS.md are read and the citations verified. Here is the report.
+> **修复状态**：S2 / S4 / S5 + 健壮性守卫 + 文档/标签 已就地修复（全语料回归无回归，见
+> `PRODUCTION_LINKER_SPEC.md` §2）。S1(池内容)、S3(实例级对齐)、S6/R4(ICF)、A2(arm64)、
+> 批判#3(cid/dispatch) 等属**生产 linker 需求**，已排进 `PRODUCTION_LINKER_SPEC.md` R1–R9
+> （做在 Kernel 层、排在 iOS W^X go/no-go 之后）。
 
 ---
 
