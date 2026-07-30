@@ -1,0 +1,145 @@
+diff --git a/runtime/lib/object.cc b/runtime/lib/object.cc
+index 3f49f75f..920bd5be 100644
+--- a/runtime/lib/object.cc
++++ b/runtime/lib/object.cc
+@@ -621,6 +621,78 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
+ #endif  // defined(DART_DYNAMIC_MODULES)
+ }
+
++// Gate 1 spike (flutter_hot_patcher): like Internal_loadDynamicModule, but
++// returns the entry-point Function wrapped in a Closure instead of invoking
++// it. Lets Dart code call the interpreted entry point synchronously and
++// repeatedly (a cached closure), instead of once via the Future-wrapped
++// public API. See spikes/gate1_mixed_execution/cases/v1_replace_existing_function.
++DEFINE_NATIVE_ENTRY(Internal_loadDynamicModuleClosure, 0, 1) {
++#if defined(DART_DYNAMIC_MODULES)
++  GET_NON_NULL_NATIVE_ARGUMENT(TypedDataBase, module_bytes,
++                               arguments->NativeArgAt(0));
++
++  const intptr_t length = module_bytes.LengthInBytes();
++  uint8_t* data = reinterpret_cast<uint8_t*>(::malloc(length));
++  if (data == nullptr) {
++    const auto& exception = Instance::Handle(
++        zone, thread->isolate_group()->object_store()->out_of_memory());
++    Exceptions::Throw(thread, exception);
++  }
++  {
++    NoSafepointScope no_safepoint;
++    // The memory does not overlap.
++    memcpy(data, module_bytes.DataAddr(0), length);  // NOLINT
++  }
++  const ExternalTypedData& typed_data = ExternalTypedData::Handle(
++      zone,
++      ExternalTypedData::New(kExternalTypedDataUint8ArrayCid, data, length));
++  auto& function = Function::Handle();
++  {
++    SafepointWriteRwLocker ml(thread, thread->isolate_group()->program_lock());
++    bytecode::BytecodeLoader loader(thread, typed_data);
++    function = loader.LoadBytecode();
++  }
++
++  if (function.IsNull()) {
++    return Object::null();
++  }
++  ASSERT(function.is_static());
++  ASSERT(function.is_declared_in_bytecode());
++
++  const auto& closure = Closure::Handle(
++      zone, Closure::New(Object::null_type_arguments(),
++                         Object::null_type_arguments(), function,
++                         Object::null_object(), Heap::kOld));
++  return closure.ptr();
++#else
++  Exceptions::ThrowUnsupportedError(
++      "Loading of dynamic modules is not supported.");
++  return Object::null();
++#endif  // defined(DART_DYNAMIC_MODULES)
++}
++
++// Gate 1 spike (flutter_hot_patcher): invoke the zero-arg entry point stashed
++// inside a closure produced by Internal_loadDynamicModuleClosure, calling
++// DartEntry::InvokeFunction directly instead of going through the normal
++// Dart closure-call dispatch (which rejects bytecode-declared entry points
++// with a NoSuchMethodError due to a signature-representation mismatch).
++DEFINE_NATIVE_ENTRY(Internal_invokeDynamicModuleClosure, 0, 1) {
++#if defined(DART_DYNAMIC_MODULES)
++  GET_NON_NULL_NATIVE_ARGUMENT(Closure, closure, arguments->NativeArgAt(0));
++  const auto& function = Function::Handle(zone, closure.function());
++  const auto& args = Array::Handle(zone, Array::New(0));
++  auto& result = Object::Handle(zone, DartEntry::InvokeFunction(function, args));
++  if (result.IsError()) {
++    Exceptions::PropagateError(Error::Cast(result));
++  }
++  return result.ptr();
++#else
++  Exceptions::ThrowUnsupportedError(
++      "Loading of dynamic modules is not supported.");
++  return Object::null();
++#endif  // defined(DART_DYNAMIC_MODULES)
++}
++
+ DEFINE_NATIVE_ENTRY(Internal_ensureDeeplyImmutable, 0, 1) {
+   GET_NATIVE_ARGUMENT(Instance, value, arguments->NativeArgAt(0));
+   value.EnsureDeeplyImmutable(zone);
+diff --git a/runtime/vm/bootstrap_natives.h b/runtime/vm/bootstrap_natives.h
+index 0d8a8cfd..4211b4bf 100644
+--- a/runtime/vm/bootstrap_natives.h
++++ b/runtime/vm/bootstrap_natives.h
+@@ -277,6 +277,8 @@ namespace dart {
+   V(Internal_prependTypeArguments, 4)                                          \
+   V(Internal_instantiateClosure, 2)                                            \
+   V(Internal_loadDynamicModule, 1)                                             \
++  V(Internal_loadDynamicModuleClosure, 1)                                     \
++  V(Internal_invokeDynamicModuleClosure, 1)                                   \
+   V(Internal_allocateOneByteString, 1)                                         \
+   V(Internal_allocateTwoByteString, 1)                                         \
+   V(Internal_writeIntoOneByteString, 3)                                        \
+diff --git a/sdk/lib/_internal/vm/lib/internal_patch.dart b/sdk/lib/_internal/vm/lib/internal_patch.dart
+index d0fca217..fdfe0217 100644
+--- a/sdk/lib/_internal/vm/lib/internal_patch.dart
++++ b/sdk/lib/_internal/vm/lib/internal_patch.dart
+@@ -458,6 +458,22 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
+ @pragma("vm:external-name", "Internal_loadDynamicModule")
+ external Object? _loadDynamicModule(Uint8List bytes);
+
++@patch
++Object? loadDynamicModuleClosure({Uri? uri, Uint8List? bytes}) {
++  return _loadDynamicModuleClosure(bytes!);
++}
++
++@pragma("vm:external-name", "Internal_loadDynamicModuleClosure")
++external Object? _loadDynamicModuleClosure(Uint8List bytes);
++
++@patch
++Object? invokeDynamicModuleClosure(Object closure) {
++  return _invokeDynamicModuleClosure(closure);
++}
++
++@pragma("vm:external-name", "Internal_invokeDynamicModuleClosure")
++external Object? _invokeDynamicModuleClosure(Object closure);
++
+ @patch
+ @pragma("vm:entry-point")
+ abstract interface class IsolateGroup {
+diff --git a/sdk/lib/internal/internal.dart b/sdk/lib/internal/internal.dart
+index adbaa54e..dc3bfb3d 100644
+--- a/sdk/lib/internal/internal.dart
++++ b/sdk/lib/internal/internal.dart
+@@ -1146,6 +1146,17 @@ bool isToStringVisiting(Object object) {
+ /// Returns a future containing the result of the entry point method.
+ external Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes});
+
++/// Gate 1 spike (flutter_hot_patcher): like [loadDynamicModule], but returns
++/// the entry-point method wrapped as a zero-arg closure instead of invoking
++/// it and wrapping the result in a Future. Lets host code call the
++/// interpreted entry point synchronously and repeatedly from a single load.
++external Object? loadDynamicModuleClosure({Uri? uri, Uint8List? bytes});
++
++/// Gate 1 spike (flutter_hot_patcher): invoke a closure previously returned
++/// by [loadDynamicModuleClosure], bypassing normal Dart closure-call dispatch
++/// (which rejects bytecode-declared entry points).
++external Object? invokeDynamicModuleClosure(Object closure);
++
+ /// Helper class to create `bool Function(Object?)` functions which
+ /// perform an `v is T` type test.
+ ///

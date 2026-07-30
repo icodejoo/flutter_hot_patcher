@@ -48,4 +48,4 @@ echo "==> [3/4] Compile replacement f' to bytecode"
   "$CASE_DIR/patch/f_patch.dart"
 
 echo "==> [4/4] Run host (expects V1 INCONCLUSIVE until _tryActivatePatch is wired)"
-"$AOT_RUNTIME" "$BUILD_DIR/main.snapshot" "$BUILD_DIR/f_patch.bytecode"
+"$AOT_RUNTIME" "$BUILD_DIR/main.snapshot" "$BUILD_DIR/f_patch.bytecode" "$BUILD_DIR/main.snapshot"
