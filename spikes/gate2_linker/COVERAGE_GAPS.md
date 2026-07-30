@@ -62,10 +62,12 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
 
 ## 中风险（大概率能处理，但未验证——扩样本应逐一纳入）
 
-7. **构造函数**：generative/factory/const/redirecting/命名构造、初始化列表、super() 链、
-   `late` 字段初始化。改构造体是否独立符号、是否级联到所有 `new` 点。
-8. **扩展方法 `extension` / 扩展类型 `extension type`**：静态分派、特殊降级。
-9. **Dart 3 模式匹配**：`switch` 表达式/模式、`if-case`、解构赋值、record 具名字段——新 codegen。
+7. **构造函数**：✅ 已测（`p3d_shape_changes/ctor_pattern`）——工厂构造函数(factory body 改动)
+   被条件1精确捕获、级联 main；命名构造+初始化列表、super() 链、非工厂构造未改动时正确判等价。
+   `late` 字段初始化未单独测。
+8. **扩展方法 `extension` / 扩展类型 `extension type`**：静态分派、特殊降级。**未测**。
+9. **Dart 3 模式匹配**：✅ 已测（`ctor_pattern` 的 `describe`）——switch 表达式 `_ when` 分支改动
+   被精确捕获。`if-case`、解构赋值、record 具名字段等子形态未单独测。
 10. **泛型方法 + reified 类型检查**：泛型**方法**(非泛型类)、`is T`/`as T`、类型参数特化产生的
     多份实例化代码(与 ICF/ V9 交织)。
 11. **异常处理的差分**：try/catch/finally/rethrow、自定义异常类、throw 位置变化。V3 只测了运行时
@@ -79,14 +81,20 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
 17. **Flutter 底层**：RenderObject/CustomPainter 的 `paint`/`performLayout`、动画
     (AnimationController/Ticker/Tween)、InheritedWidget 依赖传播、Slivers、LayoutBuilder。
 18. **const widget 规范化**：const 构造 widget 被规范化(canonicalize)，改一个 const widget 的行为。
-19. **part / part of**：一个 library 跨多文件——canonical key 用源文件，DWARF decl_file 与
-    library 的对应关系需确认(同库多文件会不会误分/误合)。
+19. **part / part of**：✅ 已测（`p3d_shape_changes/part_case`）——原地改动的函数正常差分；
+    **函数在同库不同 part 文件间移动、逻辑不变** → canonical key(源文件路径)随之变 →
+    判定为 removed+added(sound 但不精确)，精确复现了 REVIEW C1 早先预测的残留场景。
+    真实 linker 用 Kernel CanonicalName(库URI，不含物理路径)天然免疫，见 PRODUCTION_LINKER_SPEC R1。
 20. **平台通道/插件(MethodChannel)**：插件 Dart 侧 + 原生侧；补丁只能动 Dart 侧。
 
 ## 改动形态维度（我们只测了"改常量"，这些形态影响差分本身）
 
-21. **改函数签名**（参数/返回类型）→ 影响所有调用点的传参代码，可能大范围级联。
-22. **新增 / 删除** 函数、方法、类、字段（added/removed 记账已有，但没专门验证保留/链接/级联）。
+21. **改函数签名**：✅ 已测（`p3d_shape_changes/sig_change`）——被调函数加可选/命名参数时，
+    Dart 调用约定要求每个调用点加载 ArgumentsDescriptor，**即便调用点源码未改**，机器码也真实
+    变化(多一条 `mov POOL(%r15),%r10`)，被条件1天然捕获。**签名变更不是不可见改动形态**——
+    调用约定的物理约束保证了完备性。改返回类型/必需参数个数未单独测。
+22. **新增 / 删除** 函数、方法、类、字段：✅ 已测（`p3d_shape_changes/add_remove`）——干净基线场景
+    下 added/removed/byte-changed/级联记账精确匹配预期。
 23. **增删类字段**（V9 已单独测过布局，但没并进大样本精确度测量）。
 24. **改动触发不同内联决策**（某改动让函数从可内联变不可内联，内联边界移动）→ 精确度扰动。
 25. **成员重排序 / 加注释 / 格式化**（应为 no-op）——测对齐稳定性(不应产生任何闭包)。
