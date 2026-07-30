@@ -159,5 +159,14 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
   （加载为闭包 + 直接原生调用绕开 Dart 语言层闭包调用的签名校验）。
 - **V2（虚调用/闭包调用）PASS**：虚调用改 dispatch table 一项、闭包改对象自己的
   entry_point 字段，都是单点重定向，不用像 V1 那样逐调用点打补丁。
-- 下一步：V3（异常穿透）/ V4（GC 触发）/ V5（压测），以及 iOS 真机 W^X 复验（阶段 B，
+- **V3（异常穿透）PASS**：解释执行代码抛的异常，能正确穿透"运行时改写过调用指令的
+  AOT 帧"——本地 catch、向外穿透两种场景都验证过。沿用 V1 的
+  `Internal_invokeDynamicModuleClosure`（`DartEntry::InvokeFunction` 出错时
+  `Exceptions::PropagateError` 重新抛出），没加新 VM 代码。**踩坑**：补丁里若声明
+  自定义异常类（`class X implements Exception`），字节码**加载阶段**会报
+  `Unable to find function Object. in Library:'dart:core' Class: Object`——
+  新类分配需要解释器把隐式 `Object()` 父类构造解析到宿主 `dart:core`，这条链接要靠
+  `dynamic_interface.yaml` 打通，我们的 spike 用例都没配。规避：补丁只抛宿主/解释器
+  都已知的内置异常（`StateError` 等），别在补丁里声明新类型。
+- 下一步：V4（GC 触发）/ V5（压测），以及 iOS 真机 W^X 复验（阶段 B，
   桌面这套 `mprotect(PROT_EXEC)` 的机制在 iOS 强制 W^X + 代码签名下能不能等价成立是未知数）。
