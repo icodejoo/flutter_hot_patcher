@@ -62,8 +62,30 @@ part 文件移动"是 canonical-key-as-源文件路径 方案下**唯一真残�
 "改了"）。真实 linker 用 Kernel CanonicalName（库URI→类→成员，不含物理文件路径）会天然免疫
 这类移动——这与 P0/PRODUCTION_LINKER_SPEC R1 的结论一致，这里是它的一次具体实锤。
 
-## 本批次小结
+## Stream/StreamController 订阅回调（`stream_case`）—— PASS
 
-四个改动形态（签名变更/增删符号/构造函数+模式匹配/part 多文件）全部完备（无漏判）；part
-用例额外坐实了一条已知精度残留（非新发现，是既有预测的首次具体复现）。COVERAGE_GAPS 中风险项
-基本清空，剩纯 Stream 订阅/StreamController 形态、捕获局部变量的闭包等边角。
+区别于已测的 `async*` 生成器降级（状态机+合成符号）：这里是纯 `StreamController.add()` 触发
+`.stream.listen((v) => ...)` 注册的回调，走不同的注册/触发路径。改动落在回调体直调的
+`transform` 函数：`transform` 被条件1命中，`pumpStream.<anonymous closure>`（真正传给
+`.listen()` 的回调闭包体，是独立的合成函数）经直调边正确级联；`pumpStream` 外层函数本身
+（搭 controller、调 `.listen`/`.add`，逻辑未变）正确不进闭包。行为 11→14 确认。**Stream 订阅
+回调走普通闭包直调边机制，未发现区别于已验证机制的新漏判路径。**
+
+## isolate 入口函数改动（`isolate_case`）—— PASS
+
+`isolateMain` 标 `@pragma('vm:entry-point')`、经 `Isolate.spawn` **跨 isolate 边界**以引用形式
+调用（类似 tear-off，但跨越 isolate 而非同 isolate 内闭包）。改动落在它直调的 `helper`：
+`helper` 被条件1命中，`isolateMain`（自身字节未变，跨 isolate 边界被调用）经直调边正确级联。
+行为 7→8 确认。**跨 isolate 边界的调用机制不影响入口函数自身的条件1/条件2判定**——它内部对
+`helper` 的调用仍是普通直调，走既有机制，未发现特殊漏判路径。（若 `isolateMain` 自身改动，
+条件1本就与调用方式无关，天然覆盖，同 tearoff 结论。）
+
+## 本批次小结（含安全优先复核）
+
+六个用例（签名变更/增删符号/构造函数+模式匹配/part 多文件/Stream 订阅/isolate 入口）
+**全部完备（无漏判）**；part 用例额外坐实了一条已知精度残留（sound、非漏判，是既有预测的
+首次具体复现）。按"宁可保守也不能漏判"的原则复核：本批次均为**验证是否漏判**，而非为凑覆盖率
+数字；确认 Stream/isolate 这两类"看起来机制特殊"的调用边界，实际上都归约到已验证的
+"条件1看自身字节 + 条件2看直调边"机制，**没有引入需要额外保守处理的新盲区**。COVERAGE_GAPS
+中高风险项已清空，剩余（扩展方法/class修饰符/deferred import/Flutter底层等）边际价值低，
+不为凑数字继续扩。

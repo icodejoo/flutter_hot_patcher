@@ -35,8 +35,9 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
 
 1. **async / await / Stream / 生成器(sync*/async*)**：✅ 全已测。async 暴露并修复首-ret 截断漏判；
    `sync*`/`async*` 生成器（`p3b_completeness/generator_case`）改 `yield` 值同样被完备捕获、
-   正确级联 drain 方（`Iterable.fold`/`await for`）。Stream 经 `async*` 覆盖，未单独测纯 `Stream`
-   订阅/`StreamController` 形态。
+   正确级联 drain 方（`Iterable.fold`/`await for`）。纯 `Stream`/`StreamController` 订阅回调
+   （`p3d_shape_changes/stream_case`，不同于 async* 降级的另一条注册/触发路径）同样被完备捕获、
+   正确级联注册的回调闭包。
 2. **tear-off（方法撕裂）**：✅ 已测——改被撕裂的**方法本身**被完备捕获（target 双入口经多重集
    捕获；`_held` 单态被去虚化 → direct/useHeld 均级联）。P2 那次"不级联"是因改的是 setState
    闭包体、方法本身没变，属正确。**运行时注意**：补丁前已缓存旧 entry 的 tear-off 闭包需 V2 式
@@ -77,7 +78,8 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
 14. **闭包进阶**：**捕获局部变量**的闭包(会分配 context)、嵌套闭包、存进字段的闭包、
     实例方法 tear-off（见 #2）。
 15. **operator 全集**：`[]`/`[]=`、`==`+`hashCode`、`call()`(可调用对象)、一元 `-`/`~`、比较运算符。
-16. **isolate 入口**：`Isolate.spawn` 的入口函数是特殊根；改 isolate 入口代码的差分未测。
+16. **isolate 入口**：✅ 已测（`p3d_shape_changes/isolate_case`）——`Isolate.spawn` 跨 isolate 边界
+    调用入口函数不影响其内部直调边的条件1/条件2判定，正常级联，未发现特殊盲区。
 17. **Flutter 底层**：RenderObject/CustomPainter 的 `paint`/`performLayout`、动画
     (AnimationController/Ticker/Tween)、InheritedWidget 依赖传播、Slivers、LayoutBuilder。
 18. **const widget 规范化**：const 构造 widget 被规范化(canonicalize)，改一个 const widget 的行为。
