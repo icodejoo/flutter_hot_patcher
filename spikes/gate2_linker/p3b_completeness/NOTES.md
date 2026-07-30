@@ -76,7 +76,30 @@ ambiguous-changed 捕获；只读旧字段的 `summarize` 因偏移稳定正确�
 里 map 字面量改动若只体现为池常量，可能撞 normalize 池通配漏报（已知近似，同 tools/NOTES）；
 真实生成代码在 `part` 文件里，本用例内联，part-file 对齐见 COVERAGE_GAPS #19。
 
+## 第三批：Stream/生成器 + FFI Struct 布局变更
+
+| 用例 | 改动 | 结果 | 完备/精确? |
+|---|---|---|---|
+| `generator_case` | `sync*`/`async*` 生成器体内 `yield` 值 `+1→+2`（两者同时改） | byte-changed=syncGen,asyncGen;级联 sumSync/sumAsync | ✅ |
+| `ffi_layout_case` | FFI Struct 插入新字段，源码不变但字段偏移码变（FFI 版 V9） | byte-changed=sumXY,bumpY(访问偏移变的访问者);unrelatedFfi 判等价 | ✅ |
+
+### Stream/生成器 —— PASS
+
+`sync*`/`async*` 生成器体降级成状态机（类似普通 async，已知 async 曾暴露 parse_snapshot 首-ret
+截断 bug，此处复用同一修复后的工具）。改 `yield` 值：`syncGen`/`asyncGen` 均被条件1直接命中，
+`sumSync`（drain `Iterable`）/`sumAsync`（`await for` drain `Stream`）正确级联。行为
+base=32→patch=34。**生成器降级不藏漏判**，与 async 结论一致。
+
+### FFI Struct 布局变更 —— PASS（FFI 版 V9）
+
+`Point3D{x,y}` 插入新字段 `z`（在 x、y 之间），`y` 偏移随之平移；`sumXY`/`bumpY` **源码逐字节
+不变**，但访问 `y` 的偏移立即数变了 → 条件1直接命中（这正是 V9 的核心机制：字段布局变更导致
+访问者字节必变，被逐字节比对捕获，不看源码看机器码）；`unrelatedFfi`（不碰 struct）正确判等价。
+**FFI 的字段访问码与普通 Dart 类字段访问码走同一套"偏移变化→字节变化"逻辑，V9 结论在 FFI 上
+同样成立**，且未撞上 dart_ffi 特有的坑（Struct 无需 dynamic_interface 特殊处理即可正常差分）。
+
 ## 仍未覆盖（下一梯队，见 COVERAGE_GAPS）
 
-Stream/生成器(sync*/async*)、捕获局部变量的闭包、FFI Struct 布局变更、构造函数(独立用例)、
-模式匹配、签名变更、增删符号、part/part-of 多文件同库。
+捕获局部变量的闭包、构造函数(独立用例)、模式匹配、签名变更、增删符号、part/part-of 多文件同库、
+cid/dispatch 布局漂移（见 `../p3c_cid_dispatch/NOTES.md`——有界探测，调用点已确证位置无关，
+dispatch table 数据内容本身待 VM 源码级验证）。

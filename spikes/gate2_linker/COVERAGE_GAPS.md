@@ -13,11 +13,16 @@
 > 重排类成员使既有类的 cid 或 dispatch slot 平移、而**无任何函数字节改变** → byte-changed=∅、闭包=0、
 > 工具报"0 must reinterpret"，但字节未变的虚调用方在设备上按旧 slot 布局派发到错误目标 → 行为错乱。
 > 与 S1/S2 同属"字节没变但行为变了、闭包为空、无告警"的红线类。正解=SPEC §4.3 cid 稳定化 +
-> 差分器消费 cid/dispatch 元数据做布局比对（或类声明集合变化时保守告警）。**未测。**
+> 差分器消费 cid/dispatch 元数据做布局比对（或类声明集合变化时保守告警）。
+> **有界探测（`p3c_cid_dispatch/NOTES.md`）**：megamorphic 虚调用**调用点**本身实测确证位置/cid
+> 无关（cid 运行时从对象头读取、dispatch table 指针从 THR 固定偏移取，调用点字节不编码布局信息）；
+> **dispatch table 数据内容**本身是否漂移仍未验证（需 VM 源码级探测），如实留白，**不因此降低
+> 优先级**。探测过程中意外发现并修复了 S4 修复自身的一个真回归（次入口解析需 high_pc 上界）。
 
 已覆盖（基线）：int/double/bool/String、List/Map/Set/record、类 method/getter/setter/
-operator/static、mixin、enum(带方法)、泛型类、匿名闭包、直接调用链级联、多态虚调用边界；
-Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测了"改函数体常量"。**
+operator/static、mixin、enum(带方法)、泛型类、匿名闭包、直接调用链级联、多态虚调用边界、
+sync*/async* 生成器、FFI Struct 字段布局变更；Flutter 的 StatelessWidget/StatefulWidget/
+build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局属结构性偏移变化）。**
 
 ---
 
@@ -28,8 +33,10 @@ Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测
 > async 的真实 `return` 在其后被丢 → 漏判；已改为块到下一符号头。此 bug 影响**任何多返回点/
 > 提前 return/分支 return 的函数**，比单个 async 用例更重要。P1/v6/v7/v8 回归全 PASS 无变化。
 
-1. **async / await / Stream / 生成器(sync*/async*)**：✅ async 已测（暴露并修复首-ret 截断漏判）。
-   Stream/`sync*`/`async*` 仍未测。
+1. **async / await / Stream / 生成器(sync*/async*)**：✅ 全已测。async 暴露并修复首-ret 截断漏判；
+   `sync*`/`async*` 生成器（`p3b_completeness/generator_case`）改 `yield` 值同样被完备捕获、
+   正确级联 drain 方（`Iterable.fold`/`await for`）。Stream 经 `async*` 覆盖，未单独测纯 `Stream`
+   订阅/`StreamController` 形态。
 2. **tear-off（方法撕裂）**：✅ 已测——改被撕裂的**方法本身**被完备捕获（target 双入口经多重集
    捕获；`_held` 单态被去虚化 → direct/useHeld 均级联）。P2 那次"不级联"是因改的是 setState
    闭包体、方法本身没变，属正确。**运行时注意**：补丁前已缓存旧 entry 的 tear-off 闭包需 V2 式
@@ -43,9 +50,11 @@ Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测
    文本、可能塌陷精度，未测。**strip release ⚠ 从未真测**（见 REVIEW #9）：工具结构上需**未 strip**
    的快照（逐函数 ELF 符号）；生产的已 strip `libapp.so` 只剩 ~4 blob 符号 → 逐函数差分失效。
    （本条曾误记为"strip release ✅ 已测"，实为过度声明，已订正。）
-5. **dart:ffi（底层）**：✅ 已测（`ffi_case`）——Struct 字段偏移访问、FFI 值算术、
+5. **dart:ffi（底层）**：✅ 全已测。`ffi_case`——Struct 字段偏移访问、FFI 值算术、
    `Pointer.fromFunction` 回调都正常差分，且改回调函数会级联到编译器生成的 native trampoline
-   `_FfiCallbackcb`。**未测**：Struct **布局变更**（FFI 版 V9，影响所有访问者偏移）。
+   `_FfiCallbackcb`。`ffi_layout_case`（FFI 版 V9）——Struct 插入新字段使既有字段偏移平移，
+   访问者源码不变但被条件1精确捕获（偏移变化→字节变化，与普通 Dart 类字段布局变更同一机制），
+   不碰 struct 的函数正确判等价。
 6. **代码生成第三方库(freezed / json_serializable / built_value)**：✅ 已测（`codegen_case`，
    手写 json_serializable 风格、未引三方依赖）——加字段重生成的 fromJson/toJson 被完备检出、
    User 构造经 ambiguous-changed 捕获、只读旧字段的 summarize 判等价。**注**：真实生成代码在
