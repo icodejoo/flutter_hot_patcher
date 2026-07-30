@@ -169,6 +169,26 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
 `#if defined(DART_PRECOMPILED_RUNTIME)` 分支里面，`#else` 分支只管抛
 `UnsupportedError`，不碰任何参数变量。
 
+## 5.6 arm64 移植踩坑：Android/iOS 真机没有 `nm`，且 `vm:entry-point` 函数在符号表里可能出现两次
+
+在 Android arm64 真机（Gate 1b）上复现 V1-V5 时踩了两个和"设备上找符号地址"相关的坑，
+以后在 iOS 或其他真机上复现类似机制会再次遇到：
+
+1. **设备本身不带 `nm`**：V1-V5 桌面版靠运行时 `Process.runSync('nm', [selfPath])`
+   自省拿符号地址；Android/iOS 精简系统不带 binutils，设备上没有 `nm` 可调。
+   **规避**：地址解析挪到构建期，在宿主机上对同一份未 strip 的快照 ELF 跑 `nm`，
+   通过命令行参数传给设备上跑的程序（不是弱化测试——真正验证的机制"运行时改写+
+   刷新缓存"完全在设备上执行，只是"地址从哪来"这个记账方式变了）。
+2. **`@pragma('vm:entry-point')` 标注的函数在 arm64 的 `nm` 输出里可能出现两个不同
+   地址的同名符号**（大概率是 checked/unchecked 入口变体，没有逐一反汇编确认过）。
+   如果构建脚本用 `awk '$3=="函数名"{print $1}'` 匹配、不做去重，`nm` 匹配出的两行
+   地址拼进 shell 变量会嵌入一个换行符，把后续 `adb shell "..."` 的整条命令字符串
+   拆成两条——第二条(一串裸十六进制地址)会被设备的 shell 当成命令名执行，报
+   `inaccessible or not found`。**这个错误极具迷惑性**：如果侥幸选中了排序在前的
+   地址（`nm` 默认按地址升序），程序可能碰巧正确执行、把这条错误当无害的日志噪音
+   略过——直到换一个用例复现时才会露馅。**规避**：所有类似的
+   `$(nm ... | awk ...)` 都加 `| head -1`，强制只取一行，不依赖排序侥幸。
+
 ## 6. 补丁(字节码模块)能调用什么 API——闭世界树摇的坑
 
 写任何 `patch/*.dart` 时，如果运行时报
@@ -226,5 +246,15 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
   isolate group 内共享），worker isolate 读不到主 isolate 设置的闭包缓存变量，会直接
   空指针崩溃——要让相关代码对这种"跨 isolate 读不到状态"的情况判空安全，而不是假设
   全局状态处处可见。
-- 桌面阶段 A（V1-V5）已全部完成。下一步：iOS 真机 W^X 复验（阶段 B，
-  桌面这套 `mprotect(PROT_EXEC)` 的机制在 iOS 强制 W^X + 代码签名下能不能等价成立是未知数）。
+- 桌面阶段 A（V1-V5）已全部完成。
+- **Gate 1b（Android arm64 真机复现）V1-V5 全部 PASS**：用户暂无 iPhone 但有 Android
+  arm64 真机，在获取 Mac 前先在真实 arm64 硬件上复现全部机制，是低成本预检查
+  （**不能替代**阶段 B——Android 不强制 W^X，回答不了 iOS 最核心的悬念）。
+  V1/V3/V4/V5 需要重写调用点改写逻辑（arm64 是 `bl` 指令 + 显式 icache 刷新，
+  完整实现见 `android_arm64/v1_replace_existing_function/NOTES.md`）；**V2 原样
+  拷贝零改动直接跑通**——验证了"dispatch table/closure entry_point 重定向天然
+  跨架构"这条设计推论。arm64 特有的两个坑（设备无 `nm`、`vm:entry-point` 函数
+  符号重复）见 §5.6。
+- 下一步：iOS 真机 W^X 复验（阶段 B，桌面/Android 这套 `mprotect(PROT_EXEC)` 的
+  机制在 iOS 强制 W^X + 代码签名下能不能等价成立是未知数——这是整个项目现在
+  唯一悬而未决、可能推翻方案的问题）。

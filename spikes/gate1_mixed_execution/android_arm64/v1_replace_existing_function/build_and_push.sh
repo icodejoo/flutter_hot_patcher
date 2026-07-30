@@ -63,13 +63,13 @@ echo "==> [3/5] Compile replacement f' to bytecode (target arm64 platform.dill)"
   "$CASE_DIR/patch/f_patch.dart"
 
 echo "==> [4/5] Resolve g/f/fAlt static addresses at BUILD time (device has no nm)"
-G_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="g"{print $1}')
-F_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="f"{print $1}')
-FALT_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="fAlt"{print $1}')
+G_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="g"{print $1}' | head -1)
+F_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="f"{print $1}' | head -1)
+FALT_ADDR=$(nm "$BUILD_DIR/main.snapshot" | awk '$3=="fAlt"{print $1}' | head -1)
 echo "    g=0x$G_ADDR f=0x$F_ADDR fAlt=0x$FALT_ADDR"
 
 echo "==> [5/5] Push to device and run"
-DEVICE_DIR=/data/local/tmp/gate1b
+DEVICE_DIR=/data/local/tmp/gate1b/v1
 "$ADB" shell "mkdir -p $DEVICE_DIR"
 "$ADB" push "$DARTAOTRUNTIME_ARM64" "$DEVICE_DIR/dartaotruntime_product"
 "$ADB" push "$BUILD_DIR/main.snapshot" "$DEVICE_DIR/main.snapshot"

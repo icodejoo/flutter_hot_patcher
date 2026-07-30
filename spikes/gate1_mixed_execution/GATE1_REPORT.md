@@ -499,11 +499,26 @@ diff 文件：`vm_patch/gate1_vm_patch.diff`，应用方式和构建坑详见 `v
 
 用户手头暂时没有 iPhone，但有 Android arm64 真机可用。V1-V5 全部在 x86-64 桌面验证，
 从未测过 arm64——这正是 iOS 最终也要用的同一个 CPU 架构族。在获取 Mac/iPhone 之前，
-先用 Android arm64 复现 V1 核心机制，是一次**低成本、有实际增量价值**的预检查：
-用例见 `android_arm64/`，完整证据见 `android_arm64/NOTES.md`。
+先用 Android arm64 复现 V1-V5 全部核心机制，是一次**低成本、有实际增量价值**的
+预检查：用例见 `android_arm64/`，完整证据见 `android_arm64/NOTES.md`。
 
-**结果：GATE1B-ANDROID-ARM64 PASS。** V1 的核心命题（既有静态直调调用点运行时
-重定向到解释执行的 `f'`）在真实 arm64 硬件上复现成立。
+**结果：V1-V5 全部 PASS。** 不只是 V1（静态直调替换）——三种调用形态矩阵（V2）、
+异常穿透（V3）、GC 正确性（V4）、高频/并发压测（V5）在真实 arm64 硬件上全部复现成立：
+
+```
+GATE1B-ANDROID-ARM64 PASS          (V1)
+V2 PASS                            (原样跑通，零改动)
+GATE1B-V3-ANDROID-ARM64 PASS       (V3)
+GATE1B-V4-ANDROID-ARM64 PASS       (V4)
+GATE1B-V5-ANDROID-ARM64 PASS       (V5，1.6 亿次调用，0 次损坏)
+```
+
+**一条格外有分量的附加证据**：V2（虚调用改 dispatch table 一项、闭包调用改
+Closure 对象的 entry_point 字段）在 arm64 上是**原样拷贝、零改动**跑通的——
+这实测验证了 V2 桌面阶段矩阵的可移植性推论：重定向点如果是"改一个 VM 管理的
+数据结构字段"而不是"改原始机器码"，这套机制天然跨架构。V1/V3/V4/V5 都需要
+针对 arm64 重写调用点改写逻辑，唯独 V2 不需要——这条差异本身就是对"传递闭包
+边界"设计（SPEC §5.4）的一次交叉验证。
 
 **这次验证解决了什么、没解决什么**，边界必须讲清楚：
 
@@ -519,6 +534,17 @@ diff 文件：`vm_patch/gate1_vm_patch.diff`，应用方式和构建坑详见 `v
   Android 上热更新普遍比 iOS 容易的根本原因；这次在 Android 上跑通，
   不能反推 iOS 上也能跑通。阶段 B（iOS 真机复验）依然是唯一能回答这个问题
   的地方，无法被跳过或替代。
+
+**附带发现（符号解析的一个坑）**：`@pragma('vm:entry-point')` 标注的函数
+（`fAlt`，为了防止 AOT 树摇而加的保活标注）在 arm64 的符号表里出现了**两个不同
+地址**（大概率是 checked/unchecked 两个入口变体，没有逐一反汇编确认）。构建脚本
+一开始没处理这种情况，`nm` 匹配出两行地址拼进 shell 变量后嵌入了换行符，把后续
+的 `adb shell` 命令字符串拆成两条，第二条（一串裸地址）被设备的 shell 当命令名
+执行报错——这个错误在 V1 第一次跑通时就出现过，当时因为"侥幸"选中了两个地址里
+排序在前的那个而被忽略，直到 V3 上再次复现才顺藤摸瓜查到根因。修复：所有取地址
+的地方都加 `| head -1`，不依赖排序侥幸。**没有验证过两个地址具体对应什么**，
+这次的验证目的不需要深究，但以后若要在生产级 linker 里做类似的符号解析，这是一个
+需要提前弄清楚的点。
 
 **附带发现（真实的可移植性 bug）**：交叉编译到 Android arm64 时，V2 新增的
 `Internal_redirectClosureEntryPoint` 因为 `#if defined(DART_PRECOMPILED_RUNTIME)`
