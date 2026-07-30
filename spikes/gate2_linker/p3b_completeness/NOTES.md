@@ -47,7 +47,36 @@ setState 闭包体、`target`(方法)本身没变；这里改方法本身，就�
 修后 async byte-changed=`compute`、级联 `caller`、闭包=3；**P1(29==ground truth)/v6/v7/v8
 全回归 PASS 无变化**。这条修复消除了一个会漏判真实改动的完备性隐患——比单个 async 用例更重要。
 
+## 第二批：混淆构建 / FFI / 代码生成库（COVERAGE_GAPS 高风险续）
+
+| 用例 | 改动 | 结果 | 完备/精确? |
+|---|---|---|---|
+| 混淆构建 | P1 样本 `gen_snapshot --obfuscate` + `--save-debugging-info` | 闭包==ground truth(29)、漏判/误报 0 | ✅ |
+| `ffi_case` | FFI 结构体读取算术 `*2→*3` + 回调体 `cb +1→+2` | byte-changed=usePoint,cb;**级联到生成的回调桩 `_FfiCallbackcb`** | ✅ |
+| `codegen_case` | 给 model 加字段、重生成 fromJson/toJson(json_serializable 风格) | byte-changed=userFromJson,userToJson;User 构造经 ambiguous-changed 捕获;`summarize` 判等价 | ✅ |
+
+### 混淆构建 —— PASS（部署级关键正面结论）
+
+`--obfuscate` 下用 P1 样本重跑：**closure==ground truth、漏判/误报 0**。原因：
+`--save-debugging-info` 的 DWARF **保留真实名字**（本就是给崩溃符号化用），我们按 DWARF 真名
+对齐；混淆改的是标识符字符串常量（在对象池里），被 normalize 池通配、不影响指令比对。
+**前提**：保留 release 的 debug 文件（崩溃符号化的标准做法）。→ 后验 DWARF 方案能用于混淆
+release，不必依赖混淆映射表做对齐。
+
+### FFI —— PASS
+
+FFI 的 Struct 字段偏移访问码、FFI 值算术、`Pointer.fromFunction` 回调都正常差分；改回调函数
+`cb` 时，**编译器为它生成的 native 回调 trampoline `_FfiCallbackcb` 正确级联**进闭包。
+**未测**：Struct **布局变更**（增删/重排字段，是 FFI 版 V9，影响所有访问者偏移）——留作后续。
+
+### 代码生成库 —— PASS
+
+json_serializable 风格的 `fromJson`/`toJson` 重生成被完备检出；加字段连带的 User 构造函数经
+ambiguous-changed 捕获；只读旧字段的 `summarize` 因偏移稳定正确判等价（精确）。**注**：`main`
+里 map 字面量改动若只体现为池常量，可能撞 normalize 池通配漏报（已知近似，同 tools/NOTES）；
+真实生成代码在 `part` 文件里，本用例内联，part-file 对齐见 COVERAGE_GAPS #19。
+
 ## 仍未覆盖（下一梯队，见 COVERAGE_GAPS）
 
-Stream/生成器(sync*/async*)、捕获局部变量的闭包、混淆构建对齐、FFI、代码生成库、构造函数、
-模式匹配、签名变更、增删符号。
+Stream/生成器(sync*/async*)、捕获局部变量的闭包、FFI Struct 布局变更、构造函数(独立用例)、
+模式匹配、签名变更、增删符号、part/part-of 多文件同库。

@@ -26,15 +26,17 @@ Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测
 3. **const 内联 / 被广泛使用的 const**：✅ 已测——改 `const K` 被内联进每个使用点、逐个作条件1
    命中，完备。**残留风险**：若 const 入对象池、改动只体现为池 slot 值，会撞 normalize 池通配
    漏报（tools/NOTES），真 linker 需精确 slot→常量映射。
-4. **混淆构建(--obfuscate) / strip release**：当前 CanonicalName 靠 DWARF 里的函数名。release
-   常开混淆→名字被改/剥离→**DWARF 对齐直接失效**。生产必须改用混淆映射表或 Kernel 层对齐。
-   这是"后验 DWARF 方案"的部署级硬伤，必须在正式研发前定方案。
-5. **dart:ffi（底层）**：`Pointer`/`Struct`/`Union` 布局、`@Native`/`NativeFunction` trampoline、
-   `Pointer.fromFunction`/`NativeCallable` 回调(是新的入口根)。改 Struct 字段布局 ~ V9 但面向
-   native；FFI 回调入口的分类与级联未测。底层且真实插件常用。
-6. **代码生成第三方库(freezed / json_serializable / built_value)**：改一个 model 会**重生成
-   整个 .g.dart**（大量机械代码）。测点：大批量生成代码的差分、跨生成代码的对齐、以及"改一个
-   字段→重生成→闭包多大"。真实 app 的补丁大头往往在这里。
+4. **混淆构建(--obfuscate) / strip release**：✅ **已测——不破坏对齐（重要正面结论）**。
+   `--save-debugging-info` 的 DWARF **保留真实名字**（崩溃符号化用途），按真名对齐即可；混淆的
+   标识符字符串在对象池里、被 normalize 通配。P1 样本混淆构建实测 closure==ground truth、
+   漏判/误报 0。前提：保留 release 的 debug 文件（标准做法）。→ 无需混淆映射表做对齐。
+5. **dart:ffi（底层）**：✅ 已测（`ffi_case`）——Struct 字段偏移访问、FFI 值算术、
+   `Pointer.fromFunction` 回调都正常差分，且改回调函数会级联到编译器生成的 native trampoline
+   `_FfiCallbackcb`。**未测**：Struct **布局变更**（FFI 版 V9，影响所有访问者偏移）。
+6. **代码生成第三方库(freezed / json_serializable / built_value)**：✅ 已测（`codegen_case`，
+   手写 json_serializable 风格、未引三方依赖）——加字段重生成的 fromJson/toJson 被完备检出、
+   User 构造经 ambiguous-changed 捕获、只读旧字段的 summarize 判等价。**注**：真实生成代码在
+   `part` 文件里(本用例内联)，part-file 对齐见 #19；map 字面量池常量改动可能撞池通配近似。
 
 ## 中风险（大概率能处理，但未验证——扩样本应逐一纳入）
 
