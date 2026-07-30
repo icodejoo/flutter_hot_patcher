@@ -41,15 +41,17 @@ Usage: diff_linker.py BASE PATCH [--list] [--optimistic] [--emit-closure]
 """
 import subprocess, sys, re, bisect
 
-# Build {code address -> canonical key} from a --save-debugging-info DWARF ELF
-# (P0 finding, see probe_canonical_name/NOTES.md). canonical key = source-file
-# URI (~= library) + DW_AT_name (Class.method). Returns {} if no debug file
-# (caller falls back to bare names).
+# Build {code address -> canonical key} + {code address -> (low_pc, high_pc)}
+# from a --save-debugging-info DWARF ELF (P0 finding, see
+# probe_canonical_name/NOTES.md). canonical key = source-file URI (~= library) +
+# DW_AT_name (Class.method). Returns ({}, {}) if no debug file (caller falls
+# back to bare names).
 #
-# 从 --save-debugging-info 的 DWARF 建 {代码地址 -> canonical key}(P0)。无调试文件返回 {}。
+# 从 --save-debugging-info 的 DWARF 建 {代码地址 -> canonical key} + {地址 -> 区间}(P0)。
+# 无调试文件返回空。
 def dwarf_canonical_map(debug_path, strip_prefix=None):
     if not debug_path:
-        return {}
+        return {}, {}
     info = subprocess.check_output(['readelf', '--debug-dump=info', debug_path]).decode(errors='replace')
     raw = subprocess.check_output(['readelf', '--debug-dump=rawline', debug_path]).decode(errors='replace')
     files = {}
@@ -57,7 +59,7 @@ def dwarf_canonical_map(debug_path, strip_prefix=None):
         files[int(m.group(1))] = m.group(2).strip()
     die_re = re.compile(r'^\s*<\d+><([0-9a-f]+)>:.*\((DW_TAG_\w+)\)', re.M)
     starts = [(m.start(), m.group(1), m.group(2)) for m in die_re.finditer(info)]
-    spec, addr_key = {}, {}
+    spec, addr_key, addr_range = {}, {}, {}
     for i, (pos, off, tag) in enumerate(starts):
         body = info[pos:starts[i + 1][0] if i + 1 < len(starts) else len(info)]
         def at(k):
@@ -86,26 +88,47 @@ def dwarf_canonical_map(debug_path, strip_prefix=None):
             fpath = fpath.lstrip('/')
         addr = int(re.search(r'0x([0-9a-f]+)', lo).group(1), 16)
         addr_key[addr] = f'{fpath}::{nm}'
-    return addr_key
+        # DW_AT_high_pc is an absolute address in this GNU readelf rendering
+        # (verified against real output — not a DW_FORM_data* size offset).
+        hi = at('high_pc')
+        if hi is not None:
+            him = re.search(r'0x([0-9a-f]+)', hi)
+            if him:
+                addr_range[addr] = int(him.group(1), 16)
+    return addr_key, addr_range
 
 # Parse a snapshot into {key: [block,...]}. With addr_map (from DWARF), key is the
 # canonical key; else the bare ELF symbol name. Each block is a list of
 # (raw_bytes, normalized_mnemonic_placeholder, resolved_call_target). Returns also
 # a total instruction count so callers can hard-fail on a non-GNU/empty parse.
-def parse_snapshot(path, addr_map=None):
+def parse_snapshot(path, addr_map=None, addr_range=None):
     addr_map = addr_map or {}
+    addr_range = addr_range or {}
     sorted_addrs = sorted(addr_map)  # for secondary-entry (<sym+0xNN>) resolution
-    # Resolve a call-target address to a canonical key: exact hit, else the
-    # function whose low_pc is the greatest <= addr (a secondary/unchecked entry
-    # point of that function — S4 fix). Errs toward over-inclusion (safe side),
-    # never toward a soundness miss. Returns None if no debug map.
+    # Resolve a call-target address to a canonical key: exact hit, else — ONLY if
+    # it falls STRICTLY WITHIN [low_pc, high_pc) of some function (a genuine
+    # secondary/unchecked entry point of THAT function, S4 fix) — that function's
+    # key. A target with no high_pc, or that falls in unmapped space (e.g. a call
+    # into a VM runtime stub with no DWARF subprogram) must NOT be attributed to
+    # "whatever DWARF function happens to precede it in address order": an
+    # earlier, unbounded version of this fix did that and produced a real
+    # false-positive cascade (see p3c_cid_dispatch probe) — stub layout shifts
+    # with any unrelated code-size change, flipping the mis-attribution base<->
+    # patch and making unrelated unchanged functions look byte-changed. Returns
+    # None (fall back to bare name) when out of range or no high_pc is known.
     def resolve(taddr):
         if taddr in addr_map:
             return addr_map[taddr]
         if not sorted_addrs:
             return None
         i = bisect.bisect_right(sorted_addrs, taddr) - 1
-        return addr_map[sorted_addrs[i]] if i >= 0 else None
+        if i < 0:
+            return None
+        lo = sorted_addrs[i]
+        hi = addr_range.get(lo)
+        if hi is not None and lo <= taddr < hi:
+            return addr_map[lo]
+        return None
 
     out = subprocess.check_output(['objdump', '-d', path]).decode(errors='replace')
     funcs = {}
@@ -186,16 +209,16 @@ def main():
         _die('exactly one of --base-debug/--patch-debug given; both or neither '
              '(asymmetric => canonical vs bare-name keys never align).')
 
-    base_map = dwarf_canonical_map(base_dbg, base_root)
-    patch_map = dwarf_canonical_map(patch_dbg, patch_root)
+    base_map, base_range = dwarf_canonical_map(base_dbg, base_root)
+    patch_map, patch_range = dwarf_canonical_map(patch_dbg, patch_root)
     if base_map or patch_map:
         print(f'alignment                     : CanonicalName (DWARF: '
               f'{len(base_map)} base / {len(patch_map)} patch code addrs mapped)')
     else:
         print('alignment                     : bare ELF symbol name (no --*-debug)')
 
-    base, base_n = parse_snapshot(base_path, base_map)
-    patch, patch_n = parse_snapshot(patch_path, patch_map)
+    base, base_n = parse_snapshot(base_path, base_map, base_range)
+    patch, patch_n = parse_snapshot(patch_path, patch_map, patch_range)
 
     # Guard: non-GNU objdump / bad format => zero instructions parsed => every
     # block empty => everything silently "equivalent". Fail loudly instead.
