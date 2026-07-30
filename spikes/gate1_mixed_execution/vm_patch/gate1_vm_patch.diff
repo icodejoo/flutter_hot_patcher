@@ -1,8 +1,17 @@
 diff --git a/runtime/lib/object.cc b/runtime/lib/object.cc
-index 3f49f75f..920bd5be 100644
+index 3f49f75f..51043f22 100644
 --- a/runtime/lib/object.cc
 +++ b/runtime/lib/object.cc
-@@ -621,6 +621,78 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
+@@ -9,6 +9,8 @@
+ #include "vm/code_patcher.h"
+ #include "vm/dart_api_impl.h"
+ #include "vm/dart_entry.h"
++#include "vm/dispatch_table.h"
++#include "vm/isolate.h"
+ #include "vm/exceptions.h"
+ #include "vm/heap/heap.h"
+ #include "vm/native_entry.h"
+@@ -621,6 +623,112 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
  #endif  // defined(DART_DYNAMIC_MODULES)
  }
 
@@ -78,27 +87,81 @@ index 3f49f75f..920bd5be 100644
 +#endif  // defined(DART_DYNAMIC_MODULES)
 +}
 +
++// Gate 1 spike (flutter_hot_patcher) V2: overwrite the dispatch-table entry
++// for [instance]'s class id so ALL interface/virtual calls that dispatch on
++// that class id observe [replacement]'s method body instead. See
++// spikes/gate1_mixed_execution/cases/v2_call_forms_matrix.
++DEFINE_NATIVE_ENTRY(Internal_redirectDispatchTableEntry, 0, 2) {
++  GET_NON_NULL_NATIVE_ARGUMENT(Instance, instance, arguments->NativeArgAt(0));
++  GET_NON_NULL_NATIVE_ARGUMENT(Closure, replacement, arguments->NativeArgAt(1));
++  auto* table = thread->isolate_group()->dispatch_table();
++  if (table == nullptr) {
++    Exceptions::ThrowUnsupportedError(
++        "No dispatch table for this isolate group.");
++  }
++  const intptr_t cid = instance.GetClassId();
++  const auto& function = Function::Handle(zone, replacement.function());
++  table->SetEntryForCid(cid, function.entry_point());
++  return Object::null();
++}
++
++// Gate 1 spike (flutter_hot_patcher) V2: overwrite [target]'s own entry_point
++// field so every call site that dispatches through THIS closure instance
++// observes [replacement]'s method body instead. See
++// spikes/gate1_mixed_execution/cases/v2_call_forms_matrix.
++DEFINE_NATIVE_ENTRY(Internal_redirectClosureEntryPoint, 0, 2) {
++  GET_NON_NULL_NATIVE_ARGUMENT(Closure, target, arguments->NativeArgAt(0));
++  GET_NON_NULL_NATIVE_ARGUMENT(Closure, replacement, arguments->NativeArgAt(1));
++#if defined(DART_PRECOMPILED_RUNTIME)
++  target.set_entry_point(replacement.entry_point());
++#else
++  Exceptions::ThrowUnsupportedError(
++      "Closure entry_point redirection is AOT/precompiled-runtime only.");
++#endif
++  return Object::null();
++}
++
  DEFINE_NATIVE_ENTRY(Internal_ensureDeeplyImmutable, 0, 1) {
    GET_NATIVE_ARGUMENT(Instance, value, arguments->NativeArgAt(0));
    value.EnsureDeeplyImmutable(zone);
 diff --git a/runtime/vm/bootstrap_natives.h b/runtime/vm/bootstrap_natives.h
-index 0d8a8cfd..4211b4bf 100644
+index 0d8a8cfd..59648e85 100644
 --- a/runtime/vm/bootstrap_natives.h
 +++ b/runtime/vm/bootstrap_natives.h
-@@ -277,6 +277,8 @@ namespace dart {
+@@ -277,6 +277,10 @@ namespace dart {
    V(Internal_prependTypeArguments, 4)                                          \
    V(Internal_instantiateClosure, 2)                                            \
    V(Internal_loadDynamicModule, 1)                                             \
 +  V(Internal_loadDynamicModuleClosure, 1)                                     \
 +  V(Internal_invokeDynamicModuleClosure, 1)                                   \
++  V(Internal_redirectDispatchTableEntry, 2)                                  \
++  V(Internal_redirectClosureEntryPoint, 2)                                   \
    V(Internal_allocateOneByteString, 1)                                         \
    V(Internal_allocateTwoByteString, 1)                                         \
    V(Internal_writeIntoOneByteString, 3)                                        \
+diff --git a/runtime/vm/dispatch_table.h b/runtime/vm/dispatch_table.h
+index 6ba43693..f099a64e 100644
+--- a/runtime/vm/dispatch_table.h
++++ b/runtime/vm/dispatch_table.h
+@@ -62,6 +62,13 @@ class DispatchTable {
+   // Dispatch table array pointer to put into the dispatch table register.
+   const uword* ArrayOrigin() const;
+
++  // Gate 1 spike (flutter_hot_patcher): overwrite the entry for class id
++  // [cid], as used by interface/virtual dispatch (`call *(origin, cid*8)`).
++  // See spikes/gate1_mixed_execution/cases/v2_call_forms_matrix.
++  void SetEntryForCid(intptr_t cid, uword entry_point) {
++    array()[kOriginElement + cid] = entry_point;
++  }
++
+  private:
+   uword* array() { return array_.get(); }
+
 diff --git a/sdk/lib/_internal/vm/lib/internal_patch.dart b/sdk/lib/_internal/vm/lib/internal_patch.dart
-index d0fca217..fdfe0217 100644
+index d0fca217..c11850f0 100644
 --- a/sdk/lib/_internal/vm/lib/internal_patch.dart
 +++ b/sdk/lib/_internal/vm/lib/internal_patch.dart
-@@ -458,6 +458,22 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
+@@ -458,6 +458,38 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
  @pragma("vm:external-name", "Internal_loadDynamicModule")
  external Object? _loadDynamicModule(Uint8List bytes);
 
@@ -118,14 +181,30 @@ index d0fca217..fdfe0217 100644
 +@pragma("vm:external-name", "Internal_invokeDynamicModuleClosure")
 +external Object? _invokeDynamicModuleClosure(Object closure);
 +
++@patch
++Object? redirectDispatchTableEntry(Object instance, Object replacement) {
++  return _redirectDispatchTableEntry(instance, replacement);
++}
++
++@pragma("vm:external-name", "Internal_redirectDispatchTableEntry")
++external Object? _redirectDispatchTableEntry(Object instance, Object replacement);
++
++@patch
++Object? redirectClosureEntryPoint(Object target, Object replacement) {
++  return _redirectClosureEntryPoint(target, replacement);
++}
++
++@pragma("vm:external-name", "Internal_redirectClosureEntryPoint")
++external Object? _redirectClosureEntryPoint(Object target, Object replacement);
++
  @patch
  @pragma("vm:entry-point")
  abstract interface class IsolateGroup {
 diff --git a/sdk/lib/internal/internal.dart b/sdk/lib/internal/internal.dart
-index adbaa54e..dc3bfb3d 100644
+index adbaa54e..fe9b40ad 100644
 --- a/sdk/lib/internal/internal.dart
 +++ b/sdk/lib/internal/internal.dart
-@@ -1146,6 +1146,17 @@ bool isToStringVisiting(Object object) {
+@@ -1146,6 +1146,25 @@ bool isToStringVisiting(Object object) {
  /// Returns a future containing the result of the entry point method.
  external Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes});
 
@@ -139,6 +218,14 @@ index adbaa54e..dc3bfb3d 100644
 +/// by [loadDynamicModuleClosure], bypassing normal Dart closure-call dispatch
 +/// (which rejects bytecode-declared entry points).
 +external Object? invokeDynamicModuleClosure(Object closure);
++
++/// Gate 1 spike (flutter_hot_patcher) V2: redirect ALL interface/virtual
++/// calls dispatching on [instance]'s class id to [replacement]'s body.
++external Object? redirectDispatchTableEntry(Object instance, Object replacement);
++
++/// Gate 1 spike (flutter_hot_patcher) V2: redirect calls through THIS
++/// closure instance [target] to [replacement]'s body.
++external Object? redirectClosureEntryPoint(Object target, Object replacement);
 +
  /// Helper class to create `bool Function(Object?)` functions which
  /// perform an `v is T` type test.
