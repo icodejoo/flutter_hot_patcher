@@ -155,6 +155,20 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
      不要硬编码偏移量，改了源码后偏移量会变。
    - `mprotect` 临时开 `PROT_WRITE`，改写 4 字节位移，改回 `PROT_READ|PROT_EXEC`。
 
+## 5.5 跨平台移植踩坑：`#if defined(DART_PRECOMPILED_RUNTIME)` 里的变量在其他构建变体里"未使用"
+
+`runtime/lib/object.cc` 里我们加的原生函数，如果在 `#if defined(DART_PRECOMPILED_RUNTIME)`
+分支里才用到某个 `GET_NON_NULL_NATIVE_ARGUMENT` 提取出来的变量，**千万不要把提取语句放在
+`#if`/`#else` 外面**——`DART_PRECOMPILED_RUNTIME` 只在"AOT 运行时"这个构建变体里定义，
+`gen_snapshot`（"precompiler"变体，交叉编译到其他目标架构时用到）不定义这个宏，会走
+`#else` 分支，导致提取出来的变量完全没用上，在 `-Werror -Wunused-variable` 下编译报错
+（这个错误在桌面 x64 的 `dartaotruntime_product`/`gen_snapshot_product` 构建变体下不会
+触发，只有交叉编译到 Android/iOS 等其他目标架构、走到 `gen_snapshot` 的
+`precompiler_product` 变体时才会暴露——这正是"只在 x86_64 desktop 上测过"这条已知边界
+会漏掉的坑之一）。正确写法：把 `GET_NON_NULL_NATIVE_ARGUMENT` 也放进
+`#if defined(DART_PRECOMPILED_RUNTIME)` 分支里面，`#else` 分支只管抛
+`UnsupportedError`，不碰任何参数变量。
+
 ## 6. 补丁(字节码模块)能调用什么 API——闭世界树摇的坑
 
 写任何 `patch/*.dart` 时，如果运行时报

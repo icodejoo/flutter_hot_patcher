@@ -495,6 +495,46 @@ diff 文件：`vm_patch/gate1_vm_patch.diff`，应用方式和构建坑详见 `v
 
 ---
 
+## 12. 追加（2026-07-30）：Gate 1b — Android arm64 真机复现
+
+用户手头暂时没有 iPhone，但有 Android arm64 真机可用。V1-V5 全部在 x86-64 桌面验证，
+从未测过 arm64——这正是 iOS 最终也要用的同一个 CPU 架构族。在获取 Mac/iPhone 之前，
+先用 Android arm64 复现 V1 核心机制，是一次**低成本、有实际增量价值**的预检查：
+用例见 `android_arm64/`，完整证据见 `android_arm64/NOTES.md`。
+
+**结果：GATE1B-ANDROID-ARM64 PASS。** V1 的核心命题（既有静态直调调用点运行时
+重定向到解释执行的 `f'`）在真实 arm64 硬件上复现成立。
+
+**这次验证解决了什么、没解决什么**，边界必须讲清楚：
+
+- **解决了**：arm64 指令编码层面的机制可行性。arm64 的直调指令是 `bl`
+  （反汇编实测确认，编码和 x86-64 的 `call rel32` 完全不同），且 arm64 对
+  自修改代码有 x86-64 没有的硬性要求——写完新指令字节后必须显式做指令缓存
+  失效（`dc cvau`+`ic ivau`+相应屏障指令），否则 CPU 可能执行到缓存里的旧
+  指令。这一整层在 x86-64 桌面验证里完全没有出现过，这次证明了它可以正确
+  处理（bionic 没有现成的 `__clear_cache`/`cacheflush` API，靠自己汇编一段
+  验证过的机器码、`mmap` 出可执行页来调用）。
+- **没有解决**：iOS 那个最核心的悬念——W^X 强制 + 代码签名下，
+  `mprotect(PROT_EXEC)` 会不会被系统拦截。**Android 不强制 W^X**，这正是
+  Android 上热更新普遍比 iOS 容易的根本原因；这次在 Android 上跑通，
+  不能反推 iOS 上也能跑通。阶段 B（iOS 真机复验）依然是唯一能回答这个问题
+  的地方，无法被跳过或替代。
+
+**附带发现（真实的可移植性 bug）**：交叉编译到 Android arm64 时，V2 新增的
+`Internal_redirectClosureEntryPoint` 因为 `#if defined(DART_PRECOMPILED_RUNTIME)`
+分支边界写得不对（提取参数的语句放在了分支外面），在 `gen_snapshot` 的
+`precompiler_product` 构建变体下触发 `-Werror -Wunused-variable` 编译失败——
+桌面 x64 的构建变体恰好都定义了这个宏，从未暴露过这个问题。这说明**只在
+desktop x64 上迭代，测不出这类"只在跨架构交叉编译时才触发"的坑**，已修复
+并更新进 `vm_patch/gate1_vm_patch.diff`。
+
+**结论**：这次验证没有推翻 Gate 1 的任何结论，反而增加了一条正面证据——
+核心机制的思路（找调用点 + 改写 + 接解释器）具备跨架构可移植性，每种架构
+有各自的指令编码/内存一致性细节要单独处理，但至今没有发现从根本上推翻方案
+的新问题。iOS 真机复验（阶段 B）仍是下一个、也是唯一悬而未决的关键节点。
+
+---
+
 *本报告基于 2026-07-29～2026-07-30 的实测结果。若后续 SDK 版本更新，VM 内部字段
 偏移/函数签名可能变化，复现前建议按 `.claude/skills/gate1-vm-spike/SKILL.md` 的
 方法重新反汇编确认，不要假设本报告的具体地址/偏移量在新版本上依然成立。*

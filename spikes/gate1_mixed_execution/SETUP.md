@@ -3,9 +3,10 @@
 从零到跑通 V1 替换用例的环境路径。**无需 macOS 即可完成桌面阶段的全部核心验证**；
 iOS 真机复验放到桌面阶段跑通之后（见最后一节）。
 
-> **桌面阶段（V1-V5）已于 2026-07-30 全部 PASS。** 完整结论、证据链、踩坑记录见
-> [`GATE1_REPORT.md`](./GATE1_REPORT.md)（给 Fable 审核 + 后续维护参考的完整报告）。
-> 操作流程和构建坑见 `.claude/skills/gate1-vm-spike/SKILL.md`。
+> **桌面阶段（V1-V5）已于 2026-07-30 全部 PASS，Gate 1b（Android arm64 真机复现）
+> 同日 PASS。** 完整结论、证据链、踩坑记录见 [`GATE1_REPORT.md`](./GATE1_REPORT.md)
+> （给 Fable 审核 + 后续维护参考的完整报告）。操作流程和构建坑见
+> `.claude/skills/gate1-vm-spike/SKILL.md`。
 
 ---
 

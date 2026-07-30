@@ -1,12 +1,13 @@
 # Gate 1 V1/V2 所需的 Dart VM 最小改动
 
 `gate1_vm_patch.diff` 是应用在 `dart-lang/sdk` 源码 checkout（`~/dart/sdk`）上的 diff，
-支撑两个用例：
+支撑三个用例：
 - [`cases/v1_replace_existing_function`](../cases/v1_replace_existing_function/) 的
   `_tryActivatePatch` 真正调用解释器执行补丁字节码。
 - [`cases/v2_call_forms_matrix`](../cases/v2_call_forms_matrix/) 的虚调用/闭包调用重定向。
+- [`android_arm64/`](../android_arm64/) V1 在 Android arm64 真机上的复现。
 
-详见两个用例各自 `NOTES.md` 的完整证据链和设计理由，这里只记应用方式和构建坑。
+详见各用例的 `NOTES.md` 完整证据链和设计理由，这里只记应用方式和构建坑。
 
 ## 应用方式
 
@@ -70,3 +71,41 @@ git apply /path/to/gate1_vm_patch.diff
 - V1 部分是 spike 级最小实现，只覆盖"加载一次、可重复调用零参数入口点"，没做参数传递、
   异常穿透、GC 触发等场景（留给 V3/V4）。
 - V2 的 dispatch table 重定向只测过两个具体实现类的场景，没测过大规模 cid 空间/并发场景。
+
+## 跨平台移植踩坑（交叉编译到 Android arm64 时暴露，务必看）
+
+`Internal_redirectClosureEntryPoint` 里，`GET_NON_NULL_NATIVE_ARGUMENT` 提取的两个变量
+一开始放在 `#if defined(DART_PRECOMPILED_RUNTIME)` **外面**——这在桌面 x64 的
+`dartaotruntime_product`/`gen_snapshot_product` 构建变体下没问题（这两个变体都定义了
+`DART_PRECOMPILED_RUNTIME`），但交叉编译到 Android/iOS 等目标架构时，会触发 `gen_snapshot`
+的 `precompiler_product` 变体——这个变体**不**定义 `DART_PRECOMPILED_RUNTIME`，走
+`#else` 分支，两个变量完全没用上，在 `-Werror -Wunused-variable` 下编译直接报错。
+diff 里已经修好（把 `GET_NON_NULL_NATIVE_ARGUMENT` 挪进 `#if` 分支里面）。**结论**：
+以后凡是 `#if defined(DART_PRECOMPILED_RUNTIME)` 里才用到的变量，提取语句也要放进
+同一个 `#if` 分支，不要放在外面——这条只在交叉编译到桌面 x64 以外的架构时才会暴露，
+纯 x64 desktop 迭代永远测不出来。
+
+## Android arm64 交叉编译（Gate 1b，验证过程见 `android_arm64/NOTES.md`）
+
+除了应用这份 diff、正常构建桌面 x64（`out/ReleaseX64`），还需要额外交叉编译一份 Android
+arm64 目标：
+
+```bash
+# .gclient 加 custom_vars: {"download_android_deps": True} 和 target_os = ["android"]
+cd ~/dart && gclient sync -D
+
+cd ~/dart/sdk
+./tools/build.py --os android --arch arm64 -m release --dart-dynamic-modules \
+    runtime runtime_precompiled utils/gen_kernel
+
+# 默认目标名不包含需要的具体产物（同样的坑，见 skill）：
+cd out/ReleaseAndroidARM64
+../../buildtools/ninja/ninja exe.stripped/dartaotruntime \
+    clang_x64/exe.stripped/gen_snapshot_product \
+    gen/gen_kernel_aot.dart.snapshot gen/dart2bytecode.dart.snapshot vm_platform.dill
+../../buildtools/ninja/ninja 'runtime/bin:dartaotruntime_product'
+```
+
+**编译 Dart 源码的工具（`gen_kernel`/`dart2bytecode`）继续用桌面 x64 那份**（跟目标 CPU
+无关），只有 `gen_snapshot`（生成 AOT 机器码快照）和 `vm_platform.dill` 需要
+Android arm64 版本——完整说明见 `android_arm64/NOTES.md`「环境搭建」一节。

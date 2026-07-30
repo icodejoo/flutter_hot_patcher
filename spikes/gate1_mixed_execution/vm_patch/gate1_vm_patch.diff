@@ -110,9 +110,9 @@ index 3f49f75f..51043f22 100644
 +// observes [replacement]'s method body instead. See
 +// spikes/gate1_mixed_execution/cases/v2_call_forms_matrix.
 +DEFINE_NATIVE_ENTRY(Internal_redirectClosureEntryPoint, 0, 2) {
++#if defined(DART_PRECOMPILED_RUNTIME)
 +  GET_NON_NULL_NATIVE_ARGUMENT(Closure, target, arguments->NativeArgAt(0));
 +  GET_NON_NULL_NATIVE_ARGUMENT(Closure, replacement, arguments->NativeArgAt(1));
-+#if defined(DART_PRECOMPILED_RUNTIME)
 +  target.set_entry_point(replacement.entry_point());
 +#else
 +  Exceptions::ThrowUnsupportedError(
