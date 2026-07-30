@@ -151,7 +151,27 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
      不要硬编码偏移量，改了源码后偏移量会变。
    - `mprotect` 临时开 `PROT_WRITE`，改写 4 字节位移，改回 `PROT_READ|PROT_EXEC`。
 
-## 6. 已验证结论速查（详情见各 NOTES.md）
+## 6. 补丁(字节码模块)能调用什么 API——闭世界树摇的坑
+
+写任何 `patch/*.dart` 时，如果运行时报
+`error: Unable to find function/class XXX in Library:'YYY'`（在
+`Internal_loadDynamicModule`/`Internal_loadDynamicModuleClosure` 这类字节码
+**加载**阶段崩，而不是编译阶段），**不要以为是库选错了**——真正原因几乎总是：
+补丁引用的这个符号，宿主 AOT 编译产物里没人用过，被树摇删了。字节码读取器只能
+跨链接到宿主自己保留下来的声明，跟这个符号是 `dart:core` 还是 `dart:_internal`
+无关（`String.isNotEmpty`、`List.filled`、`VMInternalsForTesting` 都踩过这个坑，
+前两个是 `dart:core`）。
+
+**排查/规避方法**：
+1. 补丁里只用宿主代码**自己已经在用**的操作（比如字符串插值 `'$x'`，因为
+   `g() got: ${f()}` 这种写法本来就在用）。
+2. 想验证某个 API 能不能用，最快的办法是**先试一次、看报错**——不用提前枚举，
+   报错信息里的类名/函数名会直接告诉你解析失败在哪。
+3. 真要让补丁调用任意宿主 API，需要接 `dynamic_interface.yaml` 的 `callable`
+   声明（官方机制，本仓库的 spike 用例目前都没配这个，故意留着没解决——
+   这是"这套方案能覆盖多少真实场景"的评估项，不是阻塞 V1-V4 的问题）。
+
+## 7. 已验证结论速查（详情见各 NOTES.md）
 
 - **官方 `package:dynamic_modules` 不支持替换既有函数**——这是故意的设计限制
   （`pkg/dynamic_modules/README.md` 明确声明"additive only"），不是实现缺口。
@@ -168,5 +188,15 @@ CFE 有 `allowPlatformPrivateLibraryAccess` 检查（`pkg/kernel/lib/target/targ
   新类分配需要解释器把隐式 `Object()` 父类构造解析到宿主 `dart:core`，这条链接要靠
   `dynamic_interface.yaml` 打通，我们的 spike 用例都没配。规避：补丁只抛宿主/解释器
   都已知的内置异常（`StateError` 等），别在补丁里声明新类型。
-- 下一步：V4（GC 触发）/ V5（压测），以及 iOS 真机 W^X 复验（阶段 B，
+- **V4（补丁内触发 GC）PASS**：GC 触发时 AOT 调用方帧上存活对象未被破坏，
+  GC 后解释器内部分配依然正确。未加新 VM 代码。**重要发现（比 V4 本身更重要）**：
+  字节码补丁只能引用**宿主 AOT 编译产物自己已经保留下来**的符号（闭世界树摇），
+  不是按"这个符号属于 dart:core 还是 dart:_internal"区分——哪怕是 `dart:core`
+  再普通不过的 getter（比如 `String.isNotEmpty`），只要宿主代码没用过，
+  AOT 树摇时就被删了，补丁引用会在**字节码加载阶段**报
+  `Unable to find function/class ...`。字符串插值能用纯粹是因为宿主代码
+  自己也在用它构造字符串。**这直接限制补丁能调用什么 API**——要打通任意
+  API 调用必须靠 `dynamic_interface.yaml` 的 `callable` 声明，这不是可以
+  忽略的细节，是评估这套方案能覆盖多少真实场景的硬约束。
+- 下一步：V5（压测），以及 iOS 真机 W^X 复验（阶段 B，
   桌面这套 `mprotect(PROT_EXEC)` 的机制在 iOS 强制 W^X + 代码签名下能不能等价成立是未知数）。
