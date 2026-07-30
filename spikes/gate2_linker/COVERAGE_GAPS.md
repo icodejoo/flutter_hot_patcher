@@ -4,6 +4,17 @@
 **改动形态**没测到。重点按**对差分器"完备性(sound)/精确度"的风险**分级——高风险=可能让
 当前 spike 方案出错或漏判，中=大概率能处理但未验证，低=多半无碍或不在 diff 范围。
 
+> **本文是"语言/样本覆盖面"的复盘。`diff_linker` 工具自身的实现级缺口（含多个当前 x86-64
+> 即可复现的静默漏判）见 [`REVIEW_diff_linker.md`](REVIEW_diff_linker.md)（多 agent 评审，
+> 59 发现/52 验证存活）。** 其中一条属本文范畴、红线级、此前完全未列，补记如下：
+>
+> **0. cid / dispatch-table / vtable 布局漂移（改动形态盲区，SPEC §4.3）· 高风险**：diff_linker 只
+> 比"函数机器码字节 + 直调边"，对**类的 cid 分配 / dispatch slot / vtable 顺序零建模**。补丁若只增删/
+> 重排类成员使既有类的 cid 或 dispatch slot 平移、而**无任何函数字节改变** → byte-changed=∅、闭包=0、
+> 工具报"0 must reinterpret"，但字节未变的虚调用方在设备上按旧 slot 布局派发到错误目标 → 行为错乱。
+> 与 S1/S2 同属"字节没变但行为变了、闭包为空、无告警"的红线类。正解=SPEC §4.3 cid 稳定化 +
+> 差分器消费 cid/dispatch 元数据做布局比对（或类声明集合变化时保守告警）。**未测。**
+
 已覆盖（基线）：int/double/bool/String、List/Map/Set/record、类 method/getter/setter/
 operator/static、mixin、enum(带方法)、泛型类、匿名闭包、直接调用链级联、多态虚调用边界；
 Flutter 的 StatelessWidget/StatefulWidget/build/setState。**改动形态只测了"改函数体常量"。**
