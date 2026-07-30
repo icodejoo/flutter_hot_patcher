@@ -21,7 +21,21 @@ V9（类字段布局变更，最可能推翻方案的用例）。
 | V10 | 影响范围与性能：受影响传递闭包规模、解释比例、性能下降幅度 | ✅ k 谱系 1.7–14x + 决策模型，见 `v10_perf/` |
 
 **Gate 2 通过判据（PLAN §Gate2）：V6–V9 正确 ✅ 且 V10 性能可接受 ✅ → 全部满足。**
-另：机器码替换路线调研见 `research_machinecode_route.md`（用户择日再深议）。
+
+## 大样本全场景差分精确度测试（扩展）
+
+在 Gate 2 判据之外，进一步把差分验证扩成全类型全场景大样本，测功能覆盖率 + 差分精确度：
+
+| 阶段 | 内容 | 结果 |
+|---|---|---|
+| P0 | CanonicalName 对齐可行性（命门） | ✅ DWARF 源文件+成员名消歧，见 `probe_canonical_name/` |
+| P3 | diff_linker 升级 CanonicalName + 多重集精化 | ✅ 见 `tools/diff_linker.py` |
+| P1 | 纯 Dart 全类型大样本（3125 函数，294 撞名） | ✅ 闭包==ground truth，漏判/误报 0，见 `p1_sample/` |
+| P2 | 真实 Flutter widget + 完整框架（5797 函数） | ✅ widget 改动收敛 3 函数(0.1%)，框架全等价，见 `p2_widget/` |
+
+**汇总报告见 [`PRECISION_REPORT.md`](PRECISION_REPORT.md)**（功能覆盖率 + 精确度数字 +
+与 Shorebird 公开做法定性对比）。Shorebird 对比详见 `research_shorebird_compare.md`。
+机器码替换路线调研见 `research_machinecode_route.md`（用户择日再深议）。
 
 ## 通过 / 放弃判据（PLAN.md）
 
