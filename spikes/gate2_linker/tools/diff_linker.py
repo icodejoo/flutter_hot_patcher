@@ -237,8 +237,20 @@ def main():
           f'{len(must_interp) - len(byte_changed) - len(added) - len(seed_ambiguous)}')
     print(f'equivalent (baseline)         : {len(equivalent)}')
 
+    # Machine-readable closure dump (one canonical key per line) for measure.py.
+    if '--emit-closure' in sys.argv[3:]:
+        for n in sorted(must_interp):
+            print(f'CLOSURE\t{n}')
+
     if list_all:
         propagated = must_interp - byte_changed - added - ambiguous
+        if added or removed:
+            print('\n--- added (in patch, not base) ---')
+            for n in sorted(added):
+                print(f'  {n}')
+            print('--- removed (in base, not patch) ---')
+            for n in sorted(removed):
+                print(f'  {n}')
         print('\n--- byte-changed (condition 1) ---')
         for n in sorted(byte_changed):
             print(f'  {n}')
