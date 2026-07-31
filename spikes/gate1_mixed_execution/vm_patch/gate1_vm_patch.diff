@@ -1,8 +1,8 @@
 diff --git a/runtime/lib/object.cc b/runtime/lib/object.cc
-index 13a0bd3b677..8dbd97a00f2 100644
+index 13a0bd3b677..a55a9d2c741 100644
 --- a/runtime/lib/object.cc
 +++ b/runtime/lib/object.cc
-@@ -9,6 +9,8 @@
+@@ -9,12 +9,15 @@
  #include "vm/code_patcher.h"
  #include "vm/dart_api_impl.h"
  #include "vm/dart_entry.h"
@@ -11,7 +11,14 @@ index 13a0bd3b677..8dbd97a00f2 100644
  #include "vm/exceptions.h"
  #include "vm/heap/heap.h"
  #include "vm/native_entry.h"
-@@ -623,6 +625,112 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
+ #include "vm/object.h"
+ #include "vm/object_store.h"
+ #include "vm/resolver.h"
++#include "vm/visitor.h"
+ #include "vm/runtime_entry.h"
+ #include "vm/stack_frame.h"
+ #include "vm/symbols.h"
+@@ -623,6 +626,147 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
  #endif  // defined(DART_DYNAMIC_MODULES)
  }
  
@@ -121,14 +128,49 @@ index 13a0bd3b677..8dbd97a00f2 100644
 +  return Object::null();
 +}
 +
++// Gate 1 spike (flutter_hot_patcher) R3.1 probe: heap-walk to count all live
++// Closure instances whose .function() matches [sample]'s function. Answers
++// "can a patch-application engine enumerate every closure instance that
++// needs its entry_point redirected" -- see
++// spikes/gate2_linker/r3_boundary_contract/NOTES.md. Uses HeapIterationScope/
++// ObjectVisitor (NOT ObjectGraph -- that one is compiled out of PRODUCT
++// builds via DART_ENABLE_HEAP_SNAPSHOT_WRITER; HeapIterationScope has no such
++// gating, confirmed by reading runtime/vm/heap/heap.cc).
++class ClosureFunctionCounter : public ObjectVisitor {
++ public:
++  explicit ClosureFunctionCounter(FunctionPtr target)
++      : target_(target), count_(0) {}
++  void VisitObject(ObjectPtr obj) override {
++    if (obj->GetClassIdOfHeapObject() == kClosureCid) {
++      if (static_cast<ClosurePtr>(obj)->untag()->function() == target_) {
++        ++count_;
++      }
++    }
++  }
++  intptr_t count() const { return count_; }
++
++ private:
++  FunctionPtr target_;
++  intptr_t count_;
++};
++
++DEFINE_NATIVE_ENTRY(Internal_countClosuresForFunction, 0, 1) {
++  GET_NON_NULL_NATIVE_ARGUMENT(Closure, sample, arguments->NativeArgAt(0));
++  const FunctionPtr target = sample.function();
++  HeapIterationScope iteration(thread);
++  ClosureFunctionCounter visitor(target);
++  iteration.IterateObjects(&visitor);
++  return Integer::New(visitor.count());
++}
++
  DEFINE_NATIVE_ENTRY(Internal_ensureDeeplyImmutable, 0, 1) {
    GET_NATIVE_ARGUMENT(Instance, value, arguments->NativeArgAt(0));
    value.EnsureDeeplyImmutable(zone);
 diff --git a/runtime/vm/bootstrap_natives.h b/runtime/vm/bootstrap_natives.h
-index 2ca92bc364d..312c6e09aa7 100644
+index 2ca92bc364d..c19c80cb2a8 100644
 --- a/runtime/vm/bootstrap_natives.h
 +++ b/runtime/vm/bootstrap_natives.h
-@@ -272,6 +272,10 @@ namespace dart {
+@@ -272,6 +272,11 @@ namespace dart {
    V(Internal_prependTypeArguments, 4)                                          \
    V(Internal_instantiateClosure, 2)                                            \
    V(Internal_loadDynamicModule, 1)                                             \
@@ -136,6 +178,7 @@ index 2ca92bc364d..312c6e09aa7 100644
 +  V(Internal_invokeDynamicModuleClosure, 1)                                   \
 +  V(Internal_redirectDispatchTableEntry, 2)                                  \
 +  V(Internal_redirectClosureEntryPoint, 2)                                   \
++  V(Internal_countClosuresForFunction, 1)                                    \
    V(Internal_allocateOneByteString, 1)                                         \
    V(Internal_allocateTwoByteString, 1)                                         \
    V(Internal_writeIntoOneByteString, 3)                                        \
@@ -158,10 +201,10 @@ index 6ba4369363a..f099a64ef86 100644
    uword* array() { return array_.get(); }
  
 diff --git a/sdk/lib/_internal/vm/lib/internal_patch.dart b/sdk/lib/_internal/vm/lib/internal_patch.dart
-index 94f733413db..9a65440e80b 100644
+index 94f733413db..efde308e1d9 100644
 --- a/sdk/lib/_internal/vm/lib/internal_patch.dart
 +++ b/sdk/lib/_internal/vm/lib/internal_patch.dart
-@@ -458,6 +458,38 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
+@@ -458,6 +458,46 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
  @pragma("vm:external-name", "Internal_loadDynamicModule")
  external Object? _loadDynamicModule(Uint8List bytes);
  
@@ -197,14 +240,22 @@ index 94f733413db..9a65440e80b 100644
 +@pragma("vm:external-name", "Internal_redirectClosureEntryPoint")
 +external Object? _redirectClosureEntryPoint(Object target, Object replacement);
 +
++@patch
++int countClosuresForFunction(Object sampleClosure) {
++  return _countClosuresForFunction(sampleClosure);
++}
++
++@pragma("vm:external-name", "Internal_countClosuresForFunction")
++external int _countClosuresForFunction(Object sampleClosure);
++
  @patch
  @pragma("vm:entry-point")
  abstract interface class IsolateGroup {
 diff --git a/sdk/lib/internal/internal.dart b/sdk/lib/internal/internal.dart
-index 6df7e6c21a5..c4e24a1b60c 100644
+index 6df7e6c21a5..718c4d3a6ed 100644
 --- a/sdk/lib/internal/internal.dart
 +++ b/sdk/lib/internal/internal.dart
-@@ -1146,6 +1146,25 @@ bool isToStringVisiting(Object object) {
+@@ -1146,6 +1146,29 @@ bool isToStringVisiting(Object object) {
  /// Returns a future containing the result of the entry point method.
  external Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes});
  
@@ -226,6 +277,10 @@ index 6df7e6c21a5..c4e24a1b60c 100644
 +/// Gate 1 spike (flutter_hot_patcher) V2: redirect calls through THIS
 +/// closure instance [target] to [replacement]'s body.
 +external Object? redirectClosureEntryPoint(Object target, Object replacement);
++
++/// Gate 1 spike (flutter_hot_patcher) R3.1 probe: count all live Closure
++/// instances whose function matches [sampleClosure]'s function (heap walk).
++external int countClosuresForFunction(Object sampleClosure);
 +
  /// Helper class to create `bool Function(Object?)` functions which
  /// perform an `v is T` type test.

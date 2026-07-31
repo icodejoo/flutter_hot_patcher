@@ -76,3 +76,10 @@ R3 原表述把"diff_linker 的静态调用边模型"和"运行时补丁应用�
 补丁应用引擎证明"给定一个被改动的函数，能枚举所有引用它的活跃闭包实例"——如果做不到完备枚举，
 则该函数只要曾被 tear-off 过就必须保守地整体禁止走"改 entry_point"这条轻量重定向路径,退化到
 更重的机制（例如全局替换该 Function 对象本身而非逐实例，需要验证是否可行）。
+
+**2026-07-31 后续（不等 Mac，直接 spike 验证）**：R3.1 提出的"能不能枚举"这个问题已经有答案了
+——见 `../../gate1_mixed_execution/r3_closure_enum_probe/NOTES.md`。新增
+`Internal_countClosuresForFunction` 原生入口，用 `HeapIterationScope`（VM 自己 GC 内部也在用
+的堆遍历机制，**未被** `PRODUCT` 排除，跟 `ObjectGraph` 不是一回事）实测枚举 5 个不同 receiver
+的实例方法 tear-off + 1 个后补的，全部精确计数、无漏无多。**枚举机制本身可行，不是无解的硬缺口**
+——R3.1 剩下的是"怎么做扎实"（边遍历边写、多 isolate、大堆性能），不是"能不能做"。

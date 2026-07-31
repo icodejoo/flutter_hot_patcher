@@ -47,7 +47,9 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
    entry 重定向刷新（运行时缓存失效项，非 diff-linker 完备性问题）。**2026-07-31 提升**：这条已
    从注脚提升为独立生产需求 `PRODUCTION_LINKER_SPEC.md` R3.1（闭包重定向完备性）——V2 只测了
    重定向一个已知闭包变量，"枚举所有活跃闭包实例"这件事本身从未验证，失败是静默不生效，见
-   `r3_boundary_contract/NOTES.md`。
+   `r3_boundary_contract/NOTES.md`。**2026-07-31 spike 验证**：枚举机制找到且实测可行
+   （`HeapIterationScope`，非生产被排除的 `ObjectGraph`），见
+   `../gate1_mixed_execution/r3_closure_enum_probe/NOTES.md`，不再是无解硬缺口。
 3. **const 内联 / 被广泛使用的 const**：✅ 已测——改 `const K` 被内联进每个使用点、逐个作条件1
    命中，完备。**残留风险**：若 const 入对象池、改动只体现为池 slot 值，会撞 normalize 池通配
    漏报（tools/NOTES），真 linker 需精确 slot→常量映射。

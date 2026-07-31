@@ -46,7 +46,7 @@ git apply /path/to/gate1_vm_patch.diff
 
 ## 改了什么
 
-新增四个原生入口（不改动任何既有官方行为，纯新增）：
+新增五个原生入口（不改动任何既有官方行为，纯新增）：
 
 - `Internal_loadDynamicModuleClosure`：和官方 `Internal_loadDynamicModule` 一样加载字节码，
   但不立即调用入口点，而是包成 `Closure` 同步返回——绕开官方 API 的 Future 包装（其实底层
@@ -58,10 +58,17 @@ git apply /path/to/gate1_vm_patch.diff
   对应 class id 的那一项，让所有按该 cid 分发的调用统一重定向。
 - `Internal_redirectClosureEntryPoint`（V2）：直接调用 VM 既有的 `Closure::set_entry_point`，
   改写某个闭包实例自己的 entry_point 字段。
+- `Internal_countClosuresForFunction`（R3.1 探测，见
+  `../r3_closure_enum_probe/NOTES.md`）：用 `HeapIterationScope`/`ObjectVisitor`
+  （**不是** `ObjectGraph`——那个被 `DART_ENABLE_HEAP_SNAPSHOT_WRITER` 排除出 `PRODUCT`
+  构建）遍历整个堆，统计有多少存活的 `Closure` 实例的 `function()` 等于给定目标——回答
+  "补丁应用引擎能否完备枚举所有需要重定向 entry_point 的闭包实例"这个问题。实测 5 个不同
+  receiver 的实例方法 tear-off + 1 个后补的都被完整、精确计数。
 
 通过 `dart:_internal`（`internal.dart` + `internal_patch.dart`）暴露成
 `loadDynamicModuleClosure` / `invokeDynamicModuleClosure` /
-`redirectDispatchTableEntry` / `redirectClosureEntryPoint` 四个新公开函数。
+`redirectDispatchTableEntry` / `redirectClosureEntryPoint` /
+`countClosuresForFunction` 五个新公开函数。
 
 ## 用法上的限制
 
