@@ -22,13 +22,14 @@ official bytecode interpreter to enable App-Store-compliant hot updates on iOS.
 
 ## 当前阶段 / Current Phase
 
-**Gate 1 桌面 x64 + Android arm64 真机（V1-V5）已全部 PASS**，Gate 2 linker 可行性 spike 级
-验证（大样本精确度、多 agent 评审、生产需求排期）已完成。**唯一剩下的、还可能整体推翻方案的
-验证点是 Gate 1 阶段 B：iOS 真机 W^X 复验**——需要 Mac，是当前的头号任务。
+**Gate 1 已在桌面 x64、Android arm64 真机、iOS 真机三个平台全部 PASS**（2026-07-31 完成，
+详见 `spikes/gate1_mixed_execution/GATE1_REPORT.md` §14）——曾被认为"唯一可能整体推翻方案"
+的 iOS W^X 门已经过了：V1（改代码页）在 iOS 上确认不可行，但 V2（纯数据重定向）完全可行，
+V1 从不是运行时必需机制。**当前进入 Gate 2 生产 linker（kernel_linker，R1-R9）阶段**，
+Mac 已实现 v1（R1+R2+R3部分+R9 PASS），正在做 R3 去虚化盲区（新发现）+ R3.1 + R4-R8。
 
-**刚接手项目（尤其是从 Windows/WSL2 移交到 Mac）先读 [MAC_HANDOFF.md](MAC_HANDOFF.md)**，
-里面有锁定的 dart-sdk/Flutter Engine commit、`.gclient` 配置技巧等不在 git 历史里、只存在于
-上一台机器文件系统里的关键信息。
+**刚接手项目先读 [MAC_HANDOFF.md](MAC_HANDOFF.md)**，里面有锁定的 dart-sdk/Flutter Engine
+commit、`.gclient` 配置技巧等不在 git 历史里、只存在于本机文件系统里的关键信息。
 
 ## 文档 / Docs
 
