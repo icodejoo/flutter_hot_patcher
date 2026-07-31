@@ -93,13 +93,35 @@ V1 never invoked
   纯堆数据操作）在真机上是否真的不受 W^X 影响，这件事本来就该由 V2 自己的 iOS 复验
   来确认，不依赖 V1。
 
+## Android arm64 真机复现（2026-07-31，PASS，零代码改动）
+
+跟 V2 当年的先例一样：`host/main.dart`/`patch/module.dart` 原样复用，不用改一行代码——
+`loadDynamicModuleClosure`/`redirectClosureEntryPoint` 全程是 VM 原生函数操作（Closure
+对象字段、字节码模块加载），不涉及任何架构相关的指令编码，天然可移植。
+
+```
+BEFORE: viaClosure: A(B(ORIGINAL-C))
+  loaded interpreted patch chain as a closure
+  redirected entryVar entry_point to patchTrampoline (data write only, no mprotect, no instruction bytes touched)
+AFTER: viaClosure: A-new(B-new(PATCHED-C))
+V6 PASS: multi-hop static-call chain (stepA->stepB->stepC) reached the patched C
+via ONLY a closure entry_point redirect (V2 mechanism) -- zero code-page writes,
+V1 never invoked
+```
+
+结果与桌面 x64 逐字符一致。**两个独立架构交叉验证同一结论**——V1 从来不是运行时必需
+机制，这个结论不是 x64 特有的巧合。
+
+（构建这次复现过程中意外发现并修复了一个环境问题：本机 Android arm64 NDK 工具链缺失，
+`gclient sync` 重新拉取时撞上一个新的证书问题——本机网络环境有深信服(sangfor)的 SSL
+检测网关做 TLS 中间人，跟此前"缺 Google 中间证书"是完全不同的两类问题，见项目记忆
+`wsl-sangfor-tls-intercept`。用户确认这是预期内的公司/校园网关后，从 Windows 证书库
+导出对应证书装进 WSL 信任库解决。）
+
 ## 诚实边界
 
 - 只测了"闭包边界"这一种虚调用形态（跟 V2 的 `closureVar` 一样）。虚调用/接口调用
   边界（dispatch table）理论上应该同理，但这个用例没有专门覆盖多跳链条 + 接口调用
   边界的组合，留作后续如果需要更多交叉验证再补。
-- 只在桌面 x64 上验证；Android arm64 真机复现原计划要做，但当前环境 `adb` 不可用
-  （设备未连接/工具未装），留待设备就绪后补一遍——预期结果应该跟 V2 在 Android arm64
-  上"零改动直接复现"一样（这次机制全程是纯数据操作，不涉及任何架构相关的指令编码）。
 - 链条只有 3 跳（A→B→C）。更长的链条（比如 10+ 跳纯直调）原则上同一套论证应该仍然
   成立（传递闭包会继续往上吸收，直到虚调用边界），但没有专门测过更长的链条。
