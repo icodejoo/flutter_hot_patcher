@@ -56,6 +56,12 @@ DWARF 更本质的 CanonicalName（库 URI，不含物理文件绝对路径）�
 kernel-service 的 AST 读取 API，拿库 URI→类→成员的规范路径），这是一块独立、需要单独评估工作量
 的工程，不能指望从现有诊断工具白捡。
 
+**2026-07-31 后续（这条"独立工程"已经跑通并正面验证）**：见
+`../r1_kernel_dill_probe/NOTES.md`——`package:kernel` 的 `loadComponentFromBinary`
+就是现成的 CFE AST 读取 API，不需要自己写解析器；实测 `lib/` 下被 `package:` 引用的库文件
+拿到真正的 `package:xxx/yyy.dart` URI，且跨越完全不同的构建目录逐字节稳定（整个包目录搬家
+重编译，CanonicalName 不变）——直接解决这里点出的 part 文件移动/路径变化残留问题。
+
 ## 对 PRODUCTION_LINKER_SPEC 的更新
 
 - **R2 从"待研究"降级为"已知可行路径"**：用 `gen_snapshot`(非 product) `--disassemble

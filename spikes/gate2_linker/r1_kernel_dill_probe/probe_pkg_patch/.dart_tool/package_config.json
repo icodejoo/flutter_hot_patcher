@@ -1,0 +1,13 @@
+{
+  "configVersion": 2,
+  "packages": [
+    {
+      "name": "probe_pkg",
+      "rootUri": "../",
+      "packageUri": "lib/"
+    }
+  ],
+  "generated": "2026-07-31T00:00:00Z",
+  "generator": "manual-probe",
+  "generatorVersion": "0.0.0"
+}
