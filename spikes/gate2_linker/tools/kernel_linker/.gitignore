@@ -1,0 +1,3 @@
+.dart_sdk_mirror/
+.dart_tool/
+*.dill
