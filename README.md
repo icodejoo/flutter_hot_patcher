@@ -36,6 +36,7 @@ official bytecode interpreter to enable App-Store-compliant hot updates on iOS.
 - [docs/PRD.md](docs/PRD.md) — 产品需求文档
 - [docs/SPEC.md](docs/SPEC.md) — 技术规格与架构
 - [docs/PLAN.md](docs/PLAN.md) — 分阶段实施计划（Gate 制）
+- [docs/PATCH_DELIVERY_SPEC.md](docs/PATCH_DELIVERY_SPEC.md) — 补丁下发全链路（生成/签名/下发/应用/回滚）设计草案
 - [spikes/gate1_mixed_execution/GATE1_REPORT.md](spikes/gate1_mixed_execution/GATE1_REPORT.md) — Gate1 完整证据链
 - [spikes/gate2_linker/REVIEW_diff_linker.md](spikes/gate2_linker/REVIEW_diff_linker.md) — Gate2 diff_linker 多 agent 评审
 - [spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md](spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md) — 生产 linker 需求（R1-R9）
