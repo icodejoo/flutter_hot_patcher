@@ -56,6 +56,48 @@ byte-changed（如 `assert type is Iterable<X0>`、`assert type is Completer<voi
 在当前 spike 工具下会产生比"改函数体常量"大得多的噪音闭包——这与 V9/V10 的核心发现一致
 （对齐/稳定化精度决定闭包大小），只是又指认了一个具体噪音源。**未归一化，留作已知局限。**
 
+## 后续补测（2026-07-31）：用 analyze_snapshot 直接查 cid 本身是否漂移
+
+上面的探测只确证了"调用点指令"与 cid 无关；批判真正担心的是 **cid 分配/dispatch table 内容**
+本身是否因新增类而漂移。这轮用 Dart SDK 自带的 `analyze_snapshot --out=xxx.json` 诊断工具
+（`runtime/vm/analyze_snapshot_api_impl.cc`，release 模式 `gen_snapshot`/`analyze_snapshot`
+配对能跑，product 模式不兼容会硬报错版本不匹配）直接读快照的 Class/Function/Code 对象结构。
+
+**诚实边界先行**：`analyze_snapshot` 的 JSON 输出**不包含** DispatchTable 数组本身的内容
+（`metadata.offsets.thread.dispatch_table_array` 只是 Thread 结构体里这个字段的**内存偏移量**，
+不是数组内容）；`snapshot_data` 顶层也只有 4 个不透明地址，无解析。所以这条探测**验证的是 cid
+分配是否稳定，不是 dispatch table 数组内容本身**——这是当前可获得证据的上限，如实标注。
+
+**探测数据**（同一组 base/patch，Extra 插入在 Sq/Tri/Circ **之前**）：
+
+| 类 | base cid | patch cid | 是否相同 |
+|---|---|---|---|
+| Sq | 307 | 307 | ✅ |
+| Tri | 306 | 306 | ✅ |
+| Circ | 305 | 305 | ✅ |
+| Shape | 308 | 309 | ❌（抽象基类，新增 Extra 插入其后重编号） |
+| Extra | — | 308 | 新增，占了 Shape 原来的号 |
+
+**结论**：对这个具体场景（三个已有的具体实现类 Sq/Tri/Circ，新增一个同接口的 Extra），**cid 分配
+对既有三个具体类保持稳定**，只有抽象基类 Shape 的编号被新类"挤"了一位。同时 `Sq.area`/`Tri.area`/
+`Circ.area` 的 Code 对象**size 逐字节不变、offset 整体平移**（因为 Extra 的代码插进了同一个
+`.text` 段前面，是布局位移，非内容变化）——这与 diff_linker 早先"这三个函数字节不变"的结论一致，
+是同一个事实的两个视角互相印证。
+
+**未确证、仍需留白的部分**：
+- 只测了一种插入模式（新增同接口叶子类，插在既有实现类之前）。cid 分配算法的具体规则未知
+  （不是源码声明顺序——Extra 插在最前但没抢到最小 cid），**更复杂的场景（改接口继承链、
+  改抽象基类插入位置、增删接口）是否会牵动既有类的 cid 仍未验证**，不能从这一个正例外推为
+  "cid 总是稳定"的通用结论。
+- 即使 cid 稳定，dispatch table 数组本身**每个 slot 存的目标地址**——这是本探测始终拿不到的
+  数据（工具没暴露）——严格说仍是**未直接验证**，只是"cid 不变 + 该 cid 对应函数代码不变"这
+  两件已确证的事实叠加后，间接支持"这个具体场景下 dispatch table 该 slot 的效果不变"，不是
+  对 dispatch table 数组内容的直接读取比对。
+- 若要拿到 dispatch table 数组本身的内容做逐 slot 比对，`analyze_snapshot` 这条路走不通，需要
+  VM 源码级另辟蹊径（例如给 `analyze_snapshot` 加一个补丁导出 dispatch table 数组，或直接
+  解析快照二进制里 `DispatchTable::Deserialize` 读取的原始字节段）——这是比本轮 spike 大得多
+  的工程，仍按"iOS 门后再建"的既定顺序，留给 R1-R9 正式研发。
+
 ## 结论（诚实、有界）
 
 - ✅ 确证：megamorphic 虚调用**调用点**字节与 cid/布局无关（对这一形态，批判担心的机制不成立）。

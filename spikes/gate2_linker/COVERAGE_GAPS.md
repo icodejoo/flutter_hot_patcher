@@ -18,6 +18,9 @@
 > 无关（cid 运行时从对象头读取、dispatch table 指针从 THR 固定偏移取，调用点字节不编码布局信息）；
 > **dispatch table 数据内容**本身是否漂移仍未验证（需 VM 源码级探测），如实留白，**不因此降低
 > 优先级**。探测过程中意外发现并修复了 S4 修复自身的一个真回归（次入口解析需 high_pc 上界）。
+> **2026-07-31 补测**：`analyze_snapshot --out` 能读出快照 Class 对象的 cid 分配，对"插入新叶子
+> 类"场景实测既有类 cid **保持稳定**——但该工具不暴露 dispatch table 数组本身内容，仍是间接
+> 证据、只测一种插入模式，不能外推为通用结论，详见 `p3c_cid_dispatch/NOTES.md`。
 
 已覆盖（基线）：int/double/bool/String、List/Map/Set/record、类 method/getter/setter/
 operator/static、mixin、enum(带方法)、泛型类、匿名闭包、直接调用链级联、多态虚调用边界、
