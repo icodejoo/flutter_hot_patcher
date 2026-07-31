@@ -22,14 +22,23 @@ official bytecode interpreter to enable App-Store-compliant hot updates on iOS.
 
 ## 当前阶段 / Current Phase
 
-**Gate 1 — 验证难点 X（混合执行 ABI 层）**：验证解释执行的函数与 AOT 机器码函数能否
-在真机 iOS 上安全互操作（互相调用、异常穿透、GC 扫描）。这是整条路线的生死判定点。
+**Gate 1 桌面 x64 + Android arm64 真机（V1-V5）已全部 PASS**，Gate 2 linker 可行性 spike 级
+验证（大样本精确度、多 agent 评审、生产需求排期）已完成。**唯一剩下的、还可能整体推翻方案的
+验证点是 Gate 1 阶段 B：iOS 真机 W^X 复验**——需要 Mac，是当前的头号任务。
+
+**刚接手项目（尤其是从 Windows/WSL2 移交到 Mac）先读 [MAC_HANDOFF.md](MAC_HANDOFF.md)**，
+里面有锁定的 dart-sdk/Flutter Engine commit、`.gclient` 配置技巧等不在 git 历史里、只存在于
+上一台机器文件系统里的关键信息。
 
 ## 文档 / Docs
 
+- [MAC_HANDOFF.md](MAC_HANDOFF.md) — **Mac 交接清单，接手项目先看这个**
 - [docs/PRD.md](docs/PRD.md) — 产品需求文档
 - [docs/SPEC.md](docs/SPEC.md) — 技术规格与架构
 - [docs/PLAN.md](docs/PLAN.md) — 分阶段实施计划（Gate 制）
+- [spikes/gate1_mixed_execution/GATE1_REPORT.md](spikes/gate1_mixed_execution/GATE1_REPORT.md) — Gate1 完整证据链
+- [spikes/gate2_linker/REVIEW_diff_linker.md](spikes/gate2_linker/REVIEW_diff_linker.md) — Gate2 diff_linker 多 agent 评审
+- [spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md](spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md) — 生产 linker 需求（R1-R9）
 
 ## 目录 / Layout
 

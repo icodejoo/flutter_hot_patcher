@@ -1,5 +1,5 @@
 diff --git a/runtime/lib/object.cc b/runtime/lib/object.cc
-index 3f49f75f..51043f22 100644
+index 13a0bd3b677..8dbd97a00f2 100644
 --- a/runtime/lib/object.cc
 +++ b/runtime/lib/object.cc
 @@ -9,6 +9,8 @@
@@ -11,10 +11,10 @@ index 3f49f75f..51043f22 100644
  #include "vm/exceptions.h"
  #include "vm/heap/heap.h"
  #include "vm/native_entry.h"
-@@ -621,6 +623,112 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
+@@ -623,6 +625,112 @@ DEFINE_NATIVE_ENTRY(Internal_loadDynamicModule, 0, 1) {
  #endif  // defined(DART_DYNAMIC_MODULES)
  }
-
+ 
 +// Gate 1 spike (flutter_hot_patcher): like Internal_loadDynamicModule, but
 +// returns the entry-point Function wrapped in a Closure instead of invoking
 +// it. Lets Dart code call the interpreted entry point synchronously and
@@ -125,10 +125,10 @@ index 3f49f75f..51043f22 100644
    GET_NATIVE_ARGUMENT(Instance, value, arguments->NativeArgAt(0));
    value.EnsureDeeplyImmutable(zone);
 diff --git a/runtime/vm/bootstrap_natives.h b/runtime/vm/bootstrap_natives.h
-index 0d8a8cfd..59648e85 100644
+index 2ca92bc364d..312c6e09aa7 100644
 --- a/runtime/vm/bootstrap_natives.h
 +++ b/runtime/vm/bootstrap_natives.h
-@@ -277,6 +277,10 @@ namespace dart {
+@@ -272,6 +272,10 @@ namespace dart {
    V(Internal_prependTypeArguments, 4)                                          \
    V(Internal_instantiateClosure, 2)                                            \
    V(Internal_loadDynamicModule, 1)                                             \
@@ -140,13 +140,13 @@ index 0d8a8cfd..59648e85 100644
    V(Internal_allocateTwoByteString, 1)                                         \
    V(Internal_writeIntoOneByteString, 3)                                        \
 diff --git a/runtime/vm/dispatch_table.h b/runtime/vm/dispatch_table.h
-index 6ba43693..f099a64e 100644
+index 6ba4369363a..f099a64ef86 100644
 --- a/runtime/vm/dispatch_table.h
 +++ b/runtime/vm/dispatch_table.h
 @@ -62,6 +62,13 @@ class DispatchTable {
    // Dispatch table array pointer to put into the dispatch table register.
    const uword* ArrayOrigin() const;
-
+ 
 +  // Gate 1 spike (flutter_hot_patcher): overwrite the entry for class id
 +  // [cid], as used by interface/virtual dispatch (`call *(origin, cid*8)`).
 +  // See spikes/gate1_mixed_execution/cases/v2_call_forms_matrix.
@@ -156,15 +156,15 @@ index 6ba43693..f099a64e 100644
 +
   private:
    uword* array() { return array_.get(); }
-
+ 
 diff --git a/sdk/lib/_internal/vm/lib/internal_patch.dart b/sdk/lib/_internal/vm/lib/internal_patch.dart
-index d0fca217..c11850f0 100644
+index 94f733413db..9a65440e80b 100644
 --- a/sdk/lib/_internal/vm/lib/internal_patch.dart
 +++ b/sdk/lib/_internal/vm/lib/internal_patch.dart
 @@ -458,6 +458,38 @@ Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes}) {
  @pragma("vm:external-name", "Internal_loadDynamicModule")
  external Object? _loadDynamicModule(Uint8List bytes);
-
+ 
 +@patch
 +Object? loadDynamicModuleClosure({Uri? uri, Uint8List? bytes}) {
 +  return _loadDynamicModuleClosure(bytes!);
@@ -201,13 +201,13 @@ index d0fca217..c11850f0 100644
  @pragma("vm:entry-point")
  abstract interface class IsolateGroup {
 diff --git a/sdk/lib/internal/internal.dart b/sdk/lib/internal/internal.dart
-index adbaa54e..fe9b40ad 100644
+index 6df7e6c21a5..c4e24a1b60c 100644
 --- a/sdk/lib/internal/internal.dart
 +++ b/sdk/lib/internal/internal.dart
 @@ -1146,6 +1146,25 @@ bool isToStringVisiting(Object object) {
  /// Returns a future containing the result of the entry point method.
  external Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes});
-
+ 
 +/// Gate 1 spike (flutter_hot_patcher): like [loadDynamicModule], but returns
 +/// the entry-point method wrapped as a zero-arg closure instead of invoking
 +/// it and wrapping the result in a Future. Lets host code call the
