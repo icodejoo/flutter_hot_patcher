@@ -7,7 +7,12 @@
 > 参数化 + 架构自动探测，P1 大样本在真实 Android arm64 反汇编上 closure==ground truth，
 > 见 `ARM64_PORT_NOTES.md`；iOS arm64 待 Mac）。S1(池内容)、S3(实例级对齐)、S6/R4(ICF)、
 > 批判#3(cid/dispatch) 仍属**生产 linker 需求**，排进 `PRODUCTION_LINKER_SPEC.md` R1–R9
-> （做在 Kernel 层、排在 iOS W^X go/no-go 之后）。
+> （做在 Kernel 层、排在 iOS W^X go/no-go 之后）。**2026-07-31 spike 级补测三项**：
+> 批判#3(cid) 用 `analyze_snapshot` 实测"插入新类"场景既有类 cid 稳定（`p3c_cid_dispatch/NOTES.md`，
+> 仍非直接读 dispatch table 内容）；#14(混淆跨构建) 源码级确认改名机制无随机性 + 探针验证
+> （`r7_obfuscation_crossbuild/NOTES.md`）；并新识别一条独立生产需求 R3.1——闭包重定向是
+> 每实例粒度、"枚举所有活跃闭包实例"从未验证（`r3_boundary_contract/NOTES.md`）。均为 spike
+> 级探索，未投产，红线优先级不降。
 
 ---
 

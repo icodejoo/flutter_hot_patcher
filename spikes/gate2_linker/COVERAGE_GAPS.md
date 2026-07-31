@@ -44,7 +44,10 @@ build/setState。**改动形态只测了"改函数体常量"（+FFI 字段布局
 2. **tear-off（方法撕裂）**：✅ 已测——改被撕裂的**方法本身**被完备捕获（target 双入口经多重集
    捕获；`_held` 单态被去虚化 → direct/useHeld 均级联）。P2 那次"不级联"是因改的是 setState
    闭包体、方法本身没变，属正确。**运行时注意**：补丁前已缓存旧 entry 的 tear-off 闭包需 V2 式
-   entry 重定向刷新（运行时缓存失效项，非 diff-linker 完备性问题）。
+   entry 重定向刷新（运行时缓存失效项，非 diff-linker 完备性问题）。**2026-07-31 提升**：这条已
+   从注脚提升为独立生产需求 `PRODUCTION_LINKER_SPEC.md` R3.1（闭包重定向完备性）——V2 只测了
+   重定向一个已知闭包变量，"枚举所有活跃闭包实例"这件事本身从未验证，失败是静默不生效，见
+   `r3_boundary_contract/NOTES.md`。
 3. **const 内联 / 被广泛使用的 const**：✅ 已测——改 `const K` 被内联进每个使用点、逐个作条件1
    命中，完备。**残留风险**：若 const 入对象池、改动只体现为池 slot 值，会撞 normalize 池通配
    漏报（tools/NOTES），真 linker 需精确 slot→常量映射。
