@@ -3,8 +3,10 @@
      发现 59 条，验证存活 52 条（REFUTED 已剔除）。 -->
 
 > **修复状态**：S2 / S4 / S5 + 健壮性守卫 + 文档/标签 已就地修复（全语料回归无回归，见
-> `PRODUCTION_LINKER_SPEC.md` §2）。S1(池内容)、S3(实例级对齐)、S6/R4(ICF)、A2(arm64)、
-> 批判#3(cid/dispatch) 等属**生产 linker 需求**，已排进 `PRODUCTION_LINKER_SPEC.md` R1–R9
+> `PRODUCTION_LINKER_SPEC.md` §2）。**A2(arm64) 已就地修复并 spike 级验证**（`ARCH_CONFIG`
+> 参数化 + 架构自动探测，P1 大样本在真实 Android arm64 反汇编上 closure==ground truth，
+> 见 `ARM64_PORT_NOTES.md`；iOS arm64 待 Mac）。S1(池内容)、S3(实例级对齐)、S6/R4(ICF)、
+> 批判#3(cid/dispatch) 仍属**生产 linker 需求**，排进 `PRODUCTION_LINKER_SPEC.md` R1–R9
 > （做在 Kernel 层、排在 iOS W^X go/no-go 之后）。
 
 ---

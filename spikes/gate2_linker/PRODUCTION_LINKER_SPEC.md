@@ -25,7 +25,7 @@ spike 工具会继续保留其价值——它的**测量 harness + ground-truth 
 | **R3 调用边完备提取** | 边提取包含：目标**身份**（并入条件1）、二级/unchecked 入口按地址区间归属、尾调 jmp、以及**间接/虚调/闭包/tear-off/池介导**调用的显式边界契约 | S2、S4、S5、B1、B2 | 静态侧对每个不可静态解析的转移点，要么建保守边、要么产出"运行时必须重定向此点"的义务清单并逐条核验 |
 | **R4 ICF/去重感知** | 从 Kernel 层做 ICF 感知对齐；被折叠函数不得丢 key；`removed`/折叠导致 key 消失时保守播种其调用方或硬失败 | S6、S7 | 修"被改函数折叠进 removed、从不播种、无告警"红线 |
 | **R5 cid/dispatch/vtable 布局稳定化** | 消费 cid/dispatch table/vtable 元数据；类声明集合变化导致 slot 平移时，即便无函数字节变也须检测并处理（SPEC §4.3 cid 稳定化） | 批判#3 | 红线：字节没变但虚调用派发错乱，当前模型完全看不见 |
-| **R6 多架构（IR/快照层，非文本）** | x86-64 + arm64（Android/iOS 真机目标）；在快照/IR 层做，不做 per-arch 文本解析 | A2 | arm64 是真实部署目标之一，spike 的所有 soundness 证据只在 x86-64 取得 |
+| **R6 多架构（IR/快照层，非文本）** | x86-64 + arm64（Android/iOS 真机目标）；在快照/IR 层做，不做 per-arch 文本解析 | A2 | **spike 级已验证 Android arm64**（`ARM64_PORT_NOTES.md`）：`ARCH_CONFIG` 参数化 + `readelf -h` 自动探测架构，P1 大样本(3124函数)在真实 arm64 反汇编上 closure==ground truth、漏判0/误报0，与 x86-64 结果一致。**iOS arm64 未验证**（Mach-O 非 ELF，objdump/readelf 工具链不适用，待 Mac 后独立移植）。生产阶段仍应在快照/IR 层做，此 spike 验证证明"跨架构不是无解问题"，不代表文本解析方案可直接用于生产 |
 | **R7 混淆/strip 兼容** | 对齐与比对不依赖 DWARF 文本名；能处理 strip 后的发布产物（从 Kernel + 快照结构，而非符号表） | A1、A3、C2、C3 | release 常 strip+混淆；spike 的 DWARF 真名方案是权宜 |
 | **R8 绝不静默** | 任何解析退化/格式失配/引擎版本不一致/对齐命中率异常，一律**硬失败或显式告警**，绝不静默输出"好看的 0" | A1、A3、C5、B3 | spike 已加守卫（见下），生产必须制度化 |
 | **R9 规模** | 反向边索引 + worklist，线性传播；支撑数万函数真实 app | D4 | spike 的 O(轮×指令) 纯 Python 不可用于真实规模 |

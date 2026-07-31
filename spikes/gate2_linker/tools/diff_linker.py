@@ -27,10 +27,15 @@ not a production linker):
     PERMUTATION (two colliding instances swapping bodies leaves the multiset
     unchanged). Production alignment must be instance-level (CanonicalName +
     decl_line/column), not an unordered multiset.
-  - x86-64 / GNU-objdump only. On arm64 the `call` extraction, the %r15 pool
-    wildcard, and the ret/int3/nop mnemonics do not match — condition-2 edges
-    silently vanish. This tool hard-fails rather than silently mis-report when it
-    detects a non-GNU / arch-mismatched / stripped input (see the guards in main).
+  - GNU-objdump/readelf format only (llvm-objdump's differing column layout
+    parses to zero instructions — guarded, hard-fails rather than silently
+    reporting "all equivalent", see REVIEW Tier A1). x86-64 and arm64 are both
+    supported (ARCH_CONFIG, auto-detected via `readelf -h`, see
+    ARM64_PORT_NOTES.md) — call-site mnemonic (`call`/`bl`), the pool register
+    (`%r15`/`x27`) and syntax (hex-in-parens/decimal-in-brackets), and
+    inter-function padding mnemonics all differ per arch and are looked up from
+    ARCH_CONFIG rather than hardcoded. Other architectures hard-fail (detect_arch)
+    rather than silently using the wrong regex.
 
 Usage: diff_linker.py BASE PATCH [--list] [--optimistic] [--emit-closure]
                       [--base-debug B.debug --patch-debug P.debug]
@@ -40,6 +45,50 @@ Usage: diff_linker.py BASE PATCH [--list] [--optimistic] [--emit-closure]
     changed colliding instances).
 """
 import subprocess, sys, re, bisect
+
+# Architecture-specific disassembly conventions (REVIEW Tier A2 fix): x86-64's
+# `call`/%r15-pool/int3-padding assumptions do NOT hold on arm64 — direct calls
+# are `bl`, the object-pool register is x27 (confirmed empirically: same role
+# as x86's %r15 — `ldr d1,[x27,#22456]` loads a pooled double constant, same
+# pattern as x86 `movsd 0xNN(%r15)`), and pool offsets are decimal (`#NNNN`)
+# not hex. Verified against real Android arm64 gen_snapshot output
+# (spikes/gate2_linker/ARM64_PORT_NOTES.md) — not guessed.
+ARCH_CONFIG = {
+    'x64': {
+        'call_re': re.compile(r'call[a-z]*\s+([0-9a-f]+) <(.+)>'),
+        'pool_re': re.compile(r'0x[0-9a-f]+\(%r15\)'),
+        'pool_sub': 'POOL(%r15)',
+        'pad_prefixes': ('int3', 'nop'),
+        'objdump': 'objdump',
+    },
+    'arm64': {
+        'call_re': re.compile(r'\bbl\s+([0-9a-f]+) <(.+)>'),
+        'pool_re': re.compile(r'\[x27, #\d+\]'),
+        'pool_sub': '[POOL]',
+        # udf/.inst are arm64's filler-in-disassembly forms (no int3 concept).
+        'pad_prefixes': ('udf', '.inst', 'andeq'),
+        # The native (x86-64 host) `objdump` can't disassemble AArch64 code
+        # ("can't disassemble for architecture UNKNOWN") — needs the cross
+        # binutils target explicitly (e.g. `apt-get install
+        # binutils-aarch64-linux-gnu`). readelf (DWARF-only, format not
+        # instruction-set-specific) works fine with the native binary either way.
+        'objdump': 'aarch64-linux-gnu-objdump',
+    },
+}
+
+# Detect the ELF architecture via `readelf -h` (Machine field), NOT by trusting
+# a flag — mirrors the "never silent" principle (REVIEW R8): an unrecognized
+# or mismatched arch must hard-fail, not silently fall back to wrong regexes.
+def detect_arch(path):
+    out = subprocess.check_output(['readelf', '-h', path]).decode(errors='replace')
+    m = re.search(r'Machine:\s*(.+)', out)
+    machine = m.group(1).strip() if m else ''
+    if 'X86-64' in machine:
+        return 'x64'
+    if 'AArch64' in machine:
+        return 'arm64'
+    _die(f"unrecognized ELF machine type '{machine}' in {path} — "
+         f"only x86-64 and AArch64 are supported; refusing to guess.")
 
 # Build {code address -> canonical key} + {code address -> (low_pc, high_pc)}
 # from a --save-debugging-info DWARF ELF (P0 finding, see
@@ -101,9 +150,11 @@ def dwarf_canonical_map(debug_path, strip_prefix=None):
 # canonical key; else the bare ELF symbol name. Each block is a list of
 # (raw_bytes, normalized_mnemonic_placeholder, resolved_call_target). Returns also
 # a total instruction count so callers can hard-fail on a non-GNU/empty parse.
-def parse_snapshot(path, addr_map=None, addr_range=None):
+def parse_snapshot(path, addr_map=None, addr_range=None, arch='x64'):
     addr_map = addr_map or {}
     addr_range = addr_range or {}
+    call_re = ARCH_CONFIG[arch]['call_re']
+    objdump_bin = ARCH_CONFIG[arch]['objdump']
     sorted_addrs = sorted(addr_map)  # for secondary-entry (<sym+0xNN>) resolution
     # Resolve a call-target address to a canonical key: exact hit, else — ONLY if
     # it falls STRICTLY WITHIN [low_pc, high_pc) of some function (a genuine
@@ -130,7 +181,7 @@ def parse_snapshot(path, addr_map=None, addr_range=None):
             return addr_map[lo]
         return None
 
-    out = subprocess.check_output(['objdump', '-d', path]).decode(errors='replace')
+    out = subprocess.check_output([objdump_bin, '-d', path]).decode(errors='replace')
     funcs = {}
     cur_block = None
     ninsn = 0
@@ -152,7 +203,7 @@ def parse_snapshot(path, addr_map=None, addr_range=None):
         # trailing '+0xNN' offset — so `<OpC.+>` (operator+) and
         # `<f.<anonymous closure>>` keep their real names instead of being cut at
         # '+' or the inner '>'.
-        cm = re.search(r'call[a-z]*\s+([0-9a-f]+) <(.+)>', mnem)
+        cm = call_re.search(mnem)
         target = None
         if cm:
             taddr = int(cm.group(1), 16)
@@ -164,22 +215,26 @@ def parse_snapshot(path, addr_map=None, addr_range=None):
 
 # Normalize one instruction's disassembly text to strip relocation/drift noise so
 # condition 1 compares LOGIC not layout (V9): drop absolute call/jmp target addr;
-# wildcard object-pool slot `0xNN(%r15)`. Object FIELD offsets are KEPT (V9).
-def normalize(mnem):
-    mnem = re.sub(r'\b[0-9a-f]+ (<[^>]+>)', r'\1', mnem)       # drop abs call/jmp target addr
-    mnem = re.sub(r'0x[0-9a-f]+\(%r15\)', 'POOL(%r15)', mnem)  # wildcard pool slot
+# wildcard object-pool slot. Object FIELD offsets are KEPT (V9). Per-arch pool
+# syntax from ARCH_CONFIG (x86: `0xNN(%r15)` hex; arm64: `[x27, #NN]` decimal —
+# confirmed empirically, see ARCH_CONFIG comment).
+def normalize(mnem, arch='x64'):
+    mnem = re.sub(r'\b[0-9a-f]+ (<[^>]+>)', r'\1', mnem)  # drop abs call/jmp target addr
+    cfg = ARCH_CONFIG[arch]
+    mnem = cfg['pool_re'].sub(cfg['pool_sub'], mnem)
     return mnem
 
 # Condition-1 signature of one block. S2 fix: fold the RESOLVED call target into
 # the signature so retargeting a call to a different same-named function (which
 # leaves the instruction text identical after normalize drops the address) is
-# caught. int3/nop inter-function padding is filtered.
-def sig(block):
+# caught. Per-arch inter-function padding mnemonics are filtered (ARCH_CONFIG).
+def sig(block, arch='x64'):
+    pad = ARCH_CONFIG[arch]['pad_prefixes']
     parts = []
     for _, m, t in block:
-        if m.startswith('int3') or m.startswith('nop'):
+        if m.startswith(pad):
             continue
-        parts.append(normalize(m) + (f' ->{t}' if t else ''))
+        parts.append(normalize(m, arch) + (f' ->{t}' if t else ''))
     return ' | '.join(parts)
 
 # Resolved direct-call target keys appearing in any block of a function.
@@ -209,6 +264,16 @@ def main():
         _die('exactly one of --base-debug/--patch-debug given; both or neither '
              '(asymmetric => canonical vs bare-name keys never align).')
 
+    # Arch is DETECTED (readelf -h), not trusted from a flag (REVIEW Tier A2 /
+    # R8 never-silent). base/patch must be the SAME arch — comparing across
+    # architectures is meaningless and each snapshot's own disassembly rules
+    # must match its own machine type.
+    base_arch, patch_arch = detect_arch(base_path), detect_arch(patch_path)
+    if base_arch != patch_arch:
+        _die(f'base is {base_arch}, patch is {patch_arch} — must be the same architecture.')
+    arch = base_arch
+    print(f'architecture                  : {arch}')
+
     base_map, base_range = dwarf_canonical_map(base_dbg, base_root)
     patch_map, patch_range = dwarf_canonical_map(patch_dbg, patch_root)
     if base_map or patch_map:
@@ -217,8 +282,8 @@ def main():
     else:
         print('alignment                     : bare ELF symbol name (no --*-debug)')
 
-    base, base_n = parse_snapshot(base_path, base_map, base_range)
-    patch, patch_n = parse_snapshot(patch_path, patch_map, patch_range)
+    base, base_n = parse_snapshot(base_path, base_map, base_range, arch)
+    patch, patch_n = parse_snapshot(patch_path, patch_map, patch_range, arch)
 
     # Guard: non-GNU objdump / bad format => zero instructions parsed => every
     # block empty => everything silently "equivalent". Fail loudly instead.
@@ -241,13 +306,13 @@ def main():
     # Colliding keys: judged equivalent only if the full multiset of sigs matches.
     # NB: NOT sound under body permutation (see docstring / REVIEW S3).
     def multiset(blocks):
-        return sorted(sig(b) for b in blocks)
+        return sorted(sig(b, arch) for b in blocks)
     ambiguous = {n for n in common if len(base[n]) > 1 or len(patch[n]) > 1}
     ambiguous_changed = {n for n in ambiguous if multiset(base[n]) != multiset(patch[n])}
     ambiguous_cleared = ambiguous - ambiguous_changed
     aligned = common - ambiguous
 
-    byte_changed = {n for n in aligned if sig(base[n][0]) != sig(patch[n][0])}
+    byte_changed = {n for n in aligned if sig(base[n][0], arch) != sig(patch[n][0], arch)}
 
     seed_ambiguous = set() if optimistic else set(ambiguous_changed)
     must_interp = set(byte_changed) | set(added) | seed_ambiguous
