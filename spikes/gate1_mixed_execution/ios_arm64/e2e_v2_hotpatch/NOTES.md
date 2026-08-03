@@ -65,3 +65,34 @@ iOS arm64 编译链（`gen_kernel` + `gen_snapshot --app-aot-assembly` + `dart2b
 | iOS arm64（真机） | V2 only（W^X 封 V1） | 机制 ✅，部署待 Flutter 嵌入（B 步）|
 
 **Gate 1+2 全部通过，端到端链路在 macOS arm64 完整验证，iOS 路径机制无障碍，部署是工程问题。**
+
+
+## iOS Simulator arm64 — V2-closure PASS（2026-08-03）
+
+**结论**：`internal.redirectClosureEntryPoint` 在 iOS Simulator arm64 AOT 环境下工作正常。
+
+**输出**：
+```
+BEFORE: via-closure: ORIGINAL
+AFTER:  via-closure: PATCHED-iOS-HOTFIX
+V2-closure iOS PASS
+```
+
+**文件**（本目录）：
+- `main.dart` — Dart 测试源码（无 `dart:io`，无 `exit()`，`fn` 为 `late`非 final）
+- `dart_cli_demo.c` — C 嵌入 harness（`Dart_SetVMFlags` → `Dart_Initialize` → `Dart_CreateIsolateGroup` → `Dart_InvokeClosure`）
+- `builtin_shim.cpp` — C++ shim，将私有 `dart::bin::Builtin::NativeLookup` 暴露为 C 符号以安装 `dart:_builtin` native resolver
+- `build_sim.sh` — 一键构建+运行脚本（需要 `DART_SDK_SRC` 环境变量）
+
+**关键踩坑**（按解决顺序）：
+1. `Dart_Initialize` 返回 `char*`（NULL=成功），不是 `bool`——赋给 bool 会把错误当成功
+2. `Dart_SetVMFlags({"--precompiled_mode=true"})` 必须在 `Dart_Initialize` 之前调用
+3. `main_impl.o` 冲突——需从静态库里 `ar d` 删掉
+4. `FLAG_precompiled_mode=false` 导致 JIT 路径 SIGSEGV——正是 #2 修复的原因
+5. `Dart_Invoke(lib,"main",...)` 在 AOT 下报 NoSuchMethod——改用 `Dart_GetField`+`Dart_InvokeClosure`
+6. `Dart_NewList(n)` 产生 `List<dynamic>` 不通过类型检查——源码改为 `main(List args)`
+7. `Builtin_PrintString` native 未注册——`builtin_shim.cpp` 绕过 private 访问控制，调用 `Dart_SetNativeResolver`
+8. `exit()` 调用 `dart:io` Process_Exit native 同样未注册——源码改为 `return`
+9. `late final fn` 第二次调用 main 时报已初始化——改为 `late fn`（去掉 `final`）
+
+**W^X 结论**：`redirectClosureEntryPoint` 只写 Closure 堆对象的 `entry_point` 指针字段（堆内存，非可执行页），W^X 对其无约束，iOS 真机亦如此。

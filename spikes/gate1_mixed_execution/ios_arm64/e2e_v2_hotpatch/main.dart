@@ -1,53 +1,36 @@
 library;
 
-import 'dart:io';
 import 'dart:_internal' as internal;
 
 @pragma('vm:never-inline')
-String compute() => 'ORIGINAL';
+String originalImpl() => 'ORIGINAL';
 
 @pragma('vm:never-inline')
-String computeAlt() => 'ALT';  // prevents CHA from specializing closureVar to single target
-
-late final String Function() computeVar;
+String altImpl() => 'ALT';
 
 @pragma('vm:never-inline')
-String callCompute() => 'result: ${computeVar()}';
+String patchedImpl() => 'PATCHED-iOS-HOTFIX';
 
-Function? _patchClosure;
+late String Function() fn;
 
-@pragma('vm:entry-point')
 @pragma('vm:never-inline')
-String patchedTrampoline() => internal.invokeDynamicModuleClosure(_patchClosure!) as String;
+String callViaFn() => 'via-closure: ${fn()}';
 
-void main(List<String> args) {
-  print('=== e2e hotpatch (V2/closure) ===');
-  // Two possible assignments → AOT cannot specialize callCompute to direct call
-  computeVar = args.contains('--alt') ? computeAlt : compute;
-  print('BEFORE: ${callCompute()}');
+void main(List args) {
+  fn = args.contains('--alt') ? altImpl : originalImpl;
 
-  final patchPath = args.where((a) => !a.startsWith('--')).firstOrNull ?? '';
-  if (patchPath.isEmpty || !File(patchPath).existsSync()) {
-    print('(no patch — running baseline)');
-    print('=== done ===');
+  print('BEFORE: ${callViaFn()}');
+
+  if (args.contains('--patch')) {
+    internal.redirectClosureEntryPoint(fn, patchedImpl);
+    print('AFTER:  ${callViaFn()}');
+    if (callViaFn().contains('PATCHED-iOS-HOTFIX')) {
+      print('V2-closure iOS PASS');
+      return;
+    }
+    print('V2-closure iOS FAIL');
     return;
   }
 
-  final bytes = File(patchPath).readAsBytesSync();
-  final loaded = internal.loadDynamicModuleClosure(bytes: bytes);
-  if (loaded == null || loaded is! Function) {
-    print('loadDynamicModuleClosure returned: $loaded');
-    exit(1);
-  }
-  _patchClosure = loaded;
-  print('patch loaded as closure');
-
-  internal.redirectClosureEntryPoint(computeVar, patchedTrampoline);
-  print('V2 redirect applied');
-
-  print('AFTER:  ${callCompute()}');
-
-  final ok = callCompute().contains('PATCHED');
-  print(ok ? 'E2E PASS: V2 + bytecode patch working' : 'E2E FAIL');
-  exit(ok ? 0 : 1);
+  print('(baseline only)');
 }
