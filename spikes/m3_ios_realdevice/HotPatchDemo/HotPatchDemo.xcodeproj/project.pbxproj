@@ -173,8 +173,15 @@
 				);
 				OTHER_LDFLAGS = (
 					"-ObjC",
-					"-all_load",
-					"-ldart_vm_ios",
+					"-ldart_aot_ios",
+					"-ldart_aotruntime_product",
+					"-ldouble_conversion",
+					"-lboringssl",
+					"-licu",
+					"-ldart_chrome_zlib",
+					"-lperfetto",
+					"-ldart_cxxabi",
+					"-ldart_cxx",
 					"-lc++",
 					"-lpthread",
 					"-ldl",
@@ -186,6 +193,8 @@
 					UIKit,
 					"-framework",
 					CoreFoundation,
+					"-framework",
+					CoreGraphics,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.hotpatch.m3demo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -217,8 +226,15 @@
 				);
 				OTHER_LDFLAGS = (
 					"-ObjC",
-					"-all_load",
-					"-ldart_vm_ios",
+					"-ldart_aot_ios",
+					"-ldart_aotruntime_product",
+					"-ldouble_conversion",
+					"-lboringssl",
+					"-licu",
+					"-ldart_chrome_zlib",
+					"-lperfetto",
+					"-ldart_cxxabi",
+					"-ldart_cxx",
 					"-lc++",
 					"-lpthread",
 					"-ldl",
@@ -230,6 +246,8 @@
 					UIKit,
 					"-framework",
 					CoreFoundation,
+					"-framework",
+					CoreGraphics,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.hotpatch.m3demo;
 				PRODUCT_NAME = "$(TARGET_NAME)";

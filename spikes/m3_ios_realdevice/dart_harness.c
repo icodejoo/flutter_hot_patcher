@@ -12,6 +12,7 @@ extern const uint8_t kDartVmSnapshotInstructions[];
 
 extern Dart_NativeFunction builtin_native_lookup_shim(Dart_Handle name, int argument_count, bool* auto_setup_scope);
 extern const uint8_t* builtin_native_symbol_shim(Dart_NativeFunction nf);
+extern Dart_NativeEntryResolver get_bootstrap_resolver(void);
 
 #define CHK(h) do { \
     if (Dart_IsError(h)) { \
@@ -66,6 +67,11 @@ const char* dart_run(int use_patch) {
     Dart_Handle root_lib = Dart_RootLibrary();
     CHK(root_lib);
 
+    /* Set BootstrapNatives::Lookup directly as the resolver for the root library.
+       This makes IsBootstrapResolver() return true, so native calls go through
+       BootstrapNativeCallWrapper (correct calling convention for DN_* functions). */
+    Dart_SetNativeResolver(root_lib, get_bootstrap_resolver(), NULL);
+
     /* Call setup([] or ['--patch']) */
     Dart_Handle arg_list = Dart_NewList(use_patch ? 1 : 0);
     CHK(arg_list);
@@ -78,7 +84,7 @@ const char* dart_run(int use_patch) {
     Dart_Handle setup_res = Dart_InvokeClosure(setup_fn, 1, setup_args);
     CHK(setup_res);
 
-    /* Call getResult() → string */
+    /* Call getResult() -> string */
     Dart_Handle get_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("getResult"));
     CHK(get_fn);
     Dart_Handle result_h = Dart_InvokeClosure(get_fn, 0, NULL);
