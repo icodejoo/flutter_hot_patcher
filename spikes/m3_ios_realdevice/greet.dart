@@ -1,7 +1,5 @@
 library;
 
-import 'dart:_internal' as internal;
-
 @pragma('vm:never-inline')
 String greet() => 'ORIGINAL';
 
@@ -13,13 +11,18 @@ late String Function() greetVar;
 @pragma('vm:never-inline')
 String callGreet() => greetVar();
 
+@pragma('vm:external-name', 'Internal_redirectClosureEntryPoint')
+external Object? _redirectClosureEntryPoint(Object target, Object replacement);
+
 @pragma('vm:entry-point')
-void setup(List args) {  /* List<dynamic>: Dart_NewList returns untyped List */
+void setup(List args) {
   greetVar = greet;
   if (args.contains('--patch')) {
-    internal.redirectClosureEntryPoint(greetVar, greetPatched);
+    _redirectClosureEntryPoint(greetVar, greetPatched);
   }
 }
 
 @pragma('vm:entry-point')
 String getResult() => callGreet();
+
+void main() {}
