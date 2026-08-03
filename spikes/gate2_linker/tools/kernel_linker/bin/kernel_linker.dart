@@ -1,12 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:kernel/kernel.dart';
-import '../lib/canonical_name.dart';
 import '../lib/kernel_diff.dart';
 
 void _usage() {
   stderr.writeln(
-      'Usage: kernel_linker --base <base.dill> --patch <patch.dill> [--json] [--verbose]');
+      'Usage: kernel_linker --base <base.dill> --patch <patch.dill> [--json] [--verbose] [--allow-empty]');
   exit(1);
 }
 
@@ -14,6 +13,7 @@ void main(List<String> args) {
   String? basePath, patchPath;
   var json = false;
   var verbose = false;
+  var allowEmpty = false;
 
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -25,6 +25,8 @@ void main(List<String> args) {
         json = true;
       case '--verbose':
         verbose = true;
+      case '--allow-empty':
+        allowEmpty = true;
       default:
         stderr.writeln('Unknown flag: ${args[i]}');
         _usage();
@@ -50,12 +52,21 @@ void main(List<String> args) {
   stderr.writeln('[kernel_linker] Diffing ...');
   final result = diffComponents(base, patch);
 
-  // R8: Never silently succeed.
+  // R8: never silently succeed — zero changes is almost certainly a bug
+  // (same dill passed twice, wrong paths, build cache not invalidated).
   if (result.directlyChanged.isEmpty &&
       result.added.isEmpty &&
       result.removed.isEmpty) {
-    stderr.writeln('[kernel_linker] WARNING: No changes detected. '
-        'Verify that base and patch are different builds.');
+    if (allowEmpty) {
+      stderr.writeln('[kernel_linker] WARNING: No changes detected '
+          '(--allow-empty suppressed exit 3). '
+          'Verify that base and patch are different builds.');
+    } else {
+      stderr.writeln('[kernel_linker] ERROR: No changes detected. '
+          'Verify base and patch are different builds, '
+          'or pass --allow-empty to suppress this error.');
+      exit(3);
+    }
   }
 
   if (json) {
@@ -86,6 +97,15 @@ void _printText(DiffResult r, {required bool verbose}) {
     for (final id in r.directlyChanged) print('  ~ $id');
   }
 
+  if (r.icfAffected.isNotEmpty) {
+    print('ICF PEERS (${r.icfAffected.length}) — were identical to a changed function:');
+    if (verbose) {
+      for (final id in r.icfAffected) print('  = $id');
+    } else {
+      print('  (use --verbose to list)');
+    }
+  }
+
   if (r.transitivelyAffected.isNotEmpty) {
     print('TRANSITIVELY AFFECTED (${r.transitivelyAffected.length}):');
     if (verbose) {
@@ -95,21 +115,43 @@ void _printText(DiffResult r, {required bool verbose}) {
     }
   }
 
+  // R5: class hierarchy warnings
+  final ch = r.classHierarchy;
+  if (!ch.isEmpty) {
+    print('');
+    print('CLASS HIERARCHY CHANGES (${ch.totalChanged}) — cid/vtable drift risk:');
+    for (final c in ch.addedClasses) print('  +class $c');
+    for (final c in ch.removedClasses) print('  -class $c');
+    for (final c in ch.hierarchyChanged) print('  ~super $c');
+    for (final c in ch.memberLayoutChanged) print('  ~vtable $c');
+    print('  NOTE: Any class hierarchy change may shift cid values and '
+        'invalidate virtual dispatch. Require full app restart.');
+  }
+
   final total = r.directlyChanged.length +
       r.added.length +
+      r.icfAffected.length +
       r.transitivelyAffected.length;
   print('');
   print('Patch set: $total functions');
 }
 
 void _printJson(DiffResult r) {
+  final ch = r.classHierarchy;
   print(JsonEncoder.withIndent('  ').convert({
     'base_count': r.baseCount,
     'patch_count': r.patchCount,
     'added': r.added.map((i) => i.toString()).toList(),
     'removed': r.removed.map((i) => i.toString()).toList(),
     'changed': r.directlyChanged.map((i) => i.toString()).toList(),
+    'icf_affected': r.icfAffected.map((i) => i.toString()).toList(),
     'transitively_affected':
         r.transitivelyAffected.map((i) => i.toString()).toList(),
+    'class_hierarchy': {
+      'added_classes': ch.addedClasses,
+      'removed_classes': ch.removedClasses,
+      'hierarchy_changed': ch.hierarchyChanged,
+      'member_layout_changed': ch.memberLayoutChanged,
+    },
   }));
 }
