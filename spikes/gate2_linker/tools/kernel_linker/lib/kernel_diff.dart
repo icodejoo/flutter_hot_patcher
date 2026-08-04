@@ -40,15 +40,49 @@ class DiffResult {
   });
 }
 
+// L2 fix: Collect actual constant values so fingerprint changes when a const
+// literal changes (Printer only emits '#C1' references, not values).
+String _constantSupplement(k.Procedure proc) {
+  final constants = <String>[];
+  proc.accept(_ConstantCollector(constants));
+  if (constants.isEmpty) return '';
+  return '\nCONSTS:${constants.join(',')}';
+}
+
+class _ConstantCollector extends k.RecursiveVisitor {
+  final List<String> constants;
+  _ConstantCollector(this.constants);
+
+  @override
+  void visitConstantExpression(k.ConstantExpression node) {
+    constants.add(_constValue(node.constant));
+    super.visitConstantExpression(node);
+  }
+
+  String _constValue(k.Constant c) {
+    if (c is k.StringConstant) return '"${c.value}"';
+    if (c is k.DoubleConstant) return c.value.toString();
+    if (c is k.IntConstant) return c.value.toString();
+    if (c is k.BoolConstant) return c.value.toString();
+    if (c is k.NullConstant) return 'null';
+    if (c is k.ListConstant) return '[${c.entries.map(_constValue).join(',')}]';
+    if (c is k.MapConstant) {
+      return '{${c.entries.map((e) => '${_constValue(e.key)}:${_constValue(e.value)}').join(',')}}';
+    }
+    return c.runtimeType.toString();
+  }
+}
+
 String _fingerprint(k.Procedure proc, k.Library lib) {
   final buf = StringBuffer();
   final printer = Printer(buf, showOffsets: false);
   printer.writeProcedureInLibrary(proc, lib);
-  return buf
+  final base = buf
       .toString()
       .replaceAll(RegExp(r'@\d+'), '')
       .replaceAll(RegExp(r'[ \t]+\n'), '\n')
       .trim();
+  return base + _constantSupplement(proc); // L2 fix
 }
 
 Map<FunctionId, ProcedureInfo> _index(k.Component component) {
