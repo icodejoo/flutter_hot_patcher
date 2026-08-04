@@ -18,6 +18,9 @@ import '../lib/t13_flutter_like.dart' as t13;
 import '../lib/t14_propagation.dart' as t14;
 import '../lib/t15_hierarchy.dart' as t15;
 import '../lib/t16_edge.dart' as t16;
+import '../lib/t17_dart3.dart' as t17;
+import '../lib/t18_multiiso.dart' as t18;
+import '../lib/t19_largeheap.dart' as t19;
 
 void _registerTests() {
   registerTest('T01', 'Primitive int', 'primitives', () => t01.prim_int().toString());
@@ -126,6 +129,17 @@ void _registerTests() {
   registerTest('T89', 'Edge mutual recursive', 'edge', () => t16.edge_mutual_recursive());
   registerTest('T90', 'Edge large string', 'edge', () => t16.edge_large_string().toString());
   registerTest('T91', 'Edge identity', 'edge', () => t16.edge_identity_same());
+
+  registerTest('T92', 'Dart3 records', 'dart3', () => t17.dart3_records());
+  registerTest('T93', 'Dart3 pattern switch', 'dart3', () => t17.dart3_pattern_switch());
+  registerTest('T94', 'Dart3 extension type', 'dart3', () => t17.dart3_extension_type());
+  registerTest('T95', 'Dart3 sealed', 'dart3', () => t17.dart3_sealed());
+
+  registerTest('T96', 'Multiiso value', 'multiiso', () => t18.multiiso_value());
+  registerTest('T96b', 'Multiiso increment', 'multiiso', () => t18.multiiso_increment());
+
+  registerTest('T97', 'Largeheap test', 'largeheap', () => t19.largeheap_test());
+  registerTest('T97b', 'Largeheap count', 'largeheap', () => t19.largeheap_count().toString());
 }
 
 @pragma('vm:entry-point')
