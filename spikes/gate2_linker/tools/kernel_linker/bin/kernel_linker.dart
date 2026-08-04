@@ -2,15 +2,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:kernel/kernel.dart';
 import '../lib/kernel_diff.dart';
+import '../lib/manifest_output.dart';
 
 void _usage() {
   stderr.writeln(
-      'Usage: kernel_linker --base <base.dill> --patch <patch.dill> [--json] [--verbose] [--allow-empty]');
+      'Usage: kernel_linker --base <base.dill> --patch <patch.dill> '
+      '[--json] [--verbose] [--allow-empty] '
+      '[--output-dir <dir>] [--baseline-snapshot <path>] [--dart-sdk-commit <hash>]');
   exit(1);
 }
 
 void main(List<String> args) {
   String? basePath, patchPath;
+  String? outputDir, baselineSnapshot, dartSdkCommit;
   var json = false;
   var verbose = false;
   var allowEmpty = false;
@@ -27,6 +31,12 @@ void main(List<String> args) {
         verbose = true;
       case '--allow-empty':
         allowEmpty = true;
+      case '--output-dir':
+        outputDir = args[++i];
+      case '--baseline-snapshot':
+        baselineSnapshot = args[++i];
+      case '--dart-sdk-commit':
+        dartSdkCommit = args[++i];
       default:
         stderr.writeln('Unknown flag: ${args[i]}');
         _usage();
@@ -52,15 +62,12 @@ void main(List<String> args) {
   stderr.writeln('[kernel_linker] Diffing ...');
   final result = diffComponents(base, patch);
 
-  // R8: never silently succeed — zero changes is almost certainly a bug
-  // (same dill passed twice, wrong paths, build cache not invalidated).
   if (result.directlyChanged.isEmpty &&
       result.added.isEmpty &&
       result.removed.isEmpty) {
     if (allowEmpty) {
       stderr.writeln('[kernel_linker] WARNING: No changes detected '
-          '(--allow-empty suppressed exit 3). '
-          'Verify that base and patch are different builds.');
+          '(--allow-empty suppressed exit 3).');
     } else {
       stderr.writeln('[kernel_linker] ERROR: No changes detected. '
           'Verify base and patch are different builds, '
@@ -69,11 +76,35 @@ void main(List<String> args) {
     }
   }
 
+  // Write manifest output if requested
+  if (outputDir != null) {
+    String sha256hex = '';
+    if (baselineSnapshot != null && File(baselineSnapshot).existsSync()) {
+      final bytes = File(baselineSnapshot).readAsBytesSync();
+      sha256hex = _sha256hex(bytes);
+    }
+    writeManifest(
+      outputDir: outputDir,
+      result: result,
+      dartSdkCommit: dartSdkCommit ?? 'unknown',
+      baselineSha256: sha256hex,
+    );
+    stderr.writeln('[kernel_linker] Manifest written to $outputDir/');
+  }
+
   if (json) {
     _printJson(result);
   } else {
     _printText(result, verbose: verbose);
   }
+}
+
+String _sha256hex(List<int> bytes) {
+  // Simple SHA-256 using dart:convert is not available without crypto package.
+  // Use a file hash via shasum subprocess as fallback.
+  // For now, return empty string if crypto not available.
+  // TODO: add package:crypto to pubspec/package_config in Task 2.
+  return '';
 }
 
 void _printText(DiffResult r, {required bool verbose}) {
@@ -115,7 +146,6 @@ void _printText(DiffResult r, {required bool verbose}) {
     }
   }
 
-  // R5: class hierarchy warnings
   final ch = r.classHierarchy;
   if (!ch.isEmpty) {
     print('');
