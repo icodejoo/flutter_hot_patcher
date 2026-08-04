@@ -1,0 +1,19 @@
+{
+  "_comment": "Populated incrementally as scenarios are implemented. Format: T01..T91.",
+  "T01": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_int"],
+      "unchanged_functions_not_contains": ["hotpatch_validation.t01::prim_double"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "100"}
+  },
+  "T91": {
+    "kernel_linker": {
+      "changed_functions_contains": [],
+      "class_hierarchy_changed": false,
+      "expect_no_changes": true
+    },
+    "runtime": {"expected_output": "unchanged"}
+  }
+}
