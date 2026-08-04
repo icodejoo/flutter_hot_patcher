@@ -104,29 +104,19 @@ const char* dart_run(int use_patch, const char* patch_dill_path) {
         Dart_Handle td = Dart_NewExternalTypedData(Dart_TypedData_kUint8, patch_bytes, patch_size);
         CHK(td);
 
-        /* Load bytecode library — returns handle to the patch library */
-        Dart_Handle patch_lib = Dart_LoadLibraryFromBytecode(td);
-        if (Dart_IsError(patch_lib)) {
-            fprintf(stderr, "[ERR] LoadLibraryFromBytecode: %s\n", Dart_GetError(patch_lib));
+        /* Call applyPatch(bytes) from Dart — uses _loadDynamicModuleClosure + _redirectClosureEntryPoint internally */
+        Dart_Handle apply_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("applyPatch"));
+        CHK(apply_fn);
+        Dart_Handle apply_args[1] = {td};
+        Dart_Handle apply_res = Dart_InvokeClosure(apply_fn, 1, apply_args);
+        if (Dart_IsError(apply_res)) {
+            fprintf(stderr, "[ERR] applyPatch: %s\n", Dart_GetError(apply_res));
             free(patch_bytes);
             Dart_ExitScope();
             Dart_ShutdownIsolate();
-            return "ERROR_LOAD_BYTECODE";
+            return "ERROR_APPLY_PATCH";
         }
-        fprintf(stderr, "[M3] patch.dill loaded successfully\n");
-
-        /* Get the 'greet' entry-point function from the patch library */
-        Dart_Handle patch_greet = Dart_GetField(patch_lib, Dart_NewStringFromCString("greet"));
-        CHK(patch_greet);
-        fprintf(stderr, "[M3] Got patch greet function from bytecode library\n");
-
-        /* Call redirectToPatch(patch_greet) to redirect greetVar's entry_point */
-        Dart_Handle redirect_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("redirectToPatch"));
-        CHK(redirect_fn);
-        Dart_Handle redirect_args[1] = {patch_greet};
-        Dart_Handle redirect_res = Dart_InvokeClosure(redirect_fn, 1, redirect_args);
-        CHK(redirect_res);
-        fprintf(stderr, "[M3] redirect applied — greetVar now points to bytecode greet\n");
+        fprintf(stderr, "[M3] applyPatch done — greetVar now points to bytecode greet\n");
 
         free(patch_bytes);
     }
