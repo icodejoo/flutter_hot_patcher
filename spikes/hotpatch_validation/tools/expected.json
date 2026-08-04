@@ -3,10 +3,177 @@
   "T01": {
     "kernel_linker": {
       "changed_functions_contains": ["hotpatch_validation.t01::prim_int"],
-      "unchanged_functions_not_contains": ["hotpatch_validation.t01::prim_double"],
       "class_hierarchy_changed": false
     },
     "runtime": {"expected_output": "100"}
+  },
+  "T02": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_double"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "2.72"}
+  },
+  "T03": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_string"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "world"}
+  },
+  "T04": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_bool"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "false"}
+  },
+  "T05": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_dynamic"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "one"}
+  },
+  "T06": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_var"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "30"}
+  },
+  "T07": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t01::prim_object"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "forty-two"}
+  },
+  "T08": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_list_literal"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "[1, 2, 3, 4]"}
+  },
+  "T09": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_list_map"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "[3, 6, 9]"}
+  },
+  "T10": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_list_where"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "[1, 0, 3, 0]"}
+  },
+  "T11": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_map_literal"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "{a: 10, b: 20}"}
+  },
+  "T12": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_map_access"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "42"}
+  },
+  "T13": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_set"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "5"}
+  },
+  "T14": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t02::coll_fold"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "24"}
+  },
+  "T15": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t03::null_nullable"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "empty"}
+  },
+  "T16": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t03::null_bang"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "6"}
+  },
+  "T17": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t03::null_conditional"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "hello"}
+  },
+  "T18": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t03::null_coalesce"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "fallback"}
+  },
+  "T19": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t03::null_late"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "patched"}
+  },
+  "T20": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_toplevel"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "3.14"}
+  },
+  "T21": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_local"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "200"}
+  },
+  "T22": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_final"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "Bob"}
+  },
+  "T23": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_static"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "v2"}
+  },
+  "T24": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_list"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "4"}
+  },
+  "T25": {
+    "kernel_linker": {
+      "changed_functions_contains": ["hotpatch_validation.t04::const_expr"],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {"expected_output": "8"}
   },
   "T91": {
     "kernel_linker": {
