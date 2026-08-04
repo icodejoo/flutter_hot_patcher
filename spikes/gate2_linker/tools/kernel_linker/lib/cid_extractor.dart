@@ -4,36 +4,46 @@
 // analyze_snapshot is only available in some Dart SDK builds; we return {}
 // if the tool is absent so the rest of the pipeline degrades gracefully.
 //
-// NOTE: analyze_snapshot was NOT found in the current SDK build at
-//   ~/dart/sdk/xcodebuild/ReleaseARM64/
-// Once it becomes available, pass its path as analyzePath.
+// JSON format (analyzer_version: 2):
+//   { "objects": [ { "type": "Class", "class_id": 611, "name": "Foo", ... }, ... ] }
 
 import 'dart:convert';
 import 'dart:io';
 
-/// Extract class→cid mapping from snapshot using analyze_snapshot tool.
+/// Extract class name→class_id mapping from snapshot using analyze_snapshot tool.
 /// Returns {} if analyze_snapshot is not available or fails.
-Map<String, int> extractCidMap(String dillPath, String analyzePath) {
+Map<String, int> extractCidMap(String snapshotPath, String analyzePath) {
   if (!File(analyzePath).existsSync()) return {};
+  if (!File(snapshotPath).existsSync()) return {};
 
-  final tmpJson = '${Directory.systemTemp.path}/cid_map_tmp_${pid}.json';
-  final result = Process.runSync(analyzePath, ['--out=$tmpJson', dillPath]);
+  final tmpJson =
+      '${Directory.systemTemp.path}/cid_map_tmp_${pid}_${snapshotPath.hashCode.abs()}.json';
+  final result =
+      Process.runSync(analyzePath, ['--out=$tmpJson', snapshotPath]);
   if (result.exitCode != 0) {
     stderr.writeln('analyze_snapshot failed: ${result.stderr}');
     return {};
   }
 
   try {
-    final data = jsonDecode(File(tmpJson).readAsStringSync());
-    final classes = (data['classes'] as List?) ?? [];
+    final data = jsonDecode(File(tmpJson).readAsStringSync())
+        as Map<String, dynamic>;
+    final objs = (data['objects'] as List?) ?? [];
     return {
-      for (final cls in classes)
-        if (cls['name'] != null && cls['cid'] != null)
-          cls['name'] as String: cls['cid'] as int
+      for (final obj in objs)
+        if (obj is Map &&
+            obj['type'] == 'Class' &&
+            obj['name'] != null &&
+            obj['class_id'] != null)
+          obj['name'] as String: obj['class_id'] as int
     };
   } catch (e) {
     stderr.writeln('Failed to parse analyze_snapshot output: $e');
     return {};
+  } finally {
+    try {
+      File(tmpJson).deleteSync();
+    } catch (_) {}
   }
 }
 
@@ -52,8 +62,7 @@ List<int> generateCidMapBytes(
   final buf = <int>[];
 
   // count (u32 LE)
-  final count = changed.length;
-  buf.addAll(_u32(count));
+  buf.addAll(_u32(changed.length));
 
   for (final entry in changed.entries) {
     buf.addAll(_u32(entry.key));

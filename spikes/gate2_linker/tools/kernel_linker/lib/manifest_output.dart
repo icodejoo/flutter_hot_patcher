@@ -3,13 +3,21 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'kernel_diff.dart';
+import 'cid_extractor.dart';
 
 /// Writes manifest.json + entry_table.bin + cid_map.bin to [outputDir].
+///
+/// If [baseSnapshotPath], [patchSnapshotPath], and [analyzeSnapshotBin] are
+/// provided, cid_map.bin will be populated with class-id remappings.
+/// Otherwise cid_map.bin is written with count=0 (graceful fallback).
 void writeManifest({
   required String outputDir,
   required DiffResult result,
   required String dartSdkCommit,
   required String baselineSha256,
+  String? baseSnapshotPath,
+  String? patchSnapshotPath,
+  String? analyzeSnapshotBin,
 }) {
   Directory(outputDir).createSync(recursive: true);
 
@@ -52,8 +60,23 @@ void writeManifest({
   // entry_table.bin
   _writeEntryTable(outputDir, changedFunctions, icfAffected, affectedClosure);
 
-  // cid_map.bin (empty until snapshot-level cid analysis is added in 4-D)
-  _writeCidMap(outputDir, {});
+  // cid_map.bin — populated if snapshots provided, otherwise empty
+  Map<int, int> cidMap = {};
+  if (baseSnapshotPath != null &&
+      patchSnapshotPath != null &&
+      analyzeSnapshotBin != null) {
+    final baseCids = extractCidMap(baseSnapshotPath, analyzeSnapshotBin);
+    final patchCids = extractCidMap(patchSnapshotPath, analyzeSnapshotBin);
+    if (baseCids.isNotEmpty && patchCids.isNotEmpty) {
+      for (final entry in baseCids.entries) {
+        final patchCid = patchCids[entry.key];
+        if (patchCid != null && patchCid != entry.value) {
+          cidMap[entry.value] = patchCid;
+        }
+      }
+    }
+  }
+  _writeCidMap(outputDir, cidMap);
 }
 
 void _writeEntryTable(

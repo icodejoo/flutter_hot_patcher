@@ -8,13 +8,16 @@ void _usage() {
   stderr.writeln(
       'Usage: kernel_linker --base <base.dill> --patch <patch.dill> '
       '[--json] [--verbose] [--allow-empty] '
-      '[--output-dir <dir>] [--baseline-snapshot <path>] [--dart-sdk-commit <hash>]');
+      '[--output-dir <dir>] [--baseline-snapshot <path>] [--dart-sdk-commit <hash>] '
+      '[--base-snapshot <path>] [--patch-snapshot <path>] '
+      '[--analyze-snapshot <path>]');
   exit(1);
 }
 
 void main(List<String> args) {
   String? basePath, patchPath;
   String? outputDir, baselineSnapshot, dartSdkCommit;
+  String? baseSnapshotPath, patchSnapshotPath, analyzeSnapshotBin;
   var json = false;
   var verbose = false;
   var allowEmpty = false;
@@ -37,6 +40,12 @@ void main(List<String> args) {
         baselineSnapshot = args[++i];
       case '--dart-sdk-commit':
         dartSdkCommit = args[++i];
+      case '--base-snapshot':
+        baseSnapshotPath = args[++i];
+      case '--patch-snapshot':
+        patchSnapshotPath = args[++i];
+      case '--analyze-snapshot':
+        analyzeSnapshotBin = args[++i];
       default:
         stderr.writeln('Unknown flag: ${args[i]}');
         _usage();
@@ -88,6 +97,9 @@ void main(List<String> args) {
       result: result,
       dartSdkCommit: dartSdkCommit ?? 'unknown',
       baselineSha256: sha256hex,
+      baseSnapshotPath: baseSnapshotPath,
+      patchSnapshotPath: patchSnapshotPath,
+      analyzeSnapshotBin: analyzeSnapshotBin,
     );
     stderr.writeln('[kernel_linker] Manifest written to $outputDir/');
   }
