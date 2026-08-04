@@ -21,3 +21,10 @@ __pycache__/
 *.pyc
 tools/patch_builder/keys/*.pem
 tools/updater/target/
+spikes/gate2_linker/tools/kernel_linker/test/fixtures/
+dartvm_set.*.o
+spikes/ios_hotpatch_demo/
+dartvm_set.*.o
+spikes/ios_hotpatch_demo/
+spikes/gate2_linker/tools/kernel_linker/test/fixtures/
+tools/patch_server/patches/
