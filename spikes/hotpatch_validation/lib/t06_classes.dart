@@ -66,3 +66,4 @@ extension StatusExt on Status {
 }
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String cls_enum() => Status.active.label;  // T42
+void main() {}

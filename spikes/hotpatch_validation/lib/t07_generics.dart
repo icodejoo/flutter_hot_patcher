@@ -20,3 +20,4 @@ num generic_constraint() => _add(3, 4);  // T45
 List<T> _reverse<T>(List<T> input) => input.reversed.toList();
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String generic_list() => _reverse([1, 2, 3]).toString();  // T46
+void main() {}

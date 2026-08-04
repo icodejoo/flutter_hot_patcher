@@ -20,3 +20,4 @@ int coll_set() => {1, 2, 3}.length;
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 int coll_fold() => [1, 2, 3, 4].fold(0, (a, b) => a + b);
+void main() {}

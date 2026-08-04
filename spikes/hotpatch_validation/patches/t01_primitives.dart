@@ -20,3 +20,4 @@ int prim_var() { var x = 10; return x * 3; }
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 Object prim_object() { Object o = 'forty-two'; return o; }
+void main() {}

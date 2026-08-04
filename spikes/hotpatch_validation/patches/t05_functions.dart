@@ -40,3 +40,4 @@ String fn_async_label() => 'async_patched';  // T33
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String fn_generator() => _gen().toList().toString();  // T34
 Iterable<int> _gen() sync* { yield 10; yield 20; yield 30; }  // ×10
+void main() {}

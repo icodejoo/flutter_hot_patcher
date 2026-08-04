@@ -40,3 +40,4 @@ String fn_async_label() => 'async_baseline';  // T33 (sync proxy)
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String fn_generator() => _gen().toList().toString();  // T34
 Iterable<int> _gen() sync* { yield 1; yield 2; yield 3; }
+void main() {}

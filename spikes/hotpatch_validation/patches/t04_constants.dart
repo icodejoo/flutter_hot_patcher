@@ -18,3 +18,4 @@ int const_list() { const list = [1, 2, 3, 4]; return list.length; }
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 int const_expr() { const x = 2 * 4; return x; }
+void main() {}

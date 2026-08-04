@@ -21,3 +21,4 @@ class Vec2 {
 }
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String op_custom() => (Vec2(1, 2) + Vec2(3, 4)).toString();  // T51: (4,6)
+void main() {}

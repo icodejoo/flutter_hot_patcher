@@ -14,3 +14,4 @@ String null_coalesce() { String? a; String? b; return a ?? b ?? 'fallback'; }
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String null_late() { late String x; x = 'patched'; return x; }
+void main() {}
