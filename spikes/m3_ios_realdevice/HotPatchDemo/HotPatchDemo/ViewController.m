@@ -24,7 +24,12 @@
     [ud setObject:@"loading" forKey:@"patch_status"];
     [ud synchronize];
 
-    const char *cResult = dart_run(usePatch ? 1 : 0);
+    NSString *patchPath = nil;
+    if (usePatch) {
+        patchPath = [[NSBundle mainBundle] pathForResource:@"patch" ofType:@"dill"];
+        if (!patchPath) NSLog(@"[M3] WARNING: patch.dill not found in bundle");
+    }
+    const char *cResult = dart_run(usePatch ? 1 : 0, patchPath ? patchPath.UTF8String : NULL);
 
     [ud setObject:@"ok" forKey:@"patch_status"];
     [ud synchronize];

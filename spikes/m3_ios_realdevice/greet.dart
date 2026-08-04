@@ -1,21 +1,15 @@
 library;
 
 @pragma('vm:never-inline')
-@pragma('vm:entry-point')
 String greet() => 'ORIGINAL';
 
+// greetAlt prevents CHA devirtualization of greetVar (AOT would otherwise inline greet() directly)
 @pragma('vm:never-inline')
-@pragma('vm:entry-point')
-String greetAlt() => 'ORIGINAL-ALT';
-
-@pragma('vm:never-inline')
-@pragma('vm:entry-point')
-String greetPatched() => 'PATCHED';
+String greetAlt() => 'ALT';
 
 late String Function() greetVar;
 
 @pragma('vm:never-inline')
-@pragma('vm:entry-point')
 String callGreet() => greetVar();
 
 @pragma('vm:external-name', 'Internal_redirectClosureEntryPoint')
@@ -23,12 +17,12 @@ external Object? _redirectClosureEntryPoint(Object target, Object replacement);
 
 @pragma('vm:entry-point')
 void setup(List args) {
-  // Two possible assignments prevents AOT CHA from devirtualizing the call
   greetVar = args.contains('--alt') ? greetAlt : greet;
-  String Function() patchedClosure = greetPatched;
-  if (args.contains('--patch')) {
-    _redirectClosureEntryPoint(greetVar, patchedClosure);
-  }
+}
+
+@pragma('vm:entry-point')
+void redirectToPatch(Object patchFn) {
+  _redirectClosureEntryPoint(greetVar, patchFn);
 }
 
 @pragma('vm:entry-point')
