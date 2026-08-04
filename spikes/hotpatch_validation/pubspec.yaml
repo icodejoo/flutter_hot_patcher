@@ -1,6 +1,6 @@
 name: hotpatch_validation
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 dependencies:
   intl: ^0.19.0
   collection: ^1.18.0
