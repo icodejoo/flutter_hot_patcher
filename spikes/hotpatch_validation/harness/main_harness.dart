@@ -10,6 +10,11 @@ import '../lib/t05_functions.dart' as t05;
 import '../lib/t06_classes.dart' as t06;
 import '../lib/t07_generics.dart' as t07;
 import '../lib/t08_operators.dart' as t08;
+import '../lib/t09_async.dart' as t09;
+import '../lib/t10_errors.dart' as t10;
+import '../lib/t11_strings.dart' as t11;
+import '../lib/t12_thirdparty.dart' as t12;
+import '../lib/t13_flutter_like.dart' as t13;
 
 void _registerTests() {
   registerTest('T01', 'Primitive int', 'primitives', () => t01.prim_int().toString());
@@ -70,6 +75,38 @@ void _registerTests() {
   registerTest('T49', 'Operator logical', 'operators', () => t08.op_logical().toString());
   registerTest('T50', 'Operator bitwise', 'operators', () => t08.op_bitwise().toString());
   registerTest('T51', 'Operator custom', 'operators', () => t08.op_custom());
+
+  // T52-T55: Async (sync proxy patterns; ⚠️ KNOWN_LIMITATION: dart2bytecode async unverified)
+  registerTest('T52', 'Async future value', 'async', () => t09.async_future_value());
+  registerTest('T53', 'Async await chain', 'async', () => t09.async_await_chain());
+  registerTest('T54', 'Async future error', 'async', () => t09.async_future_error());
+  registerTest('T55', 'Async stream', 'async', () => t09.async_stream());
+
+  // T56-T59: Error handling
+  registerTest('T56', 'Error try catch', 'errors', () => t10.err_try_catch());
+  registerTest('T57', 'Error throw', 'errors', () => t10.err_throw());
+  registerTest('T58', 'Error on type', 'errors', () => t10.err_on_type());
+  registerTest('T59', 'Error finally', 'errors', () => t10.err_finally());
+
+  // T60-T63: Strings
+  registerTest('T60', 'String interpolation', 'strings', () => t11.str_interpolation());
+  registerTest('T61', 'String multiline', 'strings', () => t11.str_multiline());
+  registerTest('T62', 'String raw', 'strings', () => t11.str_raw());
+  registerTest('T63', 'String regexp', 'strings', () => t11.str_regexp().toString());
+
+  // T64-T68: Third-party packages
+  registerTest('T64', 'Thirdparty intl format', 'thirdparty', () => t12.third_intl_format());
+  registerTest('T65', 'Thirdparty intl date', 'thirdparty', () => t12.third_intl_date());
+  registerTest('T66', 'Thirdparty collection', 'thirdparty', () => t12.third_collection());
+  registerTest('T67', 'Thirdparty crypto', 'thirdparty', () => t12.third_crypto());
+  registerTest('T68', 'Thirdparty path', 'thirdparty', () => t12.third_path());
+
+  // T69-T73: Flutter-like patterns
+  registerTest('T69', 'Flutter counter logic', 'flutter_like', () => t13.flutter_counter_logic().toString());
+  registerTest('T70', 'Flutter state compute', 'flutter_like', () => t13.flutter_state_compute());
+  registerTest('T71', 'Flutter builder fn', 'flutter_like', () => t13.flutter_builder_fn());
+  registerTest('T72', 'Flutter callback', 'flutter_like', () => t13.flutter_callback());
+  registerTest('T73', 'Flutter form validate', 'flutter_like', () => t13.flutter_form_validate());
 }
 
 @pragma('vm:entry-point')
