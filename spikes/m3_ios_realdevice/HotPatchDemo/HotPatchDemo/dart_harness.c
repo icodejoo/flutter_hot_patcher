@@ -67,30 +67,27 @@ const char* dart_run(int use_patch, const char* patch_dill_path) {
     Dart_Handle root_lib = Dart_RootLibrary();
     CHK(root_lib);
 
-    /* Call setup(['--alt']) to initialize greetVar with two possible targets (prevents CHA devirtualization) */
-    Dart_Handle arg_list = Dart_NewList(1);
-    CHK(arg_list);
-    Dart_ListSetAt(arg_list, 0, Dart_NewStringFromCString("--alt"));
+    /* setup(['--alt']) initializes greetVar with two possible paths (prevents CHA devirtualization) */
+    Dart_Handle alt_list = Dart_NewList(1);
+    CHK(alt_list);
+    Dart_ListSetAt(alt_list, 0, Dart_NewStringFromCString("--alt"));
     Dart_Handle setup_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("setup"));
     CHK(setup_fn);
-    Dart_Handle setup_args[1] = {arg_list};
+    Dart_Handle setup_args[1] = {alt_list};
     Dart_Handle setup_res = Dart_InvokeClosure(setup_fn, 1, setup_args);
     CHK(setup_res);
 
-    /* Then reset greetVar to greet (the actual baseline) */
+    /* Reset greetVar to greet (baseline) */
     Dart_Handle greet_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("greet"));
     CHK(greet_fn);
-    Dart_Handle set_greetvar = Dart_SetField(root_lib, Dart_NewStringFromCString("greetVar"), greet_fn);
-    CHK(set_greetvar);
+    CHK(Dart_SetField(root_lib, Dart_NewStringFromCString("greetVar"), greet_fn));
 
     if (use_patch && patch_dill_path) {
         /* Read patch.dill from file */
         FILE* f = fopen(patch_dill_path, "rb");
         if (!f) {
             fprintf(stderr, "[ERR] Cannot open patch.dill: %s\n", patch_dill_path);
-            Dart_ExitScope();
-            Dart_ShutdownIsolate();
-            return "ERROR_NO_PATCH";
+            Dart_ExitScope(); Dart_ShutdownIsolate(); return "ERROR_NO_PATCH";
         }
         fseek(f, 0, SEEK_END);
         long patch_size = ftell(f);
@@ -98,30 +95,24 @@ const char* dart_run(int use_patch, const char* patch_dill_path) {
         uint8_t* patch_bytes = (uint8_t*)malloc(patch_size);
         fread(patch_bytes, 1, patch_size, f);
         fclose(f);
-        fprintf(stderr, "[M3] Loading patch.dill (%ld bytes) from %s\n", patch_size, patch_dill_path);
+        fprintf(stderr, "[M3] Loading patch.dill (%ld bytes)\n", patch_size);
 
-        /* Create external typed data pointing to patch bytes */
+        /* Create external typed data from patch bytes */
         Dart_Handle td = Dart_NewExternalTypedData(Dart_TypedData_kUint8, patch_bytes, patch_size);
         CHK(td);
 
-        /* Call applyPatch(bytes) from Dart — uses _loadDynamicModuleClosure + _redirectClosureEntryPoint internally */
+        /* Call applyPatch(td) — loads bytecode, stores closure in _patchClosure */
         Dart_Handle apply_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("applyPatch"));
         CHK(apply_fn);
         Dart_Handle apply_args[1] = {td};
         Dart_Handle apply_res = Dart_InvokeClosure(apply_fn, 1, apply_args);
-        if (Dart_IsError(apply_res)) {
-            fprintf(stderr, "[ERR] applyPatch: %s\n", Dart_GetError(apply_res));
-            free(patch_bytes);
-            Dart_ExitScope();
-            Dart_ShutdownIsolate();
-            return "ERROR_APPLY_PATCH";
-        }
-        fprintf(stderr, "[M3] applyPatch done — greetVar now points to bytecode greet\n");
+        CHK(apply_res);
+        fprintf(stderr, "[M3] applyPatch done\n");
 
         free(patch_bytes);
     }
 
-    /* Call getResult() → string */
+    /* Call getResult() — returns callGreet() or invokes bytecode closure */
     Dart_Handle get_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("getResult"));
     CHK(get_fn);
     Dart_Handle result_h = Dart_InvokeClosure(get_fn, 0, NULL);
