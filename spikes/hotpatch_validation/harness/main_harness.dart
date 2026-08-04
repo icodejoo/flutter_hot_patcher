@@ -15,6 +15,9 @@ import '../lib/t10_errors.dart' as t10;
 import '../lib/t11_strings.dart' as t11;
 import '../lib/t12_thirdparty.dart' as t12;
 import '../lib/t13_flutter_like.dart' as t13;
+import '../lib/t14_propagation.dart' as t14;
+import '../lib/t15_hierarchy.dart' as t15;
+import '../lib/t16_edge.dart' as t16;
 
 void _registerTests() {
   registerTest('T01', 'Primitive int', 'primitives', () => t01.prim_int().toString());
@@ -76,37 +79,53 @@ void _registerTests() {
   registerTest('T50', 'Operator bitwise', 'operators', () => t08.op_bitwise().toString());
   registerTest('T51', 'Operator custom', 'operators', () => t08.op_custom());
 
-  // T52-T55: Async (sync proxy patterns; ⚠️ KNOWN_LIMITATION: dart2bytecode async unverified)
   registerTest('T52', 'Async future value', 'async', () => t09.async_future_value());
   registerTest('T53', 'Async await chain', 'async', () => t09.async_await_chain());
   registerTest('T54', 'Async future error', 'async', () => t09.async_future_error());
   registerTest('T55', 'Async stream', 'async', () => t09.async_stream());
 
-  // T56-T59: Error handling
   registerTest('T56', 'Error try catch', 'errors', () => t10.err_try_catch());
   registerTest('T57', 'Error throw', 'errors', () => t10.err_throw());
   registerTest('T58', 'Error on type', 'errors', () => t10.err_on_type());
   registerTest('T59', 'Error finally', 'errors', () => t10.err_finally());
 
-  // T60-T63: Strings
   registerTest('T60', 'String interpolation', 'strings', () => t11.str_interpolation());
   registerTest('T61', 'String multiline', 'strings', () => t11.str_multiline());
   registerTest('T62', 'String raw', 'strings', () => t11.str_raw());
   registerTest('T63', 'String regexp', 'strings', () => t11.str_regexp().toString());
 
-  // T64-T68: Third-party packages
   registerTest('T64', 'Thirdparty intl format', 'thirdparty', () => t12.third_intl_format());
   registerTest('T65', 'Thirdparty intl date', 'thirdparty', () => t12.third_intl_date());
   registerTest('T66', 'Thirdparty collection', 'thirdparty', () => t12.third_collection());
   registerTest('T67', 'Thirdparty crypto', 'thirdparty', () => t12.third_crypto());
   registerTest('T68', 'Thirdparty path', 'thirdparty', () => t12.third_path());
 
-  // T69-T73: Flutter-like patterns
   registerTest('T69', 'Flutter counter logic', 'flutter_like', () => t13.flutter_counter_logic().toString());
   registerTest('T70', 'Flutter state compute', 'flutter_like', () => t13.flutter_state_compute());
   registerTest('T71', 'Flutter builder fn', 'flutter_like', () => t13.flutter_builder_fn());
   registerTest('T72', 'Flutter callback', 'flutter_like', () => t13.flutter_callback());
   registerTest('T73', 'Flutter form validate', 'flutter_like', () => t13.flutter_form_validate());
+
+  registerTest('T74', 'Propagation 2-level chain', 'propagation', () => t14.prop_a_2level());
+  registerTest('T75', 'Propagation 3-level chain', 'propagation', () => t14.prop_a_3level());
+  registerTest('T76', 'Propagation 4-level chain', 'propagation', () => t14.prop_a_4level());
+  registerTest('T77', 'Propagation diamond', 'propagation', () => t14.prop_a_diamond());
+  registerTest('T78', 'Propagation multi-point', 'propagation', () => t14.prop_a_multi());
+  registerTest('T79', 'Propagation sibling', 'propagation', () => t14.prop_b_sibling());
+  registerTest('T80', 'Propagation cross-class', 'propagation', () => t14.prop_cross_class());
+  registerTest('T81', 'Propagation static chain', 'propagation', () => t14.prop_static_a());
+
+  registerTest('T82', 'Hierarchy add field', 'hierarchy', () => t15.hierarchy_add_field());
+  registerTest('T83', 'Hierarchy remove field', 'hierarchy', () => t15.hierarchy_remove_field());
+  registerTest('T84', 'Hierarchy add class', 'hierarchy', () => t15.hierarchy_add_class());
+  registerTest('T85', 'Hierarchy remove class', 'hierarchy', () => t15.hierarchy_remove_class());
+  registerTest('T86', 'Hierarchy change inheritance', 'hierarchy', () => t15.hierarchy_change_inheritance());
+
+  registerTest('T87', 'Edge empty function', 'edge', () => t16.edge_empty_fn());
+  registerTest('T88', 'Edge recursive', 'edge', () => t16.edge_recursive_call().toString());
+  registerTest('T89', 'Edge mutual recursive', 'edge', () => t16.edge_mutual_recursive());
+  registerTest('T90', 'Edge large string', 'edge', () => t16.edge_large_string().toString());
+  registerTest('T91', 'Edge identity', 'edge', () => t16.edge_identity_same());
 }
 
 @pragma('vm:entry-point')

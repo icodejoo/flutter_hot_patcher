@@ -748,8 +748,8 @@
       "class_hierarchy_changed": false
     },
     "runtime": {
-      "expected_output": "5d41402a",
-      "note": "first 8 chars of MD5('hello')"
+      "expected_output": "486ea462",
+      "note": "first 8 chars of SHA256('world')"
     }
   },
   "T68": {
@@ -816,6 +816,203 @@
     },
     "runtime": {
       "expected_output": "Too short"
+    }
+  },
+  "T74": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_b_2level"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "b_patched_via_a"
+    }
+  },
+  "T75": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_c_3level"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "c_patched_b_a"
+    }
+  },
+  "T76": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_d_4level"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "d_patched_c_b_a"
+    }
+  },
+  "T77": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_b_diamond"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "b_diamond_patched+c_diamond_stable"
+    }
+  },
+  "T78": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_b_multi",
+        "hotpatch_validation.t14::prop_d_multi"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "b_multi_patched+d_multi_patched"
+    }
+  },
+  "T79": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_b_sibling"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "b_sibling_patched"
+    }
+  },
+  "T80": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::ChainB::call"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "chain_b_patched"
+    }
+  },
+  "T81": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t14::prop_static_b"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "static_b_patched_a"
+    }
+  },
+  "T82": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t15::hierarchy_add_field"
+      ],
+      "class_hierarchy_changed": true
+    },
+    "runtime": {
+      "expected_output": "Person: Alice, age: 0",
+      "note": "class PersonT82: field added (age)"
+    }
+  },
+  "T83": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t15::hierarchy_remove_field"
+      ],
+      "class_hierarchy_changed": true
+    },
+    "runtime": {
+      "expected_output": "widget: free",
+      "note": "class ItemT83: field removed (price)"
+    }
+  },
+  "T84": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t15::hierarchy_add_class"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "extra_class_hello",
+      "note": "new ExtraClass added"
+    }
+  },
+  "T85": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t15::hierarchy_remove_class"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "class_was_removed",
+      "note": "RemovedClass deleted"
+    }
+  },
+  "T86": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t15::hierarchy_change_inheritance"
+      ],
+      "class_hierarchy_changed": true
+    },
+    "runtime": {
+      "expected_output": "Child of B",
+      "note": "ChildT86: inheritance changed BaseA\u2192BaseB"
+    }
+  },
+  "T87": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t16::edge_empty_fn"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "was_empty"
+    }
+  },
+  "T88": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t16::edge_recursive"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "16",
+      "note": "recursive base case changed: 0\u21921, result 5..1\u21925..1+1"
+    }
+  },
+  "T89": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t16::edge_is_even",
+        "hotpatch_validation.t16::edge_is_odd"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "false,false",
+      "note": "mutual recursion logic swapped"
+    }
+  },
+  "T90": {
+    "kernel_linker": {
+      "changed_functions_contains": [
+        "hotpatch_validation.t16::edge_large_string"
+      ],
+      "class_hierarchy_changed": false
+    },
+    "runtime": {
+      "expected_output": "1007",
+      "note": "suffix changed 'baseline'\u2192'patched' (1 char shorter)"
     }
   }
 }

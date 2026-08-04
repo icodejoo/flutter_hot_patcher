@@ -23,8 +23,8 @@ String third_collection() {
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
 String third_crypto() {
-  final bytes = utf8.encode('hello');
-  return md5.convert(bytes).toString().substring(0, 8);  // T67: MD5 instead of SHA256
+  final bytes = utf8.encode('world');  // T67: changed input 'hello'→'world'
+  return sha256.convert(bytes).toString().substring(0, 8);
 }
 
 @pragma('vm:entry-point') @pragma('vm:never-inline')
