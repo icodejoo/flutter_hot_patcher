@@ -121,7 +121,7 @@ void _registerTests() {
   registerTest('T85', 'Hierarchy remove class', 'hierarchy', () => t15.hierarchy_remove_class());
   registerTest('T86', 'Hierarchy change inheritance', 'hierarchy', () => t15.hierarchy_change_inheritance());
 
-  registerTest('T87', 'Edge empty function', 'edge', () => t16.edge_empty_fn());
+  registerTest('T87', 'Edge empty function', 'edge', () => t16.edge_empty_fn() ?? 'null');
   registerTest('T88', 'Edge recursive', 'edge', () => t16.edge_recursive_call().toString());
   registerTest('T89', 'Edge mutual recursive', 'edge', () => t16.edge_mutual_recursive());
   registerTest('T90', 'Edge large string', 'edge', () => t16.edge_large_string().toString());

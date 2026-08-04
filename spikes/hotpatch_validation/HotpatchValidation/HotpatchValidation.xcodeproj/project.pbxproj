@@ -1,0 +1,321 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BB0000000000000000000001 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* AppDelegate.m */; };
+		BB0000000000000000000002 /* ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* ViewController.m */; };
+		BB0000000000000000000003 /* dart_harness_val.c in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000003 /* dart_harness_val.c */; };
+		BB0000000000000000000004 /* builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000004 /* builtin_shim.cpp */; };
+		BB0000000000000000000005 /* snapshot.S in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000005 /* snapshot.S */; };
+		BB0000000000000000000010 /* t01_patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* t01_patch.dill */; };
+		BB0000000000000000000011 /* t02_patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* t02_patch.dill */; };
+		BB0000000000000000000012 /* t05_patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* t05_patch.dill */; };
+		BB0000000000000000000013 /* t06_patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* t06_patch.dill */; };
+		BB0000000000000000000014 /* t14_patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* t14_patch.dill */; };
+		BB0000000000000000000015 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000015 /* LaunchScreen.storyboard */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		29B97318FDCFA39411CA2CEA /* HotpatchValidation.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HotpatchValidation.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000001 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotpatchValidation/AppDelegate.m; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000002 /* ViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotpatchValidation/ViewController.m; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000003 /* dart_harness_val.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HotpatchValidation/dart_harness_val.c; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000004 /* builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HotpatchValidation/builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000005 /* snapshot.S */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = HotpatchValidation/snapshot.S; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000006 /* dart_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotpatchValidation/dart_api.h; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000007 /* dart_harness_val.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotpatchValidation/dart_harness_val.h; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000010 /* t01_patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotpatchValidation/t01_patch.dill; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000011 /* t02_patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotpatchValidation/t02_patch.dill; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000012 /* t05_patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotpatchValidation/t05_patch.dill; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000013 /* t06_patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotpatchValidation/t06_patch.dill; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000014 /* t14_patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotpatchValidation/t14_patch.dill; sourceTree = SOURCE_ROOT; };
+		AA0000000000000000000015 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = HotpatchValidation/LaunchScreen.storyboard; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		29B97320FDCFA39411CA2CEA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		29B97315FDCFA39411CA2CEA = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000001C /* HotpatchValidation */,
+				29B97317FDCFA39411CA2CEA /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		29B97317FDCFA39411CA2CEA /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				29B97318FDCFA39411CA2CEA /* HotpatchValidation.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA000000000000000000001C /* HotpatchValidation */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000001 /* AppDelegate.m */,
+				AA0000000000000000000002 /* ViewController.m */,
+				AA0000000000000000000003 /* dart_harness_val.c */,
+				AA0000000000000000000004 /* builtin_shim.cpp */,
+				AA0000000000000000000005 /* snapshot.S */,
+				AA0000000000000000000006 /* dart_api.h */,
+				AA0000000000000000000007 /* dart_harness_val.h */,
+				AA0000000000000000000010 /* t01_patch.dill */,
+				AA0000000000000000000011 /* t02_patch.dill */,
+				AA0000000000000000000012 /* t05_patch.dill */,
+				AA0000000000000000000013 /* t06_patch.dill */,
+				AA0000000000000000000014 /* t14_patch.dill */,
+				AA0000000000000000000015 /* LaunchScreen.storyboard */,
+			);
+			name = HotpatchValidation;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		29B97316FDCFA39411CA2CEA /* HotpatchValidation */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 29B97325FDCFA39411CA2CEA /* Build configuration list for PBXNativeTarget "HotpatchValidation" */;
+			buildPhases = (
+				29B97319FDCFA39411CA2CEA /* Sources */,
+				29B97320FDCFA39411CA2CEA /* Frameworks */,
+				29B97321FDCFA39411CA2CEA /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HotpatchValidation;
+			productName = HotpatchValidation;
+			productReference = 29B97318FDCFA39411CA2CEA /* HotpatchValidation.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		29B97314FDCFA39411CA2CEA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					29B97316FDCFA39411CA2CEA = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = 29B97324FDCFA39411CA2CEA /* Build configuration list for PBXProject "HotpatchValidation" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 29B97315FDCFA39411CA2CEA;
+			productRefGroup = 29B97317FDCFA39411CA2CEA /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				29B97316FDCFA39411CA2CEA /* HotpatchValidation */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		29B97321FDCFA39411CA2CEA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0000000000000000000010 /* t01_patch.dill in Resources */,
+				BB0000000000000000000011 /* t02_patch.dill in Resources */,
+				BB0000000000000000000012 /* t05_patch.dill in Resources */,
+				BB0000000000000000000013 /* t06_patch.dill in Resources */,
+				BB0000000000000000000014 /* t14_patch.dill in Resources */,
+				BB0000000000000000000015 /* LaunchScreen.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		29B97319FDCFA39411CA2CEA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0000000000000000000001 /* AppDelegate.m in Sources */,
+				BB0000000000000000000002 /* ViewController.m in Sources */,
+				BB0000000000000000000003 /* dart_harness_val.c in Sources */,
+				BB0000000000000000000004 /* builtin_shim.cpp in Sources */,
+				BB0000000000000000000005 /* snapshot.S in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		29B97322FDCFA39411CA2CEA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 7VP87G446C;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					/Users/Cruz/dart/sdk/runtime/include,
+				);
+				INFOPLIST_FILE = HotpatchValidation/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build,
+				);
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-ldart_aot_ios",
+					"-ldart_aotruntime_product",
+					"-ldouble_conversion",
+					"-lboringssl",
+					"-licu",
+					"-ldart_chrome_zlib",
+					"-lperfetto",
+					"-ldart_cxxabi",
+					"-ldart_cxx",
+					"-lc++",
+					"-lpthread",
+					"-ldl",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-lresolv",
+					"-framework",
+					UIKit,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreGraphics,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.hotpatch.m3demo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALID_ARCHS = arm64;
+			};
+			name = Debug;
+		};
+		29B97323FDCFA39411CA2CEA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 7VP87G446C;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					/Users/Cruz/dart/sdk/runtime/include,
+				);
+				INFOPLIST_FILE = HotpatchValidation/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build,
+				);
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-ldart_aot_ios",
+					"-ldart_aotruntime_product",
+					"-ldouble_conversion",
+					"-lboringssl",
+					"-licu",
+					"-ldart_chrome_zlib",
+					"-lperfetto",
+					"-ldart_cxxabi",
+					"-ldart_cxx",
+					"-lc++",
+					"-lpthread",
+					"-ldl",
+					"-framework",
+					Foundation,
+					"-framework",
+					Security,
+					"-lresolv",
+					"-framework",
+					UIKit,
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					CoreGraphics,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = org.hotpatch.m3demo;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALID_ARCHS = arm64;
+			};
+			name = Release;
+		};
+		29B97326FDCFA39411CA2CEA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		29B97327FDCFA39411CA2CEA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		29B97324FDCFA39411CA2CEA /* Build configuration list for PBXProject "HotpatchValidation" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				29B97326FDCFA39411CA2CEA /* Debug */,
+				29B97327FDCFA39411CA2CEA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		29B97325FDCFA39411CA2CEA /* Build configuration list for PBXNativeTarget "HotpatchValidation" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				29B97322FDCFA39411CA2CEA /* Debug */,
+				29B97323FDCFA39411CA2CEA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 29B97314FDCFA39411CA2CEA /* Project object */;
+}

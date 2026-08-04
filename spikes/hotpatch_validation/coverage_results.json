@@ -9,7 +9,15 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": {
+      "id": "T01",
+      "fn": "prim_int",
+      "expected": "100",
+      "got": "100",
+      "pass": true,
+      "error": ""
+    }
   },
   {
     "id": "T02",
@@ -21,7 +29,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T03",
@@ -33,7 +42,15 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": {
+      "id": "T03",
+      "fn": "prim_string",
+      "expected": "world",
+      "got": "world",
+      "pass": true,
+      "error": ""
+    }
   },
   {
     "id": "T04",
@@ -45,7 +62,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T05",
@@ -57,7 +75,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T06",
@@ -69,7 +88,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T07",
@@ -81,7 +101,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T08",
@@ -93,7 +114,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T09",
@@ -105,7 +127,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T10",
@@ -117,7 +140,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T11",
@@ -129,7 +153,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T12",
@@ -141,7 +166,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T13",
@@ -153,7 +179,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T14",
@@ -165,7 +192,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T15",
@@ -177,7 +205,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T16",
@@ -189,7 +218,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T17",
@@ -201,7 +231,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T18",
@@ -213,7 +244,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T19",
@@ -225,7 +257,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T20",
@@ -237,7 +270,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T21",
@@ -249,7 +283,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T22",
@@ -261,7 +296,8 @@
     "known_limitation": false,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T23",
@@ -273,7 +309,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T24",
@@ -285,7 +322,8 @@
     "known_limitation": false,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T25",
@@ -297,7 +335,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T26",
@@ -309,7 +348,15 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": {
+      "id": "T26",
+      "fn": "fn_toplevel",
+      "expected": "patched",
+      "got": "patched",
+      "pass": true,
+      "error": ""
+    }
   },
   {
     "id": "T27",
@@ -321,7 +368,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T28",
@@ -333,7 +381,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T29",
@@ -345,7 +394,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T30",
@@ -357,7 +407,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T31",
@@ -369,7 +420,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T32",
@@ -381,7 +433,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T33",
@@ -393,7 +446,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T34",
@@ -405,7 +459,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T35",
@@ -417,7 +472,15 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": {
+      "id": "T35",
+      "fn": "cls_basic_method",
+      "expected": "-1",
+      "got": "-1",
+      "pass": true,
+      "error": ""
+    }
   },
   {
     "id": "T36",
@@ -429,7 +492,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T37",
@@ -441,7 +505,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T38",
@@ -453,7 +518,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T39",
@@ -465,7 +531,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T40",
@@ -477,7 +544,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T41",
@@ -489,7 +557,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T42",
@@ -501,7 +570,8 @@
     "known_limitation": false,
     "manifest_changed_count": 11,
     "manifest_affected_count": 5,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T43",
@@ -513,7 +583,8 @@
     "known_limitation": true,
     "manifest_changed_count": 1,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T44",
@@ -525,7 +596,8 @@
     "known_limitation": true,
     "manifest_changed_count": 1,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T45",
@@ -537,7 +609,8 @@
     "known_limitation": true,
     "manifest_changed_count": 1,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T46",
@@ -549,7 +622,8 @@
     "known_limitation": false,
     "manifest_changed_count": 1,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T47",
@@ -561,7 +635,8 @@
     "known_limitation": false,
     "manifest_changed_count": 6,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T48",
@@ -573,7 +648,8 @@
     "known_limitation": false,
     "manifest_changed_count": 6,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T49",
@@ -585,7 +661,8 @@
     "known_limitation": false,
     "manifest_changed_count": 6,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T50",
@@ -597,7 +674,8 @@
     "known_limitation": false,
     "manifest_changed_count": 6,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T51",
@@ -609,7 +687,8 @@
     "known_limitation": false,
     "manifest_changed_count": 6,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T52",
@@ -621,7 +700,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T53",
@@ -633,7 +713,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T54",
@@ -645,7 +726,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T55",
@@ -657,7 +739,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T56",
@@ -669,7 +752,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T57",
@@ -681,7 +765,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T58",
@@ -693,7 +778,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T59",
@@ -705,7 +791,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T60",
@@ -717,7 +804,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T61",
@@ -729,7 +817,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T62",
@@ -741,7 +830,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T63",
@@ -753,7 +843,8 @@
     "known_limitation": false,
     "manifest_changed_count": 4,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T64",
@@ -765,7 +856,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T65",
@@ -777,7 +869,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T66",
@@ -789,7 +882,8 @@
     "known_limitation": false,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T67",
@@ -801,7 +895,8 @@
     "known_limitation": false,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T68",
@@ -813,7 +908,8 @@
     "known_limitation": true,
     "manifest_changed_count": 2,
     "manifest_affected_count": 0,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T69",
@@ -825,7 +921,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T70",
@@ -837,7 +934,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T71",
@@ -849,7 +947,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T72",
@@ -861,7 +960,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T73",
@@ -873,7 +973,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 1,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T74",
@@ -885,7 +986,15 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": {
+      "id": "T74",
+      "fn": "prop_a_2level",
+      "expected": "b_patched_via_a",
+      "got": "b_patched_via_a",
+      "pass": true,
+      "error": ""
+    }
   },
   {
     "id": "T75",
@@ -897,7 +1006,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T76",
@@ -909,7 +1019,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T77",
@@ -921,7 +1032,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T78",
@@ -933,7 +1045,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T79",
@@ -945,7 +1058,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T80",
@@ -957,7 +1071,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T81",
@@ -969,7 +1084,8 @@
     "known_limitation": false,
     "manifest_changed_count": 9,
     "manifest_affected_count": 11,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T82",
@@ -981,7 +1097,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": true
+    "class_hierarchy_changed": true,
+    "device_result": null
   },
   {
     "id": "T83",
@@ -993,7 +1110,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": true
+    "class_hierarchy_changed": true,
+    "device_result": null
   },
   {
     "id": "T84",
@@ -1005,7 +1123,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": true
+    "class_hierarchy_changed": true,
+    "device_result": null
   },
   {
     "id": "T85",
@@ -1017,7 +1136,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": true
+    "class_hierarchy_changed": true,
+    "device_result": null
   },
   {
     "id": "T86",
@@ -1029,7 +1149,8 @@
     "known_limitation": false,
     "manifest_changed_count": 7,
     "manifest_affected_count": 3,
-    "class_hierarchy_changed": true
+    "class_hierarchy_changed": true,
+    "device_result": null
   },
   {
     "id": "T87",
@@ -1041,7 +1162,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 2,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T88",
@@ -1053,7 +1175,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 2,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T89",
@@ -1065,7 +1188,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 2,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T90",
@@ -1077,7 +1201,8 @@
     "known_limitation": false,
     "manifest_changed_count": 5,
     "manifest_affected_count": 2,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   },
   {
     "id": "T91",
@@ -1089,6 +1214,7 @@
     "known_limitation": true,
     "manifest_changed_count": 5,
     "manifest_affected_count": 2,
-    "class_hierarchy_changed": false
+    "class_hierarchy_changed": false,
+    "device_result": null
   }
 ]
