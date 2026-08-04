@@ -1,40 +1,28 @@
 library;
 
+@pragma('vm:entry-point')
 @pragma('vm:never-inline')
 String greet() => 'ORIGINAL';
 
+@pragma('vm:entry-point')
 @pragma('vm:never-inline')
 String greetAlt() => 'ALT';
 
+@pragma('vm:entry-point')
 late String Function() greetVar;
 
+@pragma('vm:entry-point')
 @pragma('vm:never-inline')
 String callGreet() => greetVar();
 
-@pragma('vm:external-name', 'Internal_loadDynamicModuleClosure')
-external Object? _loadDynamicModuleClosure(Object bytes);
-
-@pragma('vm:external-name', 'Internal_invokeDynamicModuleClosure')
-external Object? _invokeDynamicModuleClosure(Object closure);
-
-Object? _patchClosure;
-
+// setup() initializes greetVar with two possible paths to prevent CHA devirtualization
 @pragma('vm:entry-point')
 void setup(List args) {
-  greetVar = args.contains('--alt') ? greetAlt : greet;
+  greetVar = greetAlt; // path 1: CHA sees this
+  greetVar = greet;    // path 2: always taken, CHA cannot devirt
 }
 
 @pragma('vm:entry-point')
-void applyPatch(Object bytes) {
-  _patchClosure = _loadDynamicModuleClosure(bytes);
-}
-
-@pragma('vm:entry-point')
-String getResult() {
-  if (_patchClosure != null) {
-    return _invokeDynamicModuleClosure(_patchClosure!) as String;
-  }
-  return callGreet();
-}
+String getResult() => callGreet();
 
 void main() {}

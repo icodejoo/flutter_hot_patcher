@@ -7,26 +7,26 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		BB1234560000000000000001 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000001; };
-		BB1234560000000000000002 /* ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000002; };
-		BB1234560000000000000003 /* dart_harness.c in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000003; };
-		BB1234560000000000000005 /* builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000005; };
-		BB1234560000000000000006 /* snapshot.S in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006; };
-		BB123456000000000000000A /* patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000007; };
-		BB123456000000000000000B /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA123456000000000000000A; };
+		BB1234560000000000000001 /* HotPatchDemo/AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000001 /* HotPatchDemo/AppDelegate.m */; };
+		BB1234560000000000000002 /* HotPatchDemo/ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000002 /* HotPatchDemo/ViewController.m */; };
+		BB1234560000000000000003 /* HotPatchDemo/dart_harness.c in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000003 /* HotPatchDemo/dart_harness.c */; };
+		BB1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp */; };
+		BB1234560000000000000006 /* HotPatchDemo/snapshot.S in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006 /* HotPatchDemo/snapshot.S */; };
+		BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000007 /* HotPatchDemo/patch.dill */; };
+		BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		29B97318FDCFA39411CA2CEA /* HotPatchDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HotPatchDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA1234560000000000000001 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotPatchDemo/AppDelegate.m; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000002 /* ViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotPatchDemo/ViewController.m; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000003 /* dart_harness.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HotPatchDemo/dart_harness.c; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000004 /* dart_harness.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_harness.h; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000005 /* builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HotPatchDemo/builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000006 /* snapshot.S */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = HotPatchDemo/snapshot.S; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000007 /* patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/patch.dill; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000008 /* dart_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_api.h; sourceTree = SOURCE_ROOT; };
-		AA123456000000000000000A /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = HotPatchDemo/LaunchScreen.storyboard; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000001 /* HotPatchDemo/AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotPatchDemo/AppDelegate.m; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000002 /* HotPatchDemo/ViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HotPatchDemo/ViewController.m; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000003 /* HotPatchDemo/dart_harness.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HotPatchDemo/dart_harness.c; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000004 /* HotPatchDemo/dart_harness.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_harness.h; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HotPatchDemo/builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000006 /* HotPatchDemo/snapshot.S */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = HotPatchDemo/snapshot.S; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000007 /* HotPatchDemo/patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/patch.dill; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000008 /* HotPatchDemo/dart_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_api.h; sourceTree = SOURCE_ROOT; };
+		AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = HotPatchDemo/LaunchScreen.storyboard; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,15 +59,15 @@
 		AA123456000000000000000C /* HotPatchDemo */ = {
 			isa = PBXGroup;
 			children = (
-				AA1234560000000000000001 /* AppDelegate.m */,
-				AA1234560000000000000002 /* ViewController.m */,
-				AA1234560000000000000003 /* dart_harness.c */,
-				AA1234560000000000000004 /* dart_harness.h */,
-				AA1234560000000000000005 /* builtin_shim.cpp */,
-				AA1234560000000000000006 /* snapshot.S */,
-				AA1234560000000000000007 /* patch.dill */,
-				AA1234560000000000000008 /* dart_api.h */,
-				AA123456000000000000000A /* LaunchScreen.storyboard */,
+				AA1234560000000000000001 /* HotPatchDemo/AppDelegate.m */,
+				AA1234560000000000000002 /* HotPatchDemo/ViewController.m */,
+				AA1234560000000000000003 /* HotPatchDemo/dart_harness.c */,
+				AA1234560000000000000004 /* HotPatchDemo/dart_harness.h */,
+				AA1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp */,
+				AA1234560000000000000006 /* HotPatchDemo/snapshot.S */,
+				AA1234560000000000000007 /* HotPatchDemo/patch.dill */,
+				AA1234560000000000000008 /* HotPatchDemo/dart_api.h */,
+				AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */,
 			);
 			name = HotPatchDemo;
 			sourceTree = "<group>";
@@ -77,11 +77,12 @@
 /* Begin PBXNativeTarget section */
 		29B97316FDCFA39411CA2CEA /* HotPatchDemo */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 29B97325FDCFA39411CA2CEA;
+			buildConfigurationList = 29B97325FDCFA39411CA2CEA /* Build configuration list for PBXNativeTarget "HotPatchDemo" */;
 			buildPhases = (
 				29B97319FDCFA39411CA2CEA /* Sources */,
 				29B97320FDCFA39411CA2CEA /* Frameworks */,
 				29B97321FDCFA39411CA2CEA /* Resources */,
+				CC123456000000000000001A /* Copy patch_bundle */,
 			);
 			buildRules = (
 			);
@@ -89,7 +90,7 @@
 			);
 			name = HotPatchDemo;
 			productName = HotPatchDemo;
-			productReference = 29B97318FDCFA39411CA2CEA;
+			productReference = 29B97318FDCFA39411CA2CEA /* HotPatchDemo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -106,7 +107,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 29B97324FDCFA39411CA2CEA;
+			buildConfigurationList = 29B97324FDCFA39411CA2CEA /* Build configuration list for PBXProject "HotPatchDemo" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -115,7 +116,7 @@
 				Base,
 			);
 			mainGroup = 29B97315FDCFA39411CA2CEA;
-			productRefGroup = 29B97317FDCFA39411CA2CEA;
+			productRefGroup = 29B97317FDCFA39411CA2CEA /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -129,8 +130,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB123456000000000000000A /* patch.dill in Resources */,
-				BB123456000000000000000B /* LaunchScreen.storyboard in Resources */,
+				BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */,
+				BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -141,39 +142,57 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB1234560000000000000001 /* AppDelegate.m in Sources */,
-				BB1234560000000000000002 /* ViewController.m in Sources */,
-				BB1234560000000000000003 /* dart_harness.c in Sources */,
-				BB1234560000000000000005 /* builtin_shim.cpp in Sources */,
-				BB1234560000000000000006 /* snapshot.S in Sources */,
+				BB1234560000000000000001 /* HotPatchDemo/AppDelegate.m in Sources */,
+				BB1234560000000000000002 /* HotPatchDemo/ViewController.m in Sources */,
+				BB1234560000000000000003 /* HotPatchDemo/dart_harness.c in Sources */,
+				BB1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp in Sources */,
+				BB1234560000000000000006 /* HotPatchDemo/snapshot.S in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+		CC123456000000000000001A /* Copy patch_bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/HotPatchDemo/patch_bundle",
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/patch_bundle",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cp -r \"$SRCROOT/HotPatchDemo/patch_bundle\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/\"\n";
+			name = "Copy patch_bundle";
+		};
+
 
 /* Begin XCBuildConfiguration section */
 		29B97322FDCFA39411CA2CEA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				CLANG_ENABLE_MODULES = NO;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = NO;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 28VANPL49P;
+				DEVELOPMENT_TEAM = 7VP87G446C;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"/Users/Cruz/dart/sdk/runtime/include",
+					/Users/Cruz/dart/sdk/runtime/include,
 				);
 				INFOPLIST_FILE = HotPatchDemo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build",
+					/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build,
 				);
 				OTHER_LDFLAGS = (
 					"-ObjC",
 					"-ldart_aot_ios",
+					"-lflutter_hotpatch_updater",
 					"-ldart_aotruntime_product",
 					"-ldouble_conversion",
 					"-lboringssl",
@@ -189,6 +208,8 @@
 					Foundation,
 					"-framework",
 					Security,
+					"-lresolv",
+					"-lresolv",
 					"-framework",
 					UIKit,
 					"-framework",
@@ -209,24 +230,25 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
-				CLANG_ENABLE_MODULES = NO;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_MODULES = NO;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 28VANPL49P;
+				DEVELOPMENT_TEAM = "";
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
-					"/Users/Cruz/dart/sdk/runtime/include",
+					/Users/Cruz/dart/sdk/runtime/include,
 				);
 				INFOPLIST_FILE = HotPatchDemo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
-					"/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build",
+					/Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/build,
 				);
 				OTHER_LDFLAGS = (
 					"-ObjC",
 					"-ldart_aot_ios",
+					"-lflutter_hotpatch_updater",
 					"-ldart_aotruntime_product",
 					"-ldouble_conversion",
 					"-lboringssl",
@@ -242,6 +264,8 @@
 					Foundation,
 					"-framework",
 					Security,
+					"-lresolv",
+					"-lresolv",
 					"-framework",
 					UIKit,
 					"-framework",

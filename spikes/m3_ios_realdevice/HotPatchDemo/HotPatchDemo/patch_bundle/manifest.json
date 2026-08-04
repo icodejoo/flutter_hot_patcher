@@ -1,0 +1,46 @@
+{
+  "format_version": "1",
+  "dart_sdk_commit": "1aa7d7321fb",
+  "baseline_sha256": "",
+  "changed_functions": [
+    "file:///Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/HotPatchDemo/HotPatchDemo/greet.dart::callGreet",
+    "file:///Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/HotPatchDemo/HotPatchDemo/greet.dart::greet"
+  ],
+  "icf_affected": [],
+  "affected_closure": [
+    "file:///Users/Cruz/Documents/flutter_hot_patcher/spikes/m3_ios_realdevice/HotPatchDemo/HotPatchDemo/greet.dart::getResult"
+  ],
+  "class_hierarchy_changed": false,
+  "class_hierarchy": {
+    "added_classes": [],
+    "removed_classes": [],
+    "hierarchy_changed": [],
+    "member_layout_changed": []
+  },
+  "patch_id": "greet-v1-ios-m4demo",
+  "patch_version": 1,
+  "created_at": "2026-08-04T03:38:10.788902+00:00",
+  "platform": "ios",
+  "payload_type": "bytecode",
+  "target_build_fingerprint": "1.0+1",
+  "sig_anchor_key_id": "anchor-greet-v1-ios-m4demo",
+  "sig_alg": "ed25519",
+  "cert_chain": [],
+  "artifacts": [
+    {
+      "path": "bytecode/patch.dill",
+      "sha256": "d1f652c005e11a30e0950daff876df3691691a90a112e759d7849d713d5f8850",
+      "size": 439
+    },
+    {
+      "path": "entry_table.bin",
+      "sha256": "9753c7b59402375f26d6006eb9d8c0ddd60e5bbf693ca6bf2ceb4efea99511bc",
+      "size": 372
+    },
+    {
+      "path": "cid_map.bin",
+      "sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "size": 4
+    }
+  ]
+}
