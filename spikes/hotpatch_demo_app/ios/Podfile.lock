@@ -1,0 +1,22 @@
+PODS:
+  - dart_hotpatch_plugin (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+
+DEPENDENCIES:
+  - dart_hotpatch_plugin (from `.symlinks/plugins/dart_hotpatch_plugin/ios`)
+  - Flutter (from `Flutter`)
+
+EXTERNAL SOURCES:
+  dart_hotpatch_plugin:
+    :path: ".symlinks/plugins/dart_hotpatch_plugin/ios"
+  Flutter:
+    :path: Flutter
+
+SPEC CHECKSUMS:
+  dart_hotpatch_plugin: 195e7c351e233df712ec15c5c0321ddfb0fef1dd
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+
+PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
+
+COCOAPODS: 1.16.2
