@@ -498,6 +498,99 @@ xcrun devicectl device copy from \
 
 ---
 
+## 8. 2026-08-05 最新发现与 X1 引擎构建验证
+
+### 8.1 dart2bytecode 与 .dart 文件入口点约束
+
+**发现**：`dart2bytecode` 在 Dart SDK 内每个 `.dart` 文件只能有一个"主"入口点（entry_point），这是 VM 设计层面的限制而非实现细节。
+
+**影响**：
+- 多函数分发器（multi-fn dispatcher）必须路由到一个单一入口，然后分支到实际函数
+- 不能有多个独立的 `@pragma('vm:entry-point')` 函数在同一编译单元被 `Dart_Invoke` 直接调用
+- 解决方案：统一的 dispatcher 函数 + 闭包/高阶函数路由
+
+**参考代码**：`spikes/gate1_mixed_execution/ios_arm64/e2e_v2_hotpatch/dispatcher.dart` 中的 `invokeFunction()` 模式
+
+### 8.2 GN 编译标志正确形式：dart_dynamic_modules=true
+
+**发现**：构建 Flutter Engine 或 Dart VM 时，动态模块支持的标志应为：
+```
+--gn-args "dart_dynamic_modules=true"
+```
+
+**常见错误**：`--dart-dynamic-modules`（此标志不存在）
+
+**确认方式**：
+```bash
+grep -r "dart_dynamic_modules" flutter/engine/src/build/config/
+# 应该在 GN 配置文件中看到此变量定义
+```
+
+**关键文件**：`//runtime/BUILD.gn` 中的条件编译块会检查 `dart_dynamic_modules` 变量，进而决定是否编译 `Dart_LoadLibraryFromBytecode` 等动态加载 API。
+
+### 8.3 vpython3 来源约束：必须来自 depot_tools
+
+**发现**：Flutter Engine 的 gclient 构建链要求 `vpython3` 必须来自 `depot_tools`，而非系统 Python 或 Homebrew 安装。
+
+**症状**（如果用错了 Python）：
+- `gclient sync` 失败，错误信息含 `ModuleNotFoundError: No module named 'yaml'`
+- 或 `vpython3` 找不到位置
+
+**解决方案**：
+```bash
+# 确保 depot_tools 在 PATH 最前面
+export PATH="/path/to/depot_tools:$PATH"
+
+# 验证
+which vpython3  # 应该指向 depot_tools/vpython3 或其符号链接
+vpython3 --version  # 应该有输出
+```
+
+**相关配置**：`.gclient` 文件中的 `solutions` 必须包含 `depot_tools` 仓库，而且 `gclient_platform` 需要正确设置为 `darwin` 或 `linux`。
+
+### 8.4 googlesource.com 网络可用性是 gclient sync 的硬要求
+
+**发现**：`gclient sync` 不能仅依靠 GitHub 镜像完成。即使从 GitHub 克隆了初始仓库，sync 过程仍需要访问 `https://chromium.googlesource.com/` 上的多个 DEPS 源。
+
+**症状**（网络隔离环境）：
+- `gclient sync` 在 "Syncing projects" 阶段卡住或超时
+- Dart SDK 部分仓库（如 `third_party/benchmark`、`third_party/boringssl/src`）无法下载
+- 国内网络可能需要科学上网工具
+
+**验证**（在 sync 前）：
+```bash
+curl -I https://chromium.googlesource.com/chromium/src.git/info/refs
+# 应该返回 HTTP 200，而非超时/拒绝
+```
+
+**构建环境要求**：
+- 国内开发：建议在阿里云 ECS 等有国际出口的服务器上跑 gclient sync，或配置全局代理
+- Mac 本地开发：确保科学上网工具配置正确，或使用 VPN
+
+### 8.5 常量字面值变更现已可通过 _ConstantCollector 访问器检测
+
+**发现**：Dart VM 的 `_ConstantCollector` 访问器（visitor）能够在编译时遍历并记录所有常量字面值的变更。这为"const 修改检测"提供了第一手数据。
+
+**原理**：
+- 当补丁 .dill 通过 `Dart_LoadLibraryFromBytecode` 加载时，VM 会对其执行 CHA（Class Hierarchy Analysis）和常量传播
+- `_ConstantCollector` 在这个阶段被触发，访问所有 `const` 修饰的对象
+- 对比基线库中的相同 const，可以检测是否发生了修改
+
+**检测流程**：
+```
+补丁加载 → VM 常量化 → _ConstantCollector.visitConstant() 
+  → 对比 baseline const id 
+  → 若 id/值改变 → 标记为"invalid const change"
+```
+
+**关键类**：`runtime/vm/compiler/frontend/constant_reader.cc` 中的 `ConstantEvaluator`，以及相关的 `ObjectStore::constants_()` 缓存机制。
+
+**应用**：
+- T20-T25 的"const 修改检测"能力基于此
+- 未来可编写精细的"const 变更白名单"（如允许某些数值常量改变，禁止函数指针修改）
+
+---
+
 ## 附录：关键文件速查
 
 | 文件 | 作用 | 关键内容 |

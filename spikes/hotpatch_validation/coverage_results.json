@@ -1216,5 +1216,89 @@
     "manifest_affected_count": 2,
     "class_hierarchy_changed": false,
     "device_result": null
+  },
+  {
+    "id": "T92",
+    "file": "t17_dart3",
+    "kernel_pass": true,
+    "description": "Records (Dart 3.0)",
+    "known_limitation": false,
+    "manifest_changed_count": 1,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T93",
+    "file": "t17_dart3",
+    "kernel_pass": true,
+    "description": "Pattern switch (Dart 3.0)",
+    "known_limitation": false,
+    "manifest_changed_count": 1,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T94",
+    "file": "t17_dart3",
+    "kernel_pass": true,
+    "description": "Extension type (Dart 3.3)",
+    "known_limitation": false,
+    "manifest_changed_count": 1,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T95",
+    "file": "t17_dart3",
+    "kernel_pass": true,
+    "description": "Sealed class + exhaustive switch",
+    "known_limitation": false,
+    "manifest_changed_count": 2,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T96",
+    "file": "t18_multiiso",
+    "kernel_pass": true,
+    "description": "Multi-isolate isolate-local behavior",
+    "known_limitation": false,
+    "manifest_changed_count": 2,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T97",
+    "file": "t19_largeheap",
+    "kernel_pass": true,
+    "description": "Large heap 1000 objects closure graph",
+    "known_limitation": false,
+    "manifest_changed_count": 3,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T98",
+    "file": "t20_platform",
+    "kernel_pass": true,
+    "description": "Platform channel Dart-side getLocationDisplay",
+    "known_limitation": false,
+    "manifest_changed_count": 2,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T99",
+    "file": "t20_platform",
+    "kernel_pass": true,
+    "description": "Platform channel Dart-side getLocationWithFallback",
+    "known_limitation": false,
+    "manifest_changed_count": 2,
+    "manifest_affected_count": 0
+  },
+  {
+    "id": "T100",
+    "file": "t09_async",
+    "kernel_pass": true,
+    "description": "Async future value dart2bytecode device test PATCHED",
+    "known_limitation": false,
+    "runtime_pass": true,
+    "actual_output": "PATCHED",
+    "expected_output": "99",
+    "manifest_changed_count": 1,
+    "manifest_affected_count": 0
   }
 ]

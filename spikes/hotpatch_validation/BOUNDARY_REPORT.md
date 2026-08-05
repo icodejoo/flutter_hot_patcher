@@ -117,3 +117,154 @@ CHANGED (6):
 | 已知限制（已修复/缓解）| 4 项（L1-L4）| ✅ 全部修复或已缓解 |
 | 无法解决（架构限制）| 6 项（X1-X6） | ❌ 需要更大工程 |
 | 生产前 P0 必做 | 2 项剩余 | 阻塞上线 |
+
+---
+
+## 七、X1 Flutter Engine 构建进展（2026-08-04）
+
+### 构建环境已建立
+
+| 组件 | 状态 |
+|------|------|
+| Flutter 3.38.10 / 3.44.6 | ✅ 已安装（fvm） |
+| depot_tools + gclient | ✅ 可用 |
+| flutter/engine main 分支 | ✅ 已 clone |
+| gclient sync（Skia/abseil等 ~5GB）| ⏳ 运行中 |
+| GN configure（dart_dynamic_modules=true）| ⏳ 待 sync 完成 |
+| ninja build ios_release_arm64 | ⏳ 待配置完成 |
+| Flutter.xcframework 产物 | ⏳ 待构建完成 |
+
+### 关键技术发现
+
+1. **正确 GN 参数**：`--gn-args "dart_dynamic_modules=true"`（非 `--dart-dynamic-modules`）
+2. **vpython3 要求**：必须用 depot_tools 的 vpython3（Python 3.8），不能用系统 Python 3.14
+3. **完整 sync 必要**：Skia + abseil-cpp 等 ~5GB 依赖，--no-history 不够，需 full sync
+4. **引擎版本**：flutter/engine main branch（3.44.6 对应的 hash 83675ed27... 无法直接 fetch）
+
+### 构建完成后的验证步骤
+
+```bash
+# 1. 确认产物
+ls ~/engine_ios/src/out/ios_release_arm64/Flutter.xcframework
+
+# 2. 验证 dart_dynamic_modules 编译进去
+strings ~/engine_ios/src/out/ios_release_arm64/Flutter.xcframework/*/Flutter.framework/Flutter | \
+  grep "Internal_loadDynamicModuleClosure"
+
+# 3. 构建 Flutter test app
+cd spikes/flutter_hotpatch_demo/hotpatch_flutter_test
+flutter build ios \
+  --local-engine=~/engine_ios/src/out/ios_release_arm64 \
+  --local-engine-src-path=~/engine_ios/src \
+  --release
+
+# 4. 部署到 iPhone 14
+xcrun devicectl device install app --device 040F89ED-E7CC-54B0-A7BB-908EE82C0224 \
+  build/ios/iphoneos/Runner.app
+```
+
+### X1 完成判定标准
+
+- [ ] Flutter.xcframework 包含 `Internal_loadDynamicModuleClosure` 符号
+- [ ] Flutter test app 成功在 iPhone 14 启动（显示 "BASELINE" 或 "PATCHED"）
+- [ ] Updater fhp_init/stage_patch MethodChannel 调用返回 0（成功）
+- [ ] 加载 patch.dill 后 UI 显示 "PATCHED"
+
+---
+
+## 八、X1 最终状态：googlesource.com 网络受限（2026-08-04）
+
+### 根本原因
+
+```
+curl -I https://flutter.googlesource.com → HTTP 000 (连接失败)
+curl -I https://github.com              → HTTP 200 (正常)
+```
+
+Flutter Engine 的 30+ 个第三方依赖（abseil-cpp、angle、skia 等）
+托管在 googlesource.com，该网络无法访问。
+gclient sync 始终在这些依赖上失败，无法完成 Engine 构建。
+
+### 已完成工作
+
+| 组件 | 状态 |
+|------|------|
+| flutter/engine main 分支 clone | ✅ 完成 |
+| tools/gn --ios 参数确认 | ✅ --gn-args "dart_dynamic_modules=true" |
+| vpython3 配置 | ✅ 正常 |
+| Flutter plugin scaffold | ✅ tools/flutter_plugin/ |
+| Flutter test app | ✅ spikes/flutter_hotpatch_demo/ |
+| gclient sync 第三方依赖 | ❌ googlesource.com 不可达 |
+
+### 在能访问 googlesource.com 的机器上的完整步骤
+
+```bash
+# 1. 获取代码
+mkdir -p ~/engine_ios/src
+git clone https://github.com/flutter/engine.git --branch main --depth=100 ~/engine_ios/src/flutter
+
+# 2. 配置 .gclient
+cat > ~/engine_ios/.gclient << 'GCLIENT_EOF'
+solutions = [{ "name": "src/flutter", "url": "https://github.com/flutter/engine.git",
+  "custom_deps": {"src/third_party/dart": None}, "deps_file": "DEPS" }]
+GCLIENT_EOF
+
+# 3. sync（需要 googlesource.com 访问）
+export PATH="$HOME/depot_tools:$PATH"
+cd ~/engine_ios && gclient sync --force -j8
+
+# 4. 链接补丁 Dart SDK
+rm -rf src/third_party/dart
+ln -sf ~/dart/sdk src/third_party/dart
+
+# 5. GN configure
+cd src/flutter
+vpython3 tools/gn --ios --runtime-mode release \
+  --no-prebuilt-dart-sdk --gn-args="dart_dynamic_modules=true"
+
+# 6. Build (~60 min)
+ninja -C ../out/ios_release_arm64 flutter
+
+# 7. Verify
+strings out/ios_release_arm64/Flutter.xcframework/**/Flutter | \
+  grep "Internal_loadDynamicModuleClosure"
+
+# 8. Test Flutter app
+cd ~/Documents/flutter_hot_patcher/spikes/flutter_hotpatch_demo/hotpatch_flutter_test
+flutter build ios \
+  --local-engine=~/engine_ios/src/out/ios_release_arm64 \
+  --local-engine-src-path=~/engine_ios/src --release
+```
+
+### X1 完成判定标准（在有网络访问权的机器上）
+
+- [ ] Flutter.xcframework 含 Internal_loadDynamicModuleClosure 符号
+- [ ] Flutter test app 在 iPhone 14 显示 PATCHED
+- [ ] Updater MethodChannel fhp_init/stage_patch 返回 0
+
+
+---
+
+## 八、X1 最终状态：googlesource.com 网络受限（2026-08-04）
+
+### 根本原因
+- `flutter.googlesource.com` → HTTP 000 (连接失败)
+- `github.com` → HTTP 200 (正常)
+- Flutter Engine 30+ 第三方依赖托管在 googlesource.com，该网络无法访问
+
+### 已完成工作
+- flutter/engine main 分支 clone ✅
+- tools/gn --ios 参数确认: `--gn-args "dart_dynamic_modules=true"` ✅
+- vpython3 配置正常 ✅
+- Flutter plugin scaffold: tools/flutter_plugin/ ✅
+- Flutter test app: spikes/flutter_hotpatch_demo/ ✅
+- gclient sync: ❌ googlesource.com 不可达
+
+### 在能访问 googlesource.com 的机器上运行
+```bash
+cd ~/engine_ios && gclient sync --force -j8
+ln -sf ~/dart/sdk src/third_party/dart
+cd src/flutter && vpython3 tools/gn --ios --runtime-mode release \
+  --no-prebuilt-dart-sdk --gn-args="dart_dynamic_modules=true"
+ninja -C ../out/ios_release_arm64 flutter
+```

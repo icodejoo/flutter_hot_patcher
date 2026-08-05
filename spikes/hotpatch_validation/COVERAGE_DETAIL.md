@@ -40,6 +40,10 @@
 - **Kernel**: PASS (changed=7, affected=0)
 - **Runtime**: SKIP expected=? actual=TBD
 
+### T100 — Async future value dart2bytecode device test PATCHED
+- **Kernel**: PASS (changed=1, affected=0)
+- **Runtime**: PASS expected=99 actual=PATCHED
+
 ### T11 — t02_collections
 - **Kernel**: PASS (changed=7, affected=0)
 - **Runtime**: SKIP expected=? actual=TBD
@@ -362,5 +366,37 @@
 
 ### T91 — t16_edge [KNOWN_LIMITATION]
 - **Kernel**: PASS (changed=5, affected=2)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T92 — Records (Dart 3.0)
+- **Kernel**: PASS (changed=1, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T93 — Pattern switch (Dart 3.0)
+- **Kernel**: PASS (changed=1, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T94 — Extension type (Dart 3.3)
+- **Kernel**: PASS (changed=1, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T95 — Sealed class + exhaustive switch
+- **Kernel**: PASS (changed=2, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T96 — Multi-isolate isolate-local behavior
+- **Kernel**: PASS (changed=2, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T97 — Large heap 1000 objects closure graph
+- **Kernel**: PASS (changed=3, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T98 — Platform channel Dart-side getLocationDisplay
+- **Kernel**: PASS (changed=2, affected=0)
+- **Runtime**: SKIP expected=? actual=TBD
+
+### T99 — Platform channel Dart-side getLocationWithFallback
+- **Kernel**: PASS (changed=2, affected=0)
 - **Runtime**: SKIP expected=? actual=TBD
 
