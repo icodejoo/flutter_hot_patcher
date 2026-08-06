@@ -70,12 +70,14 @@ impl ShorebirdState {
     }
 
     pub fn mark_downloaded(&mut self, path: &str) {
-        if let ShorebirdPatchState::Downloading { url, signature } = &self.patch_state.clone() {
+        if let ShorebirdPatchState::Downloading { url, signature } = self.patch_state.clone() {
             self.patch_state = ShorebirdPatchState::Downloaded {
-                url: url.clone(),
-                signature: signature.clone(),
+                url,
+                signature,
                 path: path.to_string(),
             };
+        } else {
+            eprintln!("[shorebird] mark_downloaded called in unexpected state: {:?}", self.patch_state);
         }
     }
 

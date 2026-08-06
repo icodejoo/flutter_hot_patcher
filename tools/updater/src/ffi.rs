@@ -68,7 +68,7 @@ pub extern "C" fn fhp_stage_patch(
 pub extern "C" fn fhp_get_next_boot_patch_dir() -> *const c_char {
     let ctx_guard = CONTEXT.lock().unwrap();
     match ctx_guard.as_ref().and_then(|c| c.state.get_next_boot_dir()) {
-        Some(dir) => CString::new(dir).unwrap().into_raw(),
+        Some(dir) => CString::new(dir).unwrap_or_default().into_raw(),
         None => std::ptr::null(),
     }
 }
@@ -95,7 +95,7 @@ pub extern "C" fn fhp_state_json() -> *const c_char {
         Some(ctx) => serde_json::to_string_pretty(&ctx.state).unwrap_or_default(),
         None => "{}".to_string(),
     };
-    CString::new(json).unwrap().into_raw()
+    CString::new(json).unwrap_or_default().into_raw()
 }
 
 #[no_mangle]
@@ -181,9 +181,14 @@ pub extern "C" fn fhp_download_and_stage(
     }
 
     // Update shorebird state
+    let path_str = match out_path.to_str() {
+        Some(s) => s.to_string(),
+        None => return -6,
+    };
+
     let mut ctx_guard = CONTEXT.lock().unwrap();
     if let Some(ctx) = ctx_guard.as_mut() {
-        ctx.shorebird.mark_downloaded(out_path.to_str().unwrap_or(""));
+        ctx.shorebird.mark_downloaded(&path_str);
         ctx.shorebird.mark_installed(patch_number);
         ctx.shorebird.save(&ctx.data_dir).ok();
     }
