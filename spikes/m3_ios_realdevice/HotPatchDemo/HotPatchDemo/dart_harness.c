@@ -109,7 +109,8 @@ const char* dart_run(const char* patch_bundle_dir) {
     }
 
     strncpy(g_result, result_str ? result_str : "NULL", 255);
-    Dart_ExitScope(); Dart_ShutdownIsolate();
+    Dart_ExitScope();
+    /* NOTE: Do not call Dart_ShutdownIsolate() — it crashes the app on iOS. Keep isolate alive. */
     fclose(dbg);
     return g_result;
 #undef CHK

@@ -100,7 +100,8 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             channel = req.get("channel", DEFAULT_CHANNEL)
             current_patch_number = req.get("current_patch_number", 0)
             host = self.headers.get("Host", "localhost")
-            result = self._shorebird_check(release_version, platform, channel, current_patch_number, host)
+            proto = self.headers.get("X-Forwarded-Proto", "http")
+            result = self._shorebird_check(release_version, platform, channel, current_patch_number, host, proto)
             self._send_json(200, result)
             return
 
@@ -169,7 +170,7 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             "bundle_base_url": base_url,
         }
 
-    def _shorebird_check(self, release_version, platform, channel, current_patch_number, host):
+    def _shorebird_check(self, release_version, platform, channel, current_patch_number, host, proto='http'):
         """Shorebird-compatible patch check logic."""
         no_patch = {"patch_available": False, "patch": None, "rolled_back_patch_numbers": []}
         release_version = release_version.replace(' ', '+')
@@ -206,7 +207,7 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             return {**no_patch, "rolled_back_patch_numbers": rolled_back}
 
         bundle_name, manifest = best
-        download_url = f"http://{host}/patches/{release_version}/{bundle_name}/bundle.zst"
+        download_url = f"{proto}://{host}/patches/{release_version}/{bundle_name}/bundle.zst"
         return {
             "patch_available": True,
             "patch": {
@@ -229,7 +230,14 @@ def main():
 
     print(f"[server] Patch server starting on {args.host}:{args.port}")
     print(f"[server] Patches dir: {PATCHES_DIR}")
-    httpd = http.server.HTTPServer((args.host, args.port), PatchHandler)
+    import socket as _sock
+    if ':' in args.host:
+        class IPv6Server(http.server.HTTPServer):
+            address_family = _sock.AF_INET6
+        ServerClass = IPv6Server
+    else:
+        ServerClass = http.server.HTTPServer
+    httpd = ServerClass((args.host, args.port), PatchHandler)
     httpd.serve_forever()
 
 if __name__ == "__main__":

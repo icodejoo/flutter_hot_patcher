@@ -2,7 +2,7 @@
 #include "flutter_hotpatch_updater.h"
 
 static NSString* kBuildFingerprint = @"1.0+1";
-static NSString* kServerURL = @"http://192.168.1.100:8765"; // TODO: replace hardcoded IP with plist config
+static NSString* kServerURL = @"https://stock-honey-multimedia-sea.trycloudflare.com"; // Cloudflare tunnel // USB en7 IPv4 // TODO: replace hardcoded IP with plist config
 /* kAppId and kChannel reserved for fhp_check_update / fhp_download_and_stage (Task 1) */
 static NSString* kAppId = @"com.hotpatch.demo";
 static NSString* kChannel = @"stable";
@@ -42,11 +42,55 @@ static NSString* kChannel = @"stable";
 
 - (void)_checkForUpdatesInBackground {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        NSLog(@"[Updater] Background patch check starting (server: %@)", kServerURL);
-        /* TODO(Task 1): call fhp_check_update(kServerURL, kAppId, kChannel) then
-           fhp_download_and_stage() once those FFI functions are integrated via
-           libflutter_hotpatch_updater.a -- not yet declared in flutter_hotpatch_updater.h */
-        (void)kAppId; (void)kChannel; /* suppress unused-variable warnings until Task 1 */
+        NSLog(@"[Updater] Checking %@ for updates...", kServerURL);
+
+        const char* responseJson = fhp_check_update(
+            [kServerURL UTF8String],
+            [kAppId UTF8String],
+            [kBuildFingerprint UTF8String],
+            [kChannel UTF8String]
+        );
+        if (!responseJson) {
+            NSLog(@"[Updater] Check failed (null response)");
+            return;
+        }
+
+        NSString *jsonStr = @(responseJson);
+        NSLog(@"[Updater] raw response: %.200@", jsonStr);
+        NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+        fhp_free_string(responseJson);
+
+        NSError *jsonErr = nil;
+        NSDictionary *resp = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
+        if (!resp) {
+            NSLog(@"[Updater] JSON parse error: %@", jsonErr.localizedDescription);
+            return;
+        }
+        NSLog(@"[Updater] patch_available=%@", resp[@"patch_available"]);
+        if (![resp[@"patch_available"] boolValue]) return;
+
+        NSDictionary *patch = resp[@"patch"];
+        NSString *downloadUrl = patch[@"download_url"];
+        NSString *hash = patch[@"hash"] ?: @"";
+        NSNumber *patchNumber = patch[@"number"];
+        if (!downloadUrl || !patchNumber) return;
+
+        NSLog(@"[Updater] Downloading patch #%@ ...", patchNumber);
+
+        static const char* kPubKeyHex = "70fe9e96bec44e7a6ab78f98fd6e931cd550b615fab4cd501053e80c72f8ef55";
+
+        int result = fhp_download_and_stage(
+            [downloadUrl UTF8String],
+            [hash UTF8String],
+            "",
+            [patchNumber intValue],
+            kPubKeyHex
+        );
+        if (result == 0) {
+            NSLog(@"[Updater] Patch #%@ staged. Cold restart to apply.", patchNumber);
+        } else {
+            NSLog(@"[Updater] Stage failed: %d", result);
+        }
     });
 }
 

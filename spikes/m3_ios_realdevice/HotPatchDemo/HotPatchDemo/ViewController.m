@@ -3,7 +3,7 @@
 #include "flutter_hotpatch_updater.h"
 
 static const char* kPatchPublicKeyHex =
-    "9d2550fb40571238ee6bd8459ffa60bb2c121249abf44bebe0c1218faec9e82f";
+    "70fe9e96bec44e7a6ab78f98fd6e931cd550b615fab4cd501053e80c72f8ef55";
 static const char* kBuildFingerprint = "1.0+1";
 /* 5-B: telemetry endpoint. Empty string = disabled. */
 static NSString* const kTelemetryURL = @"";  /* set to @"http://your-server:8765/telemetry" in production */

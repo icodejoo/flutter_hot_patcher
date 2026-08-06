@@ -21,6 +21,15 @@ const char* fhp_state_json(void);
 /** Free a string returned by fhp_*. */
 void fhp_free_string(const char* s);
 
+/** Check for OTA update. Returns JSON string (caller must fhp_free_string()). */
+const char* fhp_check_update(const char* server_url, const char* app_id,
+                              const char* release_version, const char* channel);
+
+/** Download, verify, and stage a patch. Returns 0 on success. */
+int fhp_download_and_stage(const char* download_url, const char* expected_sha256_hex,
+                            const char* bundle_dir_hint, int patch_number,
+                            const char* pubkey_hex);
+
 #ifdef __cplusplus
 }
 #endif

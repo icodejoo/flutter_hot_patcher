@@ -103,11 +103,20 @@ pub extern "C" fn fhp_check_update(
     server_url: *const c_char,
     app_id: *const c_char,
     release_version: *const c_char,
-    current_patch_number: i32,
+    _channel: *const c_char,
 ) -> *const c_char {
     let server_url = unsafe { CStr::from_ptr(server_url) }.to_string_lossy().to_string();
     let app_id = unsafe { CStr::from_ptr(app_id) }.to_string_lossy().to_string();
     let release_version = unsafe { CStr::from_ptr(release_version) }.to_string_lossy().to_string();
+
+    // Read current patch number from state
+    let current_patch_number: i64 = {
+        let ctx_guard = CONTEXT.lock().unwrap();
+        ctx_guard.as_ref()
+            .and_then(|c| c.state.staged_patch_id.as_ref())
+            .and_then(|id| id.parse::<i64>().ok())
+            .unwrap_or(-1)
+    };
 
     let body = serde_json::json!({
         "app_id": app_id,
@@ -135,14 +144,16 @@ pub extern "C" fn fhp_check_update(
 pub extern "C" fn fhp_download_and_stage(
     download_url: *const c_char,
     expected_sha256_hex: *const c_char,
-    patch_number: u32,
-    bundle_dir: *const c_char,
+    bundle_dir_hint: *const c_char,
+    patch_number: i32,
+    pubkey_hex: *const c_char,
 ) -> i32 {
     use sha2::Digest;
 
     let url = unsafe { CStr::from_ptr(download_url) }.to_string_lossy().to_string();
     let expected_hash = unsafe { CStr::from_ptr(expected_sha256_hex) }.to_string_lossy().to_string();
-    let bundle_dir = unsafe { CStr::from_ptr(bundle_dir) }.to_string_lossy().to_string();
+    let bundle_dir_hint = unsafe { CStr::from_ptr(bundle_dir_hint) }.to_string_lossy().to_string();
+    let pubkey = unsafe { CStr::from_ptr(pubkey_hex) }.to_string_lossy().to_string();
 
     // Download bytes
     let resp = match ureq::get(&url).call() {
@@ -162,36 +173,79 @@ pub extern "C" fn fhp_download_and_stage(
         return -3;
     }
 
-    // Decompress zstd
-    let decompressed = match zstd::decode_all(std::io::Cursor::new(&bytes)) {
+    // Decompress zstd -> tar bytes
+    let tar_bytes = match zstd::decode_all(std::io::Cursor::new(&bytes)) {
         Ok(d) => d,
         Err(e) => { eprintln!("[updater] zstd decompress failed: {}", e); return -4; }
     };
 
-    // Write to bundle_dir
-    let patch_dir = std::path::PathBuf::from(&bundle_dir);
+    // Determine destination dir
+    let patch_dir = if bundle_dir_hint.is_empty() {
+        let ctx_guard = CONTEXT.lock().unwrap();
+        match ctx_guard.as_ref() {
+            Some(ctx) => ctx.data_dir.join("patches").join(patch_number.to_string()),
+            None => return -2,
+        }
+    } else {
+        std::path::PathBuf::from(&bundle_dir_hint)
+    };
+
     if let Err(e) = std::fs::create_dir_all(&patch_dir) {
         eprintln!("[updater] mkdir failed: {}", e);
         return -5;
     }
-    let out_path = patch_dir.join("patch.bin");
-    if let Err(e) = std::fs::write(&out_path, &decompressed) {
-        eprintln!("[updater] write failed: {}", e);
-        return -6;
+
+    // Untar into patch_dir
+    let mut archive = tar::Archive::new(std::io::Cursor::new(&tar_bytes));
+    for entry in match archive.entries() {
+        Ok(e) => e,
+        Err(e) => { eprintln!("[updater] tar entries failed: {}", e); return -7; }
+    } {
+        let mut entry = match entry {
+            Ok(e) => e,
+            Err(e) => { eprintln!("[updater] tar entry failed: {}", e); return -7; }
+        };
+        let entry_path = match entry.path() {
+            Ok(p) => p.to_path_buf(),
+            Err(_) => continue,
+        };
+        // strip leading "bundle/" component
+        let rel = entry_path.components()
+            .skip(1)
+            .collect::<std::path::PathBuf>();
+        if rel.as_os_str().is_empty() { continue; }
+        let dest = patch_dir.join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        if let Err(e) = entry.unpack(&dest) {
+            eprintln!("[updater] unpack {:?} failed: {}", dest, e);
+            return -8;
+        }
     }
 
-    // Update shorebird state
-    let path_str = match out_path.to_str() {
-        Some(s) => s.to_string(),
-        None => return -6,
+    // Verify bundle signature
+    let pub_bytes = match hex::decode(&pubkey) {
+        Ok(b) => b,
+        Err(_) => { eprintln!("[updater] bad pubkey hex"); return -9; }
     };
 
     let mut ctx_guard = CONTEXT.lock().unwrap();
-    if let Some(ctx) = ctx_guard.as_mut() {
-        ctx.shorebird.mark_downloaded(&path_str);
-        ctx.shorebird.mark_installed(patch_number);
-        ctx.shorebird.save(&ctx.data_dir).ok();
-    }
+    let ctx = match ctx_guard.as_mut() { Some(c) => c, None => return -2 };
 
-    0
+    let bundle_path_str = patch_dir.to_string_lossy().to_string();
+    match verify::verify_bundle(&patch_dir, &pub_bytes, &ctx.app_fingerprint, &ctx.state.blacklist) {
+        Ok(patch_id) => {
+            ctx.state.set_staged(bundle_path_str, patch_id);
+            ctx.state.mark_verified();
+            ctx.state.mark_next_boot();
+            ctx.state.save(&ctx.data_dir).ok();
+            ctx.shorebird.mark_downloaded(&patch_dir.join("patch.bin").to_string_lossy().to_string());
+            ctx.shorebird.mark_installed(patch_number as u32);
+            ctx.shorebird.save(&ctx.data_dir).ok();
+            0
+        }
+        Err(e) => { eprintln!("[updater] verify_bundle failed: {:?}", e); -10 }
+    }
 }
+
