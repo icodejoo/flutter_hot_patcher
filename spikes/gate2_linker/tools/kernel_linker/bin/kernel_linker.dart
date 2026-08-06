@@ -54,7 +54,12 @@ void main(List<String> args) {
       case '--pointers-json':
         pointersJsonPath = args[++i];
       case '--patch-version':
-        patchVersion = int.parse(args[++i]);
+        final parsed = int.tryParse(args[++i]);
+        if (parsed == null) {
+          stderr.writeln('--patch-version must be an integer');
+          exit(1);
+        }
+        patchVersion = parsed;
       case '--release-version':
         releaseVersion = args[++i];
       default:
@@ -125,9 +130,14 @@ void main(List<String> args) {
       patchVersion: patchVersion,
       releaseVersion: releaseVersion,
     );
-    File(pointersJsonPath!).writeAsStringSync(
-      JsonEncoder.withIndent('  ').convert(pointersData));
-    stderr.writeln('[kernel_linker] pointers.json written to $pointersJsonPath');
+    try {
+      File(pointersJsonPath!).writeAsStringSync(
+        JsonEncoder.withIndent('  ').convert(pointersData));
+      stderr.writeln('[kernel_linker] pointers.json written to $pointersJsonPath');
+    } catch (e) {
+      stderr.writeln('[kernel_linker] ERROR writing pointers.json: $e');
+      exit(1);
+    }
   }
 
   if (json) {

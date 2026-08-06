@@ -6,10 +6,10 @@ Map<String, dynamic> generatePointersJson({
   required String releaseVersion,
 }) {
   final functions = <Map<String, dynamic>>[];
-  for (var i = 0; i < changedFunctions.length; i++) {
+  for (final entry in changedFunctions.asMap().entries) {
     functions.add({
-      'canonical_name': changedFunctions[i],
-      'patch_index': i,
+      'canonical_name': entry.value,
+      'patch_index': entry.key,
     });
   }
   return {
