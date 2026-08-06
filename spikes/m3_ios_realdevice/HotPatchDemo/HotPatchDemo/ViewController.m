@@ -18,7 +18,7 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     NSDictionary *body = @{@"patch_id": patch_id, @"success": @(success)};
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    /* Fire-and-forget: no retry, no error handling — telemetry is best-effort */
+    /* Fire-and-forget: no retry, no error handling -- telemetry is best-effort */
     [[NSURLSession.sharedSession dataTaskWithRequest:req] resume];
     NSLog(@"[5B] telemetry: patch_id=%@ success=%d", patch_id, (int)success);
 }
@@ -32,15 +32,8 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemBackgroundColor;
 
-    NSArray *dataPaths = NSSearchPathForDirectoriesInDomains(
-        NSApplicationSupportDirectory, NSUserDomainMask, YES);
-    NSString *dataDir = [[dataPaths firstObject]
-        stringByAppendingPathComponent:@"HotPatchUpdater"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dataDir
-        withIntermediateDirectories:YES attributes:nil error:nil];
-
-    /* Initialize Updater (boot-loop watchdog fires here) */
-    fhp_init([dataDir UTF8String], kBuildFingerprint);
+    /* fhp_init was moved to AppDelegate.didFinishLaunchingWithOptions (Shorebird-aligned).
+       Boot-loop watchdog and blacklist check already ran before this point. */
 
     /* 5-B: if Updater auto-rolled-back (boot-loop), report crash */
     const char* stateJson = fhp_state_json();
@@ -50,7 +43,7 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
         [stateStr dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] ?: @{};
     NSArray *blacklist = state[@"blacklist"] ?: @[];
     if (blacklist.count > 0) {
-        /* Last patch was blacklisted — report crash for the most recently blacklisted id */
+        /* Last patch was blacklisted -- report crash for the most recently blacklisted id */
         report_telemetry(blacklist.lastObject, NO);
     }
 
@@ -64,10 +57,11 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
             nextBootDir = fhp_get_next_boot_patch_dir();
         }
     }
+    NSLog(@"[ViewController] next_boot_patch: %s", nextBootDir ? nextBootDir : "(null — baseline)");
 
     /* Run Dart */
     const char *cResult = dart_run(nextBootDir);
-    NSLog(@"[4D] Dart result: %s", cResult);
+    NSLog(@"[ViewController] Dart result: %s", cResult ? cResult : "(nil)");
 
     /* Confirm health + report success telemetry */
     fhp_confirm_health();
