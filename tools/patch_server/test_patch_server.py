@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for patch_server.py"""
 import json, os, shutil, sys, tempfile, threading, time, unittest, urllib.request
-sys.path.insert(0, '/tmp')
+sys.path.insert(0, os.path.dirname(__file__))
 import patch_server
 
 class TestPatchServer(unittest.TestCase):
@@ -26,6 +26,13 @@ class TestPatchServer(unittest.TestCase):
         with urllib.request.urlopen(url) as r:
             return json.loads(r.read())
 
+    def _post_json(self, path, payload):
+        url = f"http://127.0.0.1:{self.port}{path}"
+        data = json.dumps(payload).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+
     def _make_patch(self, fingerprint, patch_id, version=1, platform="ios"):
         d = os.path.join(self.patches_dir, fingerprint, patch_id, "bytecode")
         os.makedirs(d)
@@ -36,6 +43,22 @@ class TestPatchServer(unittest.TestCase):
         open(os.path.join(self.patches_dir, fingerprint, patch_id, "manifest.json"), "w").write(
             json.dumps(manifest))
         open(os.path.join(d, "patch.dill"), "wb").write(b"\x90" * 10)
+
+    def _make_shorebird_patch(self, release_version, bundle_name, patch_number=1, channel="stable", platform="ios"):
+        """Create a patch dir with manifest including shorebird fields."""
+        d = os.path.join(self.patches_dir, release_version, bundle_name)
+        os.makedirs(d)
+        manifest = {
+            "patch_id": bundle_name,
+            "patch_version": patch_number,
+            "patch_number": patch_number,
+            "platform": platform,
+            "channel": channel,
+            "target_build_fingerprint": release_version,
+            "bundle_name": bundle_name,
+        }
+        open(os.path.join(d, "manifest.json"), "w").write(json.dumps(manifest))
+        open(os.path.join(d, "bundle.zst"), "wb").write(b"\x00" * 8)
 
     def test_check_no_patch_returns_empty(self):
         r = self._get_json("/check?platform=ios&fingerprint=1.0+1")
@@ -63,6 +86,41 @@ class TestPatchServer(unittest.TestCase):
         self._make_patch("1.0+1", "greet-v1")
         r = self._get_json("/patches/1.0+1/greet-v1/manifest.json")
         self.assertEqual(r["patch_id"], "greet-v1")
+
+    # ---------- Shorebird API tests ----------
+
+    def test_shorebird_patches_check_no_patch(self):
+        payload = {
+            "release_version": "2.0+1", "platform": "ios", "arch": "aarch64",
+            "app_id": "com.example.app", "channel": "stable", "current_patch_number": 0,
+        }
+        r = self._post_json("/api/v1/patches/check", payload)
+        self.assertFalse(r["patch_available"])
+        self.assertIsNone(r["patch"])
+        self.assertEqual(r["rolled_back_patch_numbers"], [])
+
+    def test_shorebird_patches_check_with_patch(self):
+        self._make_shorebird_patch("1.0+1", "bundle-v1", patch_number=1, channel="stable")
+        payload = {
+            "release_version": "1.0+1", "platform": "ios", "arch": "aarch64",
+            "app_id": "com.example.app", "channel": "stable", "current_patch_number": 0,
+        }
+        r = self._post_json("/api/v1/patches/check", payload)
+        self.assertTrue(r["patch_available"])
+        self.assertIsNotNone(r["patch"])
+        self.assertEqual(r["patch"]["number"], 1)
+        self.assertIn("download_url", r["patch"])
+
+    def test_shorebird_events(self):
+        payload = [{"type": "PatchInstallSuccess", "patch_number": 1, "release_version": "1.0+1"}]
+        r = self._post_json("/api/v1/events", payload)
+        self.assertTrue(r["ok"])
+
+    def test_shorebird_channels(self):
+        r = self._get_json("/api/v1/channels")
+        self.assertIn("channels", r)
+        self.assertIsInstance(r["channels"], list)
+        self.assertIn("stable", r["channels"])
 
 
 if __name__ == "__main__":
