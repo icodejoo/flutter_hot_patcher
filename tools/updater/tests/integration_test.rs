@@ -1,15 +1,15 @@
 use flutter_hotpatch_updater::{state::*, verify, watchdog};
-use ring::signature::{Ed25519KeyPair, KeyPair};
+use ed25519_dalek::{SigningKey, Signer};
+use rand_core::OsRng;
 use std::path::Path;
 
-fn gen_key() -> (Vec<u8>, Vec<u8>) {
-    let rng = ring::rand::SystemRandom::new();
-    let doc = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-    let pair = Ed25519KeyPair::from_pkcs8(doc.as_ref()).unwrap();
-    (doc.as_ref().to_vec(), pair.public_key().as_ref().to_vec())
+fn gen_key() -> (SigningKey, Vec<u8>) {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let pub_key = signing_key.verifying_key().to_bytes().to_vec();
+    (signing_key, pub_key)
 }
 
-fn make_bundle(dir: &Path, pkcs8: &[u8], fingerprint: &str) {
+fn make_bundle(dir: &Path, signing_key: &SigningKey, fingerprint: &str) {
     let bytecode_dir = dir.join("bytecode");
     std::fs::create_dir_all(&bytecode_dir).unwrap();
     let dill = b"\x90\x90\x90";
@@ -39,19 +39,18 @@ fn make_bundle(dir: &Path, pkcs8: &[u8], fingerprint: &str) {
         ]
     });
 
-    let pair = Ed25519KeyPair::from_pkcs8(pkcs8).unwrap();
-    let sig = pair.sign(&verify::canonical_bytes(&manifest));
+    let sig = signing_key.sign(&verify::canonical_bytes(&manifest));
     std::fs::write(dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    std::fs::write(dir.join("manifest.sig"), sig.as_ref()).unwrap();
+    std::fs::write(dir.join("manifest.sig"), sig.to_bytes().to_vec()).unwrap();
 }
 
 #[test]
 fn test_full_pipeline_crash_rollback() {
     let data_dir = tempfile::tempdir().unwrap();
     let bundle_dir = tempfile::tempdir().unwrap();
-    let (pkcs8, pub_key) = gen_key();
-    make_bundle(bundle_dir.path(), &pkcs8, "1.0+1");
+    let (signing_key, pub_key) = gen_key();
+    make_bundle(bundle_dir.path(), &signing_key, "1.0+1");
 
     let blacklist: Vec<String> = vec![];
     let patch_id = verify::verify_bundle(bundle_dir.path(), &pub_key, "1.0+1", &blacklist)
@@ -65,7 +64,6 @@ fn test_full_pipeline_crash_rollback() {
     assert_eq!(state.stage, PatchStage::PendingConfirmation);
     assert!(state.get_next_boot_dir().is_some());
 
-    // Simulate crash: next cold boot without confirm
     watchdog::on_cold_boot(&mut state, data_dir.path());
     assert_eq!(state.stage, PatchStage::Baseline);
     assert!(state.blacklist.contains(&"test-patch-1".to_string()));
@@ -76,8 +74,8 @@ fn test_full_pipeline_crash_rollback() {
 fn test_full_pipeline_healthy_confirm() {
     let data_dir = tempfile::tempdir().unwrap();
     let bundle_dir = tempfile::tempdir().unwrap();
-    let (pkcs8, pub_key) = gen_key();
-    make_bundle(bundle_dir.path(), &pkcs8, "1.0+2");
+    let (signing_key, pub_key) = gen_key();
+    make_bundle(bundle_dir.path(), &signing_key, "1.0+2");
 
     let blacklist: Vec<String> = vec![];
     let patch_id = verify::verify_bundle(bundle_dir.path(), &pub_key, "1.0+2", &blacklist)
@@ -95,8 +93,8 @@ fn test_full_pipeline_healthy_confirm() {
 #[test]
 fn test_wrong_fingerprint_rejected() {
     let bundle_dir = tempfile::tempdir().unwrap();
-    let (pkcs8, pub_key) = gen_key();
-    make_bundle(bundle_dir.path(), &pkcs8, "1.0+1");
+    let (signing_key, pub_key) = gen_key();
+    make_bundle(bundle_dir.path(), &signing_key, "1.0+1");
     let blacklist: Vec<String> = vec![];
     let result = verify::verify_bundle(bundle_dir.path(), &pub_key, "WRONG_FP", &blacklist);
     assert!(result.is_err());
@@ -105,8 +103,8 @@ fn test_wrong_fingerprint_rejected() {
 #[test]
 fn test_blacklisted_patch_rejected() {
     let bundle_dir = tempfile::tempdir().unwrap();
-    let (pkcs8, pub_key) = gen_key();
-    make_bundle(bundle_dir.path(), &pkcs8, "1.0+1");
+    let (signing_key, pub_key) = gen_key();
+    make_bundle(bundle_dir.path(), &signing_key, "1.0+1");
     let blacklist = vec!["test-patch-1".to_string()];
     let result = verify::verify_bundle(bundle_dir.path(), &pub_key, "1.0+1", &blacklist);
     assert!(result.is_err());

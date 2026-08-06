@@ -25,6 +25,9 @@ void fhp_free_string(const char* s);
 const char* fhp_check_update(const char* server_url, const char* app_id,
                               const char* release_version, const char* channel);
 
+/** Flush queued events (crashes, boots) to server. Returns 0 on success. */
+int fhp_flush_events(const char* server_url);
+
 /** Download, verify, and stage a patch. Returns 0 on success. */
 int fhp_download_and_stage(const char* download_url, const char* expected_sha256_hex,
                             const char* bundle_dir_hint, int patch_number,

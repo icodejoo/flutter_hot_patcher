@@ -2,7 +2,12 @@
 #include "flutter_hotpatch_updater.h"
 
 static NSString* kBuildFingerprint = @"1.0+1";
-static NSString* kServerURL = @"https://stock-honey-multimedia-sea.trycloudflare.com"; // Cloudflare tunnel // USB en7 IPv4 // TODO: replace hardcoded IP with plist config
+static NSString* _serverURLFromPlist(void) {
+    NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+    NSString *url = info[@"HotPatchServerURL"];
+    return url.length ? url : @"http://localhost:8765";
+}
+#define kServerURL _serverURLFromPlist()
 /* kAppId and kChannel reserved for fhp_check_update / fhp_download_and_stage (Task 1) */
 static NSString* kAppId = @"com.hotpatch.demo";
 static NSString* kChannel = @"stable";
@@ -43,6 +48,9 @@ static NSString* kChannel = @"stable";
 - (void)_checkForUpdatesInBackground {
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
         NSLog(@"[Updater] Checking %@ for updates...", kServerURL);
+
+        // Flush queued crash events before check (events queued during fhp_init crash detection)
+        fhp_flush_events([kServerURL UTF8String]);
 
         const char* responseJson = fhp_check_update(
             [kServerURL UTF8String],

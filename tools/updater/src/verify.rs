@@ -1,4 +1,4 @@
-use ring::signature::{UnparsedPublicKey, ED25519};
+use ed25519_dalek::{VerifyingKey, Signature, Verifier};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug)]
@@ -38,10 +38,17 @@ pub fn verify_manifest_signature(
     signature: &[u8],
     public_key_bytes: &[u8],
 ) -> Result<(), VerifyError> {
+    let key_array: [u8; 32] = public_key_bytes
+        .try_into()
+        .map_err(|_| VerifyError::InvalidSignature)?;
+    let key = VerifyingKey::from_bytes(&key_array)
+        .map_err(|_| VerifyError::InvalidSignature)?;
+    let sig_array: [u8; 64] = signature
+        .try_into()
+        .map_err(|_| VerifyError::InvalidSignature)?;
+    let sig = Signature::from_bytes(&sig_array);
     let bytes = canonical_bytes(manifest);
-    let key = UnparsedPublicKey::new(&ED25519, public_key_bytes);
-    key.verify(&bytes, signature)
-        .map_err(|_| VerifyError::InvalidSignature)
+    key.verify(&bytes, &sig).map_err(|_| VerifyError::InvalidSignature)
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -123,21 +130,17 @@ pub fn verify_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{SigningKey, Signer};
+    use rand_core::OsRng;
 
-    fn test_key_pair() -> (Vec<u8>, Vec<u8>) {
-        use ring::rand::SystemRandom;
-        use ring::signature::{Ed25519KeyPair, KeyPair};
-        let rng = SystemRandom::new();
-        let doc = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-        let pair = Ed25519KeyPair::from_pkcs8(doc.as_ref()).unwrap();
-        let pub_key = pair.public_key().as_ref().to_vec();
-        (doc.as_ref().to_vec(), pub_key)
+    fn test_key_pair() -> (SigningKey, Vec<u8>) {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let pub_bytes = signing_key.verifying_key().to_bytes().to_vec();
+        (signing_key, pub_bytes)
     }
 
-    fn sign_test(pkcs8: &[u8], manifest: &serde_json::Value) -> Vec<u8> {
-        use ring::signature::{Ed25519KeyPair, KeyPair};
-        let pair = Ed25519KeyPair::from_pkcs8(pkcs8).unwrap();
-        pair.sign(&canonical_bytes(manifest)).as_ref().to_vec()
+    fn sign_test(signing_key: &SigningKey, manifest: &serde_json::Value) -> Vec<u8> {
+        signing_key.sign(&canonical_bytes(manifest)).to_bytes().to_vec()
     }
 
     #[test]
@@ -149,17 +152,17 @@ mod tests {
 
     #[test]
     fn test_verify_manifest_ok() {
-        let (pkcs8, pub_key) = test_key_pair();
+        let (signing_key, pub_key) = test_key_pair();
         let manifest = serde_json::json!({"patch_id":"test-1","format_version":"1"});
-        let sig = sign_test(&pkcs8, &manifest);
+        let sig = sign_test(&signing_key, &manifest);
         assert!(verify_manifest_signature(&manifest, &sig, &pub_key).is_ok());
     }
 
     #[test]
     fn test_verify_manifest_tampered_fails() {
-        let (pkcs8, pub_key) = test_key_pair();
+        let (signing_key, pub_key) = test_key_pair();
         let original = serde_json::json!({"patch_id":"test-1"});
-        let sig = sign_test(&pkcs8, &original);
+        let sig = sign_test(&signing_key, &original);
         let tampered = serde_json::json!({"patch_id":"tampered"});
         assert!(verify_manifest_signature(&tampered, &sig, &pub_key).is_err());
     }

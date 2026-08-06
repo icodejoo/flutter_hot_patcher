@@ -32,6 +32,16 @@ pub extern "C" fn fhp_init(
     watchdog::on_cold_boot(&mut state, &data_path);
     let mut shorebird = ShorebirdState::load_or_new(&data_path);
     if shorebird.check_boot_loop() {
+        let crashed_patch = shorebird.rolled_back_patch_numbers.last().copied();
+        let evt = PatchEvent {
+            app_id: "com.hotpatch.demo".to_string(),
+            client_id: fingerprint.clone(),
+            patch_number: crashed_patch,
+            release_version: fingerprint.clone(),
+            timestamp: String::new(),
+            message: "BootLoop".to_string(),
+        };
+        shorebird.queue_event(evt);
         shorebird.save(&data_path).ok();
     }
     shorebird.on_boot_start();
@@ -249,3 +259,30 @@ pub extern "C" fn fhp_download_and_stage(
     }
 }
 
+
+#[no_mangle]
+pub extern "C" fn fhp_flush_events(server_url: *const c_char) -> i32 {
+    let server_url = unsafe { CStr::from_ptr(server_url) }.to_string_lossy().to_string();
+    let mut ctx_guard = CONTEXT.lock().unwrap();
+    let ctx = match ctx_guard.as_mut() { Some(c) => c, None => return -1 };
+    let events = ctx.shorebird.take_queued_events();
+    if events.is_empty() { return 0; }
+    ctx.shorebird.save(&ctx.data_dir).ok();
+    drop(ctx_guard);
+
+    let url = format!("{}/api/v1/events", server_url.trim_end_matches('/'));
+    let body = serde_json::to_string(&events).unwrap_or_default();
+    match ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+    {
+        Ok(_) => {
+            eprintln!("[updater] flushed {} events to {}", events.len(), url);
+            0
+        }
+        Err(e) => {
+            eprintln!("[updater] flush_events failed: {}", e);
+            -2
+        }
+    }
+}

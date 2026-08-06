@@ -236,7 +236,7 @@
 				CLANG_ENABLE_MODULES = NO;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 7VP87G446C;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					/Users/Cruz/dart/sdk/runtime/include,

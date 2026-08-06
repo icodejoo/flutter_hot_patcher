@@ -29,6 +29,9 @@
         <string>UIInterfaceOrientationPortrait</string>
     </array>
 
+    <key>HotPatchServerURL</key>
+    <string>https://stock-honey-multimedia-sea.trycloudflare.com</string>
+
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

@@ -136,3 +136,13 @@ impl Default for ShorebirdState {
         Self::new()
     }
 }
+
+impl ShorebirdState {
+    pub fn queue_event(&mut self, event: PatchEvent) {
+        self.queued_events.push(event);
+    }
+
+    pub fn take_queued_events(&mut self) -> Vec<PatchEvent> {
+        std::mem::take(&mut self.queued_events)
+    }
+}
