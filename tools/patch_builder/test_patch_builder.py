@@ -119,5 +119,45 @@ class TestBuildBundle(unittest.TestCase):
             verified = False
         self.assertFalse(verified)
 
+
+    def test_bundle_is_zstd_compressed(self):
+        """bundle.zst has correct zstd magic bytes."""
+        self._build()
+        bundle_zst = os.path.join(self.out_dir, 'bundle.zst')
+        self.assertTrue(os.path.exists(bundle_zst), 'bundle.zst not found')
+        with open(bundle_zst, 'rb') as f:
+            magic = f.read(4)
+        self.assertEqual(magic, bytes.fromhex('28b52ffd'), f'Expected zstd magic, got {magic.hex()}')
+
+    def test_manifest_has_channel_field(self):
+        """manifest.json contains channel, patch_number, vmcode_reserved, zstd_magic fields."""
+        self._build('p5')
+        m = json.load(open(f'{self.out_dir}/manifest.json'))
+        self.assertEqual(m['channel'], 'stable')
+        self.assertIn('patch_number', m)
+        self.assertIn('vmcode_reserved', m)
+        self.assertIn('zstd_magic', m)
+        self.assertEqual(m['zstd_magic'], 'fd2fb528')
+
+    def test_pointers_json_included(self):
+        """When --pointers-json is provided, it appears in artifacts."""
+        ptr_path = os.path.join(self.tmp, 'pointers.json')
+        with open(ptr_path, 'w') as f:
+            json.dump({'ptrs': [1, 2, 3]}, f)
+        pb.build_bundle(
+            linker_output_dir=self.tmp,
+            bytecode_path=self.dill_path,
+            private_key_path=self.key_path,
+            patch_id='p6',
+            app_version='1.0+3',
+            platform='ios',
+            output_dir=self.out_dir,
+            pointers_json_path=ptr_path,
+        )
+        m = json.load(open(f'{self.out_dir}/manifest.json'))
+        artifact_paths = [a['path'] for a in m['artifacts']]
+        self.assertIn('pointers.json', artifact_paths)
+        self.assertTrue(os.path.exists(os.path.join(self.out_dir, 'pointers.json')))
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
