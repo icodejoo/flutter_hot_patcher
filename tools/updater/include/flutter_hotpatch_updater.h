@@ -21,6 +21,29 @@ const char* fhp_state_json(void);
 /** Free a string returned by fhp_*. */
 void fhp_free_string(const char* s);
 
+
+/**
+ * Check for an available patch update from the server.
+ * server_url: Base URL (e.g. "https://update.example.com")
+ * app_id: Application identifier
+ * release_version: Current release version string
+ * current_patch_number: Current patch number, or -1 if on baseline
+ * Returns JSON response string. Caller must fhp_free_string().
+ */
+const char* fhp_check_update(const char* server_url, const char* app_id,
+                              const char* release_version, int current_patch_number);
+
+/**
+ * Download and stage a patch from the given URL.
+ * download_url: Direct download URL for the .zst patch file
+ * expected_sha256_hex: Expected SHA-256 hash (hex), or empty string to skip verification
+ * patch_number: Patch number being applied
+ * bundle_dir: Directory where the patch should be written
+ * Returns 0 on success, negative on error.
+ */
+int fhp_download_and_stage(const char* download_url, const char* expected_sha256_hex,
+                            unsigned int patch_number, const char* bundle_dir);
+
 #ifdef __cplusplus
 }
 #endif
