@@ -520,3 +520,202 @@ strings ~/engine_ios/src/out/ios_release/libFlutter.dylib | grep "loadDynamicMod
    - 每次重啟 macOS 後 cryptex 版本號可能改變
    - 用 `find /var/run/com.apple.security.cryptexd -name "metal" 2>/dev/null` 重新找路徑
 
+
+---
+
+## Phase 2：真机验证 (2026-08-05~06) — 痛点记录
+
+### P1: dlsym 检测 API 名称错误（严重误导）
+
+**现象**：ObjC plugin 用 `dlsym(RTLD_DEFAULT, "Dart_LoadLibraryFromBytecode")` 检查 API，始终返回 `❌ MISSING`。
+
+**根因**：`Dart_LoadLibraryFromBytecode` 这个 C API 根本不存在！`dart_dynamic_modules` 的接口是 Dart 层的，通过 `dart:_internal` 的 `loadDynamicModuleClosure`/`loadDynamicModule` 函数调用，不是公开 C API。
+
+**正确验证方式**：
+```dart
+// 使用 package:dynamic_modules/dynamic_modules.dart (SDK 内部包)
+final result = await loadModuleFromBytes(dbc3Bytes);
+```
+
+**教训**：下次验证 Dart VM 内部功能，优先检查 dart:_internal 层，而不是 C API 层。
+
+---
+
+### P2: Snapshot 版本不匹配 (Wrong full snapshot version)
+
+**现象**：
+```
+[FATAL] Error while initializing the Dart VM: Wrong full snapshot version,
+expected 'd8a3cf0d095957b3391ebb5bae489749' found '1ce86630892e2dca9a8543fdb8ed8e22'
+```
+
+**根因**：Dart VM snapshot hash 由 dart revision + 编译 flags 决定。
+- 我们引擎：dart revision `37bbc285d8` (3.7.0-260.0.dev, Dec 17 2024)
+- fvm 3.38.10 使用：Dart SDK 3.10.9 (stable, Feb 2026)
+- 两者 hash 不同，VM 拒绝加载
+
+**尝试过的失败方案**：
+1. 替换 fvm 3.38.10 的 `dart-sdk` 目录 → 破坏 fvm 自身（fvm 是 globally activated Dart package）
+2. `flutter run --local-engine` + `--local-engine-host` → 我们的 dart 3.7.0-dev 无法编译 Flutter 3.38.10 包（需要 Dart 3.8+）
+3. 安装 fvm 3.29.0（Dart 3.7.0 stable）→ 引擎 dart:ui 缺少 `SemanticsRole` 等新 API，Flutter 3.29.0 不兼容
+
+**关键发现**：引擎 dart revision 和 Flutter SDK 版本必须严格匹配，不能跨版本混用。
+
+**下次升级正确流程**：
+1. 确认 fvm 使用的 Flutter SDK 版本（如 3.38.10）
+2. 查看该 Flutter engine hash：`cat ~/fvm/versions/X.Y.Z/bin/internal/engine.version`
+3. checkout flutter engine 至该 hash 对应的 dart revision
+4. 用该 revision 的 dart SDK 重新构建引擎
+
+---
+
+### P3: 动态模块字节码格式 — DBC3，不是 .dill
+
+**现象**：用 fvm dart 编译的 `.dill` kernel 文件（magic `0x90ABCDEF`）传给 `loadModuleFromBytes`，VM 崩溃：
+```
+bytecode_reader.cc:733: error: Unexpected Dart bytecode magic efcdab90
+```
+
+**根因**：`dart_dynamic_modules` 的 `Internal_loadDynamicModuleClosure` 不接受普通 kernel `.dill`，而是专用的 **DBC3（Dart Byte Code 3）格式**，magic = `0x44424333`。
+
+**编译 DBC3 的工具链**：
+```bash
+# 1. 编译 dart2bytecode snapshot（只需一次）
+ninja -C ~/engine_ios/src/out/host_release dart2bytecode
+
+# 2. 编译 dartaotruntime（只需一次）  
+ninja -C ~/engine_ios/src/out/host_release dartaotruntime
+
+# 3. 编译 Dart 源码到 DBC3
+AOTRUNTIME=~/engine_ios/src/out/host_release/dartaotruntime
+D2B=~/engine_ios/src/out/host_release/gen/dart2bytecode.dart.snapshot
+PLATFORM=~/engine_ios/src/out/host_release/vm_platform_strong.dill
+
+"$AOTRUNTIME" "$D2B" \
+  --platform "$PLATFORM" \
+  --output /path/to/module.dbc3 \
+  /path/to/source.dart
+```
+
+**注意**：dart2bytecode snapshot 是 x86_64 ELF（host_release 是 x64 build）。需要用 host_release 的 `dartaotruntime`（也是 x86_64），不能用 prebuilts/macos-arm64 的 arm64 版本。
+
+---
+
+### P4: host engine 缺少 HOST arch 保护
+
+**现象**：构建 host_release 引擎时报错：
+```
+stub_code_compiler.cc:2397:6: error: no member named 'set_lr_state' in 'dart::compiler::Assembler'
+```
+
+**根因**：我们给 ARM64 的 `GenerateResumeStub` 添加了 `set_lr_state(LRState::OnEntry().EnterFrame())`，该 API 是 ARM64 专属，host build（x64）的 Assembler 没有此方法。
+
+**修复**：给该代码块加架构保护：
+```cpp
+#if defined(TARGET_ARCH_ARM64)
+  __ set_lr_state(LRState::OnEntry().EnterFrame());
+#endif
+  __ Bind(&resume_interpreter);
+```
+
+文件：`~/dart/sdk/runtime/vm/compiler/stub_code_compiler.cc` 约 2397 行
+
+---
+
+### P5: fvm cache Flutter binary 替换后还是用旧引擎
+
+**现象**：替换了 `ios-profile/Flutter.xcframework` 但 `flutter run` 默认 debug 模式，用的是 `ios/Flutter.xcframework`，导致仍旧用旧引擎。
+
+**根因**：不同构建模式使用不同的 xcframework 目录：
+- `flutter run` (debug) → `ios/Flutter.xcframework`
+- `flutter run --profile` → `ios-profile/Flutter.xcframework`
+- `flutter run --release` → `ios-release/Flutter.xcframework`
+
+**替换时需要全部覆盖**：
+```bash
+for dir in ios ios-profile ios-release; do
+  FW=~/fvm/versions/X.Y.Z/bin/cache/artifacts/engine/$dir/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter
+  cp "$FW" "${FW}.bak" && cp $CUSTOM_FLUTTER "$FW"
+done
+```
+
+---
+
+### P6: gen_snapshot 也需替换
+
+除了 Flutter.framework 二进制，`gen_snapshot_arm64` 也需替换，否则 release/profile 构建会用旧 gen_snapshot 生成不兼容的 AOT snapshot。
+
+**路径**：`~/fvm/versions/X.Y.Z/bin/cache/artifacts/engine/ios-{release,profile}/gen_snapshot_arm64`
+
+---
+
+### X1 最终验证方式（不依赖 Flutter app）
+
+由于 Flutter SDK 版本兼容性问题，最终用 host_release dart 在 Mac 上完成了端到端验证：
+
+```bash
+# 1. 编译测试模块到 DBC3
+~/engine_ios/src/out/host_release/dartaotruntime \
+  ~/engine_ios/src/out/host_release/gen/dart2bytecode.dart.snapshot \
+  --platform ~/engine_ios/src/out/host_release/vm_platform_strong.dill \
+  --output /tmp/test_module.dbc3 \
+  /path/to/test_module.dart
+
+# 2. 加载并验证
+~/engine_ios/src/out/host_release/dart \
+  --packages=/path/to/pkg_config.json \
+  /path/to/test_loader.dart
+```
+
+**验证结果**：
+```
+✅ X1 MILESTONE VERIFIED!
+🎉 loadModuleFromBytes SUCCESS! Result: Closure: () => void
+dart_dynamic_modules IS FULLY WORKING in our custom engine!
+```
+
+`package:dynamic_modules` package config (`/tmp/pkg_config.json`)：
+```json
+{
+  "configVersion": 2,
+  "packages": [
+    {"name": "dynamic_modules", "rootUri": "file:///Users/Cruz/dart/sdk/pkg/dynamic_modules", "packageUri": "lib/"},
+    {"name": "expect", "rootUri": "file:///Users/Cruz/dart/sdk/pkg/expect", "packageUri": "lib/"}
+  ]
+}
+```
+
+---
+
+### 下次升级引擎版本完整流程
+
+1. **确认目标 Flutter SDK 版本**（需要适配的 fvm 版本）
+2. **查找对应 engine hash**：`cat ~/fvm/versions/X.Y.Z/bin/internal/engine.version`
+3. **更新 flutter engine repo**：
+   ```bash
+   cd ~/engine_ios/src/flutter
+   git fetch origin
+   git checkout <engine_hash>
+   gclient sync --with_branch_heads --with_tags
+   ```
+4. **检查新 dart revision 的 DBC3 兼容性**：新版本的 `dart_dynamic_modules` API 是否仍在 `dart:_internal` 中
+5. **重新应用所有 patch**（cmath、strong_order.h、stub_code_compiler.cc 等）
+6. **重新 GN + ninja 构建**：`ios_release` + `host_release`（含 dart2bytecode + dartaotruntime）
+7. **替换 fvm cache**：Flutter.framework + gen_snapshot（全三个目录：ios, ios-profile, ios-release）
+8. **验证**：用上述 host_release dart 脚本端到端测试 DBC3 加载
+
+---
+
+## 关键文件路径汇总（2026-08-06 更新）
+
+| 产物 | 路径 |
+|------|------|
+| 自定义 Flutter.xcframework | `~/Documents/flutter_hot_patcher/engine/ios_release/Flutter.xcframework` |
+| host_release dart | `~/engine_ios/src/out/host_release/dart` |
+| host_release dartaotruntime | `~/engine_ios/src/out/host_release/dartaotruntime` |
+| dart2bytecode snapshot | `~/engine_ios/src/out/host_release/gen/dart2bytecode.dart.snapshot` |
+| vm_platform_strong.dill | `~/engine_ios/src/out/host_release/vm_platform_strong.dill` |
+| flutter_patched_sdk | `~/engine_ios/src/out/ios_release/flutter_patched_sdk/` |
+| gen_snapshot_arm64 | `~/engine_ios/src/out/ios_release/gen_snapshot_arm64` |
+| dart SDK (custom) | `~/dart/sdk/` (rev: `37bbc285d8`) |
+| dynamic_modules pkg | `~/dart/sdk/pkg/dynamic_modules/` |
