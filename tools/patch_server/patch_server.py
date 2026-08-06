@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 4-E: flutter_hot_patcher patch distribution server.
 
@@ -29,6 +28,8 @@ Patch storage layout:
 import argparse, http.server, json, os, urllib.parse
 
 PATCHES_DIR = "./patches"
+AVAILABLE_CHANNELS = ["stable", "beta"]
+DEFAULT_CHANNEL = "stable"
 _crash_counts = {}  # {patch_id: {"attempts": 0, "crashes": 0}}
 _rolled_back_patches = {}  # {release_version: [patch_numbers]}
 
@@ -46,7 +47,8 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
 
     def _send_file(self, path):
         try:
-            data = open(path, "rb").read()
+            with open(path, "rb") as f:
+                data = f.read()
         except FileNotFoundError:
             self.send_error(404, "Not found")
             return
@@ -59,7 +61,6 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         parts = [p for p in parsed.path.split("/") if p]
 
-        # GET /check?platform=ios&fingerprint=1.0+1
         if parts == ["check"]:
             params = dict(urllib.parse.parse_qsl(parsed.query))
             fp = params.get("fingerprint", "")
@@ -68,13 +69,10 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, result)
             return
 
-        # GET /api/v1/channels
         if parts == ["api", "v1", "channels"]:
-            self._send_json(200, {"channels": ["stable", "beta"]})
+            self._send_json(200, {"channels": AVAILABLE_CHANNELS})
             return
 
-        # GET /patches/<fingerprint>/<patch_id>/manifest.json
-        # GET /patches/<fingerprint>/<patch_id>/<file>
         if parts and parts[0] == "patches" and len(parts) >= 4:
             fp = parts[1]
             patch_id = parts[2]
@@ -91,7 +89,6 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
-        # POST /api/v1/patches/check
         if parts == ["api", "v1", "patches", "check"]:
             try:
                 req = json.loads(body)
@@ -100,14 +97,13 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
                 return
             release_version = req.get("release_version", "")
             platform = req.get("platform", "ios")
-            channel = req.get("channel", "stable")
+            channel = req.get("channel", DEFAULT_CHANNEL)
             current_patch_number = req.get("current_patch_number", 0)
             host = self.headers.get("Host", "localhost")
             result = self._shorebird_check(release_version, platform, channel, current_patch_number, host)
             self._send_json(200, result)
             return
 
-        # POST /api/v1/events
         if parts == ["api", "v1", "events"]:
             try:
                 events = json.loads(body)
@@ -151,14 +147,16 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             if not os.path.exists(manifest_path):
                 continue
             try:
-                m = json.load(open(manifest_path))
+                with open(manifest_path) as f:
+                    m = json.load(f)
                 if m.get("platform") != platform:
                     continue
                 v = m.get("patch_version", 0)
                 if v > best_version:
                     best_version = v
                     best = (patch_id, m)
-            except Exception:
+            except Exception as e:
+                print(f"[patch_server] WARNING: error reading manifest {manifest_path}: {e}")
                 continue
         if not best:
             return {}
@@ -188,18 +186,20 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             if not os.path.exists(manifest_path):
                 continue
             try:
-                m = json.load(open(manifest_path))
+                with open(manifest_path) as f:
+                    m = json.load(f)
                 patch_number = m.get("patch_number", m.get("patch_version", 0))
                 if patch_number <= current_patch_number:
                     continue
-                if m.get("channel", "stable") != channel:
+                if m.get("channel", DEFAULT_CHANNEL) != channel:
                     continue
                 if patch_number in rolled_back:
                     continue
                 if patch_number > best_number:
                     best_number = patch_number
                     best = (bundle_name, m)
-            except Exception:
+            except Exception as e:
+                print(f"[patch_server] WARNING: error reading manifest {manifest_path}: {e}")
                 continue
 
         if not best:
@@ -217,7 +217,6 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             "rolled_back_patch_numbers": rolled_back,
         }
 
-
 def main():
     global PATCHES_DIR
     p = argparse.ArgumentParser(description="flutter_hot_patcher patch server")
@@ -232,7 +231,6 @@ def main():
     print(f"[server] Patches dir: {PATCHES_DIR}")
     httpd = http.server.HTTPServer((args.host, args.port), PatchHandler)
     httpd.serve_forever()
-
 
 if __name__ == "__main__":
     main()

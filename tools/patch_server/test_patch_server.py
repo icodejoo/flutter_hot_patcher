@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for patch_server.py"""
 import json, os, shutil, sys, tempfile, threading, time, unittest, urllib.request
 sys.path.insert(0, os.path.dirname(__file__))
@@ -8,6 +7,7 @@ class TestPatchServer(unittest.TestCase):
     def setUp(self):
         self.patches_dir = tempfile.mkdtemp()
         patch_server.PATCHES_DIR = self.patches_dir
+        patch_server._rolled_back_patches.clear()
         # Start server on random port
         self.server = patch_server.http.server.HTTPServer(
             ("127.0.0.1", 0), patch_server.PatchHandler
@@ -20,6 +20,7 @@ class TestPatchServer(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         shutil.rmtree(self.patches_dir)
+        patch_server._rolled_back_patches.clear()
 
     def _get_json(self, path):
         url = f"http://127.0.0.1:{self.port}{path}"
@@ -40,11 +41,12 @@ class TestPatchServer(unittest.TestCase):
             "patch_id": patch_id, "patch_version": version,
             "platform": platform, "target_build_fingerprint": fingerprint,
         }
-        open(os.path.join(self.patches_dir, fingerprint, patch_id, "manifest.json"), "w").write(
-            json.dumps(manifest))
-        open(os.path.join(d, "patch.dill"), "wb").write(b"\x90" * 10)
+        with open(os.path.join(self.patches_dir, fingerprint, patch_id, "manifest.json"), "w") as f:
+            f.write(json.dumps(manifest))
+        with open(os.path.join(d, "patch.dill"), "wb") as f:
+            f.write(b"\x90" * 10)
 
-    def _make_shorebird_patch(self, release_version, bundle_name, patch_number=1, channel="stable", platform="ios"):
+    def _make_shorebird_patch(self, release_version, bundle_name, patch_number=1, channel=patch_server.DEFAULT_CHANNEL, platform="ios"):
         """Create a patch dir with manifest including shorebird fields."""
         d = os.path.join(self.patches_dir, release_version, bundle_name)
         os.makedirs(d)
@@ -57,8 +59,10 @@ class TestPatchServer(unittest.TestCase):
             "target_build_fingerprint": release_version,
             "bundle_name": bundle_name,
         }
-        open(os.path.join(d, "manifest.json"), "w").write(json.dumps(manifest))
-        open(os.path.join(d, "bundle.zst"), "wb").write(b"\x00" * 8)
+        with open(os.path.join(d, "manifest.json"), "w") as f:
+            f.write(json.dumps(manifest))
+        with open(os.path.join(d, "bundle.zst"), "wb") as f:
+            f.write(b"\x00" * 8)
 
     def test_check_no_patch_returns_empty(self):
         r = self._get_json("/check?platform=ios&fingerprint=1.0+1")
@@ -87,12 +91,10 @@ class TestPatchServer(unittest.TestCase):
         r = self._get_json("/patches/1.0+1/greet-v1/manifest.json")
         self.assertEqual(r["patch_id"], "greet-v1")
 
-    # ---------- Shorebird API tests ----------
-
     def test_shorebird_patches_check_no_patch(self):
         payload = {
             "release_version": "2.0+1", "platform": "ios", "arch": "aarch64",
-            "app_id": "com.example.app", "channel": "stable", "current_patch_number": 0,
+            "app_id": "com.example.app", "channel": patch_server.DEFAULT_CHANNEL, "current_patch_number": 0,
         }
         r = self._post_json("/api/v1/patches/check", payload)
         self.assertFalse(r["patch_available"])
@@ -100,10 +102,10 @@ class TestPatchServer(unittest.TestCase):
         self.assertEqual(r["rolled_back_patch_numbers"], [])
 
     def test_shorebird_patches_check_with_patch(self):
-        self._make_shorebird_patch("1.0+1", "bundle-v1", patch_number=1, channel="stable")
+        self._make_shorebird_patch("1.0+1", "bundle-v1", patch_number=1, channel=patch_server.DEFAULT_CHANNEL)
         payload = {
             "release_version": "1.0+1", "platform": "ios", "arch": "aarch64",
-            "app_id": "com.example.app", "channel": "stable", "current_patch_number": 0,
+            "app_id": "com.example.app", "channel": patch_server.DEFAULT_CHANNEL, "current_patch_number": 0,
         }
         r = self._post_json("/api/v1/patches/check", payload)
         self.assertTrue(r["patch_available"])
@@ -120,8 +122,7 @@ class TestPatchServer(unittest.TestCase):
         r = self._get_json("/api/v1/channels")
         self.assertIn("channels", r)
         self.assertIsInstance(r["channels"], list)
-        self.assertIn("stable", r["channels"])
-
+        self.assertIn(patch_server.DEFAULT_CHANNEL, r["channels"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

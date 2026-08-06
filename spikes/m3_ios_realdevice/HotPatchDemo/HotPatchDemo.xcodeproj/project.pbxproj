@@ -137,6 +137,25 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		CC123456000000000000001A /* Copy patch_bundle */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/HotPatchDemo/patch_bundle",
+			);
+			name = "Copy patch_bundle";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/patch_bundle",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cp -r \"$SRCROOT/HotPatchDemo/patch_bundle\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		29B97319FDCFA39411CA2CEA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -151,23 +170,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-		CC123456000000000000001A /* Copy patch_bundle */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/HotPatchDemo/patch_bundle",
-			);
-			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/patch_bundle",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "cp -r \"$SRCROOT/HotPatchDemo/patch_bundle\" \"$BUILT_PRODUCTS_DIR/$CONTENTS_FOLDER_PATH/\"\n";
-			name = "Copy patch_bundle";
-		};
-
 
 /* Begin XCBuildConfiguration section */
 		29B97322FDCFA39411CA2CEA /* Debug */ = {
