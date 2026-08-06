@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:kernel/kernel.dart';
 import '../lib/kernel_diff.dart';
 import '../lib/manifest_output.dart';
+import '../lib/pointers_json.dart';
 
 void _usage() {
   stderr.writeln(
@@ -10,7 +11,8 @@ void _usage() {
       '[--json] [--verbose] [--allow-empty] '
       '[--output-dir <dir>] [--baseline-snapshot <path>] [--dart-sdk-commit <hash>] '
       '[--base-snapshot <path>] [--patch-snapshot <path>] '
-      '[--analyze-snapshot <path>]');
+      '[--analyze-snapshot <path>] [--pointers-json <path>] '
+      '[--patch-version <int>] [--release-version <str>]');
   exit(1);
 }
 
@@ -21,6 +23,9 @@ void main(List<String> args) {
   var json = false;
   var verbose = false;
   var allowEmpty = false;
+  String? pointersJsonPath;
+  int patchVersion = 0;
+  String releaseVersion = 'unknown';
 
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -46,6 +51,12 @@ void main(List<String> args) {
         patchSnapshotPath = args[++i];
       case '--analyze-snapshot':
         analyzeSnapshotBin = args[++i];
+      case '--pointers-json':
+        pointersJsonPath = args[++i];
+      case '--patch-version':
+        patchVersion = int.parse(args[++i]);
+      case '--release-version':
+        releaseVersion = args[++i];
       default:
         stderr.writeln('Unknown flag: ${args[i]}');
         _usage();
@@ -102,6 +113,21 @@ void main(List<String> args) {
       analyzeSnapshotBin: analyzeSnapshotBin,
     );
     stderr.writeln('[kernel_linker] Manifest written to $outputDir/');
+  }
+
+  if (pointersJsonPath != null) {
+    final changedFunctions = [
+      ...result.directlyChanged.map((id) => id.toString()),
+      ...result.added.map((id) => id.toString()),
+    ];
+    final pointersData = generatePointersJson(
+      changedFunctions: changedFunctions,
+      patchVersion: patchVersion,
+      releaseVersion: releaseVersion,
+    );
+    File(pointersJsonPath!).writeAsStringSync(
+      JsonEncoder.withIndent('  ').convert(pointersData));
+    stderr.writeln('[kernel_linker] pointers.json written to $pointersJsonPath');
   }
 
   if (json) {
