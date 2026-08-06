@@ -7,11 +7,14 @@ from datetime import datetime, timezone
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
+ZSTD_MAGIC = "fd2fb528"
+
 def canonical_bytes(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 def _sha256_file(path):
-    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 def _create_bundle_tar_zst(bundle_dir, output_dir):
     zst_path = os.path.join(output_dir, "bundle.zst")
