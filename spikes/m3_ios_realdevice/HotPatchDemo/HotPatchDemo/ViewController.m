@@ -91,8 +91,7 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
     /* Write result for devicectl retrieval */
     NSArray *docPaths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString *docDir = [docPaths firstObject];
-    NSString *diagContent = [NSString stringWithFormat:@"result=%s
-build_fp=%s",
+    NSString *diagContent = [NSString stringWithFormat:@"result=%s\nbuild_fp=%s",
         cResult ? cResult : "nil", kBuildFingerprint];
     [diagContent writeToFile:[docDir stringByAppendingPathComponent:@"result.txt"]
         atomically:YES encoding:NSUTF8StringEncoding error:nil];

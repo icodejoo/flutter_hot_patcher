@@ -2,7 +2,7 @@
 #include "flutter_hotpatch_updater.h"
 
 static NSString* kBuildFingerprint = @"1.0+1";
-static NSString* kServerURL = @"http://192.168.1.100:8765";
+static NSString* kServerURL = @"http://192.168.1.100:8765"; // TODO: replace hardcoded IP with plist config
 /* kAppId and kChannel reserved for fhp_check_update / fhp_download_and_stage (Task 1) */
 static NSString* kAppId = @"com.hotpatch.demo";
 static NSString* kChannel = @"stable";
@@ -19,8 +19,12 @@ static NSString* kChannel = @"stable";
         NSApplicationSupportDirectory, NSUserDomainMask, YES);
     NSString *dataDir = [[dataPaths firstObject]
         stringByAppendingPathComponent:@"HotPatchUpdater"];
+    NSError *dirError = nil;
     [[NSFileManager defaultManager] createDirectoryAtPath:dataDir
-        withIntermediateDirectories:YES attributes:nil error:nil];
+        withIntermediateDirectories:YES attributes:nil error:&dirError];
+    if (dirError) {
+        NSLog(@"[AppDelegate] WARNING: failed to create data dir: %@", dirError.localizedDescription);
+    }
 
     fhp_init([dataDir UTF8String], [kBuildFingerprint UTF8String]);
     NSLog(@"[AppDelegate] fhp_init complete (dataDir=%@)", dataDir);
