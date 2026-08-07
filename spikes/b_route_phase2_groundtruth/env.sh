@@ -48,6 +48,7 @@ if [ "${#_aots[@]}" -ne 1 ]; then
   exit 1
 fi
 export AOT_TOOLS="${_aots[0]}"
+unset _revs _aots
 
 export SPIKE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export OUT_DIR="${OUT_DIR:-$SPIKE_ROOT/out}"
