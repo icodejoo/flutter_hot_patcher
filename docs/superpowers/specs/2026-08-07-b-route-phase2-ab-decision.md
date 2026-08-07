@@ -178,24 +178,74 @@
 
 ---
 
-## 7. 下一步（Phase 2.1 范围界定，不展开成计划）
+## 7. 性能风险的重新评估（补测后）
 
-按"先证伪最贵的假设"排序：
+初稿把"Simulator 解释执行的性能代价"列为唯一可能整体推翻方案 A 的东西。
+补测对称 link_percentage（GROUND_TRUTH §8.1.1）之后，**这个风险的性质变了**：
 
-1. **先量化 Simulator 的性能代价**（1–2 周）。
-   这是唯一还可能整体推翻方案 A 的东西，且比 A2 便宜得多。
-   做法：拿上游 Dart，在 arm64 host 上强制 `USING_SIMULATOR`，
-   跑一组代表性 Flutter 工作负载，测原生 vs 解释的比值。
-   **在这个数出来之前不应投入 A2 的 4–8 周。**
-2. 补齐本 spike 的对称基线：让 base 也走带 DD 的构建，测出我们搭法下真实的 link_percentage（§8.1 末）。
-3. 若 1 通过，按 A1→A3→A4→A6→A2→A5→A7 推进
-   （把 A2 排在有 linker 产出可验证之后，便于逐步验证而非一次性豪赌）。
+| patch 类型 | 对称 link% | 走解释执行的代码占比 |
+|---|---|---|
+| 变长常量改动 | 100.00% | **0** |
+| 函数体改动 | 99.84% | **0.16%** |
+| 新增类 | 93.38% | 6.62% |
+
+**改一个函数体，只有那个函数本身（及其闭包）走解释执行，占全部代码的 0.16%。**
+这不是"整个 app 变慢"，而是"被你改的那个函数变慢"。
+
+风险因此从"整体性能崩塌"收敛为一个具体得多的问题：
+
+> **如果被 patch 的恰好是热点函数怎么办？**
+
+这个场景是真实的——修性能 bug 时改的往往就是热点。但它的性质是
+"该函数在打补丁后到下次发版前这段时间内变慢 N 倍"，是可评估、可规避的工程权衡
+（比如：热点函数的补丁走发版而非热更），不是方案的否决项。
+
+**因此 A 的 go/no-go 不再挂在这个数上。** 它仍然该测，但可以与 A1/A3/A4 并行，
+不必作为前置闸门。
+
+### 7.1 [阻断] 这个数在当前机器上测不了
+
+尝试过并确认无路：
+
+- 上游 `USING_SIMULATOR` 只在 `TARGET_ARCH != HOST_ARCH` 时定义
+  （`runtime/platform/globals.h:369-372`），所以 arm64 真机/arm64 Mac 上它恒为假。
+- `tools/build.py -a simarm64` 在 arm64 宿主上被解析成
+  `host_cpu="arm64" target_cpu="arm64" dart_target_arch="arm64"` —— 产出的是原生构建，不是模拟器构建。
+- `tools/utils.py` 的 `ARCH_FAMILY` 里没有"在 arm64 宿主上模拟 arm64"这个配置项
+  （有 `simarm_arm64`，没有 `simarm64_arm64`）。要 `simulator_arm64` 只能用 **x64 宿主**。
+- `/Users/Cruz/dart/sdk` 的 checkout 不完整（`third_party/protobuf` 缺失），
+  gn 配置直接失败；补齐需要 `gclient sync`，而 dart main 分支的 sync 有已知的不稳定窗口
+  （见 `flutter-engine-rebuild` skill）。
+- 该机器磁盘只剩 31GiB。
+
+### 7.2 推荐的测法（比合成 benchmark 更好，但需要你点头）
+
+不要去搭一个合成的 simulator benchmark，**直接用 Shorebird 自己的引擎做端到端测量**：
+
+1. 用 `spikes/shorebird_test/`（已注册 app_id）做 `shorebird release macos`
+2. 把一个热点循环函数改掉，`shorebird patch macos`
+3. 打补丁前后各跑一次同样的工作负载，测比值
+
+在 macOS 上做可以完全绕开 iOS 的真机、签名、MDM 一整套麻烦（见 `project_ota_painpoints`）。
+测到的是 Shorebird 生产引擎的真实混合执行开销，比任何合成 benchmark 都更有说服力。
+
+**这一步我没有自行执行**：它会往 Shorebird 的服务器上创建一个真实的 release 和 patch，
+属于对外发布动作，需要你明确同意。
 
 ---
 
-## 8. 本报告未回答的问题
+## 8. 修订后的下一步
 
-- Simulator 解释执行的性能代价（第 7 节第 1 项，最重要）
-- 我们自己搭法下、两侧对称时的 link_percentage（§8.1 末，只测了 diff 尺寸）
+1. **可以开始 A1**（引擎强制编入 simulator，跑通全解释执行）—— 不再被性能数字阻塞
+2. 并行做 7.2 的端到端性能测量（需你同意后执行）
+3. 按 A1→A3→A4→A6→A2→A5→A7 推进，把最难且无参照的 A2 排在有 linker 产出可验证之后，
+   便于逐步验证而非一次性豪赌
+
+---
+
+## 9. 本报告未回答的问题
+
+- Simulator 解释执行的性能代价（§7.1 阻断，§7.2 给出可行测法；但风险已从否决项降级）
 - 大型真实 Flutter app 上的尺寸表现（本 spike 用的是 998KB 的最小 Dart 程序）
-- `IDENTITY.signature_hash` 的构造（§4.3）
+- `IDENTITY.signature_hash` 的构造（GROUND_TRUTH §4.3）
+- GROUND_TRUTH §8.3 列出的其余边角未解项

@@ -14,9 +14,20 @@ metadata:
 方案 B 的原定价值主张（"diff 从 300KB 降到几十字节"）**已被实测推翻** —— 那两个数都没实测过；
 Shorebird 自己在 998KB 快照上改等长常量也是 2,881 字节。
 
-**下一步的第一件事不是开工，是先量化 Simulator 解释执行的性能代价**（1–2 周）。
-这是唯一还可能整体推翻方案 A 的东西，且比最难的 A2（CPU↔Sim 转换层，4–8 周）便宜得多。
-在这个数出来之前不应投入 A2。
+**性能风险已降级，A1 可以直接开始。** 补测对称 link_percentage 后：
+变长常量 100.00%、函数体改动 **99.84%**、新增类 93.38%（全部落在 Shorebird 的 >90% 生产区间）。
+改一个函数体只有那个函数本身走解释执行，占全部代码 0.16% —— 不是"整个 app 变慢"，
+而是"被改的那个函数变慢"。残留风险收敛为"若 patch 的恰好是热点函数"，
+属可评估可规避的工程权衡，不是否决项。
+
+**Simulator 性能数在本机测不了（真阻断，别再试）**：上游 `USING_SIMULATOR` 只在
+`TARGET_ARCH != HOST_ARCH` 时定义；`tools/build.py -a simarm64` 在 arm64 宿主上被解析成
+host==target==arm64，产出原生构建；`ARCH_FAMILY` 里没有 `simarm64_arm64` 这个配置项，
+要 `simulator_arm64` 只能用 x64 宿主；且 `/Users/Cruz/dart/sdk` 的 checkout 缺
+`third_party/protobuf`，gn 直接失败。
+**推荐测法**：别搭合成 benchmark，直接 `shorebird release macos` + `shorebird patch macos`
+改一个热点循环测前后比值——用 Shorebird 生产引擎端到端测，且 macOS 绕开 iOS 签名/MDM 全套麻烦。
+该步会在 Shorebird 服务器上创建真实 release/patch，属对外动作，需用户明确同意后才执行。
 
 **方案 A 唯一没有开源参照的部分**：`runtime/vm/shorebird/wrapper.cc` 的 CPU↔Simulator 双向切换
 （`TransitionDartToSimulatorIfNeeded` / `CPUToSimulator` / `SimulatorToCPU` /

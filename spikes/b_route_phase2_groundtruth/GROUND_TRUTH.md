@@ -403,10 +403,31 @@ DD 改写，于是 812 处调用点的形态在两侧不同，必然失配。真
 生产环境的真实量级应参照上表的"两侧都有 DD"三行：**常量改动 2.9KB、函数体改动 3.1KB、
 新增类 23.8KB。**
 
-同理，41.95% 的 link_percentage 也是同一不对称造成的；生产环境应显著更高。
-若要拿到我们自己搭法下的真实数字，需要让 base 也走一遍带 DD 的构建
-（或直接跑一次 `shorebird release ios` + `shorebird patch ios`）——
-这一步没做，所以本 spike **没有测出我们搭法下对称情况的 link_percentage**，只测出了 diff 尺寸。
+### 8.1.1 [实测] 对称情况下的 link_percentage —— 已补测
+
+利用 §3.1 已验证的规则（未链接集合 == `subgraph_hash` 变化集合，四样本精确吻合），
+直接比对两个都经过 DD 的 optimized 快照的 hash，即可算出对称情形的 link 率。
+以 `s1_equal_len.optimized.aot`（1581 个函数）作为"发布版"基线：
+
+| patch | 不匹配函数 | **link%（按代码体积）** | 不匹配的是谁 |
+|---|---|---|---|
+| s2_diff_len（变长常量） | 0 | **100.00%** | — |
+| s3_body（函数体改动） | 2 | **99.84%** | 恰好是那两个 `[Optimized] main` |
+| s4_add（新增类） | 52 + 2 新增 | **93.38%** | enum `toString` / `_enumToString` 一族，类表 id 平移的连锁 |
+
+**三个数全部落在 Shorebird 的 >90% 生产区间**（其 CLI 在 <90% 才告警）。
+§8.1 开头的 41.95% 确认为 harness 假象，本节到此定案。
+
+s3 只有两个 `main` 失配，与 §8.2 的分析完全一致：`computeChecksum` 被内联进 `main`。
+
+复现：
+```bash
+bash -c 'source ./env.sh
+for n in s1_equal_len s2_diff_len s3_body s4_add; do
+  "$ANALYZE_SNAPSHOT" --shorebird --out="$OUT_DIR/sym/$n.opt.json" "$OUT_DIR/aot/$n.optimized.aot"
+done'
+# 然后按 (name, occurrence) 建键，比对 subgraph_hash，按 size 加权
+```
 
 ### 8.2 一个曾经被误判的结论（勿沿用旧说法）
 
