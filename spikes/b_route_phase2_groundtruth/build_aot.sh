@@ -53,7 +53,20 @@ echo "[build_aot] gen_kernel -> $DILL"
 echo "[build_aot] gen_snapshot ($SNAPSHOT_KIND) -> $AOT"
 case "$SNAPSHOT_KIND" in
   elf)
-    "$GEN_SNAPSHOT" --snapshot_kind=app-aot-elf --elf="$AOT" "$DILL"
+    # 额外产出 .ct.link / .ft.link / .dt.link 侧车文件（class/field/dispatch
+    # table link info）。这是 Task 3 实测发现的必需项：aot_tools link 在
+    # 生成"优化后 patch 快照"这一步会去读 <base>.ct.link / <patch>.ct.link /
+    # <base>.ft.link，如果它们不存在会直接崩：
+    #   Error: Unable to read file: .../base.ct.link
+    # 这些文件只能在最初构建 base/patch .aot 时由 gen_snapshot 一并产出
+    # （link 阶段拿不到 base 的 kernel，没法临时补算）。已验证加上这三个
+    # --print_..._link_info_to 参数不会改变 --elf= 输出的字节内容
+    # （cmp 逐字节相同），纯粹是追加的侧车产物。
+    "$GEN_SNAPSHOT" --snapshot_kind=app-aot-elf --elf="$AOT" \
+      --print_class_table_link_info_to="$OUTDIR/$NAME.ct.link" \
+      --print_field_table_link_info_to="$OUTDIR/$NAME.ft.link" \
+      --print_dispatch_table_link_info_to="$OUTDIR/$NAME.dt.link" \
+      "$DILL"
     ;;
   assembly)
     ASM="$OUTDIR/$NAME.S"
