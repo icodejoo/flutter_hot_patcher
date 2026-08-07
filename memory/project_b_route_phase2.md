@@ -95,3 +95,20 @@ Shorebird 只是把它编进 arm64 真机构建并加了 CPU↔Simulator 转换�
 - 产出：`spikes/b_route_phase2_groundtruth/GROUND_TRUTH.md` + A/B 决策报告
 
 相关：[[project-m4-m5-progress]]、[[project-shorebird-alignment]]、[[project-x1-engine-build]]
+
+
+## 2026-08-07 追加：macOS 端到端真实性能测试已执行（结果部分不确定，诚实记录）
+
+真实跑了 `shorebird release macos` + `shorebird patch macos`（app_id
+`f445726f-0621-461a-8d42-fb1fa6e4ec17`，release `1.0.0+2`），直接运行二进制（绕开 `open` 的
+sandbox stdout 拦截）观察日志，**证实补丁在生产后端创建后确实被下载并在下次启动时自动生效**
+（`Shorebird updater: no active patch` → `patch path: .../patches/1/dlc.vmcode`）。这是 Plan A
+架构假设的生产级端到端验证，不是取证 spike 里的合成程序。
+
+**性能比值未能干净测出**：系统空闲时基线（原生）106-109ms/5000万次迭代；补丁刚生效那次 128.6ms
+(1.19x)，是唯一疑似信号，样本量=1。之后连续 8 组配对测量因本机 CPU 竞争（本 Claude Code 进程本身
+占 ~58% CPU + iOS 模拟器后台进程）把原生基线也拖到 465ms，噪声吞掉了信号，原生与补丁不可区分。
+**没有编造数字** —— 诚实记录为"未验证，需在空闲机器重测"，脚本/二进制在
+`spikes/shorebird_test/` 可直接复用。
+
+详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` 附录。
