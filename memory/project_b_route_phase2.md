@@ -27,6 +27,36 @@ Shorebird 只是把它编进 arm64 真机构建并加了 CPU↔Simulator 转换�
   `gen_snapshot_arm64` / `analyze_snapshot_arm64` / `Flutter.xcframework`
 - `/Users/Cruz/dart/sdk` — 上游对照，用于判定哪些 flag 是 Shorebird 私有
 
+## 已实测破解（2026-08-07 取证 spike，`spikes/b_route_phase2_groundtruth/`）
+
+**`.vmcode` 文件格式（U1/U2，已双向验证）**
+```
+[uint32 LE 映射数 N]
+[N × (uint32 LE sim_offset, uint32 LE cpu_offset)]   # sim=patch 侧偏移, cpu=base 侧偏移
+[补零至 16384 字节]
+[optimized patch 快照，ELF，与 <sample>.optimized.aot 逐字节相同]
+```
+- **没有 magic / version 字段**。引擎里的 `WrongMagic`/`WrongVersion` 属于别的结构。
+- 二进制解出的 (sim,cpu) 集合与 `link_table.txt` 逐条相等。
+- 对齐常量 8192 还是 16384 暂不可区分（样本太小），已排除 4096。
+
+**linker 精度（重要，纠正了一次误判）**
+- 逐函数 subgraph hash **精确工作**：改 `kTag` 只让用到它的 `main` 失配，未动过的
+  `Greeter.greet` / `makeGreeters` / 分配桩全部链接成功。
+- 本 harness 上 link_percentage 只有 ~42%，但 529 个未链接的**全是 Dart SDK 平台函数**，
+  平均 363 字节/个（已链接的平均 132 字节/个）—— 函数越大、引用对象池槽位越多越易失配。
+  这把"对象池对齐"的价值量化了。
+- 注意边界：我们的 base 与 patch 是两个独立从零构建的程序，不等同于 Shorebird 真实
+  release→patch 流程，42% 不代表其生产水平。
+
+**工具链踩坑**
+- `gen_kernel` 必须加 `--target=flutter`（Shorebird 的 platform dill 是 flutter target），否则崩在
+  `DillLoader.loadExtraRequiredLibraries`。
+- `.ct.link` / `.ft.link` / `.dt.link` 必须在最初构建 `.aot` 时用
+  `--print_{class,field,dispatch}_table_link_info_to=` 一并产出；link 阶段补不出来。
+- `analyze_snapshot` 必须带 `--shorebird`，否则是另一种 JSON 格式。
+- gen_snapshot 字节可复现，测到的差异都是真信号。
+
 **Why:** 在错误架构前提下选路线，选哪条都不对；先取证再决策。
 
 **How to apply:** 下一步执行 Phase 2.0 取证 spike，完成后才做 A/B 决策。
