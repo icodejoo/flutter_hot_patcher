@@ -1,9 +1,28 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — Shorebird linker 真实架构已取证确认，Phase 2.0 取证 spike 的 spec+plan 已就绪
+description: B-route Phase 2 — 取证 spike 已完成，五个未知量破解四个，A/B 决策为走方案 A（对齐 Shorebird 全架构）
 metadata:
   type: project
 ---
+
+## 决策已定（2026-08-07）：走方案 A
+
+`docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md`
+
+**理由**：能力差距是决定性的。方案 B（data-only + 对象池对齐）永远改不了函数体，
+而修 bug 基本都要改函数体。方案 A 改函数体只要 **3.1KB**，与改常量的 2.9KB 同一量级。
+方案 B 的原定价值主张（"diff 从 300KB 降到几十字节"）**已被实测推翻** —— 那两个数都没实测过；
+Shorebird 自己在 998KB 快照上改等长常量也是 2,881 字节。
+
+**下一步的第一件事不是开工，是先量化 Simulator 解释执行的性能代价**（1–2 周）。
+这是唯一还可能整体推翻方案 A 的东西，且比最难的 A2（CPU↔Sim 转换层，4–8 周）便宜得多。
+在这个数出来之前不应投入 A2。
+
+**方案 A 唯一没有开源参照的部分**：`runtime/vm/shorebird/wrapper.cc` 的 CPU↔Simulator 双向切换
+（`TransitionDartToSimulatorIfNeeded` / `CPUToSimulator` / `SimulatorToCPU` /
+`CallSimulatorFromFfiTrampoline`）。其余全部有上游代码或已被 spike 破解。
+`simulator_arm64.cc` 本身是上游自带的 3,954 行，只是 `USING_SIMULATOR` 在
+`TARGET_ARCH == HOST_ARCH` 时不定义（`runtime/platform/globals.h:369`），真机构建把它编译掉了。
 
 **2026-08-07 重大修正：此前记录的 Phase 2 前提是错的。**
 
