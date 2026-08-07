@@ -12,6 +12,70 @@
 
 ---
 
+## 执行期实测修正（2026-08-07，Task 0–2 完成后回写）
+
+以下是执行中实测到的、与本计划初稿不符或初稿未知的事实。**后续任务以这里为准。**
+
+**环境**
+- 本机唯一的 bash 是 `/bin/bash` 3.2.57。不可用 bash 4+ 特性（nameref `local -n`、关联数组等）。
+- 交互 shell 是 zsh，`env.sh` 用了 bash 数组与 `shopt`，一律经 `bash -c 'source ./env.sh && ...'` 调用。
+- pytest 装在 spike 内的隔离 venv：`env.sh` 导出 `PY="$SPIKE_ROOT/.venv/bin/python"`。
+  **全文中的 `python3` 一律替换为 `"$PY"`**（计划初稿写的 `pip install --user pytest` 已作废）。
+
+**⚠️ RTK 的 `diff` 在本 repo 内不可信**
+- 单行差异的两个文件会被报成 `✅ Files are identical` 且退出码 0；多处改动时统计数字与 hunk 行号也是错的。
+- 同样的文件复制到 `/tmp` 下比对则正常，只在 repo 路径触发。
+- **任何差异验证一律用 `command diff` / `cmp` / `command git diff --no-index`；git 一律用 `command git`。**
+
+**gen_kernel 必须加 `--target=flutter`**
+- 计划初稿 Task 2 Step 1/Step 2 的 `gen_kernel` 命令**缺这个 flag，会直接崩**：
+  `Null check operator used on a null value` at `DillLoader.read` / `DillTarget.loadExtraRequiredLibraries`。
+- 原因：Shorebird fork 的 `platform_strong.dill` 是按 `--target=flutter` 编的，不是默认 vm target。
+- `build_aot.sh` 已内置该 flag 并有行内注释说明。
+
+**已实测确认**
+- ELF 路径可用（`--snapshot_kind=app-aot-elf`），五个样本的 `.aot` 均 ~998KB。`SNAPSHOT_KIND=elf` 为默认。
+- **gen_snapshot 字节可复现**：同一输入两次构建 `cmp` 完全一致。故 Task 6 差分矩阵里测到的任何字节差异都是真信号，不是构建噪声。
+
+**`analyze_snapshot --shorebird --out=X.json` 的实测 schema**（Task 4/5/8 直接用，不必再探测）
+
+注意：**必须带 `--shorebird`**。不带 `--shorebird` 是另一种格式（顶层为
+`metadata` / `objects` / `shorebird` / `snapshot_data`），两者不可混用。
+
+```
+顶层: {"shorebird": "true", "snapshot_data": {...}, "functions": [...]}
+
+snapshot_data (全部为字符串):
+  dart_version, snapshot_version,
+  vm_data_length, vm_data_hash,
+  adjusted_vm_instructions_length, adjusted_vm_instructions_hash
+
+functions: list，base 样本实测 1585 条。每条:
+  name                 str   例 "[Optimized] Object.runtimeType"
+  index_in_entries     int
+  offset               int   代码在 instructions 区的偏移
+  size                 int
+  self_hash            str   40 位十六进制 = SHA-1
+  subgraph_hash        str   SHA-1
+  op_subgraph_hash     str   SHA-1
+  self_pp              list[int]   自身用到的 object pool 槽位下标
+  subgraph_pp          list[int]
+  self_selectors       list[int]
+  subgraph_selectors   list[int]
+  self_field_table     list[int]
+  subgraph_field_table list[int]
+  callees              list[int]   调用图边，值为被调者的 index_in_entries
+```
+
+- Task 8 的 `compare_hashes.py` `load_codes()` 直接取顶层 `functions`，按 `name` 建索引即可。
+- `callees` 是计划初稿未预料到的字段，它就是 `code_graph.dart` 的输入。
+
+**架构佐证**：`dart_version` 实测为
+`3.12.2 (stable) ... on "macos_simarm64"` —— **simarm64**，即 Shorebird 为 iOS 产出的是
+SIMARM64 快照。这与设计文档 §1.5 "patch 指令由 VM 内置 Simulator 执行" 的推断一致。
+
+---
+
 ## File Structure
 
 全部新建，位于 `spikes/b_route_phase2_groundtruth/`：
