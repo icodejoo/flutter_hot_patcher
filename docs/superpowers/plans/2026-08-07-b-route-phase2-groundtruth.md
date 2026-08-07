@@ -12,6 +12,137 @@
 
 ---
 
+## 执行期实测修正（2026-08-07，Task 0–2 完成后回写）
+
+以下是执行中实测到的、与本计划初稿不符或初稿未知的事实。**后续任务以这里为准。**
+
+**环境**
+- 本机唯一的 bash 是 `/bin/bash` 3.2.57。不可用 bash 4+ 特性（nameref `local -n`、关联数组等）。
+- 交互 shell 是 zsh，`env.sh` 用了 bash 数组与 `shopt`，一律经 `bash -c 'source ./env.sh && ...'` 调用。
+- pytest 装在 spike 内的隔离 venv：`env.sh` 导出 `PY="$SPIKE_ROOT/.venv/bin/python"`。
+  **全文中的 `python3` 一律替换为 `"$PY"`**（计划初稿写的 `pip install --user pytest` 已作废）。
+
+**⚠️ RTK 的 `diff` 在本 repo 内不可信**
+- 单行差异的两个文件会被报成 `✅ Files are identical` 且退出码 0；多处改动时统计数字与 hunk 行号也是错的。
+- 同样的文件复制到 `/tmp` 下比对则正常，只在 repo 路径触发。
+- **任何差异验证一律用 `command diff` / `cmp` / `command git diff --no-index`；git 一律用 `command git`。**
+
+**gen_kernel 必须加 `--target=flutter`**
+- 计划初稿 Task 2 Step 1/Step 2 的 `gen_kernel` 命令**缺这个 flag，会直接崩**：
+  `Null check operator used on a null value` at `DillLoader.read` / `DillTarget.loadExtraRequiredLibraries`。
+- 原因：Shorebird fork 的 `platform_strong.dill` 是按 `--target=flutter` 编的，不是默认 vm target。
+- `build_aot.sh` 已内置该 flag 并有行内注释说明。
+
+**已实测确认**
+- ELF 路径可用（`--snapshot_kind=app-aot-elf`），五个样本的 `.aot` 均 ~998KB。`SNAPSHOT_KIND=elf` 为默认。
+- **gen_snapshot 字节可复现**：同一输入两次构建 `cmp` 完全一致。故 Task 6 差分矩阵里测到的任何字节差异都是真信号，不是构建噪声。
+
+**`analyze_snapshot --shorebird --out=X.json` 的实测 schema**（Task 4/5/8 直接用，不必再探测）
+
+注意：**必须带 `--shorebird`**。不带 `--shorebird` 是另一种格式（顶层为
+`metadata` / `objects` / `shorebird` / `snapshot_data`），两者不可混用。
+
+```
+顶层: {"shorebird": "true", "snapshot_data": {...}, "functions": [...]}
+
+snapshot_data (全部为字符串):
+  dart_version, snapshot_version,
+  vm_data_length, vm_data_hash,
+  adjusted_vm_instructions_length, adjusted_vm_instructions_hash
+
+functions: list，base 样本实测 1585 条。每条:
+  name                 str   例 "[Optimized] Object.runtimeType"
+  index_in_entries     int
+  offset               int   代码在 instructions 区的偏移
+  size                 int
+  self_hash            str   40 位十六进制 = SHA-1
+  subgraph_hash        str   SHA-1
+  op_subgraph_hash     str   SHA-1
+  self_pp              list[int]   自身用到的 object pool 槽位下标
+  subgraph_pp          list[int]
+  self_selectors       list[int]
+  subgraph_selectors   list[int]
+  self_field_table     list[int]
+  subgraph_field_table list[int]
+  callees              list[int]   调用图边，值为被调者的 index_in_entries
+```
+
+- Task 8 的 `compare_hashes.py` `load_codes()` 直接取顶层 `functions`，按 `name` 建索引即可。
+- `callees` 是计划初稿未预料到的字段，它就是 `code_graph.dart` 的输入。
+
+**架构佐证**：`dart_version` 实测为
+`3.12.2 (stable) ... on "macos_simarm64"` —— **simarm64**，即 Shorebird 为 iOS 产出的是
+SIMARM64 快照。这与设计文档 §1.5 "patch 指令由 VM 内置 Simulator 执行" 的推断一致。
+
+### Task 3 实测结果与产物真实布局
+
+**`.ct.link` / `.ft.link` / `.dt.link` 必须在最初构建 base/patch `.aot` 时一并产出。**
+`aot_tools link` 会去读它们，缺失则直接 `Error: Unable to read file: .../base.ct.link`。
+link 阶段拿不到 base 的 kernel，无法事后补算。`build_aot.sh` 的 elf 分支已加上
+`--print_class_table_link_info_to=` / `--print_field_table_link_info_to=` /
+`--print_dispatch_table_link_info_to=`；已用 `cmp` 验证这三个 flag 不改变 `--elf=` 输出的字节。
+
+**debug 产物的真实布局**（与计划初稿的推测清单不同，以实测为准）：
+- 命名是 `<name>.<stage>.<table>.json`，stage ∈ {`ct`, `preDdOptimized`, `ddOnly`, `optimized`}。
+  没有扁平的 `class_table.json` / `object_pool.json`，全部带 stage 前缀。
+- **四段中间 `.aot` 不在 `--dump-debug-info` 目录里**，而是落在输入旁边的 `out/aot/`：
+  `out/aot/<name>.{ct,preDdOptimized,ddOnly,optimized}.aot`。**Task 6 的 `stage_path()` 要按这个改。**
+- `.link` 侧车实际有：`base.{ct,ft,dt,op,dd,dd_callers}.link`、
+  `<name>.{ct,ft,dt}.link`、`<name>.ct.op.link`、`<name>.ddOnly.op.link`、
+  `<name>.preDdOptimized.{dd_slots,dd_identity}.link`、`<name>.optimized.dd_resolution.tsv`。
+- `link_table.txt` 首行是表头：
+  `name, patch index in entries, patch offset, base index in entries, base offset`
+
+**link_percentage 实测**
+
+| 样本 | link_percentage | base_codes | patch_codes | linked_code_size | patch_code_size |
+|---|---|---|---|---|---|
+| s1_equal_len | 41.953328824040966 | 1585 | 1581 | 138936 | 331168 |
+| s2_diff_len | 41.953328824040966 | 1585 | 1581 | 138936 | 331168 |
+| s3_body | 41.953328824040966 | 1585 | 1581 | 138936 | 331168 |
+| s4_add | 41.890341821518696 | 1585 | 1583 | 138776 | 331284 |
+
+s1/s2/s3 的 `link_table.txt` **逐字节相同**。
+
+**⚠️ 关于这个现象的正确解读（Task 3 实现者的结论是错的，勿沿用）**
+
+实现者报告称"`computeChecksum` 即使未被修改也从不链接，说明全局级联淹没了逐函数信号"。**这个结论不成立。**
+实测核对：
+
+- `computeChecksum` 根本不在函数表里 —— 它被**内联**进了 `main`（函数表里有两个
+  `[Optimized] main`，一个是主体一个是闭包），不是"链接失败"。
+- s1/s2/s3 中未链接的应用函数**只有那两个 `main`**。这正是应该的结果：
+  s1/s2 改的 `kTag` 用在 `main` 的 print 里；s3 改的 `computeChecksum` 被内联进 `main`。
+  三个样本恰好都只有 `main` 及其闭包失配，所以 link_table 相同是**正确答案**。
+- 完全未改动的 `EnglishGreeter.greet` / `FrenchGreeter.greet` / `GermanGreeter.greet` /
+  `makeGreeters` / 各 `Allocate` 桩**全部链接成功**。
+
+**结论：逐函数 subgraph hash 是精确工作的，应用层信号干净。**
+
+**42% 这个数字的真实来源（这才是真正的改进空间所在）**
+
+s1 的 1581 个 patch 函数中 1052 链接、529 未链接。529 个未链接的**全部是 `[Optimized]` 的
+Dart SDK/平台函数**，没有一个是应用代码 —— 最大的几个是 `NoSuchMethodError.toString`(4280B)、
+`_BigIntImpl._divRem`(3236B)、JSON parser(2724B/2524B)、`_Uri._normalizeRegName`(2208B)、
+`_Future._propagateToListeners`(2192B)、`ChannelBuffers.handleMessage`(1856B)。
+
+体积对比很说明问题：
+
+| | 个数 | 总字节 | 平均字节/个 |
+|---|---|---|---|
+| 已链接 | 1052 | 138,936 | 132 |
+| 未链接 | 529 | 192,232 | **363** |
+
+**函数越大、引用的 object pool 槽位越多，越容易因池重编号而 hash 失配。** 这就是
+`--base_op_link_data=` / `--patch_op_link_data=` 要解决的问题，也把"对象池对齐"的价值
+从定性说法变成了可量化的量（在本 harness 上：58% 的代码体积卡在这里）。
+
+注意本 harness 与 Shorebird 真实 release→patch 流程不同（我们的 base 与 patch 是两个独立
+从零构建的程序），所以 42% 不代表 Shorebird 生产环境的水平。Task 9 写 GROUND_TRUTH 时必须
+标注这个边界。
+
+---
+
 ## File Structure
 
 全部新建，位于 `spikes/b_route_phase2_groundtruth/`：

@@ -1,9 +1,28 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — Shorebird linker 真实架构已取证确认，Phase 2.0 取证 spike 的 spec+plan 已就绪
+description: B-route Phase 2 — 取证 spike 已完成，五个未知量破解四个，A/B 决策为走方案 A（对齐 Shorebird 全架构）
 metadata:
   type: project
 ---
+
+## 决策已定（2026-08-07）：走方案 A
+
+`docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md`
+
+**理由**：能力差距是决定性的。方案 B（data-only + 对象池对齐）永远改不了函数体，
+而修 bug 基本都要改函数体。方案 A 改函数体只要 **3.1KB**，与改常量的 2.9KB 同一量级。
+方案 B 的原定价值主张（"diff 从 300KB 降到几十字节"）**已被实测推翻** —— 那两个数都没实测过；
+Shorebird 自己在 998KB 快照上改等长常量也是 2,881 字节。
+
+**下一步的第一件事不是开工，是先量化 Simulator 解释执行的性能代价**（1–2 周）。
+这是唯一还可能整体推翻方案 A 的东西，且比最难的 A2（CPU↔Sim 转换层，4–8 周）便宜得多。
+在这个数出来之前不应投入 A2。
+
+**方案 A 唯一没有开源参照的部分**：`runtime/vm/shorebird/wrapper.cc` 的 CPU↔Simulator 双向切换
+（`TransitionDartToSimulatorIfNeeded` / `CPUToSimulator` / `SimulatorToCPU` /
+`CallSimulatorFromFfiTrampoline`）。其余全部有上游代码或已被 spike 破解。
+`simulator_arm64.cc` 本身是上游自带的 3,954 行，只是 `USING_SIMULATOR` 在
+`TARGET_ARCH == HOST_ARCH` 时不定义（`runtime/platform/globals.h:369`），真机构建把它编译掉了。
 
 **2026-08-07 重大修正：此前记录的 Phase 2 前提是错的。**
 
@@ -26,6 +45,36 @@ Shorebird 只是把它编进 arm64 真机构建并加了 CPU↔Simulator 转换�
 - `~/.shorebird/bin/cache/flutter/*/bin/cache/artifacts/engine/ios-release/` — fork 的
   `gen_snapshot_arm64` / `analyze_snapshot_arm64` / `Flutter.xcframework`
 - `/Users/Cruz/dart/sdk` — 上游对照，用于判定哪些 flag 是 Shorebird 私有
+
+## 已实测破解（2026-08-07 取证 spike，`spikes/b_route_phase2_groundtruth/`）
+
+**`.vmcode` 文件格式（U1/U2，已双向验证）**
+```
+[uint32 LE 映射数 N]
+[N × (uint32 LE sim_offset, uint32 LE cpu_offset)]   # sim=patch 侧偏移, cpu=base 侧偏移
+[补零至 16384 字节]
+[optimized patch 快照，ELF，与 <sample>.optimized.aot 逐字节相同]
+```
+- **没有 magic / version 字段**。引擎里的 `WrongMagic`/`WrongVersion` 属于别的结构。
+- 二进制解出的 (sim,cpu) 集合与 `link_table.txt` 逐条相等。
+- 对齐常量 8192 还是 16384 暂不可区分（样本太小），已排除 4096。
+
+**linker 精度（重要，纠正了一次误判）**
+- 逐函数 subgraph hash **精确工作**：改 `kTag` 只让用到它的 `main` 失配，未动过的
+  `Greeter.greet` / `makeGreeters` / 分配桩全部链接成功。
+- 本 harness 上 link_percentage 只有 ~42%，但 529 个未链接的**全是 Dart SDK 平台函数**，
+  平均 363 字节/个（已链接的平均 132 字节/个）—— 函数越大、引用对象池槽位越多越易失配。
+  这把"对象池对齐"的价值量化了。
+- 注意边界：我们的 base 与 patch 是两个独立从零构建的程序，不等同于 Shorebird 真实
+  release→patch 流程，42% 不代表其生产水平。
+
+**工具链踩坑**
+- `gen_kernel` 必须加 `--target=flutter`（Shorebird 的 platform dill 是 flutter target），否则崩在
+  `DillLoader.loadExtraRequiredLibraries`。
+- `.ct.link` / `.ft.link` / `.dt.link` 必须在最初构建 `.aot` 时用
+  `--print_{class,field,dispatch}_table_link_info_to=` 一并产出；link 阶段补不出来。
+- `analyze_snapshot` 必须带 `--shorebird`，否则是另一种 JSON 格式。
+- gen_snapshot 字节可复现，测到的差异都是真信号。
 
 **Why:** 在错误架构前提下选路线，选哪条都不对；先取证再决策。
 
