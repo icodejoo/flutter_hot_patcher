@@ -9,12 +9,23 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
+if [ $# -lt 3 ]; then
+  echo "USAGE: build_aot.sh <input.dart> <output_dir> <name>" >&2
+  echo "       env SNAPSHOT_KIND=elf|assembly (默认 elf)" >&2
+  exit 1
+fi
+
 INPUT="$1"; OUTDIR="$2"; NAME="$3"
 SNAPSHOT_KIND="${SNAPSHOT_KIND:-elf}"
 mkdir -p "$OUTDIR"
 
 DILL="$OUTDIR/$NAME.dill"
 AOT="$OUTDIR/$NAME.aot"
+
+# 先删旧产物。set -e 会在工具失败时中止本脚本，但上一轮留下的 .dill/.aot
+# 仍在盘上；后续 run_link.sh 会把陈旧快照当成本轮结果消费，测出来的差异全是假的。
+# 删掉之后，末尾的 [ -s "$AOT" ] 才真正代表"本轮确实产出了东西"。
+rm -f "$DILL" "$AOT"
 
 echo "[build_aot] gen_kernel -> $DILL"
 # --target=flutter 是必须的：这套 Shorebird fork 引擎里的
