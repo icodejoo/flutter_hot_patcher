@@ -526,3 +526,57 @@ A7_RESULT: 9312480  ✅ compute()×37 走解释，其余走原生（BL 和 BLR �
 ```
 
 方案 A 全部 7 个阶段完成，Shorebird 等价实现的核心流程端到端打通。
+
+---
+
+## 17. 与 Shorebird 生产能力的差距分析与补全计划（2026-08-10 追加）
+
+### 17.1 差距清单
+
+| 差距 | 影响 | 优先级 |
+|---|---|---|
+| **Flutter Engine 未改** | iOS App 无法使用 Simulator；一切不可用 | P0 关键 |
+| **subgraph_hash 自研缺失** | 依赖 Shorebird .op.link；独立链接率仅 ~8% vs 生产 >90% | P1 高 |
+| **FFI/safepoint/异常** | SimulatorToCPU 不安全，生产崩溃风险 | P2 中 |
+| **iOS 真机端到端** | 未在 iOS 上跑通完整流程 | P3 验证 |
+
+### 17.2 补全任务
+
+#### B1 — Flutter Engine 修改（最高优先级）
+
+**目标**：修改 Flutter Engine 的 arm64 iOS 构建，强制开启 `USING_SIMULATOR`，集成 SimulatorToCPU 转换层，发布可嵌入 Flutter app 的 `Flutter.xcframework`。
+
+**起点**：
+- `/Users/Cruz/dart/sdk` 的改动已证明正确（A1-A5），需要移植到 Flutter Engine fork
+- Flutter Engine 的 Dart VM 在 `src/third_party/dart`
+- 已有 X1 engine 构建记录（`memory/project_x1_engine_build.md`）
+- 需要修改 `runtime/platform/globals.h`（同 A1），`runtime/vm/simulator_arm64.cc`（同 A2+A5），`runtime/bin/main_impl.cc`（同 A7）
+
+**验收标准**：Flutter app 在 iOS 真机上加载 vmcode patch，patched 函数走解释，unpatched 函数走原生，`link_percentage > 0%`。
+
+#### B2 — 自研 subgraph_hash（消除 Shorebird 二进制依赖）
+
+**目标**：在 Flutter Engine 的 `analyze_snapshot` 里实现 `--shorebird` 模式，输出与 Shorebird 兼容的 `self_hash`/`subgraph_hash`/`op_subgraph_hash`，使 fhp_linker 可达 >90% 链接率。
+
+**已知**：Shorebird 的 hash 计算在私有 C++ fork 里。取证 spike 已证明：
+- `self_hash` 不是简单 SHA-1(code bytes)（已验证不匹配）
+- `subgraph_hash` 纳入 subgraph_pp（PP 槽位下标）和 subgraph_selectors（分发选择子 id）
+- `op_subgraph_hash` = 去掉 PP/selector 的变体
+
+**路径**：向 `runtime/vm/analyze_snapshot_api_impl.cc` 添加 `--shorebird` flag 处理，实现 Code 对象 + 调用图遍历 + SHA-1 计算，参照 GROUND_TRUTH §3-§4 文档。
+
+#### B3 — SimulatorToCPU 生产加固
+
+**目标**：处理 FFI trampoline、GC safepoint、跨边界异常传播，使 SimulatorToCPU 不会在生产用例中崩溃或导致内存错误。
+
+**已知问题**：当前 `InvokeWithTHR` 不处理 safepoint 检查（可能死锁 GC），不处理 Dart 异常（从 native 弹出未处理异常会崩溃），FFI 调用链路未测试。
+
+#### B4 — iOS 真机端到端验证
+
+**目标**：在 iOS 真机（iPhone）上运行一个真实 Flutter app，应用 B-route vmcode 补丁，验证 patched 函数走解释、unpatched 函数走原生、结果正确、app 不崩溃。
+
+### 17.3 执行顺序
+
+B1（Flutter Engine）→ B2（subgraph_hash） → B3（加固）→ B4（真机）
+
+B1 是所有其他工作的先决条件；B2 与 B1 可并行推进；B3/B4 在 B1 完成后开展。
