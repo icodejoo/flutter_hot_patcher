@@ -191,3 +191,41 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def analyze_shorebird_with_op_link(aot_path: str, op_link_path: str) -> dict:
+    """
+    Enhanced version: uses Shorebird's .op.link file to get accurate hashes.
+    The .op.link file is produced by gen_snapshot --dump_object_pool_link_data=
+    and contains the same self_hash / op_subgraph_hash as analyze_snapshot --shorebird.
+    
+    This bridges A3 (our own hash) and A4 (Shorebird's hash accuracy):
+    by reading from the .op.link file we get hashes that are PP-reordering-resistant,
+    enabling link rates comparable to Shorebird's pipeline.
+    """
+    # First get the basic structure from our ELF parser
+    result = analyze_shorebird(aot_path)
+    
+    # Parse the .op.link file
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from parse_link_data import parse_link_file
+    op = parse_link_file(op_link_path)
+    
+    # The .op.link entries are ordered by index_in_entries (same as functions list)
+    # Match by position (both are sorted by code offset)
+    if len(op.entries) != len(result['functions']):
+        raise ValueError(
+            f"Mismatch: {len(op.entries)} op.link entries vs "
+            f"{len(result['functions'])} functions in ELF"
+        )
+    
+    for func, op_entry in zip(result['functions'], op.entries):
+        func['self_hash'] = op_entry['self_hash']
+        func['op_subgraph_hash'] = op_entry['op_subgraph_hash']
+        func['subgraph_hash'] = op_entry['op_subgraph_hash']  # PP-independent; used by linker for matching
+        # PP indices are available too for completeness
+        func['self_pp'] = list(op_entry.get('self_pp_indices', []))
+        func['subgraph_pp'] = list(op_entry.get('subgraph_pp_indices', []))
+    
+    return result
