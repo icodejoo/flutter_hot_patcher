@@ -33,6 +33,18 @@ int fhp_download_and_stage(const char* download_url, const char* expected_sha256
                             const char* bundle_dir_hint, int patch_number,
                             const char* pubkey_hex);
 
+/**
+ * Apply a zstd-compressed bipatch diff to an in-memory snapshot region and
+ * write the patched result to out_path.
+ *
+ * base_ptr/base_len: pointer to the base snapshot region (e.g. kDartIsolateSnapshotData).
+ * diff_path:         path to downloaded .vmdiff file (zstd-wrapped bipatch stream).
+ * out_path:          destination file for the fully-patched region.
+ * Returns 0 on success, negative on error.
+ */
+int fhp_vmcode_stage(const uint8_t* base_ptr, unsigned long base_len,
+                     const char* diff_path, const char* out_path);
+
 #ifdef __cplusplus
 }
 #endif

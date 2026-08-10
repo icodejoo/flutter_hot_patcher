@@ -49,6 +49,7 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
 
     /* Stage bundled patch if not already staged */
     const char* nextBootDir = fhp_get_next_boot_patch_dir();
+    /* B-route test: skip bundled patch to get clean baseline
     if (!nextBootDir) {
         NSString *bundlePatchDir = [[[NSBundle mainBundle] bundlePath]
             stringByAppendingPathComponent:@"patch_bundle"];
@@ -57,7 +58,22 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
             nextBootDir = fhp_get_next_boot_patch_dir();
         }
     }
+    */
     NSLog(@"[ViewController] next_boot_patch: %s", nextBootDir ? nextBootDir : "(null — baseline)");
+
+    /* B-route: load staged vmcode patch (IsolateSnapshotData) before Dart VM init */
+    NSArray *dataPaths = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
+    NSString *dataDir  = [[dataPaths firstObject] stringByAppendingPathComponent:@"HotPatchUpdater"];
+    NSString *metaPath = [dataDir stringByAppendingPathComponent:@"vmcode_staged.json"];
+    NSData *metaData = [NSData dataWithContentsOfFile:metaPath];
+    if (metaData) {
+        NSDictionary *meta = [NSJSONSerialization JSONObjectWithData:metaData options:0 error:nil];
+        NSString *stagedPath = meta[@"staged_path"];
+        if (stagedPath) {
+            int vmResult = dart_load_vmcode_patch([stagedPath UTF8String]);
+            NSLog(@"[ViewController] vmcode patch load: %d (1=loaded, 0=not found, -1=err)", vmResult);
+        }
+    }
 
     /* Run Dart */
     const char *cResult = dart_run(nextBootDir);

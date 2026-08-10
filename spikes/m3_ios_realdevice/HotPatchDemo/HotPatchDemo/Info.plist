@@ -30,7 +30,10 @@
     </array>
 
     <key>HotPatchServerURL</key>
-    <string>https://stock-honey-multimedia-sea.trycloudflare.com</string>
+    <string>http://10.39.53.19:8765</string>
+
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Hot patch update server on local USB network</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

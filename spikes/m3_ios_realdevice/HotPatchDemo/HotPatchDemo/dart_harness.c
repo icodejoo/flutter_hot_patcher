@@ -2,6 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "dart_api.h"
 #include "dart_harness.h"
 
@@ -9,6 +13,35 @@ extern const uint8_t kDartIsolateSnapshotData[];
 extern const uint8_t kDartIsolateSnapshotInstructions[];
 extern const uint8_t kDartVmSnapshotData[];
 extern const uint8_t kDartVmSnapshotInstructions[];
+
+/* B-route: pointer to mmap'd patched IsolateSnapshotData (NULL = use baseline) */
+static const uint8_t* g_vmcode_isolate_data = NULL;
+static size_t         g_vmcode_isolate_data_len = 0;
+static void*          g_vmcode_mmap_addr = NULL;
+
+/**
+ * Load a staged vmcode patch (patched IsolateSnapshotData) from disk into
+ * read-only memory.  Call before dart_run().
+ * Returns 1 if patch was loaded, 0 if no patch exists, -1 on error.
+ */
+int dart_load_vmcode_patch(const char* staged_path) {
+    int fd = open(staged_path, O_RDONLY);
+    if (fd < 0) return 0;  /* no patch staged yet */
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    size_t len = (size_t)st.st_size;
+
+    /* mmap PROT_READ — data section, no PROT_EXEC needed */
+    void* addr = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (addr == MAP_FAILED) return -1;
+
+    g_vmcode_mmap_addr      = addr;
+    g_vmcode_isolate_data     = (const uint8_t*)addr;
+    g_vmcode_isolate_data_len = len;
+    return 1;
+}
 
 extern Dart_NativeFunction builtin_native_lookup_shim(Dart_Handle name, int argument_count, bool* auto_setup_scope);
 extern const uint8_t* builtin_native_symbol_shim(Dart_NativeFunction nf);
@@ -56,9 +89,18 @@ const char* dart_run(const char* patch_bundle_dir) {
         g_initialized = true;
     }
 
+    /* B-route: use patched data section if available, otherwise baseline */
+    const uint8_t* iso_data = g_vmcode_isolate_data
+                              ? g_vmcode_isolate_data
+                              : kDartIsolateSnapshotData;
+    fprintf(dbg, "dart_run: using %s IsolateSnapshotData (%zu bytes)\n",
+            g_vmcode_isolate_data ? "VMCODE-PATCHED" : "baseline",
+            g_vmcode_isolate_data ? g_vmcode_isolate_data_len : (size_t)0);
+    fflush(dbg);
+
     char* err = NULL;
     Dart_Isolate iso = Dart_CreateIsolateGroup("vm://hotpatch", "main",
-        kDartIsolateSnapshotData, kDartIsolateSnapshotInstructions,
+        iso_data, kDartIsolateSnapshotInstructions,
         NULL, NULL, NULL, &err);
     if (!iso) { fprintf(dbg, "iso err: %s\n", err ? err : "null"); fclose(dbg); free(err); return "ERROR"; }
 
