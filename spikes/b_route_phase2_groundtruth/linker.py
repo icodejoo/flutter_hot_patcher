@@ -20,7 +20,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-HEADER_SIZE = 16384
+_PAGE_SIZE = 4096  # macOS/iOS page size
+
+def _header_size(n_entries: int) -> int:
+    content = 4 + n_entries * 8
+    pages = (content + _PAGE_SIZE - 1) // _PAGE_SIZE
+    return max(pages, 4) * _PAGE_SIZE  # at least 16384 (4 pages)
+
+HEADER_SIZE = _PAGE_SIZE * 4  # 16384 default; actual = dynamic per entry count
 
 
 def run_analyze_snapshot(analyze_snapshot_bin: str, aot_file: str) -> dict:
@@ -37,7 +44,7 @@ def run_analyze_snapshot(analyze_snapshot_bin: str, aot_file: str) -> dict:
         Path(tmp_path).unlink(missing_ok=True)
 
 
-def build_link_table(base_json: dict, patch_json: dict) -> list[tuple[int, int]]:
+def build_link_table(base_json: dict, patch_json: dict, **kwargs) -> list[tuple[int, int]]:
     """
     Match patch functions to base functions by subgraph_hash.
     Returns list of (sim_offset, cpu_offset) — patch offset, base offset.
@@ -56,6 +63,17 @@ def build_link_table(base_json: dict, patch_json: dict) -> list[tuple[int, int]]
 
     entries = []
     for pf in patch_json['functions']:
+        # Optionally skip functions unsafe to run natively via SimulatorToCPU
+        # (enabled via exclude_vm_unsafe=True for use with A7 vmcode loading)
+        if kwargs.get('exclude_vm_unsafe', False):
+            name = pf.get('name', '')
+            if ('[Stub]' in name or name.startswith('stub ') or
+                    name.startswith('stub_') or
+                    name.startswith('_start') or
+                    name.startswith('_get') or
+                    name.startswith('_run') or
+                    name.startswith('_kDart')):
+                continue
         ph = pf['subgraph_hash']
         candidates = base_by_hash.get(ph, [])
         if len(candidates) == 1:
@@ -75,9 +93,8 @@ def write_vmcode(entries: list[tuple[int, int]], patch_elf: bytes) -> bytes:
     header = struct.pack('<I', N)
     for sim, cpu in entries:
         header += struct.pack('<II', sim, cpu)
-    if len(header) > HEADER_SIZE:
-        raise ValueError(f"Link table too large: {len(header)} bytes, limit {HEADER_SIZE}")
-    header = header.ljust(HEADER_SIZE, b'\0')
+    h_size = _header_size(len(entries))
+    header = header.ljust(h_size, b'\0')
     return header + patch_elf
 
 
