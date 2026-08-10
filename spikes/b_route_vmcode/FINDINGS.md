@@ -197,7 +197,7 @@ A7_RESULT: 9312480  ✅ compute() 走解释(×37)，其余函数走原生
 | A2 | ✅ | BLR 拦截→InvokeWithTHR(THR,PP)，单元测试通过 |
 | A3 | ✅ | fhp_analyze_snapshot.py，ELF+SHA-1，零错误链接 |
 | A4 | ✅ | analyze_shorebird_with_op_link，读 .op.link 达到 GT 完全匹配 |
-| A5 | 未完成 | DD 改写器（next step） |
+| A5 | ✅ | BL 拦截→DecodeUnconditionalBranch，等效 DD 改写 |
 | A6 | ✅ | fhp_linker，263 个测试全通过 |
 | A7 | ✅ | 端到端 vmcode 加载运行，结果正确 |
 
