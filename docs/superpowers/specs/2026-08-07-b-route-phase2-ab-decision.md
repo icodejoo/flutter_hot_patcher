@@ -386,3 +386,28 @@
 2. **A3**（自研 analyze_snapshot hash 计算）—— 向上游 `analyze_snapshot_api_impl.cc` 添加
    `subgraph_hash` 逻辑，消除对 Shorebird 二进制的依赖
 3. A4/A5 可并行推进（link data 格式已破解）
+
+## 13. A2 进展（2026-08-10，原型已实现，尚未完全通过）
+
+**已完成部分：**
+- `runtime/vm/simulator_arm64.h`：`SetLinkedFunction(sim_addr, cpu_addr)` / `IsLinkedFunction` / `SetBaseInstructionsBase` API
+- `runtime/vm/simulator_arm64.cc`：BLR handler 增加 link table 查询，命中时调用 `ShorebirdSimToCpuCall` assembly shim
+- `runtime/vm/shorebird_sim_to_cpu_arm64.S`：ARM64 assembly shim，把 Simulator 模拟寄存器（x0-x7、x26/THR、x27/PP）传给 native call
+- `shorebird_sim_to_cpu_test.cc`：`SetLinkedFunction`/`IsLinkedFunction` API 测试通过（`ShorebirdSimToCpu_LinkTableSet: PASS`）
+
+**已知问题（下一个 A2 迭代要解决的）：**
+BLR → `ShorebirdSimToCpuCall` → native function 全链路调用触发 SIGBUS（`BUS_ADRALN`）。
+根本原因：Simulator 解释器本身跑在 C++ 调用栈上，到 BLR handler 时栈深度已经很深；
+`ShorebirdSimToCpuCall` assembly shim 再往下分配栈帧，最终 `ldp x19,x20,[sp,#16]` 读到栈边界以外。
+
+**修复方向（下一步）：**
+1. 给 `ShorebirdSimToCpuCall` 单独分配一个比较浅的 native call 栈（`setcontext`/`makecontext` 或 OS 级线程），
+   让 native 函数跑在独立栈而不是 Simulator 解释器的 C++ 调用栈上。
+2. 或者：把 Simulator 主循环迁到一个较小的深度（限制 Execute loop 的栈占用），留出空间给 native call。
+3. Shorebird 的 `wrapper.cc` 很可能用了方案 1 或类似机制（`TransitionDartToSimulatorIfNeeded` /
+   `TransitionDartToCpuIfNeeded` 分别管理进出 Simulator 的栈切换）。
+
+**诚实边界**：A2 的核心机制（BLR 拦截 + 寄存器传递）已实现并编译成功，
+API 测试通过，全链路调用因栈深度问题未跑通。
+修复要么需要独立 native 调用栈（复杂），要么需要轻量级协程机制。
+这部分仍在 A2 的"4-8 周高风险"范围内，符合预期。
