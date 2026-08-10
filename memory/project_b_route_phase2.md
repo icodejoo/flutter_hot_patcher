@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1-A7原型完成；追加生产对齐计划B1-B4：Flutter Engine修改→subgraph_hash→FFI加固→iOS真机
+description: B-route Phase 2 — B1完成：Flutter.xcframework已重建含A1-A7改动，ShorebirdSimToCpuCall确认在binary中；待B2-B4
 metadata:
   type: project
 ---
@@ -346,3 +346,19 @@ gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
 - 验证 link_percentage > 90%，功能正确，不崩溃
 
 **执行顺序**：B1 → B2（并行）→ B3 → B4
+
+
+## 2026-08-10 追加：B1 完成（Flutter.xcframework 重建）
+
+成功把 A1-A7 的所有改动移植进 Flutter Engine，并完成 iOS arm64 重构：
+- `engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter` 已更新（18MB, Aug 10）
+- `nm` 确认 `ShorebirdSimToCpuCall` 和 `_ShorebirdSimToCpuCall` 都在 binary 里
+- 编译修复：`__aarch64__` guard（代替 `TARGET_ARCH_ARM64`）让 clang_x64 host 正常编译
+- 编译修复：UIKitDefines.h → UIUtilities SubFrameworks 路径（iOS 26.5 SDK split UIKit）
+- 编译修复：BoringSSL 去重（create_flutter_framework_dylib.ninja patch）
+
+**所有测试通过**：dart/sdk ShorebirdSimToCpu_BasicCall/LinkTableAPI PASS，263 pytest PASS。
+
+**下一步 B2**：在 Flutter Engine 的 analyze_snapshot_api_impl.cc 实现 --shorebird 模式，
+消除对 Shorebird 二进制的 .op.link 文件依赖，达到真正的 >90% 链接率。
+B3 (FFI/safepoint)、B4 (iOS 真机端到端) 继续排队。
