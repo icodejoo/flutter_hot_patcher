@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — 取证 spike 已完成，五个未知量破解四个，A/B 决策为走方案 A（对齐 Shorebird 全架构）
+description: B-route Phase 2 — 取证完成，决策为走方案 A，macOS 端到端验证 PASS，下一步是 A1（引擎强制编入 simulator）
 metadata:
   type: project
 ---
@@ -112,3 +112,23 @@ sandbox stdout 拦截）观察日志，**证实补丁在生产后端创建后确
 `spikes/shorebird_test/` 可直接复用。
 
 详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` 附录。
+
+
+## 2026-08-10 追加：下一步任务已排定——继续方案 A 自研实现，从 A1 开始
+
+**不再等待更多性能数据，直接推进 A1。** 决策依据：唯一干净的性能样本点（1.19x）落在可接受区间，
+且函数体改动只拖慢被改函数自身（§8.1 已证，不是全 app 变慢）。
+
+**A1 具体起点（下次会话直接续做，不需要重新取证或重新决策 A/B）：**
+1. checkout：`/Users/Cruz/dart/sdk`，需先确认/补齐 `third_party/protobuf` 缺失问题。
+2. 在 `runtime/platform/globals.h:369` 把 `USING_SIMULATOR` 门控从
+   `TARGET_ARCH != HOST_ARCH` 改成强制定义，先在 x64 宿主验证编译通过。
+3. A1 的验证目标故意避开 A2 最大风险：**整个 isolate 100% 走 Simulator**（不需要 LinkTable，
+   不需要 CPU↔Sim 双向切换），只验证"Simulator 能不能解释执行 arm64 AOT 指令"这一件事。
+4. A2（转换层，`wrapper.cc` 等价物，无公开参照）要等 A1 跑通后才具体设计，因为需要先有能跑的
+   Simulator 环境做实验对象。
+
+完整排期（A1→A3→A4→A6→A5→A2→A7，17-27周量级）见
+`docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10。
+
+相关：[[project-shorebird-alignment]]
