@@ -411,3 +411,32 @@ BLR → `ShorebirdSimToCpuCall` → native function 全链路调用触发 SIGBUS
 API 测试通过，全链路调用因栈深度问题未跑通。
 修复要么需要独立 native 调用栈（复杂），要么需要轻量级协程机制。
 这部分仍在 A2 的"4-8 周高风险"范围内，符合预期。
+
+## 14. A2 完成（2026-08-10，真实验证，单元测试通过）
+
+**原型实现完整，两个测试通过。**
+
+修复了两个 bug：
+1. `shorebird_base_instructions_base_ != 0` 判断在 base=0 时短路，改为 `!shorebird_link_table_.empty()`
+2. `ClobberVolatileRegisters()` 会随机化 LR（R30 在 `kAbiVolatileCpuRegs` 里），导致后续 `ret` 跳到垃圾地址；SimulatorToCPU 路径不调用它
+
+最终方案：用 `InvokeLeafRuntime`（现有 kLeafRuntimeCall 机制）代替 assembly shim。
+同样的 C ABI 调用，无额外栈帧，避免了 shim 在 Simulator 解释器 C++ 调用栈深层运行时的 SIGBUS。
+
+**实测结果（`run_vm_tests`）：**
+- `ShorebirdSimToCpu_LinkTableAPI`: PASS — SetLinkedFunction/IsLinkedFunction API 正确
+- `ShorebirdSimToCpu_BasicCall`: PASS — BLR 到链接地址，调用 `ShorebirdTestNativeDoubler(21)=42`，Simulator 继续正确执行 `ret` 返回 42
+
+**已知限制（下一 A2 迭代）**：
+`InvokeLeafRuntime` 不设置 THR（x26）和 PP（x27）。
+对于需要 Thread 指针的真实 Dart 函数（分配对象、抛异常等），需要在调用前
+将真实 CPU 的 x26/x27 设置为 Simulator 中对应的值。
+Shorebird 的 `wrapper.cc` 的 `TransitionDartToCpuIfNeeded` 可能通过 setjmp/longjmp
+或专用切换指令来处理这个问题，目前我们的实现对于不依赖 THR/PP 的叶子函数可以正确工作。
+
+**A2 进展小结（三个阶段全 PASS）：**
+- A1（Simulator 强制开启，整体 isolate 全解释执行）：PASS
+- A2（BLR 拦截 + SimulatorToCPU + 单元测试）：PASS  
+- A6（fhp_linker，1052/1052 匹配 GT）：PASS
+
+**下一步：A3（自研 analyze_snapshot --shorebird 等价实现）或 A4/A5（link data 生成）**
