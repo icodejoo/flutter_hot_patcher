@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1+A2+A3+A4+A6+A7全部完成；端到端vmcode运行正确；剩余A5(DD改写器)
+description: B-route Phase 2 — 方案A端到端打通：A1-A4+A6+A7完成，端到端vmcode验证PASS，剩余A5(DD改写器)
 metadata:
   type: project
 ---
@@ -236,3 +236,40 @@ A7_RESULT: 9312480  ← patch compute() 走解释(×37)，其余走原生
 - 50M icount 阈值跳过启动阶段（VM init 函数需要一致隔离状态）
 
 **方案A状态**：A1✓ A2✓ A3✓ A4✓ A6✓ A7✓，剩余 A5（DD改写器，下一步）
+
+
+## 2026-08-10 最终状态总结
+
+**方案 A 核心流程端到端验证通过（真实测量，非推测）：**
+
+```bash
+# 编译 patch（compute() 乘数 31→37）
+dartaotruntime_product gen_kernel ... --aot -o patch.dill patch.dart
+gen_snapshot --elf=patch.aot patch.dill
+
+# 生成 vmcode（链接表 + patch ELF）
+python3 fhp_analyze_snapshot.py --shorebird --out=base_analyze.json base.aot
+python3 fhp_analyze_snapshot.py --shorebird --out=patch_analyze.json patch.aot
+python3 linker.py --base=base.aot --patch=patch.aot --output=patch.vmcode \
+  --base-json=base_analyze.json --patch-json=patch_analyze.json
+
+# 运行
+dartaotruntime --shorebird-vmcode=patch.vmcode patch.aot
+# [A7] Configured 3235 link table entries
+# A7_RESULT: 9312480  ← compute()×37 走解释，其余走原生 ✅
+```
+
+**A5（DD 改写器）是唯一剩余任务**，机制已完全破解：
+gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
+需修改 `/Users/Cruz/dart/sdk/runtime/bin/gen_snapshot.cc` 添加 `--dd_slot_mapping=` flag 处理。
+
+**可复用工具（无需 Shorebird 二进制）：**
+- `spikes/b_route_phase2_groundtruth/fhp_analyze_snapshot.py` — A3
+- `spikes/b_route_phase2_groundtruth/linker.py` — A6
+- `/Users/Cruz/dart/sdk/xcodebuild/ReleaseARM64/dartaotruntime` — A1+A2+A7（已修改）
+
+**已知限制（A5 完成前）：**
+- fhp_linker 用 SHA-1(code bytes) 作哈希，不如 Shorebird 的 op_subgraph_hash 精确
+  （可通过 analyze_shorebird_with_op_link + .op.link 文件达到 GT 精度，但需要 Shorebird gen_snapshot 产出 .op.link）
+- 50M icount 阈值是启发式；Shorebird 用更精确的 TransitionDartToCpuIfNeeded
+- A5 缺失意味着 patch 快照不做 DD 改写，调用链路不走 DD table（在取证 spike 中这占 ~58% 未链接的原因之一）
