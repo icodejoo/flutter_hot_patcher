@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — B1+B2+B4完成：Flutter.xcframework含SimulatorToCPU+analyze_snapshot+vmcode C API；剩余B3(safepoint加固)
+description: B-route Phase 2 — 核心架构对齐✓；B3(GC safepoint)是生产硬门槛；iOS真机E2E待跑通
 metadata:
   type: project
 ---
@@ -379,3 +379,25 @@ B3 (FFI/safepoint)、B4 (iOS 真机端到端) 继续排队。
 - iOS 真机：在 HotPatchDemo 调用 Dart_ShorebirdLoadVmcode() 并运行真实补丁
 
 **fhp_repatch.sh**：引擎 build 后需执行 `out/ios_release/fhp_repatch.sh` 补丁 toolchain.ninja（UIUtilities + BoringSSL）。
+
+
+## 2026-08-10 诚实差距评估（对齐 Shorebird 生产能力）
+
+### 已对齐 ✅
+- A1-A7 全部完成（Simulator + 链接表 + vmcode + linker + dartaotruntime end-to-end）
+- B1: Flutter.xcframework 已重建，含 ShorebirdSimToCpuCall
+- B2: Dart_DumpSnapshotInformationShorebirdAsJson 已编译入库
+- B4: Dart_ShorebirdLoadVmcode iOS C API 已加入 dart_api.h
+
+### 未对齐 ❌（生产硬门槛）
+- **B3（GC Safepoint）**：InvokeWithTHR 跨 Simulator↔CPU 边界无 VM 线程转换标记（TransitionGeneratedToNative）。
+  GC 在 SimulatorToCPU 执行期间触发 → 死锁 or 堆损坏。这是唯一的生产硬门槛。
+  修复：在 InvokeWithTHR 前后加 `thread->set_execution_state(Thread::kThreadInNative)` / `kThreadInGenerated`。
+
+### 未对齐 ⚠️（验证/工程缺口）
+- iOS 真机 E2E：Dart_ShorebirdLoadVmcode() 存在但未在真实 Flutter app 跑过
+- analyze_snapshot 独立二进制仅 Linux 构建（macOS GN 限制，CI 用 Linux 没问题）
+- Simulator 进入开销：每次调用多一次 Simulator dispatch（比 Shorebird 直接查 base instructions table 慢）
+
+### 下一步
+B3（VM 线程转换标记）→ iOS 真机端到端验证（HotPatchDemo + vmcode） → 性能优化
