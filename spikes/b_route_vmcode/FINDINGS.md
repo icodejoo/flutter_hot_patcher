@@ -178,10 +178,46 @@ A/B 决策见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md`�
 原生 108ms vs Simulator 强制开启 7.78s（72倍），**结果值完全一致**（15530048）。
 真实验证，不是推测。详见 ab-decision.md §11。
 
-### 下一步：A3（analyze_snapshot 等价实现）或 A2（转换层）
+### 2026-08-10：A2+A3+A4+A6+A7 全部完成，方案 A 核心流程端到端打通
 
-A1 完成，排期见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10-11。
-建议先做 A3（格式已破解，风险低），把 A2（CPU↔Sim 转换层，无公开参照，风险最高）留到后面。
+**完整端到端验证结果：**
+
+```
+dartaotruntime --shorebird-vmcode=patch.vmcode patch.aot
+[A7] Configured 3235 link table entries
+A7_RESULT: 9312480  ✅ compute() 走解释(×37)，其余函数走原生
+```
+
+与预期完全一致：只改了函数体的 `compute()` 没有被链接（hash 不同），
+走 Simulator 解释执行；其余 3235 个未改函数通过 SimulatorToCPU 调用原生代码。
+
+| 阶段 | 状态 | 一句话说明 |
+|---|---|---|
+| A1 | ✅ | USING_SIMULATOR 强制打开，72× 慢但结果一致 |
+| A2 | ✅ | BLR 拦截→InvokeWithTHR(THR,PP)，单元测试通过 |
+| A3 | ✅ | fhp_analyze_snapshot.py，ELF+SHA-1，零错误链接 |
+| A4 | ✅ | analyze_shorebird_with_op_link，读 .op.link 达到 GT 完全匹配 |
+| A5 | 未完成 | DD 改写器（next step） |
+| A6 | ✅ | fhp_linker，263 个测试全通过 |
+| A7 | ✅ | 端到端 vmcode 加载运行，结果正确 |
+
+新工具清单（均在 `spikes/b_route_phase2_groundtruth/`）：
+- `fhp_analyze_snapshot.py` — 替代 Shorebird analyze_snapshot --shorebird
+- `linker.py` — 替代 aot_tools link（链接表生成 + vmcode 写入）
+
+修改的 Dart SDK 文件（`/Users/Cruz/dart/sdk`）：
+- `runtime/platform/globals.h:369` — 强制 USING_SIMULATOR
+- `runtime/vm/simulator_arm64.cc` — BLR 拦截 + InvokeWithTHR(THR,PP) + icount 阈值
+- `runtime/vm/simulator_arm64.h` — SetLinkedFunction/IsLinkedFunction API
+- `runtime/bin/main_impl.cc` — --shorebird-vmcode 参数加载链接表
+- `runtime/bin/main_options.h` — 新增 shorebird_vmcode 选项
+
+详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §11-15。
+
+### 下一步：A5（DD 改写器）
+
+gen_snapshot 中把 `BL target` 改写为 `LDR(thr,#2424) + LDR(slot*8) + BLR` 三元组。
+机制已完全破解（GROUND_TRUTH §5），需修改 gen_snapshot C++ 添加 `--dd_slot_mapping=` flag。
 
 ---
 
