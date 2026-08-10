@@ -234,8 +234,10 @@ A1-A5 全部移植进 Flutter Engine，`Flutter.xcframework/ios-arm64` 含 `Shor
 iOS ObjC 代码可在 isolate 创建前调用，Simulator::Current() 第一次调用时自动应用链接表。
 
 **与 Shorebird 生产能力的剩余差距**：
-1. B3（GC Safepoint 未处理）：InvokeWithTHR 跨 Simulator↔CPU 边界没有 VM 线程转换标记，
-   GC 在 SimulatorToCPU 执行期间触发会死锁/堆损坏。这是生产硬门槛。
+1. ~~B3（GC Safepoint 未处理）~~ → **✅ 2026-08-10 完成**：
+   - `HasScheduledInterrupts()` 检查：GC/中断挂起时跳过原生调用回退 Simulator，避免原生栈 root 漏扫
+   - `SimulatorSetjmpBuffer` RAII 包裹：Dart 异常经 `JumpToFrame→longjmp` 正确回传 Simulator
+   - BL（A5）和 BLR（A2）两处拦截均已修复，Flutter.xcframework 已重建
 2. iOS 真机端到端未验证：`Dart_ShorebirdLoadVmcode()` API 存在但未在真实 Flutter app 跑过。
 3. analyze_snapshot --shorebird 独立二进制只在 Linux/Android 构建（macOS GN 限制）。
 4. 每次函数调用都过 Simulator（含已链接函数），比 Shorebird 的直接 base instructions table 多一次 dispatch。

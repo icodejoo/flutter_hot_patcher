@@ -634,7 +634,7 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 | analyze_snapshot --shorebird（B2） | `Dart_DumpSnapshotInformationShorebirdAsJson()` |
 
 **剩余项（生产级对齐）：**
-- **B3**（FFI/safepoint 加固）：`InvokeWithTHR` 不处理 safepoint 和跨边界异常
+- **B3**（FFI/safepoint 加固）：✅ 已完成——HasScheduledInterrupts() 检查 + SimulatorSetjmpBuffer
 - iOS 真机端到端：在 HotPatchDemo app 调用 `Dart_ShorebirdLoadVmcode()` 并运行补丁
 
 ---
@@ -661,7 +661,7 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 
 | 差距 | 影响 | 严重程度 |
 |---|---|---|
-| **B3：GC Safepoint 未处理** | SimulatorToCPU 执行时 GC 触发 → 死锁/堆损坏 | **生产硬门槛** |
+| **B3：GC Safepoint** | SimulatorToCPU 执行时 GC 触发 → 死锁/堆损坏 | **✅ 2026-08-10 完成** |
 | **iOS 真机端到端未验证** | B4 API 存在但未在真实 Flutter app 上跑过 | 验证缺口 |
 | **analyze_snapshot 独立二进制仅 Linux** | CI 需要 Linux build agent | 工程约束 |
 | **Simulator 进入开销** | 每次调用都进入解释器再立即跳出，比 Shorebird base instructions table 多一跳 | 性能开销 |
@@ -670,4 +670,4 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 
 核心架构已完整实现并端到端验证（macOS dartaotruntime）。
 Flutter.xcframework 已含所有关键能力。
-**B3（VM 线程转换标记）是到生产的唯一硬门槛**；iOS 真机验证是下一步行动项。
+**B3（GC Safepoint 加固）已完成**（2026-08-10）。iOS 真机 E2E 验证是下一步行动项。
