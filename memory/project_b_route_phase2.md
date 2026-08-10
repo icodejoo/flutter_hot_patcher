@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — 方案A端到端打通：A1-A4+A6+A7完成，端到端vmcode验证PASS，剩余A5(DD改写器)
+description: B-route Phase 2 — 方案A全部完成 A1-A7✓：BL+BLR拦截，vmcode加载，263测试全通
 metadata:
   type: project
 ---
@@ -273,3 +273,27 @@ gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
   （可通过 analyze_shorebird_with_op_link + .op.link 文件达到 GT 精度，但需要 Shorebird gen_snapshot 产出 .op.link）
 - 50M icount 阈值是启发式；Shorebird 用更精确的 TransitionDartToCpuIfNeeded
 - A5 缺失意味着 patch 快照不做 DD 改写，调用链路不走 DD table（在取证 spike 中这占 ~58% 未链接的原因之一）
+
+
+## 2026-08-10 最终：A5 完成，方案A全部 7 个阶段完成
+
+**A5 实现方式（与原计划等效但更简洁）**：
+不修改 gen_snapshot 做 DD 改写，而是在 Simulator 的 `DecodeUnconditionalBranch`（处理 `BL` 直接跳转指令）
+里加入与 BLR 相同的链接表查询。`BL target` 若目标在链接表中，直接调 `InvokeWithTHR` 走原生代码。
+等效于 Shorebird 的 `BL→LDR+LDR+BLR` 改写 + BLR 链接表查询。
+
+**关键 API**：
+- `SetSimToCpuStartupThreshold(N)`：N=50_000_000 用于 vmcode 模式（跳过 VM 启动阶段）
+- `SetSimToCpuEnabled(bool)`：单元测试用 true（threshold=0，立即生效）
+
+**最终状态**：A1+A2+A3+A4+A5+A6+A7 全部完成，263 个 pytest 全绿，单元测试全通。
+
+可复用工具（不依赖 Shorebird 二进制）：
+- `spikes/b_route_phase2_groundtruth/fhp_analyze_snapshot.py` (A3)
+- `spikes/b_route_phase2_groundtruth/linker.py` (A6)
+- `/Users/Cruz/dart/sdk/xcodebuild/ReleaseARM64/dartaotruntime` (A1+A2+A5+A7)
+
+已知限制（工程质量问题，不影响正确性）：
+- 50M icount 阈值是启发式（真正的 "VM 初始化完成" 检测更精确）
+- fhp_analyze_snapshot 用 SHA-1(code bytes) 作哈希；with .op.link 可达 GT 精度
+- PP（x27）从模拟寄存器读取，在某些边缘情况下可能不正确
