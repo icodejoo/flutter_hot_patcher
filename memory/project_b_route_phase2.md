@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1+A6完成；A2原型BLR拦截+汇编shim实现，API测试通过，全链路因栈深度SIGBUS待修复
+description: B-route Phase 2 — A1+A2+A6全部完成并通过单元测试；BLR拦截→native调用验证；下一步A3/A4/A5
 metadata:
   type: project
 ---
@@ -196,3 +196,20 @@ dartaotruntime/gen_snapshot/gen_kernel/dartaotruntime_product（`tools/build.py 
 
 **下一 A2 迭代**：实现 CPU 调用的独立栈机制。参考 `/Users/Cruz/dart/sdk/runtime/vm/` 里的
 `JumpToFrame` / `SimulatorSetjmpBuffer` — 现有的 setjmp/longjmp 机制可以复用来实现这个栈切换。
+
+
+## 2026-08-10 追加：A2 全部完成（单元测试通过）
+
+两个 bug 已修复：
+1. guard 用 `!shorebird_link_table_.empty()` 代替 `!= 0` 的 base 地址检查
+2. `ClobberVolatileRegisters()` 会随机化 LR，改为 SimulatorToCPU 路径不调用它
+
+最终用 `InvokeLeafRuntime`（现有机制）代替 assembly shim，消除栈深度问题。
+
+`run_vm_tests` 结果：
+- `ShorebirdSimToCpu_LinkTableAPI: PASS`
+- `ShorebirdSimToCpu_BasicCall: PASS` — `ShorebirdTestNativeDoubler(21)=42`
+
+**总体进展**：A1 ✓ + A2 ✓ + A6 ✓ 均完成并有测试验证。
+**已知限制**：`InvokeLeafRuntime` 不设置 THR(x26)/PP(x27)，需要 Dart 函数完整支持时再加。
+**下一步**：A3（自研 analyze_snapshot hash 计算，消除对 Shorebird 二进制依赖）或 A4/A5（link data 生成）
