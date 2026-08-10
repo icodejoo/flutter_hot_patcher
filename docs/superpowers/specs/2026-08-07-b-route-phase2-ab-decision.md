@@ -351,3 +351,38 @@
 
 **下一步**：A3（analyze_snapshot --shorebird 等价实现）或 A2（转换层）。
 建议先做 A3（格式已破解，风险低，可独立验证），把 A2 留到有更多 Simulator 使用经验之后。
+
+## 12. A6 完成（2026-08-10，真实验证）
+
+实现了独立的 `fhp_linker`（`spikes/b_route_phase2_groundtruth/linker.py`），不依赖 `aot_tools link`：
+
+**算法**：
+1. 读取 base 和 patch 的 `analyze_snapshot --shorebird` JSON（由 Shorebird 的 `analyze_snapshot` 二进制产出）
+2. 以 `subgraph_hash` 为键匹配：唯一匹配直接采用，碰撞时以 `(name, hash)` 组合消歧
+3. 生成 `.vmcode` 文件：`[uint32 count][count × (sim_offset, cpu_offset)][zero-pad 到 16384 B][patch ELF]`
+
+**验证结果（对照 aot_tools link 的 ground truth，4 个样本全通过）**：
+
+| 样本 | GT linked | fhp_linker linked | 集合相等 | ELF 相等 |
+|---|---|---|---|---|
+| s1_equal_len | 1052 | 1052 | ✅ | ✅ |
+| s2_diff_len | 1052 | 1052 | ✅ | ✅ |
+| s3_body | 1052 | 1052 | ✅ | ✅ |
+| s4_add | 533 | 533 | ✅ | ✅ |
+
+8 个 pytest 测试，全部通过（总计 247 个，无回归）。
+
+**分工说明**：
+- `fhp_linker` 目前仍依赖 Shorebird 的 `analyze_snapshot --shorebird` 产出 JSON 作为输入
+- A3（自研 analyze_snapshot 等价实现）尚未完成——上游 `analyze_snapshot_api_impl.cc`
+  没有 Shorebird 的 `subgraph_hash` 计算逻辑，该部分在 Shorebird 私有 C++ fork 里
+- `subgraph_hash` 的反向工程尚未成功（尝试了 SHA-1 of raw code bytes / 带 size prefix /
+  带 hex 字符串，均不匹配）；计划仍是向上游 `analyze_snapshot_api_impl.cc` 添加等价的
+  hash 计算（SHA-1 of normalized code bytes + PP slot indices），使整个管道不依赖 Shorebird 二进制
+- 目前最关键、风险最高的剩余件仍是 **A2**（CPU↔Simulator 转换层）
+
+**下一步优先级**：
+1. **A2**（CPU↔Simulator 转换层）—— 唯一无公开参照的部分，其他一切都可以围绕它展开
+2. **A3**（自研 analyze_snapshot hash 计算）—— 向上游 `analyze_snapshot_api_impl.cc` 添加
+   `subgraph_hash` 逻辑，消除对 Shorebird 二进制的依赖
+3. A4/A5 可并行推进（link data 格式已破解）
