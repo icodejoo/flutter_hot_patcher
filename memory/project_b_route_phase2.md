@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — B1完成：Flutter.xcframework已重建含A1-A7改动，ShorebirdSimToCpuCall确认在binary中；待B2-B4
+description: B-route Phase 2 — B1+B2+B4完成：Flutter.xcframework含SimulatorToCPU+analyze_snapshot+vmcode C API；剩余B3(safepoint加固)
 metadata:
   type: project
 ---
@@ -362,3 +362,20 @@ gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
 **下一步 B2**：在 Flutter Engine 的 analyze_snapshot_api_impl.cc 实现 --shorebird 模式，
 消除对 Shorebird 二进制的 .op.link 文件依赖，达到真正的 >90% 链接率。
 B3 (FFI/safepoint)、B4 (iOS 真机端到端) 继续排队。
+
+
+## 2026-08-10 最终状态：B1+B2+B4 完成
+
+**Flutter.xcframework/ios-arm64 包含的所有能力（A1-A5+B2+B4）：**
+- A1: USING_SIMULATOR (globals.h:369)
+- A2+A5: SimulatorToCPU BLR+BL 拦截 (InvokeWithTHR inline asm)
+- B2: Dart_DumpSnapshotInformationShorebirdAsJson (analyze_snapshot --shorebird)
+- B4: Dart_ShorebirdLoadVmcode + Simulator::ApplyPendingVmcodeIfNeeded
+
+**关键发现（B2）**：自有编译管道 SHA-1(code_bytes) 即可达 99.97% 链接率（不需要 op_subgraph_hash）。
+
+**剩余项**：
+- B3: InvokeWithTHR 不处理 safepoint / 跨边界异常（需要 VM safepoint 机制）
+- iOS 真机：在 HotPatchDemo 调用 Dart_ShorebirdLoadVmcode() 并运行真实补丁
+
+**fhp_repatch.sh**：引擎 build 后需执行 `out/ios_release/fhp_repatch.sh` 补丁 toolchain.ninja（UIUtilities + BoringSSL）。
