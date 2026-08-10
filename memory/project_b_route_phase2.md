@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1+A2+A6全部完成并通过单元测试；BLR拦截→native调用验证；下一步A3/A4/A5
+description: B-route Phase 2 — A1+A2+A3+A4+A6+A7全部完成；端到端vmcode运行正确；剩余A5(DD改写器)
 metadata:
   type: project
 ---
@@ -213,3 +213,26 @@ dartaotruntime/gen_snapshot/gen_kernel/dartaotruntime_product（`tools/build.py 
 **总体进展**：A1 ✓ + A2 ✓ + A6 ✓ 均完成并有测试验证。
 **已知限制**：`InvokeLeafRuntime` 不设置 THR(x26)/PP(x27)，需要 Dart 函数完整支持时再加。
 **下一步**：A3（自研 analyze_snapshot hash 计算，消除对 Shorebird 二进制依赖）或 A4/A5（link data 生成）
+
+
+## 2026-08-10 追加：A3+A4+A7 完成，方案A核心流程端到端打通
+
+**A3 (fhp_analyze_snapshot.py)**：ELF symbol parser + SHA-1 hash，Shorebird兼容JSON，零错误链接。
+
+**A4 (analyze_shorebird_with_op_link)**：读 .op.link 得到准确 op_subgraph_hash，s1/s2/s3 GT完全匹配。
+
+**A7 端到端测试（真实结果，2026-08-10）**：
+```
+dartaotruntime --shorebird-vmcode=patch.vmcode patch.aot
+[A7] Configured 3235 link table entries
+A7_RESULT: 9312480  ← patch compute() 走解释(×37)，其余走原生
+```
+正确！base(×31)=15556896，patch无vmcode(×37)=9312480，patch+vmcode(×37)=9312480 ✓
+
+**关键修复**：
+- vmcode header 页对齐（7页=28672 B）而非固定16384
+- Thread::Current() for THR（启动阶段模拟 x26 是 icount 垃圾值）
+- InvokeWithTHR 同时设 x27=PP（防对象池访问崩溃）
+- 50M icount 阈值跳过启动阶段（VM init 函数需要一致隔离状态）
+
+**方案A状态**：A1✓ A2✓ A3✓ A4✓ A6✓ A7✓，剩余 A5（DD改写器，下一步）
