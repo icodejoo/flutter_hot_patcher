@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1+A6 完成：Simulator 解释执行 arm64 AOT 验证；fhp_linker 100%匹配GT；下一步 A2（转换层）
+description: B-route Phase 2 — A1+A6完成；A2原型BLR拦截+汇编shim实现，API测试通过，全链路因栈深度SIGBUS待修复
 metadata:
   type: project
 ---
@@ -180,3 +180,19 @@ dartaotruntime/gen_snapshot/gen_kernel/dartaotruntime_product（`tools/build.py 
 计划向上游 `analyze_snapshot_api_impl.cc` 添加等价的 hash 计算消除依赖。
 
 **下一步优先级：A2（CPU↔Simulator 转换层）> A3（自研 hash） > A4/A5**
+
+
+## 2026-08-10 追加：A2 原型实现（BLR 拦截 + assembly shim，API PASS，全链路 SIGBUS 待修）
+
+**已完成**：
+- BLR handler 拦截：`simulator_arm64.cc` 里的 `DecodeUnconditionalBranchReg` 增加 link table 查询
+- `shorebird_sim_to_cpu_arm64.S`：ARM64 assembly shim，把 Simulator 的模拟寄存器传给 native 函数
+- API 测试通过（`ShorebirdSimToCpu_LinkTableSet: PASS`）
+
+**待修**：全链路调用（BLR→shim→native function→epilogue）触发 SIGBUS（BUS_ADRALN），
+原因是 Simulator 解释器 C++ 调用栈太深，assembly shim 的 epilogue 读到栈边界。
+修复方向：native 函数运行在独立栈（setcontext 或线程），与 Simulator 调用栈隔离——
+这很可能就是 Shorebird `wrapper.cc` 的 `TransitionDartToCpuIfNeeded`/`TransitionDartToSimulatorIfNeeded` 所做的事情。
+
+**下一 A2 迭代**：实现 CPU 调用的独立栈机制。参考 `/Users/Cruz/dart/sdk/runtime/vm/` 里的
+`JumpToFrame` / `SimulatorSetjmpBuffer` — 现有的 setjmp/longjmp 机制可以复用来实现这个栈切换。
