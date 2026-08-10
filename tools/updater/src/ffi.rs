@@ -1,5 +1,5 @@
 use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int, c_ulong};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -108,6 +108,13 @@ pub extern "C" fn fhp_state_json() -> *const c_char {
     CString::new(json).unwrap_or_default().into_raw()
 }
 
+fn ureq_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+}
+
 #[no_mangle]
 pub extern "C" fn fhp_check_update(
     server_url: *const c_char,
@@ -135,7 +142,7 @@ pub extern "C" fn fhp_check_update(
     });
 
     let url = format!("{}/api/v1/patches/check", server_url.trim_end_matches('/'));
-    let result = ureq::post(&url)
+    let result = ureq_agent().post(&url)
         .set("Content-Type", "application/json")
         .send_string(&body.to_string());
 
@@ -166,7 +173,7 @@ pub extern "C" fn fhp_download_and_stage(
     let pubkey = unsafe { CStr::from_ptr(pubkey_hex) }.to_string_lossy().to_string();
 
     // Download bytes
-    let resp = match ureq::get(&url).call() {
+    let resp = match ureq_agent().get(&url).call() {
         Ok(r) => r,
         Err(e) => { eprintln!("[updater] download failed: {}", e); return -1; }
     };
@@ -260,6 +267,67 @@ pub extern "C" fn fhp_download_and_stage(
 }
 
 
+/// Apply a zstd-compressed bipatch diff to a base snapshot region and write the
+/// patched result to `out_path`.
+///
+/// `base_ptr` / `base_len` point to the in-memory snapshot region (e.g.
+/// `kDartIsolateSnapshotData` from the linked binary — no file I/O needed).
+/// `diff_path` is the path to the downloaded `.vmdiff` file (zstd-compressed bipatch).
+/// `out_path` is where the full patched region will be written.
+/// Returns 0 on success, negative on error.
+#[no_mangle]
+pub extern "C" fn fhp_vmcode_stage(
+    base_ptr: *const u8,
+    base_len: c_ulong,
+    diff_path: *const c_char,
+    out_path: *const c_char,
+) -> c_int {
+    let diff_path = unsafe { CStr::from_ptr(diff_path) }.to_string_lossy().to_string();
+    let out_path  = unsafe { CStr::from_ptr(out_path)  }.to_string_lossy().to_string();
+
+    // Safety: caller guarantees pointer validity for the duration of this call.
+    let base: &[u8] = unsafe { std::slice::from_raw_parts(base_ptr, base_len as usize) };
+
+    // Read diff file
+    let compressed = match std::fs::read(&diff_path) {
+        Ok(b) => b,
+        Err(e) => { eprintln!("[vmcode] read diff failed: {}", e); return -1; }
+    };
+
+    // Decompress zstd envelope
+    let patch_bytes = match zstd::decode_all(std::io::Cursor::new(&compressed)) {
+        Ok(b) => b,
+        Err(e) => { eprintln!("[vmcode] zstd decompress failed: {}", e); return -2; }
+    };
+
+    // Apply bipatch
+    let patched = {
+        use bipatch::Reader;
+        let patch_cursor = std::io::Cursor::new(&patch_bytes);
+        let base_cursor  = std::io::Cursor::new(base);
+        let mut reader = match Reader::new(patch_cursor, base_cursor) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[vmcode] bipatch init failed: {}", e); return -3; }
+        };
+        let mut out = Vec::new();
+        if let Err(e) = std::io::Read::read_to_end(&mut reader, &mut out) {
+            eprintln!("[vmcode] bipatch apply failed: {}", e); return -4;
+        }
+        out
+    };
+
+    // Ensure parent dir exists and write
+    if let Some(parent) = std::path::Path::new(&out_path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if let Err(e) = std::fs::write(&out_path, &patched) {
+        eprintln!("[vmcode] write staged failed: {}", e); return -5;
+    }
+
+    eprintln!("[vmcode] staged {} bytes → {}", patched.len(), out_path);
+    0
+}
+
 #[no_mangle]
 pub extern "C" fn fhp_flush_events(server_url: *const c_char) -> i32 {
     let server_url = unsafe { CStr::from_ptr(server_url) }.to_string_lossy().to_string();
@@ -272,7 +340,7 @@ pub extern "C" fn fhp_flush_events(server_url: *const c_char) -> i32 {
 
     let url = format!("{}/api/v1/events", server_url.trim_end_matches('/'));
     let body = serde_json::to_string(&events).unwrap_or_default();
-    match ureq::post(&url)
+    match ureq_agent().post(&url)
         .set("Content-Type", "application/json")
         .send_string(&body)
     {

@@ -15,6 +15,7 @@ hex = "0.4"
 ureq = { version = "2", default-features = false, features = ["native-tls"] }
 zstd = "0.13"
 tar = "0.4"
+bipatch = "1.0.0"
 
 [dev-dependencies]
 tempfile = "3"
