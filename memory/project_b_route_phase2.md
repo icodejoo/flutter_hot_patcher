@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — 取证完成，决策为走方案 A，macOS 端到端验证 PASS，下一步是 A1（引擎强制编入 simulator）
+description: B-route Phase 2 — A1 已完成并真实验证（arm64 硬件上 Simulator 解释执行 arm64 AOT，72倍慢但结果一致），下一步 A3 或 A2
 metadata:
   type: project
 ---
@@ -132,3 +132,35 @@ sandbox stdout 拦截）观察日志，**证实补丁在生产后端创建后确
 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10。
 
 相关：[[project-shorebird-alignment]]
+
+
+## 2026-08-10 追加：A1 完成，真实验证通过（不是推测）
+
+在 `/Users/Cruz/dart/sdk` 强制打开 `runtime/platform/globals.h:369` 的 `USING_SIMULATOR`
+（arm64 分支从 `#if !defined(HOST_ARCH_ARM64)` 改成无条件 `#define`），重新编译
+dartaotruntime/gen_snapshot/gen_kernel/dartaotruntime_product（`tools/build.py --arch=arm64`），
+编译一个 5000 万次迭代热循环，AOT 快照在改造后的 dartaotruntime 上跑：
+
+- 原生（未改造的系统 dart）：108ms
+- Simulator 强制开启：7.78s（72倍）
+- **两者结果值完全一致**（15530048）——证实正确解释执行，不是静默走了原生
+
+**环境修复细节（供复现）**：
+- 缺失依赖：`third_party/protobuf`（还需要单独克隆 `protobuf-gn` 到
+  `build/secondary/third_party/protobuf`，BUILD.gn 真正找的是这个路径）+ `third_party/perfetto`
+  （`android_git`/platform/external/perfetto，独立 git clone 比等 `gclient sync` 跑完全量快得多——
+  全量 sync 会拉很多与本任务无关的 benchmark/多平台 CIPD 包，耗时很长，建议跳过，
+  只手动 clone 缺的那几个）。
+- `runtime/bin/directory_macos.cc` 里的 `readdir_r` 在新版 macOS SDK 上被标记 deprecated
+  as error，改成 `readdir()` 即可（与 Simulator 改动无关，纯环境兼容问题）。
+- 运行 `gen_kernel_aot.dart.snapshot` 必须用 `dartaotruntime_product`（product 模式），
+  且 `--platform=` 要用重新编译产出的 `vm_platform_strong.dill`，不能用旧的
+  `bootstrap_gen_kernel.dill`（SDK hash 不匹配会直接 crash）。
+- 这个 checkout 里还有一批**跟本任务无关的既存未提交改动**（`Internal_redirectDispatchTableEntry`
+  等 dispatch table 相关 natives，看起来是更早的 dart_dynamic_modules 相关 spike 遗留），
+  没有清理，也没有依赖它们，纯粹共存。
+
+**范围诚实说明**：这次只验证了"整份快照 100% 走 Simulator"，故意没碰 A2
+（CPU↔Simulator 双向切换层，唯一无公开参照、风险最高的部分）。
+
+下一步 A3 或 A2，见 [[project-b-route-phase2]] 关联的 ab-decision.md §10-11。
