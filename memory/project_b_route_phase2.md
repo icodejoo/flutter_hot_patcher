@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — 方案A全部完成 A1-A7✓：BL+BLR拦截，vmcode加载，263测试全通
+description: B-route Phase 2 — 全部完成✓：A1-A7 PASS，B-route工具链完整提交，iOS端到端vmcode pipeline交付
 metadata:
   type: project
 ---
@@ -297,3 +297,25 @@ gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
 - 50M icount 阈值是启发式（真正的 "VM 初始化完成" 检测更精确）
 - fhp_analyze_snapshot 用 SHA-1(code bytes) 作哈希；with .op.link 可达 GT 精度
 - PP（x27）从模拟寄存器读取，在某些边缘情况下可能不正确
+
+
+## 2026-08-10 收尾：所有未提交工作已清理并提交
+
+**提交的额外工作（M4/M5时期未提交的内容）**：
+- `tools/updater/src/ffi.rs`：`fhp_vmcode_stage()` FFI（bipatch+zstd）+ `ureq_agent()` 超时
+- `tools/updater/Cargo.toml`：`bipatch = "1.0.0"` 依赖
+- `tools/patch_server/patch_server.py`：vmcode 补丁类型支持（isolate_data.vmdiff）
+- `tools/patch_server/patch_server_flask.py`：Flask 替代方案（修 Python 3.14 ENOTCONN）
+- `spikes/m3_ios_realdevice/`：B-route vmcode staging 集成（AppDelegate + dart_harness）
+- `tools/patch_builder/vmcode_patch_builder.py`：从 App 二进制提取 IsolateSnapshotData 并生成 .vmdiff
+- `spikes/b_route_vmcode/e2e_test.sh`：B-route 端对端测试脚本
+- 各种 .gitignore、.fvmrc、配置文件
+
+**最终验证通过**：
+- `ShorebirdSimToCpu_BasicCall: PASS` ✓
+- `ShorebirdSimToCpu_LinkTableAPI: PASS` ✓
+- `A1_SIMULATOR_TEST: 42` ✓
+- `A7_RESULT: 9312480` ✓（vmcode + 3235条链接表）
+- 263 pytest 全通过 ✓
+- Rust 20 tests 全通过 ✓
+- 工作树干净（除系统噪声）
