@@ -165,6 +165,18 @@ DD table 的 `LDR(thr,#2424) + LDR(slot*8) + BLR` 改写机制。
 详见 `spikes/b_route_phase2_groundtruth/GROUND_TRUTH.md`（含复现命令与未解项清单），
 A/B 决策见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md`（结论：走方案 A）。
 
+### 2026-08-07：macOS 端到端真实性能测试
+
+在真实 Shorebird 生产后端（`spikes/shorebird_test/`）跑通 release→patch→自动更新全链路，
+补丁确实在下次启动时自动生效（日志实证）。性能比值因本机 CPU 竞争噪声未能干净测出
+（唯一干净样本 1.19x，之后 8 组测量被噪声淹没）。详见 ab-decision.md 附录。
+
+### 下一步：方案 A 自研实现（A1 起）
+
+决策已定，不再等待更多性能数据。排期与 A1 具体起点见
+`docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10。
+A1 = 引擎强制编入 simulator，跑通整个 isolate 全解释执行（不涉及 A2 转换层，风险最低，先做）。
+
 ---
 
 ## 历史记录
