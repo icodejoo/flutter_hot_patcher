@@ -14,8 +14,8 @@ EXTERNAL SOURCES:
     :path: Flutter
 
 SPEC CHECKSUMS:
-  dart_hotpatch_plugin: 195e7c351e233df712ec15c5c0321ddfb0fef1dd
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  dart_hotpatch_plugin: 83a112cbc2c26c9e27161555f5ca9ae2a9ad2cd2
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
 
 PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
 
