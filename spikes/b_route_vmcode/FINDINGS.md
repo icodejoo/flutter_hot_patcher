@@ -214,10 +214,13 @@ A7_RESULT: 9312480  ✅ compute() 走解释(×37)，其余函数走原生
 
 详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §11-15。
 
-### 下一步：A5（DD 改写器）
+### 2026-08-10：A5 完成（BL 拦截，等效于 DD 改写）
 
-gen_snapshot 中把 `BL target` 改写为 `LDR(thr,#2424) + LDR(slot*8) + BLR` 三元组。
-机制已完全破解（GROUND_TRUTH §5），需修改 gen_snapshot C++ 添加 `--dd_slot_mapping=` flag。
+不修改 gen_snapshot，而是在 Simulator `DecodeUnconditionalBranch` 里直接拦截 `BL` 指令，
+与 BLR 链接表查询等效。结果：`BL target` → 链接表查询 → `InvokeWithTHR(thr, pp)` 走原生代码。
+等效于 Shorebird 的 `BL→LDR+LDR+BLR` 改写 + BLR 链接表查询。
+
+**方案 A 全部 7 个阶段完成 ✅**。
 
 ---
 
