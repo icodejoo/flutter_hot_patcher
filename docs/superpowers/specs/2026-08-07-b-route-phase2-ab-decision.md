@@ -580,3 +580,24 @@ A7_RESULT: 9312480  ✅ compute()×37 走解释，其余走原生（BL 和 BLR �
 B1（Flutter Engine）→ B2（subgraph_hash） → B3（加固）→ B4（真机）
 
 B1 是所有其他工作的先决条件；B2 与 B1 可并行推进；B3/B4 在 B1 完成后开展。
+
+## 18. B1 完成（2026-08-10）——Flutter Engine iOS arm64 重建
+
+**Flutter.xcframework/ios-arm64 已包含所有 A1-A7 改动：**
+
+```bash
+nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | grep Shorebird
+000000000000f5d4 T ShorebirdSimToCpuCall
+000000000000f590 T _ShorebirdSimToCpuCall
+```
+
+**编译修复（iOS 26.5 SDK + Flutter Engine 跨编译）：**
+1. UIKitDefines.h `#import <UIUtilities/UIDefines.h>` — iOS 26.5 把 UIKit 拆成子框架；
+   通过 `/tmp/ios_framework_shim` + toolchain.ninja 补丁解决（不需要 sudo）
+2. BoringSSL 重复符号 — 移除 create_flutter_framework_dylib.ninja 里 Dart 的 BoringSSL 副本
+3. Inline asm 跨编译 — 用 `#if defined(__aarch64__)` 代替 `TARGET_ARCH_ARM64`
+   （后者在 clang_x64 host 构建里也被定义，导致 x64 汇编器报错）
+
+**下一步 B2**：向 `analyze_snapshot_api_impl.cc` 添加 `--shorebird` 模式，
+实现 subgraph_hash 计算，消除对 Shorebird gen_snapshot 的 .op.link 文件依赖，
+使独立链接率从 ~8%（SHA-1 bytes）提升至 >90%。
