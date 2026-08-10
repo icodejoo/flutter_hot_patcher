@@ -6,5 +6,5 @@
 - [文档写入模型规则](feedback_doc_writing.md) — 更新/写入文档用 Haiku model + effort low
 - [OTA验证痛点](project_ota_painpoints.md) — TCC/MDM/tunnel/ureq痛点记录
 - [记忆文件存放规则](feedback_memory_in_repo.md) — 记忆随 git repo 存放，换机器 clone 后直接可用
-- [B-route Phase 2](project_b_route_phase2.md) — A1真实验证通过（Simulator解释执行arm64 AOT，72倍慢结果一致），下一步A3或A2
+- [B-route Phase 2](project_b_route_phase2.md) — 方案A全部完成A1-A7✓：BL+BLR拦截SimulatorToCPU，vmcode加载运行，263测试全绿
 - [RTK diff 不可信](feedback_rtk_diff_unreliable.md) — repo 内单行改动被报成 "Files are identical"，验证一律用 command diff
