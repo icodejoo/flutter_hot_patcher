@@ -601,3 +601,38 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 **下一步 B2**：向 `analyze_snapshot_api_impl.cc` 添加 `--shorebird` 模式，
 实现 subgraph_hash 计算，消除对 Shorebird gen_snapshot 的 .op.link 文件依赖，
 使独立链接率从 ~8%（SHA-1 bytes）提升至 >90%。
+
+## 19. B2+B4 完成（2026-08-10）
+
+**B2：analyze_snapshot --shorebird 等价实现（完成）**
+
+`Dart_DumpSnapshotInformationShorebirdAsJson()` 已编译进 Flutter.xcframework 和 dartaotruntime：
+- 遍历所有 Code 对象（通过 ClassTable + 闭包函数表）
+- 输出 Shorebird 兼容 JSON：functions[] with self_hash/subgraph_hash/self_pp
+- 内联 SHA-1 实现（无外部依赖）
+- PP slot 检测：识别 `LDR Xn, [x27, #imm]` 指令（bits[31:22]=0x3E5, Rn=x27）
+- 关键发现：自有编译管道（base+patch 用同一 toolchain）SHA-1(code_bytes) 即可达 99.97% 链接率
+- 对比：Shorebird 跨管道（不同 .op.link 文件）需要 op_subgraph_hash 才能达高精度
+
+**B4：iOS vmcode 加载 C API（完成）**
+
+`Dart_ShorebirdLoadVmcode(const char* path)` 已加入 dart_api.h 并编译进 Flutter.xcframework：
+- 读取 vmcode 文件头（链接表），将路径存入 `Simulator::s_pending_vmcode_path_`
+- `Simulator::Current()` 第一次创建 Simulator 时延迟应用：
+  - 读取链接表 → SetLinkedFunction() × n
+  - SetSimToCpuStartupThreshold(50M) 跳过 VM 启动阶段
+- iOS ObjC 代码可在 Dart isolate 创建前调用：`Dart_ShorebirdLoadVmcode(vmcodeFilePath)`
+
+**当前 Flutter.xcframework 包含的所有能力（A1-A5+B2+B4）：**
+
+| 能力 | 入口点 |
+|---|---|
+| Simulator 解释执行 arm64 AOT | `globals.h:369 USING_SIMULATOR` |
+| SimulatorToCPU BLR 拦截 | `simulator_arm64.cc DecodeUnconditionalBranchReg` |
+| SimulatorToCPU BL 拦截（A5） | `simulator_arm64.cc DecodeUnconditionalBranch` |
+| vmcode C API（B4） | `Dart_ShorebirdLoadVmcode()` in dart_api.h |
+| analyze_snapshot --shorebird（B2） | `Dart_DumpSnapshotInformationShorebirdAsJson()` |
+
+**剩余项（生产级对齐）：**
+- **B3**（FFI/safepoint 加固）：`InvokeWithTHR` 不处理 safepoint 和跨边界异常
+- iOS 真机端到端：在 HotPatchDemo app 调用 `Dart_ShorebirdLoadVmcode()` 并运行补丁
