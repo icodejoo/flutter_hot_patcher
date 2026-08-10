@@ -1,0 +1,3 @@
+# Ed25519 signing keys - never commit private key
+keys/
+*.pem
