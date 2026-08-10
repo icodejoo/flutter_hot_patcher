@@ -37,6 +37,8 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[server] {fmt % args}")
 
+
+
     def _send_json(self, code, obj):
         body = json.dumps(obj, indent=2).encode()
         self.send_response(code)
@@ -207,14 +209,22 @@ class PatchHandler(http.server.BaseHTTPRequestHandler):
             return {**no_patch, "rolled_back_patch_numbers": rolled_back}
 
         bundle_name, manifest = best
-        download_url = f"{proto}://{host}/patches/{release_version}/{bundle_name}/bundle.zst"
+        patch_type = manifest.get("patch_type", "bytecode")
+        if patch_type == "vmcode":
+            download_url = f"{proto}://{host}/patches/{release_version}/{bundle_name}/isolate_data.vmdiff"
+        else:
+            download_url = f"{proto}://{host}/patches/{release_version}/{bundle_name}/bundle.zst"
+        patch_info = {
+            "number": best_number,
+            "download_url": download_url,
+            "hash": manifest.get("hash", ""),
+            "patch_type": patch_type,
+        }
+        if patch_type == "vmcode":
+            patch_info["isolate_data_size"] = manifest.get("isolate_data_size", 0)
         return {
             "patch_available": True,
-            "patch": {
-                "number": best_number,
-                "download_url": download_url,
-                "hash": manifest.get("hash", ""),
-            },
+            "patch": patch_info,
             "rolled_back_patch_numbers": rolled_back,
         }
 
