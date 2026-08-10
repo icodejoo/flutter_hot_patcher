@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — A1 已完成并真实验证（arm64 硬件上 Simulator 解释执行 arm64 AOT，72倍慢但结果一致），下一步 A3 或 A2
+description: B-route Phase 2 — A1+A6 完成：Simulator 解释执行 arm64 AOT 验证；fhp_linker 100%匹配GT；下一步 A2（转换层）
 metadata:
   type: project
 ---
@@ -164,3 +164,19 @@ dartaotruntime/gen_snapshot/gen_kernel/dartaotruntime_product（`tools/build.py 
 （CPU↔Simulator 双向切换层，唯一无公开参照、风险最高的部分）。
 
 下一步 A3 或 A2，见 [[project-b-route-phase2]] 关联的 ab-decision.md §10-11。
+
+
+## 2026-08-10 追加：A6 完成（fhp_linker，不依赖 aot_tools）
+
+`spikes/b_route_phase2_groundtruth/linker.py`：独立 Python linker，算法：
+1. 读取 analyze_snapshot --shorebird JSON（base + patch）
+2. 以 `subgraph_hash` 匹配；碰撞时用 `(name, hash)` 消歧
+3. 写 `.vmcode` = `[uint32 count][count×(sim,cpu)][pad→16384B][patch ELF]`
+
+验证：4 样本全通过，link table 集合相等 100%，ELF passthrough 一致，247 pytest 全绿。
+
+**仍依赖 Shorebird 的 `analyze_snapshot --shorebird` 产出 JSON 作为输入**（A3 未完成）。
+`subgraph_hash` 的反向工程未成功（SHA-1 of code bytes 不匹配）；
+计划向上游 `analyze_snapshot_api_impl.cc` 添加等价的 hash 计算消除依赖。
+
+**下一步优先级：A2（CPU↔Simulator 转换层）> A3（自研 hash） > A4/A5**
