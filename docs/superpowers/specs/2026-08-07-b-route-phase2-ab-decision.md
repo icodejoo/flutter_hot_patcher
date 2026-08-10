@@ -636,3 +636,38 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 **剩余项（生产级对齐）：**
 - **B3**（FFI/safepoint 加固）：`InvokeWithTHR` 不处理 safepoint 和跨边界异常
 - iOS 真机端到端：在 HotPatchDemo app 调用 `Dart_ShorebirdLoadVmcode()` 并运行补丁
+
+---
+
+## 20. 与 Shorebird 生产能力的诚实差距总结（2026-08-10 最终评估）
+
+### 已对齐
+
+| 能力 | 状态 | 验证方式 |
+|---|---|---|
+| USING_SIMULATOR 强制 arm64 | ✅ | A1：72×慢但结果一致（15530048） |
+| Simulator 解释执行 arm64 AOT | ✅ | A1 dartaotruntime hello.aot |
+| SimulatorToCPU BLR 拦截 + THR/PP | ✅ | A2：ShorebirdSimToCpu_BasicCall PASS |
+| BL 拦截（等效 DD 改写） | ✅ | A5：A7 结果 9312480 验证 |
+| vmcode 格式（LinkTable + patch ELF） | ✅ | A6：263 pytest，GT 完全匹配 |
+| fhp_linker 链接表生成 | ✅ | A6：1052/1052 对比 aot_tools |
+| fhp_analyze_snapshot 函数 hash | ✅ | A3+A4：自有管道 99.97% 链接率 |
+| dartaotruntime --shorebird-vmcode | ✅ | A7：end-to-end 正确 |
+| Flutter.xcframework iOS arm64 重建 | ✅ | B1：ShorebirdSimToCpuCall in binary |
+| analyze_snapshot --shorebird API | ✅ | B2：API 编译确认，函数在库中 |
+| iOS vmcode C API | ✅ | B4：Dart_ShorebirdLoadVmcode 在 dart_api.h |
+
+### 未对齐（剩余差距）
+
+| 差距 | 影响 | 严重程度 |
+|---|---|---|
+| **B3：GC Safepoint 未处理** | SimulatorToCPU 执行时 GC 触发 → 死锁/堆损坏 | **生产硬门槛** |
+| **iOS 真机端到端未验证** | B4 API 存在但未在真实 Flutter app 上跑过 | 验证缺口 |
+| **analyze_snapshot 独立二进制仅 Linux** | CI 需要 Linux build agent | 工程约束 |
+| **Simulator 进入开销** | 每次调用都进入解释器再立即跳出，比 Shorebird base instructions table 多一跳 | 性能开销 |
+
+### 一句话结论
+
+核心架构已完整实现并端到端验证（macOS dartaotruntime）。
+Flutter.xcframework 已含所有关键能力。
+**B3（VM 线程转换标记）是到生产的唯一硬门槛**；iOS 真机验证是下一步行动项。

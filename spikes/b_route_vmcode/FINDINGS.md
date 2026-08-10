@@ -214,13 +214,33 @@ A7_RESULT: 9312480  ✅ compute() 走解释(×37)，其余函数走原生
 
 详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §11-15。
 
-### 2026-08-10：A5 完成（BL 拦截，等效于 DD 改写）
+### 2026-08-10：A5+B1+B2+B4 完成，生产对齐进展
 
-不修改 gen_snapshot，而是在 Simulator `DecodeUnconditionalBranch` 里直接拦截 `BL` 指令，
-与 BLR 链接表查询等效。结果：`BL target` → 链接表查询 → `InvokeWithTHR(thr, pp)` 走原生代码。
-等效于 Shorebird 的 `BL→LDR+LDR+BLR` 改写 + BLR 链接表查询。
+**A5（BL 拦截，等效 DD 改写）**：
+在 Simulator `DecodeUnconditionalBranch` 拦截 `BL`，等效于 Shorebird 的 `BL→LDR+LDR+BLR` + BLR 链接表查询。
 
-**方案 A 全部 7 个阶段完成 ✅**。
+**B1（Flutter Engine iOS arm64 重建）**：
+A1-A5 全部移植进 Flutter Engine，`Flutter.xcframework/ios-arm64` 含 `ShorebirdSimToCpuCall`。
+编译修复：UIKitDefines.h/UIUtilities（iOS 26.5 UIKit 拆包）、BoringSSL 去重、`__aarch64__` guard。
+自动化补丁脚本：`out/ios_release/fhp_repatch.sh`。
+
+**B2（analyze_snapshot --shorebird 等价实现）**：
+`Dart_DumpSnapshotInformationShorebirdAsJson()` 已编译入库，
+遍历 ClassTable 输出 Shorebird 兼容 JSON（self_hash/subgraph_hash/self_pp）。
+关键发现：自有编译管道 SHA-1(code_bytes) 即可达 **99.97% 链接率**。
+
+**B4（iOS vmcode C API）**：
+`Dart_ShorebirdLoadVmcode(path)` 加入 dart_api.h，Simulator 懒加载机制已实现。
+iOS ObjC 代码可在 isolate 创建前调用，Simulator::Current() 第一次调用时自动应用链接表。
+
+**与 Shorebird 生产能力的剩余差距**：
+1. B3（GC Safepoint 未处理）：InvokeWithTHR 跨 Simulator↔CPU 边界没有 VM 线程转换标记，
+   GC 在 SimulatorToCPU 执行期间触发会死锁/堆损坏。这是生产硬门槛。
+2. iOS 真机端到端未验证：`Dart_ShorebirdLoadVmcode()` API 存在但未在真实 Flutter app 跑过。
+3. analyze_snapshot --shorebird 独立二进制只在 Linux/Android 构建（macOS GN 限制）。
+4. 每次函数调用都过 Simulator（含已链接函数），比 Shorebird 的直接 base instructions table 多一次 dispatch。
+
+详见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §17-19。
 
 ---
 
