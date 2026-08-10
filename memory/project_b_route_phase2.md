@@ -1,6 +1,6 @@
 ---
 name: project-b-route-phase2
-description: B-route Phase 2 — 全部完成✓：A1-A7 PASS，B-route工具链完整提交，iOS端到端vmcode pipeline交付
+description: B-route Phase 2 — A1-A7原型完成；追加生产对齐计划B1-B4：Flutter Engine修改→subgraph_hash→FFI加固→iOS真机
 metadata:
   type: project
 ---
@@ -319,3 +319,30 @@ gen_snapshot 把 `BL target` → `LDR(thr,#2424) + LDR(slot*8) + BLR`。
 - 263 pytest 全通过 ✓
 - Rust 20 tests 全通过 ✓
 - 工作树干净（除系统噪声）
+
+
+## 2026-08-10 追加：生产对齐任务 B1-B4
+
+目标：与 Shorebird 完全对齐生产能力。
+
+**B1（最高优先级）：Flutter Engine arm64 iOS 修改**
+- 把 `/Users/Cruz/dart/sdk` 的 A1-A5 改动移植到 Flutter Engine fork
+- 目标路径：`src/third_party/dart/runtime/`（与 dart/sdk 结构一致）
+- 发布修改版 Flutter.xcframework（USING_SIMULATOR enabled）
+- 参考已有 X1 engine 构建（memory/project_x1_engine_build.md）
+
+**B2（可与B1并行）：自研 subgraph_hash**
+- 向 analyze_snapshot_api_impl.cc 添加 --shorebird 模式
+- 实现 Code 对象遍历 + 调用图 + SHA-1，参照 GROUND_TRUTH §3-§4
+- 目标：fhp_linker 链接率从 ~8%（SHA-1 bytes）提升至 >90%
+
+**B3：SimulatorToCPU 生产加固**
+- GC safepoint 处理（防止死锁）
+- Dart 异常跨边界传播
+- FFI trampoline 支持
+
+**B4：iOS 真机端到端验证**
+- 真实 Flutter app + vmcode patch + iOS 真机
+- 验证 link_percentage > 90%，功能正确，不崩溃
+
+**执行顺序**：B1 → B2（并行）→ B3 → B4
