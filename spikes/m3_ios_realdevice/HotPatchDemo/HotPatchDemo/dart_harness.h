@@ -13,6 +13,13 @@ const char* dart_run(const char* patch_bundle_dir);
  */
 int dart_load_vmcode_patch(const char* staged_path);
 
+/**
+ * flutter_hot_patcher B4: Load Simulator link table from a vmcode file.
+ * Must be called BEFORE dart_run(). Sets up SimulatorToCPU dispatch table.
+ * Returns true on success (N>0 entries), false on failure or empty table.
+ */
+bool fhp_shorebird_load_vmcode(const char* vmcode_path);
+
 #ifdef __cplusplus
 }
 #endif

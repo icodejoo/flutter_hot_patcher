@@ -13,6 +13,7 @@
 		BB1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000005 /* HotPatchDemo/builtin_shim.cpp */; };
 		BB1234560000000000000006 /* HotPatchDemo/snapshot.S in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006 /* HotPatchDemo/snapshot.S */; };
 		BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000007 /* HotPatchDemo/patch.dill */; };
+		BB123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode in Resources */ = {isa = PBXBuildFile; fileRef = AA123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode */; };
 		BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
 
@@ -27,6 +28,7 @@
 		AA1234560000000000000007 /* HotPatchDemo/patch.dill */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/patch.dill; sourceTree = SOURCE_ROOT; };
 		AA1234560000000000000008 /* HotPatchDemo/dart_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_api.h; sourceTree = SOURCE_ROOT; };
 		AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = HotPatchDemo/LaunchScreen.storyboard; sourceTree = SOURCE_ROOT; };
+		AA123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/vmcode_link.vmcode; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +70,7 @@
 				AA1234560000000000000007 /* HotPatchDemo/patch.dill */,
 				AA1234560000000000000008 /* HotPatchDemo/dart_api.h */,
 				AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */,
+				AA123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode */,
 			);
 			name = HotPatchDemo;
 			sourceTree = "<group>";
@@ -130,7 +133,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */,
+				BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */
+				BB123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode in Resources */,
 				BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -75,6 +75,21 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
         }
     }
 
+    /* flutter_hot_patcher B4: Load vmcode link table (SimulatorToCPU).
+       Priority: 1) staged OTA file in dataDir, 2) bundled vmcode_link.vmcode in app bundle */
+    NSString *vmodePath = [dataDir stringByAppendingPathComponent:@"vmcode_link.vmcode"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:vmodePath]) {
+        // Fall back to bundled vmcode for initial testing
+        vmodePath = [[NSBundle mainBundle] pathForResource:@"vmcode_link" ofType:@"vmcode"];
+    }
+    if (vmodePath && [[NSFileManager defaultManager] fileExistsAtPath:vmodePath]) {
+        bool vmcodeOK = fhp_shorebird_load_vmcode([vmodePath UTF8String]);
+        NSLog(@"[ViewController] B4 vmcode link table: %s (path=%@)",
+              vmcodeOK ? "LOADED" : "EMPTY/FAILED", vmodePath);
+    } else {
+        NSLog(@"[ViewController] B4 no vmcode_link.vmcode — Simulator interprets all functions");
+    }
+
     /* Run Dart */
     const char *cResult = dart_run(nextBootDir);
     NSLog(@"[ViewController] Dart result: %s", cResult ? cResult : "(nil)");
