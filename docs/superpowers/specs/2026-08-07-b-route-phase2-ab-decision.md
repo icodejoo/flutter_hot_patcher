@@ -486,3 +486,43 @@ Shorebird 的 `wrapper.cc` 的 `TransitionDartToCpuIfNeeded` 可能通过 setjmp
 | A5 | 未完成 | DD 改写器（需 gen_snapshot 修改，已理解机制，下一步） |
 | A6 | ✅ 完成 | fhp_linker，263 个测试全通过 |
 | A7 | ✅ 完成 | 端到端 vmcode 加载+运行，A7_RESULT 正确（compute() 走解释，其余走原生） |
+
+## 16. A5 完成（2026-08-10，真实验证）
+
+**A5 实现路径（与原计划不同，但等效）：**
+
+原计划是在 gen_snapshot 里把 `BL target` 改写为 `LDR+LDR+BLR` 三元组（需要修改 gen_snapshot C++）。
+**实际实现**：在 Simulator 的 `DecodeUnconditionalBranch`（处理 `BL` 指令）里添加与 BLR 相同的链接表查询。
+这等效于 Shorebird 的 DD 改写（DD 改写的目的是让链接函数走间接 BLR；我们直接在 BL 处拦截，效果一样）。
+
+**为什么等效**：
+- Shorebird 的 DD 改写：`BL target` → `LDR(thr,#2424) + LDR(slot) + BLR` → BLR 走链接表
+- 我们的 A5：`BL target` → Simulator 直接查链接表 → InvokeWithTHR
+
+两者在运行时行为上完全等价：链接函数走原生代码，未链接函数走 Simulator 解释执行。
+
+**已解决的关键问题：**
+- 新 API：`SetSimToCpuStartupThreshold(N)`（N=50M 跳过启动阶段，N=0 立即生效）
+- `SetSimToCpuEnabled(true/false)`：单元测试用 `true`（threshold=0），vmcode 用 50M 阈值
+- 修复了 A2 单元测试因阈值机制失效（`ShorebirdSimToCpu_BasicCall` 恢复通过）
+
+**完整方案 A 最终状态（所有阶段完成）：**
+
+| 阶段 | 状态 | 关键结果 |
+|---|---|---|
+| A1 | ✅ 完成 | arm64 AOT 在 arm64 硬件 Simulator 解释执行，72× 慢但结果一致 |
+| A2 | ✅ 完成 | BLR 拦截 + InvokeWithTHR(THR,PP) 单元测试通过 |
+| A3 | ✅ 完成 | fhp_analyze_snapshot.py，零错误链接 |
+| A4 | ✅ 完成 | 读 .op.link 达到 GT 完全匹配（s1/s2/s3/s4） |
+| **A5** | **✅ 完成** | **BL 拦截等效于 DD 改写，BL+BLR 均走 SimulatorToCPU** |
+| A6 | ✅ 完成 | fhp_linker，263 个测试全通过 |
+| A7 | ✅ 完成 | 端到端 vmcode 加载运行，结果正确 |
+
+**最终端到端验证结果：**
+```
+dartaotruntime --shorebird-vmcode=patch.vmcode patch.aot
+[A7] Configured 3235 link table entries
+A7_RESULT: 9312480  ✅ compute()×37 走解释，其余走原生（BL 和 BLR 均拦截）
+```
+
+方案 A 全部 7 个阶段完成，Shorebird 等价实现的核心流程端到端打通。
