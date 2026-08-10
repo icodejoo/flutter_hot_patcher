@@ -1,4 +1,1 @@
-
-git add tools/patch_builder/.gitignore
-git commit -q -m "chore: gitignore signing keys (never commit private key)"
-echo committed
+snapshot.S.bak
