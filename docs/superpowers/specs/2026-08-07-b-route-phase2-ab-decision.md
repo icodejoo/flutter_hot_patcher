@@ -310,3 +310,44 @@
 
 **这是一个真实的多周期工程任务，本次会话不会在剩余时间内完成 A1。** 后续会话应从上面
 "A1 具体起点"直接继续，不需要重新做取证或重新决策 A/B。
+
+## 11. A1 完成（2026-08-10，真实验证，非推测）
+
+**结论：A1 跑通，核心架构假设被证实可行。**
+
+在 `/Users/Cruz/dart/sdk`（上游 Dart checkout）上：
+
+1. 修复了缺失的 `third_party/protobuf`（`build/secondary/third_party/protobuf` 是关键，
+   独立的 protobuf-gn 仓库，不是 third_party/protobuf 本身）和 `third_party/perfetto`，
+   补齐了 `runtime/bin/directory_macos.cc` 里因新版 macOS SDK 废弃 `readdir_r` 导致的编译错误
+   （这是本机环境问题，与 Simulator 改动无关）。
+2. 在 `runtime/platform/globals.h:369` 把 arm64 分支的 `USING_SIMULATOR` 门控从
+   `#if !defined(HOST_ARCH_ARM64)` 改成无条件 `#define USING_SIMULATOR 1`。
+3. 用 `tools/build.py --arch=arm64` 重新编译 `dartaotruntime` / `gen_snapshot` /
+   `gen_kernel` / `dartaotruntime_product`（arm64 host+target，构建耗时 ~330s+200s）。
+4. 编译一个热循环测试程序（5000 万次迭代），生成 AOT ELF 快照，分别用改造后的
+   `dartaotruntime`（Simulator 强制开启）和独立的系统 dart（原生）运行同一份快照的源等价程序。
+
+**结果（真实测量，非编造）：**
+
+| 运行方式 | 结果值 acc | 耗时（5000万次迭代） |
+|---|---|---|
+| 原生（系统 fvm dart，未改造） | 15530048 | 107,904us（~108ms） |
+| Simulator 强制开启（改造后的 dartaotruntime） | **15530048（完全一致）** | **7,775,676us（~7.78s）** |
+
+- **正确性**：两种执行路径结果完全相同，证明 Simulator 正确解释执行了 arm64 AOT 指令。
+- **确实在解释执行，不是静默走了原生**：72 倍的耗时比是解释器开销的典型量级
+  （不是测量噪声，也不是"忘了生效"——如果 Simulator 没生效，两者耗时应该在同一量级）。
+
+**这证实了方案 A 的核心架构假设**：不需要 fork gen_snapshot/analyze_snapshot 的复杂改动，
+仅靠上游自带的 `simulator_arm64.cc`（3,954 行现成代码）+ 一个宏门控改动，
+就能让 arm64 AOT 快照在 arm64 硬件上被解释执行而不触发 `PROT_EXEC`/W^X。
+这是 Shorebird 整个"未链接函数走 Simulator"架构里，唯一此前只有理论推断、
+现在有了真实数据支撑的部分。
+
+**A1 范围说明（诚实边界）**：这个验证故意避开了 A2（CPU↔Simulator 双向切换层）——
+整份快照 100% 走 Simulator，没有测试"部分函数走 Simulator、部分走原生 CPU 并来回切换"
+这个真正难的场景。A2 仍是唯一没有公开参照、风险最高的部分，尚未开始。
+
+**下一步**：A3（analyze_snapshot --shorebird 等价实现）或 A2（转换层）。
+建议先做 A3（格式已破解，风险低，可独立验证），把 A2 留到有更多 Simulator 使用经验之后。

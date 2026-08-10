@@ -171,11 +171,17 @@ A/B 决策见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md`�
 补丁确实在下次启动时自动生效（日志实证）。性能比值因本机 CPU 竞争噪声未能干净测出
 （唯一干净样本 1.19x，之后 8 组测量被噪声淹没）。详见 ab-decision.md 附录。
 
-### 下一步：方案 A 自研实现（A1 起）
+### 2026-08-10：A1 完成 —— Simulator 真的能在 arm64 硬件上解释执行 arm64 AOT 指令
 
-决策已定，不再等待更多性能数据。排期与 A1 具体起点见
-`docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10。
-A1 = 引擎强制编入 simulator，跑通整个 isolate 全解释执行（不涉及 A2 转换层，风险最低，先做）。
+在 `/Users/Cruz/dart/sdk` 强制打开 `USING_SIMULATOR`（`runtime/platform/globals.h:369`），
+重新编译 dartaotruntime/gen_snapshot/gen_kernel，跑一个 5000 万次迭代的热循环：
+原生 108ms vs Simulator 强制开启 7.78s（72倍），**结果值完全一致**（15530048）。
+真实验证，不是推测。详见 ab-decision.md §11。
+
+### 下一步：A3（analyze_snapshot 等价实现）或 A2（转换层）
+
+A1 完成，排期见 `docs/superpowers/specs/2026-08-07-b-route-phase2-ab-decision.md` §10-11。
+建议先做 A3（格式已破解，风险低），把 A2（CPU↔Sim 转换层，无公开参照，风险最高）留到后面。
 
 ---
 
