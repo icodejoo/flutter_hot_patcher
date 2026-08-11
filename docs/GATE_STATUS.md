@@ -140,3 +140,24 @@ fhp_shorebird_load_vmcode() 加载 3223 条 SimulatorToCPU 链接表，Dart 在 
 | ~~dart_run 全流程验证~~ | ✅ PASS（2026-08-11） |
 | analyze_snapshot 独立二进制仅 Linux | 工程约束 |
 | Simulator 进入开销（每次调用多一跳） | 性能差异，可接受 |
+
+---
+
+## 知识图谱（2026-08-11）
+
+`/graphify` 在 2026-08-11 为整个仓库构建了知识图谱。
+
+| 指标 | 数值 |
+|---|---|
+| 节点 | 4,251 |
+| 边 | 5,780 |
+| 社区 | 354 |
+| 文件 | 637（代码 398 + 文档 132 + 图片 107） |
+
+**God Nodes（最高连接度核心概念）：**
+- `elements`（193 edges）— Dart kernel 元素系统枢纽
+- `parse_link_file()`（31 edges）— vmcode linker 格式解析
+- `ShorebirdState`（21 edges）— Shorebird OTA 状态机
+- `parse_vmcode()`（18 edges）— 二进制 vmcode 解析
+
+**图谱文件：** `graphify-out/graph.html`（浏览器打开），`graphify-out/graph.json`
