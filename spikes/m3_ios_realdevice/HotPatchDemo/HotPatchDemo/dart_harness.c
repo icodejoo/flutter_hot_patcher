@@ -62,7 +62,14 @@ static Dart_Handle setup_print(void) {
 }
 
 const char* dart_run(const char* patch_bundle_dir) {
-    FILE* dbg = fopen("/private/var/tmp/dart_debug.txt", "w");
+    // flutter_hot_patcher B4 re-verify: write to app tmp dir so devicectl can read it
+    char dart_log_path[512] = "/private/var/tmp/dart_debug.txt";
+    const char* tmpdir = getenv("TMPDIR");
+    if (tmpdir && strlen(tmpdir) + 20 < sizeof(dart_log_path)) {
+        snprintf(dart_log_path, sizeof(dart_log_path), "%sdart_debug.txt", tmpdir);
+    }
+    FILE* dbg = fopen(dart_log_path, "w");
+    fprintf(stderr, "[dart_harness] log path: %s\n", dart_log_path);
     if (!dbg) dbg = stderr;
 
 #define CHK(h, label) do { \
