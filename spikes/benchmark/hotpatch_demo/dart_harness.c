@@ -248,3 +248,106 @@ const char* dart_run(const char* patch_bundle_dir) {
     return g_result;
 #undef CHK
 }
+
+/* ── AOT Patch API ──────────────────────────────────────────────────────── */
+/* dart_run() leaves the isolate entered (no Dart_ExitIsolate/ShutdownIsolate).
+ * These functions open a fresh handle scope, do their work, copy the result
+ * to a static buffer, then exit the scope. The static buffers survive scope exit. */
+
+const char* dart_apply_aot_patch(int variant) {
+    static char s_result[256] = "UNKNOWN";
+
+    Dart_EnterScope();
+
+    Dart_Handle lib = Dart_RootLibrary();
+    if (Dart_IsError(lib)) {
+        snprintf(s_result, sizeof(s_result),
+                 "dart_apply_aot_patch: no root lib: %s", Dart_GetError(lib));
+        Dart_ExitScope();
+        return s_result;
+    }
+
+    /* Build Dart List([variant]) */
+    Dart_Handle dart_list = Dart_NewList(1);
+    if (Dart_IsError(dart_list)) {
+        snprintf(s_result, sizeof(s_result), "dart_apply_aot_patch: NewList error");
+        Dart_ExitScope();
+        return s_result;
+    }
+    Dart_Handle dart_int = Dart_NewIntegerFromInt64((int64_t)variant);
+    Dart_ListSetAt(dart_list, 0, dart_int);
+
+    Dart_Handle invoke_args[1];
+    invoke_args[0] = dart_list;
+
+    /* Call applyAOTPatch([variant]) */
+    Dart_Handle apply_result = Dart_Invoke(
+        lib, Dart_NewStringFromCString("applyAOTPatch"), 1, invoke_args);
+    if (Dart_IsError(apply_result)) {
+        snprintf(s_result, sizeof(s_result),
+                 "dart_apply_aot_patch: invoke error: %s",
+                 Dart_GetError(apply_result));
+        Dart_ExitScope();
+        return s_result;
+    }
+
+    /* Return getResult() to verify patch took effect */
+    Dart_Handle get_result = Dart_Invoke(
+        lib, Dart_NewStringFromCString("getResult"), 0, NULL);
+    if (Dart_IsError(get_result)) {
+        snprintf(s_result, sizeof(s_result),
+                 "dart_apply_aot_patch: getResult error: %s",
+                 Dart_GetError(get_result));
+        Dart_ExitScope();
+        return s_result;
+    }
+
+    /* Copy string before ExitScope invalidates handle-owned memory */
+    const char* tmp = NULL;
+    Dart_StringToCString(get_result, &tmp);
+    strncpy(s_result, tmp ? tmp : "(null)", sizeof(s_result) - 1);
+    s_result[sizeof(s_result) - 1] = '\0';
+
+    Dart_ExitScope();
+    return s_result;
+}
+
+const char* dart_benchmark_greet(int n) {
+    static char s_bench[64] = "0.000";
+
+    Dart_EnterScope();
+
+    Dart_Handle lib = Dart_RootLibrary();
+    if (Dart_IsError(lib)) {
+        Dart_ExitScope();
+        return s_bench;
+    }
+
+    Dart_Handle dart_list = Dart_NewList(1);
+    if (Dart_IsError(dart_list)) {
+        Dart_ExitScope();
+        return s_bench;
+    }
+    Dart_ListSetAt(dart_list, 0, Dart_NewIntegerFromInt64((int64_t)n));
+
+    Dart_Handle invoke_args[1];
+    invoke_args[0] = dart_list;
+
+    Dart_Handle result = Dart_Invoke(
+        lib, Dart_NewStringFromCString("benchmarkGreet"), 1, invoke_args);
+    if (Dart_IsError(result)) {
+        Dart_ExitScope();
+        return s_bench;
+    }
+
+    /* Copy string before ExitScope invalidates handle-owned memory */
+    const char* tmp = NULL;
+    Dart_StringToCString(result, &tmp);
+    if (tmp) {
+        strncpy(s_bench, tmp, sizeof(s_bench) - 1);
+        s_bench[sizeof(s_bench) - 1] = '\0';
+    }
+
+    Dart_ExitScope();
+    return s_bench;
+}

@@ -29,6 +29,25 @@ bool fhp_shorebird_load_vmcode(const char* vmcode_path);
  */
 int dart_load_ota_patch(const char* vmcode_path);
 
+/**
+ * Apply a pre-compiled AOT patch variant (no bytecode loading).
+ * Calls applyAOTPatch([variant]) in Dart — pure data pointer update.
+ * variant=0: restore original greet()
+ * variant=1: greet_patched() → 'PATCHED_AOT'
+ * variant=2: greet_cpu_aot() → 10K loop, AOT speed
+ * Returns: result of getResult() after patch applied, or error string.
+ * MUST be called after dart_run() has initialized the isolate.
+ */
+const char* dart_apply_aot_patch(int variant);
+
+/**
+ * Benchmark greetVar() for n sequential calls.
+ * Calls benchmarkGreet([n]) in Dart.
+ * Returns: mean microseconds per call as null-terminated string (e.g. "0.051").
+ * MUST be called after dart_run() has initialized the isolate.
+ */
+const char* dart_benchmark_greet(int n);
+
 #ifdef __cplusplus
 }
 #endif
