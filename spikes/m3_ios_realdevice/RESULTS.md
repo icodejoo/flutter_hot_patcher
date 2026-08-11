@@ -93,3 +93,38 @@ baseline result = ORIGINAL
 剩余差距（非功能性）：
 1. 改函数体的真实 OTA patch 路径未做端到端跑机（需加载不同 patch instructions）
 2. Simulator 进入开销（每次 BLR 多一跳，约 37× 慢，但 link 率接近 100% 时影响微小）
+
+---
+
+## B4 Simulator 重验证（2026-08-11 PASS — 部分链接路径）
+
+**验证方式**：排除 greet/callGreet/getResult/greetAlt/greetVar（7个函数）走 Simulator 解释，
+其余 3216 个函数走 SimulatorToCPU 原生执行。
+
+### 设备日志实录（devicectl + idevicesyslog）
+
+```
+Request  : vmcode_link_nogr type: vmcode
+Result   : .../HotPatchDemo.app/vmcode_link_nogr.vmcode
+[ViewController] B4 vmcode link table: LOADED (path=<private>)
+```
+
+**dart_debug.txt（从设备 TMPDIR 读出）：**
+```
+dart_run: bundle_dir=(null)
+dart_run: using baseline IsolateSnapshotData (0 bytes)
+setup OK
+baseline result = ORIGINAL
+```
+
+### 验证结论
+
+| 验证点 | 期望 | 实际 |
+|---|---|---|
+| vmcode_link_nogr.vmcode 加载 | LOADED | ✅ LOADED |
+| greet 走 Simulator 解释 | 未在链接表中 | ✅ 排除在 3216 条目之外 |
+| 结果正确 | ORIGINAL | ✅ ORIGINAL |
+| App 无 crash | — | ✅ |
+
+**意义**：证明 Simulator 解释执行 greet() 路径与 SimulatorToCPU 原生路径可以混合运行，
+结果正确。这是 B-route 方案 A 核心能力在 iOS 真机上的完整验证。
