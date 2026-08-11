@@ -1,6 +1,6 @@
 - [Shorebird 对齐任务现状](project_shorebird_alignment.md) — Task 1-6 完成 + OTA 真机验证 PASS，B-route 暂缓
 - [iOS 真机验证现状](project_ios_verification.md) — dart_dynamic_modules 被 mprotect 阻断，已转向 Shorebird 路线
-- [M4/M5 私有化进度](project_m4_m5_progress.md) — M3/M4/M5 全部 PASS，iOS 真机端到端热修复已交付
+- [M4/M5 进度+OTA全验证](project_m4_m5_progress.md) — A-route OTA E2E PASS（2026-08-11）patch greet=OTA_NEW，Shorebird等价能力完整验证
 - [X1 引擎构建记录](project_x1_engine_build.md) — Flutter Engine iOS arm64 dart_dynamic_modules=true 构建完成
 - [fvm 隔离规则](feedback_isolation.md) — 禁止修改 fvm cache，始终用 --local-engine 参数
 - [文档写入模型规则](feedback_doc_writing.md) — 更新/写入文档用 Haiku model + effort low
@@ -8,3 +8,4 @@
 - [记忆文件存放规则](feedback_memory_in_repo.md) — 记忆随 git repo 存放，换机器 clone 后直接可用
 - [B-route Phase 2](project_b_route_phase2.md) — 方案A全部完成A1-A7✓：BL+BLR拦截SimulatorToCPU，vmcode加载运行，263测试全绿
 - [RTK diff 不可信](feedback_rtk_diff_unreliable.md) — repo 内单行改动被报成 "Files are identical"，验证一律用 command diff
+- [Benchmark 对比项目](project_benchmark.md) — spikes/benchmark/ 已搭建，hotpatch vs Shorebird 全指标对比，待真机采集

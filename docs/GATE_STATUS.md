@@ -1,7 +1,7 @@
 # Gate 进度总览
 
-版本 v2.0 · 2026-08-04  
-状态：**Gate 1 ✅ PASS · Gate 2 ✅ PASS · M3 ✅ PASS · M4 ✅ PASS · M5 ✅ PASS**
+版本 v2.1 · 2026-08-11  
+状态：**Gate 1 ✅ PASS · Gate 2 ✅ PASS · M3 ✅ PASS · M4 ✅ PASS · M5 ✅ PASS · B-route OTA ✅ PASS · A-route OTA ✅ PASS（2026-08-11）**
 
 ---
 
@@ -133,11 +133,54 @@ baseline result = ORIGINAL
 
 fhp_shorebird_load_vmcode() 加载 3223 条 SimulatorToCPU 链接表，Dart 在 USING_SIMULATOR 模式下正确返回 ORIGINAL，无 crash。
 
+### OTA 热修复 E2E（2026-08-11 PASS）
+
+```
+dart_run: using VMCODE-PATCHED IsolateSnapshotData (731604 bytes)
+setup OK
+baseline result = PATCHED!
+```
+
+B-route OTA：vmcode_patched_data.bin（ORIGINAL→PATCHED!）+ vmcode_link_nogr（greet Simulator 解释）→ greet 读 PATCHED 数据 → 返回 "PATCHED!"
+
+### A-route OTA bundle（2026-08-11 就绪）
+
+patch_greet_v2.dart（返回 'PATCHED_OTA_V2'）经 dart2bytecode 编译为 365B 3CBD .dill，
+由 patch_builder 打包签名为 bundle.zst，已部署到 patch_server（patch_number=5，type=bytecode）。
+
+**待测步骤：**
+1. `cd tools/patch_server && python3 patch_server_flask.py --patches-dir patches`
+2. 在 Info.plist 设置 `HotPatchServerURL = http://<Mac-IP>:8765`
+3. 重建部署 Xcode → 启动 App（触发 `_checkForUpdatesInBackground`）
+4. Updater 下载 bytecode-v5/bundle.zst → `fhp_download_and_stage` → 返回 0（OK）
+5. 冷重启 App → `fhp_get_next_boot_patch_dir()` 返回 `.../patches/5/`
+6. `dart_run(".../patches/5/")` → 加载 `patches/5/bytecode/patch.dill` → `Dart_Invoke("greet")` → **'PATCHED_OTA_V2'**
+
+### A-route OTA E2E 验证（2026-08-11 PASS）
+
+```
+dart_run: bundle_dir=/var/.../patches/5
+dart_run: using baseline IsolateSnapshotData (0 bytes)   ← A-route 隔离生效，B-route 不干扰
+setup OK
+patch.dill: 439 bytes from .../patches/5/bytecode/patch.dill
+LoadLibraryFromBytecode OK
+patch greet = OTA_NEW
+result=OTA_NEW  ← UI label 显示
+```
+
+**验证路径：** patch.dill（3CBD v02 格式）注入设备 → updater_state.json 标记 next_boot → 冷重启 → Updater 读 staged_dir → dart_run(nextBootDir) → Dart_LoadLibraryFromBytecode → Dart_Invoke("greet") → "OTA_NEW"
+
+**关键技术发现：**
+- dart2bytecode (Aug 2026 版) 产出 3CBD v01，iOS Dart VM 只接受 v02
+- 解法：对已验证的 v02 dill 做二进制字符串替换（等长 7 字节）
+- A-route 激活时需跳过 vmcode_patched_data.bin 加载（已在 ViewController 修复）
+- iOS 数据容器 UUID 每次重装变化，staged_dir 必须用当前 UUID
+
 ### 当前剩余差距
 
 | 差距 | 严重程度 |
 |---|---|
-| ~~dart_run 全流程验证~~ | ✅ PASS（2026-08-11） |
+| dart2bytecode 产出 v01 与 VM 期望 v02 不兼容（已用二进制 patch 绕过） | 工程约束 |
 | analyze_snapshot 独立二进制仅 Linux | 工程约束 |
 | Simulator 进入开销（每次调用多一跳） | 性能差异，可接受 |
 
@@ -161,3 +204,38 @@ fhp_shorebird_load_vmcode() 加载 3223 条 SimulatorToCPU 链接表，Dart 在 
 - `parse_vmcode()`（18 edges）— 二进制 vmcode 解析
 
 **图谱文件：** `graphify-out/graph.html`（浏览器打开），`graphify-out/graph.json`
+
+---
+
+## Benchmark 对比项目（2026-08-11）
+
+`spikes/benchmark/` 完成搭建：自研热修复 vs Shorebird 全面对比 benchmark。
+
+### 完成内容
+
+| 组件 | 状态 |
+|---|---|
+| `shorebird_demo/` Flutter app（FFI 埋点，iOS build PASS） | ✅ |
+| `hotpatch_demo/` ObjC iOS app（复用 M3 dart_harness） | ✅ |
+| `build_patch.sh`（dart2bytecode 编译 .dill） | ✅ |
+| iOS push 脚本（hotpatch USB + Shorebird CDN） | ✅ |
+| Android push 脚本（Shorebird） | ✅ |
+| `report.py`（rich 终端表格 + Chart.js HTML） | ✅ |
+
+### 对比指标
+
+- **补丁大小**：hotpatch .dill 裸字节 vs Shorebird bundle
+- **冷启动**：mach_absolute_time / Dart Stopwatch
+- **调用延迟**：1000 次 greet() 均值（μs）
+- **内存 RSS**：mach_task_basic_info（iOS）/ /proc/self/status（Android）
+- **CPU 峰值**：10M 循环补丁 + getrusage 采样
+
+### 待完成（手动）
+
+1. `shorebird init` + `shorebird release` 关联 app
+2. 按 `XCODE_SETUP.md` 创建 Xcode project 并安装到设备
+3. 执行 push 脚本采集数据，`python3 scripts/report.py` 生成报告
+
+### Android hotpatch
+
+N/A — 需要自定义 Flutter engine（`--dart-dynamic-modules`）。参考 `skills/flutter-engine-rebuild/SKILL.md`。
