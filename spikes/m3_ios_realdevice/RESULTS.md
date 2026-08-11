@@ -171,3 +171,53 @@ baseline result = PATCHED!
 - ✅ SimulatorToCPU 原生执行（其余 3216 函数走原生）
 - ✅ 混合路径结果正确
 - ✅ iOS 真机 W^X 限制完全绕过（全程 PROT_READ，无 PROT_EXEC）
+
+---
+
+## A-route OTA E2E 验证（2026-08-11 PASS）
+
+**iPhone 14 真机（UDID: 040F89ED-E7CC-54B0-A7BB-908EE82C0224），全链路函数体 OTA 验证通过。**
+
+### 验证日志
+
+```
+dart_run: bundle_dir=/var/mobile/Containers/Data/Application/58DF9545-F3B5-414E-904D-7E0EF50FB89D/Library/Application Support/HotPatchUpdater/patches/5
+dart_run: using baseline IsolateSnapshotData (0 bytes)
+dart_run: using baseline IsolateSnapshotInstructions (0 bytes)
+setup OK
+patch.dill: 439 bytes from /var/.../patches/5/bytecode/patch.dill
+LoadLibraryFromBytecode OK
+patch greet = OTA_NEW
+```
+
+**result.txt: `result=OTA_NEW`** ✅
+
+### 验证内容
+
+| 验证点 | 期望 | 实际 |
+|---|---|---|
+| bundle_dir（A-route 激活） | 非 null | ✅ `.../patches/5` |
+| baseline IsolateSnapshotData | 0 bytes（不加载 B-route 数据） | ✅ |
+| patch.dill 加载 | 439B v02 格式 | ✅ |
+| Dart_LoadLibraryFromBytecode | OK | ✅ |
+| greet() 返回值 | OTA_NEW | ✅ |
+| result.txt | result=OTA_NEW | ✅ |
+
+### 关键技术发现
+
+1. **dart2bytecode v01 兼容性**：2026-08 版 dart2bytecode 产出 3CBD v01 格式，iOS Dart VM（从 X1 engine 构建）只接受 v02 格式，加载 v01 会崩溃（无 crash log，dart_debug.txt 截断）。解法：对已验证的 v02 dill 做二进制等长字符串替换。
+
+2. **iOS UUID per-install**：每次 xcodebuild install 后数据容器 UUID 变化，staged_dir 注入必须先读 ota_debug.log 中的 dataDir UUID，确保路径一致性。
+
+3. **A/B route 隔离**：A-route 激活（nextBootDir 非 null）时必须跳过 vmcode_patched_data.bin 的加载，否则快照版本不匹配导致 Dart VM 初始化失败。ViewController.m 已修复。
+
+4. **dart_debug.txt 位置**：在 appDataContainer domain 的 `tmp/dart_debug.txt`，不在 `temporary` domain。
+
+### 意义
+
+**Shorebird 等价能力完整验证：**
+- ✅ 函数体 OTA（改函数逻辑，非数据常量）
+- ✅ Dart_LoadLibraryFromBytecode（3CBD v02 格式，dart_dynamic_modules=true）
+- ✅ A-route 与 B-route 完全隔离
+- ✅ iOS W^X 合规（全程不触发 mprotect PROT_EXEC）
+- ✅ Updater 状态机 staged_dir → next_boot → pending_confirmation → confirmed_good

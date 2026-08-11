@@ -30,7 +30,7 @@
     </array>
 
     <key>HotPatchServerURL</key>
-    <string>http://10.39.53.19:8765</string>
+    <string>https://sculpture-olympics-radical-leaders.trycloudflare.com</string>
 
     <key>NSLocalNetworkUsageDescription</key>
     <string>Hot patch update server on local USB network</string>

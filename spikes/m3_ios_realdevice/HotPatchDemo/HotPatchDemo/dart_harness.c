@@ -213,7 +213,10 @@ const char* dart_run(const char* patch_bundle_dir) {
         if (!f) {
             fprintf(dbg, "patch.dill not found: %s\n", dill_path);
             fclose(dbg); Dart_ExitScope(); Dart_ShutdownIsolate();
-            return "ERR_NO_PATCH";
+            /* Return path for diagnosis via result.txt */
+            static char err_path[600];
+            snprintf(err_path, sizeof(err_path), "ERR_NO_PATCH:%s", dill_path);
+            return err_path;
         }
         fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
         uint8_t* buf = (uint8_t*)malloc(sz);

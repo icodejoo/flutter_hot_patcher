@@ -75,16 +75,15 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
         }
     }
 
-    /* flutter_hot_patcher OTA DEMO: load patched IsolateSnapshotData (data-only patch)
-       PATCH: "ORIGINAL" → "PATCHED!" in the data section (same byte length, no instructions change)
-       This combined with B4 link table (greet excluded → runs interpreted) demonstrates:
-       - greet() runs in Simulator, reads patched data constant → returns "PATCHED!"
-       - all other functions run natively via SimulatorToCPU */
-    NSString *patchedDataPath = [dataDir stringByAppendingPathComponent:@"vmcode_patched_data.bin"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
+    /* B-route data patch: only load when A-route (nextBootDir) is NOT active.
+       When A-route is active, the Dart VM must use baseline snapshot data to avoid
+       snapshot version mismatch between the bundled vmcode_patched_data.bin and
+       the current build's snapshot. A-route loads greet() from patch.dill directly. */
+    NSString *patchedDataPath = nextBootDir ? nil : [dataDir stringByAppendingPathComponent:@"vmcode_patched_data.bin"];
+    if (!nextBootDir && ![[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
         patchedDataPath = [[NSBundle mainBundle] pathForResource:@"vmcode_patched_data" ofType:@"bin"];
     }
-    if (patchedDataPath && [[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
+    if (!nextBootDir && patchedDataPath && [[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
         int dataResult = dart_load_vmcode_patch([patchedDataPath UTF8String]);
         NSLog(@"[ViewController] OTA data patch loaded: %d (1=ok,0=not found,-1=err)", dataResult);
     } else {

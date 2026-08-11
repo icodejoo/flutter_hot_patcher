@@ -41,6 +41,9 @@ static NSString* kChannel = @"stable";
 
     fhp_init([dataDir UTF8String], [kBuildFingerprint UTF8String]);
     fhpLog([NSString stringWithFormat:@"[AppDelegate] fhp_init complete (dataDir=%@)", dataDir]);
+    const char* _nextBootDir = fhp_get_next_boot_patch_dir();
+    fhpLog([NSString stringWithFormat:@"[AppDelegate] next_boot_dir: %s", _nextBootDir ? _nextBootDir : "(null)"]);
+    if (_nextBootDir) fhp_free_string(_nextBootDir);
 
     /* STEP 2: Background patch check (non-blocking) */
     [self _checkForUpdatesInBackground];
