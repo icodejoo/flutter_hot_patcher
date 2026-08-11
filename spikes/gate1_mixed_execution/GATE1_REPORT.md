@@ -1,7 +1,12 @@
 # Gate 1 报告 — 混合执行 ABI（难点 X）
 
-版本 v1.0 · 2026-07-30
-状态：**桌面阶段（阶段 A，V1-V5）全部 PASS** · 阶段 B（iOS 真机）未开始
+版本 v1.1 · 2026-07-31
+状态：**Gate 1 全部通过**——桌面 x64（阶段 A，V1-V5）、Android arm64 真机（Gate 1b）、
+**iOS 真机（阶段 B/Gate 1B，2026-07-31 完成）全部 PASS**。核心结论：V1（改写已签名
+代码页）在 iOS 上确认不可行（W^X + 无 JIT entitlement 双重封死），但 **V1 从来不是
+生产必需机制**——V2（dispatch table / closure entry_point 纯数据重定向）在三个平台
+上均验证通过，静态直调链完全可以只靠 V2 边界重定向正确生效，无需触碰任何代码页。
+详见 §14（iOS 真机实测）。
 
 本报告面向两个用途：(1) 提交给 Fable 审核 Gate 1 的结论与证据是否站得住；
 (2) 后续迭代/维护时的技术参考。写法上不重复各 `NOTES.md` 的完整反汇编细节，
@@ -25,6 +30,10 @@
      依然正确（V4）。
   5. 高频调用（10 万次）和真实并发竞争（8 isolate、1.6 亿次调用，主 isolate 同时在改写
      共享调用点）下机制保持稳定，零崩溃/损坏（V5）。
+  6. **（2026-07-31 追加）多跳纯静态直调链，完全不用 V1，只靠传递闭包+一次 V2 数据
+     重定向也能正确生效**（V6）——订正了此前"任何静态直调点都需要V1"的不准确表述，
+     见 §5 订正说明与 `cases/v6_multihop_no_v1/NOTES.md`。这次发现直接呼应了 Mac 在
+     iOS 阶段 B 上独立得出的同一结论（见下方"下一步"更新）。
 - **同时发现的重要约束**（不是失败，是划定了边界，直接影响 PRD/SPEC 的后续设计）：
   - 官方 `package:dynamic_modules` 按设计**不支持替换既有函数**，只支持加法式扩展——
     这不是实现缺口，官方文档明确声明（§4）。我们的机制完全绕开了这套公开 API，靠
@@ -36,9 +45,16 @@
   - 增量构建系统有两处依赖追踪失效的坑，会在 `exit code 0` 的情况下悄悄产出没生效的
     二进制（§7）——这是纯工程坑，不影响结论，但会在后续维护中反复踩，已固化进项目内
     skill（`.claude/skills/gate1-vm-spike/SKILL.md`）。
-- **下一步**：阶段 B（iOS 真机复验，`SETUP.md` §B）——桌面 Linux 允许任意
-  `mprotect(PROT_EXEC)`，iOS 有 W^X 强制 + 代码签名，这套核心机制在真机约束下能不能
-  等价成立，是唯一悬而未决、可能直接推翻 Gate 1 结论的问题。
+- **阶段 B 最终结论（2026-07-31，Mac 在真机 iPhone 上完成，见 §14）**：V1a
+  （mprotect RWX 改代码页）errno=13、V1b（MAP_JIT）errno=1（无 `cs.allow-jit`
+  entitlement，且**即便有该 entitlement，MAP_JIT 也只能分配全新匿名 JIT 页，不能对
+  已签名代码页做 mprotect**）——V1 在 iOS 上**没有任何可行路径**，双重封死。
+  **V2（dispatch table / closure entry_point）在 iOS 真机上完全 PASS**；**V3（静态
+  直调链只靠 V2 边界重定向）在 iOS 真机上同样 PASS**，与本报告 §5 订正、V6 用例
+  （桌面 x64 + Android arm64 双平台验证，见 `cases/v6_multihop_no_v1/NOTES.md`）
+  的结论**三平台交叉印证一致**：V1 从来不是运行时必需机制，"V1 在 iOS 不通"
+  不威胁混合执行架构的健全性。**Gate 1 至此在桌面 x64、Android arm64、iOS 真机
+  三个平台全部通过**，进入 Gate 2 生产 linker 阶段（详见 §14-16）。
 
 ---
 
@@ -241,9 +257,23 @@ call *%rcx            ; 间接调用，目标是上面读到的 entry_point
 ```
 
 **对 SPEC §5"传递闭包"的直接推论**：如果一个既有函数只通过虚调用/闭包调用被引用，
-重定向代价很低（改一个点）；只要有**任何一个**静态直调调用点引用它，就必须额外处理
-那个调用点（V1 的机制），且做不到"改一处、全局生效"。这就是传递闭包"止于虚调用点"
-（SPEC §5.4）这句话的机制级证据。
+重定向代价很低（改一个点，全类/该闭包实例统一生效）；如果它被静态直调引用，这个调用点
+本身没有字段可改。
+
+> **订正（2026-07-31，V6 用例，见 `cases/v6_multihop_no_v1/NOTES.md`）**：上一段曾在
+> 此处写"只要有任何一个静态直调调用点引用它，就必须额外处理那个调用点（V1 的机制），
+> 且做不到'改一处、全局生效'"——这个表述不准确，容易让人误以为 V1 的物理改写机制是
+> 静态直调链路运行时必需的。V6 用例实测证伪：一条 A→B→C 的纯静态直调链，只需
+> **传递闭包把 A/B/C 整体标记为转解释 + 在链路最外层的虚调用/闭包边界做一次 V2 式
+> 数据字段重定向**，完全不碰任何一条调用指令，链路照样正确生效——因为一旦 A 被传递
+> 闭包吸收，A 自己的旧机器码（含它对 B 的静态直调指令）根本不再被执行；仍在原生世界
+> 运行的调用者，按传递闭包的定义，不可能通过静态直调触达一个"转解释"函数（否则它自己
+> 也会被吸收进闭包，矛盾）。**准确的表述应为**：静态直调本身没有可重定向的字段，所以
+> 传递闭包必须把整条静态直调链都纳入"转解释"集合，直到遇到虚调用/闭包边界为止——但
+> "纳入转解释集合"不等于"运行时需要 V1 物理改写"，V1 在这条链路的运行时激活过程中
+> 从未被调用。这正是 SPEC §5"重定向不靠改机器码"的机制级证据，V1 更准确的定位是
+> "验证'能否重定向一个既有函数的可观测行为'这件事本身是否可行"的早期探索手段，不是
+> 生产架构运行时依赖的机制。
 
 ### 5.3 实测验证（VM 新增两个原生入口）
 
@@ -471,6 +501,13 @@ diff 文件：`vm_patch/gate1_vm_patch.diff`，应用方式和构建坑详见 `v
    （这条理论上应该没问题，因为补丁走的是解释型字节码，符合 Guideline 3.3.1b，
    但"运行时改写已签名代码段的调用指令"这个动作本身在 iOS 上物理上可能不被允许——
    这正是阶段 B 存在的意义）。
+5. **（2026-07-31）阶段 B 已在 iOS 真机上完成，Gate 1 全部通过**：详见 §14。V1a/V1b
+   在 iOS 上双重封死（`mprotect` errno=13；`MAP_JIT` errno=1 且即便有 entitlement 也
+   只能分配新页、不能改写已签名代码页）；V2（dispatch table/closure entry_point）与
+   V3（静态直调链只靠 V2 边界重定向）均 PASS。与 V6 用例（§5 订正，桌面 x64 + Android
+   arm64 双平台）的结论**三平台交叉印证**：V1 从来不是生产架构运行时依赖的机制，
+   "V1 在 iOS 不通"不威胁混合执行架构的健全性。**Gate 1 在桌面 x64、Android arm64、
+   iOS 真机三个平台全部 PASS，正式进入 Gate 2 生产 linker 阶段**（§14-16）。
 
 ---
 
@@ -480,7 +517,8 @@ diff 文件：`vm_patch/gate1_vm_patch.diff`，应用方式和构建坑详见 `v
 - `docs/PRD.md`、`docs/SPEC.md`、`docs/PLAN.md` — 产品需求、技术规格、Gate 制划分
 - `spikes/gate1_mixed_execution/SETUP.md` — 环境搭建、阶段划分
 - `.claude/skills/gate1-vm-spike/SKILL.md` — 完整操作流程、构建坑、反汇编方法论
-- `spikes/gate1_mixed_execution/cases/v{1..5}_*/NOTES.md` — 各用例完整证据链
+- `spikes/gate1_mixed_execution/cases/v{1..6}_*/NOTES.md` — 各用例完整证据链
+  （V6 是 2026-07-31 追加，验证"V1 是否运行时必需"）
 - `spikes/gate1_mixed_execution/vm_patch/{README.md,gate1_vm_patch.diff}` — VM 改动
 
 ### 外部源码/文档引用
@@ -589,13 +627,13 @@ desktop x64 上迭代，测不出这类"只在跨架构交叉编译时才触发"
 
 ---
 
-*本报告基于 2026-07-29～2026-07-30 的实测结果。若后续 SDK 版本更新，VM 内部字段
-偏移/函数签名可能变化，复现前建议按 `.claude/skills/gate1-vm-spike/SKILL.md` 的
-方法重新反汇编确认，不要假设本报告的具体地址/偏移量在新版本上依然成立。*
+## 14. Phase B（iOS 真机 Gate 1B）— 完整结论（2026-07-31，Mac 实测）
 
----
-
-## 13. Phase B（iOS 真机 Gate 1B）— 完整结论（2026-07-31）
+> 本节由 Mac 在真机 iPhone 上实测完成，是本报告"阶段 B"悬念的最终答案。与 §5 订正、
+> `cases/v6_multihop_no_v1/NOTES.md`（桌面 x64 + Android arm64 双平台验证"V1 从不
+> 是运行时必需机制"）是**三个独立环境的交叉印证**——Windows/WSL2 这边在没有 iOS
+> 设备的情况下用桌面+Android 复现同一结论，Mac 在真机上给出了最终的、带具体 errno
+> 的实测确认，两条线各自独立得出，互相印证，不是一方抄另一方。
 
 **设备**：iPhone14,7（iOS 18.x），设备 ID `040F89ED-E7CC-54B0-A7BB-908EE82C0224`
 
@@ -686,7 +724,7 @@ Gate 2 需要验证的问题：
 
 ---
 
-## 14. B 步 — iOS 集成可行性预评估（2026-07-31）
+## 15. B 步 — iOS 集成可行性预评估（2026-07-31，Mac 评估）
 
 ### 5 个核心问题的评估结论
 
@@ -758,7 +796,7 @@ iOS 上相同：dispatch table 在 VM heap 中是可写的，V2 有效。
 
 ---
 
-## 15. A 步开始 — 生产 linker 方向确认（2026-07-31）
+## 16. A 步开始 — 生产 linker 方向确认（2026-07-31，Mac）
 
 Gate 1 + Gate 2 + Gate 1B iOS + C 端到端 + B 可行性全部通过。
 
@@ -767,4 +805,18 @@ Gate 1 + Gate 2 + Gate 1B iOS + C 端到端 + B 可行性全部通过。
 2. 优先级：R1 → R2（对象池比对）→ R3/R3.1（调用边 + 闭包枚举）→ R4/R5/R6/R7
 3. 验证台：用 spike 的 `COVERAGE_GAPS` 语料做回归
 
-下一次 session 从 Flutter Engine fork + VM patch 移植开始（B 步工程落地）。
+kernel_linker v1（R1+R2+R3(部分)+R9）已在 Mac 上实现并 PASS，详见
+`spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md` 的更新记录与
+`spikes/gate2_linker/tools/kernel_linker/`（代码在 Mac 本地，尚未推送到本仓库——
+Mac 当前无推送权限）。**Windows/WSL2 这边审查代码后发现一个需要优先处理的红线**：
+kernel_linker 的调用图目前只追踪 Kernel 层的 `StaticInvocation`，看不到 AOT 编译器
+的"去虚化"（单态实例方法调用被编译成直接跳转）——这是旧版 Python `diff_linker.py`
+（机器码层）已经解决过、但升级到 Kernel IR 层后又冒出来的一个具体红线，详见
+`spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md` R3 条目的 2026-07-31 更新。
+
+---
+
+*本报告基于 2026-07-29～2026-07-31 的实测结果，含桌面 x64、Android arm64、iOS 真机
+三个平台。若后续 SDK 版本更新，VM 内部字段偏移/函数签名可能变化，复现前建议按
+`.claude/skills/gate1-vm-spike/SKILL.md` 的方法重新反汇编确认，不要假设本报告的
+具体地址/偏移量在新版本上依然成立。*

@@ -7,60 +7,52 @@ A self-developed Flutter code-push solution targeting iOS + Android. Its core is
 **function-level differential linker with compile-time constraints**, paired with Dart's
 official bytecode interpreter to enable App-Store-compliant hot updates on iOS.
 
-## 当前状态 / Current Status
+## 为什么做这个 / Why
 
-**Gate 1 ✅ PASS · Gate 2 ✅ PASS · M3 ✅ PASS · M4 ✅ PASS · M5 ✅ PASS**
-
-完整私有化 Flutter 热更新系统已交付。完整进度见 [`docs/GATE_STATUS.md`](docs/GATE_STATUS.md)。
-
-## 项目目录 / Layout
-
-```
-flutter_hot_patcher/
-│
-├── docs/                          # 设计文档
-│   ├── PRD.md                     # 产品需求
-│   ├── SPEC.md                    # 技术规格与架构
-│   ├── PLAN.md                    # 分阶段计划（Gate 制）
-│   ├── GATE_STATUS.md             # 当前进度总览（从这里开始）
-│   ├── PATCH_DELIVERY_SPEC.md     # 补丁下发全链路规格
-│   └── superpowers/
-│       ├── specs/                 # 4-A/B/C 设计规格
-│       └── plans/                 # 4-A/B/C 实施计划
-│
-├── spikes/
-│   ├── gate1_mixed_execution/     # Gate 1：混合执行 ABI 验证（V1-V5 + iOS）
-│   ├── gate2_linker/              # Gate 2：kernel_linker + 精确度测试
-│   │   └── tools/kernel_linker/  # ★ 4-A 生产级 linker（Dart，R1-R9）
-│   └── m3_ios_realdevice/        # ★ M3/M4-D iOS 真机 demo（Xcode App）
-│
-└── tools/
-    ├── patch_builder/            # ★ 4-B 补丁流水线（Python，Ed25519 签名）
-    ├── updater/                  # ★ 4-C Updater（Rust，boot-loop watchdog，C FFI）
-    └── patch_server/             # ★ 4-E 私有服务端 + 5-A/B 测试台
-```
-
-## 快速了解项目 / Where to Start
-
-| 你的目的 | 先看这里 |
-|----------|----------|
-| 整体进度 / 结论速查 | [`docs/GATE_STATUS.md`](docs/GATE_STATUS.md) |
-| 产品需求 | [`docs/PRD.md`](docs/PRD.md) |
-| 技术规格与架构 | [`docs/SPEC.md`](docs/SPEC.md) |
-| 补丁下发全链路设计 | [`docs/PATCH_DELIVERY_SPEC.md`](docs/PATCH_DELIVERY_SPEC.md) |
-| kernel_linker 使用 | [`spikes/gate2_linker/tools/kernel_linker/README.md`](spikes/gate2_linker/tools/kernel_linker/README.md) |
-| iOS 真机 demo | [`spikes/m3_ios_realdevice/RESULTS.md`](spikes/m3_ios_realdevice/RESULTS.md) |
-| Updater Rust 库 | [`tools/updater/`](tools/updater/) |
-| 补丁打包工具 | [`tools/patch_builder/patch_builder.py`](tools/patch_builder/patch_builder.py) |
-| 下发服务器 | [`tools/patch_server/patch_server.py`](tools/patch_server/patch_server.py) |
-| 等价测试台 | [`tools/patch_server/equivalence_tester.py`](tools/patch_server/equivalence_tester.py) |
+- Shorebird 是目前唯一成熟的 Flutter iOS 热更方案，但**闭源、不支持私有化部署，其 ToS 明确禁止自托管商用**。
+- 市面无成熟的可私有化部署替代品；开源方案（如 flutter_patcher）仅支持 Android 整包 .so 替换，无差分、无 iOS。
+- 我们需要**数据自主可控、可私有部署**的热更能力。
 
 ## 技术定位 / Positioning
 
 - **不使用任何第三方闭源产物**。全部基于 Dart/Flutter 官方开源代码（BSD）自研，能力定位对齐 Shorebird。
-- Dart SDK 锁定版本：`1aa7d7321fb`（2026-05-07），见 [`MAC_HANDOFF.md`](MAC_HANDOFF.md)。
-- 核心创新：逐函数差分 linker（kernel_linker，R1-R9）+ 运行时字节码加载（`Dart_LoadLibraryFromBytecode`）。
+- 终局形态：维护一对魔改的 **Dart VM fork + Flutter Engine fork**，供自有 App 使用。
+- 关键复用：Dart 官方 `runtime/vm/interpreter.cc`（`--dart-dynamic-modules` 开关）+ `dart2bytecode` 编译器，均为 BSD，解释器无需自研。
+- 真正自研部分（唯一无公开先例的黑盒）：**逐函数替换 + 编译期约束的 linker**。
+
+## 当前阶段 / Current Phase
+
+**Gate 1 已在桌面 x64、Android arm64 真机、iOS 真机三个平台全部 PASS**（2026-07-31 完成，
+详见 `spikes/gate1_mixed_execution/GATE1_REPORT.md` §14）——曾被认为"唯一可能整体推翻方案"
+的 iOS W^X 门已经过了：V1（改代码页）在 iOS 上确认不可行，但 V2（纯数据重定向）完全可行，
+V1 从不是运行时必需机制。**当前进入 Gate 2 生产 linker（kernel_linker，R1-R9）阶段**，
+Mac 已实现 v1（R1+R2+R3部分+R9 PASS），正在做 R3 去虚化盲区（新发现）+ R3.1 + R4-R8。
+
+**刚接手项目先读 [MAC_HANDOFF.md](MAC_HANDOFF.md)**，里面有锁定的 dart-sdk/Flutter Engine
+commit、`.gclient` 配置技巧等不在 git 历史里、只存在于本机文件系统里的关键信息。
+
+## 文档 / Docs
+
+- [MAC_HANDOFF.md](MAC_HANDOFF.md) — **Mac 交接清单，接手项目先看这个**
+- [docs/PRD.md](docs/PRD.md) — 产品需求文档
+- [docs/SPEC.md](docs/SPEC.md) — 技术规格与架构
+- [docs/PLAN.md](docs/PLAN.md) — 分阶段实施计划（Gate 制）
+- [docs/PATCH_DELIVERY_SPEC.md](docs/PATCH_DELIVERY_SPEC.md) — 补丁下发全链路（生成/签名/下发/应用/回滚）设计草案
+- [spikes/gate1_mixed_execution/GATE1_REPORT.md](spikes/gate1_mixed_execution/GATE1_REPORT.md) — Gate1 完整证据链
+- [spikes/gate2_linker/REVIEW_diff_linker.md](spikes/gate2_linker/REVIEW_diff_linker.md) — Gate2 diff_linker 多 agent 评审
+- [spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md](spikes/gate2_linker/PRODUCTION_LINKER_SPEC.md) — 生产 linker 需求（R1-R9）
+
+## 目录 / Layout
+
+```
+flutter_hot_patcher/
+├── docs/           # PRD / SPEC / PLAN
+├── spikes/         # 验证性实验代码（Gate 1 从这里开始）
+└── README.md
+```
 
 ## 法律边界 / Legal Boundary
 
-全程仅使用 Dart/Flutter 官方 BSD 开源代码自研，能力范围对齐 Shorebird 已开源（MIT/Apache/BSD）的组件；不接触、不使用 Shorebird 闭源二进制或其私有 VM fork。
+全程仅使用 Dart/Flutter 官方 BSD 开源代码自研，能力范围对齐 Shorebird 已开源
+（MIT/Apache/BSD）的组件；不接触、不使用 Shorebird 闭源二进制或其私有 VM fork。
+立项前建议法务对整体路线做一次确认。

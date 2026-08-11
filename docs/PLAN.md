@@ -13,6 +13,10 @@
 
 当前起点：**Gate 1 — 难点 X（混合执行 ABI）**。
 
+> **2026-07-31 更新**：Gate 1 已在桌面 x64、Android arm64 真机、iOS 真机三个平台全部
+> PASS（详见 `spikes/gate1_mixed_execution/GATE1_REPORT.md` §14）——iOS W^X 真机复验
+> 通过：V1 不可行但非必需，V2 完全可行。当前进入 Gate 2 生产 linker 阶段。
+
 ---
 
 ## Gate 1 — 「替换既有函数」验证（约 2 人周 ~ 1 人月）
