@@ -1,20 +1,35 @@
 # Xcode Project Setup
 
-The Xcode project for HotPatchBench must be created manually (one-time setup):
+The Xcode project `HotPatchBench.xcodeproj` now exists in this directory — no manual creation needed.
 
-1. Open Xcode → File → New → Project → iOS → App
-   - Product Name: HotPatchBench
-   - Bundle ID: com.hotpatch.bench.hotpatch
-   - Language: Objective-C
-   - Save to: spikes/benchmark/hotpatch_demo/
+## Opening the Project
 
-2. Add to target: AppDelegate.m, dart_harness.c, builtin_shim.cpp
-   (measure.h is included via #include — no need to add separately)
+```bash
+open spikes/benchmark/hotpatch_demo/HotPatchBench.xcodeproj
+```
 
-3. Copy Build Settings from spikes/m3_ios_realdevice/HotPatchDemo:
-   - Header Search Paths (for dart_api.h, flutter engine headers)
-   - Other Linker Flags (Flutter engine static libs)
-   - The AOT snapshot.o must be compiled and linked (see build_patch.sh)
+## Source Files (already in project)
 
-4. The greet.dart → snapshot.S → snapshot.o pipeline:
-   See `build_patch.sh` for the compilation commands.
+- `AppDelegate.m` — app entry point, programmatic UI
+- `dart_harness.c` — Dart VM harness (AOT bootstrap)
+- `builtin_shim.cpp` — Dart builtin shims
+
+(`measure.h` is included via `#include` — not a compile target)
+
+## Build Settings (pre-configured)
+
+- **Bundle ID**: `com.hotpatch.bench.hotpatch`
+- **Team**: 7VP87G446C (update if needed via Xcode → Signing & Capabilities)
+- **Header Search Paths**: `/Users/Cruz/dart/sdk/runtime/include`
+- **Library Search Paths**: `spikes/m3_ios_realdevice/build` (Flutter engine static libs)
+- **Other Linker Flags**: Full Flutter engine link set (dart_aot_ios, boringssl, icu, etc.)
+
+## Adding the AOT Snapshot
+
+The greet.dart AOT snapshot (`snapshot.o`) must be compiled and linked manually:
+
+1. Run `build_patch.sh` to compile greet.dart → snapshot.S → snapshot.o
+2. In Xcode: target → Build Phases → Link Binary With Libraries → add snapshot.o
+   (or add it as a file reference and include in Sources)
+
+See `build_patch.sh` for the compilation commands.
