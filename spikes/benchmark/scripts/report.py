@@ -14,8 +14,10 @@ RESULTS_DIR = pathlib.Path(__file__).parent.parent / "results"
 EXPECTED = [
     ("hotpatch",  "ios",     "normal"),
     ("hotpatch",  "ios",     "cpu"),
+    ("shorebird", "ios",     "none"),
     ("shorebird", "ios",     "normal"),
     ("shorebird", "ios",     "cpu"),
+    ("shorebird", "android", "none"),
     ("shorebird", "android", "normal"),
     ("shorebird", "android", "cpu"),
 ]

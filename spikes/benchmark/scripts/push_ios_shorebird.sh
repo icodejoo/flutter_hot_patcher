@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Publish Shorebird patch for iOS, launch app (Shorebird pulls via CDN), collect result
-# Usage: ./push_ios_shorebird.sh [UDID] [normal|cpu]
-# Note: Shorebird delivers patches via its CDN — requires device internet access.
-#       This script handles the publish + device launch + result collection flow.
-# Requires: shorebird CLI (~/.shorebird/bin/shorebird), devicectl (Xcode 15+)
+# Shorebird iOS benchmark: publish patch → device downloads (needs WiFi) → two-launch cycle → pull result
+# Usage: ./push_ios_shorebird.sh [UDID] [none|normal|cpu]
 set -euo pipefail
 
 UDID="${1:-040F89ED-E7CC-54B0-A7BB-908EE82C0224}"
@@ -11,80 +8,87 @@ PATCH_TYPE="${2:-normal}"
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 BENCH_DIR="$REPO_ROOT/spikes/benchmark/shorebird_demo"
 RESULTS="$REPO_ROOT/spikes/benchmark/results"
-BUNDLE_ID="com.hotpatch.bench.shorebird_demo"
+BUNDLE_ID="com.hotpatch.bench.shorebirdDemo"
 SHOREBIRD="$HOME/.shorebird/bin/shorebird"
 
-echo "=== Shorebird iOS Patch ==="
-echo "  UDID:        $UDID"
-echo "  patch_type:  $PATCH_TYPE"
+echo "=== Shorebird iOS Patch: $PATCH_TYPE ==="
+echo "  UDID: $UDID"
+echo "  NOTE: Device must have WiFi internet access for patch download."
 
-# 1. Select patch source file
-ORIG_GREET="$BENCH_DIR/lib/greet.dart"
-case "$PATCH_TYPE" in
-  normal) PATCH_SRC="$BENCH_DIR/patches/greet_v1.dart" ;;
-  cpu)    PATCH_SRC="$BENCH_DIR/patches/greet_cpu.dart" ;;
-  *) echo "Usage: $0 [UDID] normal|cpu"; exit 1 ;;
-esac
-
-# 2. Swap greet.dart → patch variant, publish, restore
-cp "$ORIG_GREET" "${ORIG_GREET}.bak"
-cp "$PATCH_SRC" "$ORIG_GREET"
-echo "  Swapped greet.dart → $PATCH_TYPE variant"
-
-PATCH_OUTPUT_LOG=$(mktemp)
-cd "$BENCH_DIR"
-"$SHOREBIRD" patch ios --staging 2>&1 | tee "$PATCH_OUTPUT_LOG" || {
-    cp "${ORIG_GREET}.bak" "$ORIG_GREET"
-    rm -f "${ORIG_GREET}.bak" "$PATCH_OUTPUT_LOG"
-    echo "  [ERROR] shorebird patch failed — check shorebird login"
-    exit 1
+_push_meta() {
+  local SIZE="$1" TYPE="$2"
+  printf "$SIZE" > /tmp/bench_patch_size.txt
+  printf "$TYPE" > /tmp/bench_patch_type.txt
+  for f in bench_patch_size.txt bench_patch_type.txt; do
+    local DEST="Documents/${f/bench_patch_/patch_}"
+    xcrun devicectl device copy to --device "$UDID" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+      --source "/tmp/$f" --destination "$DEST" 2>/dev/null || true
+  done
 }
 
-# Extract patch size from shorebird output (best-effort)
-PATCH_SIZE=$(grep -oE '[0-9]+ bytes' "$PATCH_OUTPUT_LOG" | grep -oE '[0-9]+' | tail -1 || echo "0")
-echo "  Shorebird patch published, size: ${PATCH_SIZE}B"
+_launch_wait() {
+  local SECS="$1"
+  xcrun devicectl device process launch --device "$UDID" "$BUNDLE_ID" 2>/dev/null
+  echo "  Waiting ${SECS}s..."
+  sleep "$SECS"
+}
 
-cp "${ORIG_GREET}.bak" "$ORIG_GREET"
-rm -f "${ORIG_GREET}.bak" "$PATCH_OUTPUT_LOG"
+_pull_result() {
+  local OUT="$RESULTS/shorebird_ios_${PATCH_TYPE}.json"
+  xcrun devicectl device copy from --device "$UDID" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --source "Documents/benchmark.json" \
+    --destination "$OUT" 2>/dev/null && \
+    echo "  Result: $(python3 -c "import json; d=json.load(open('$OUT')); print(json.dumps(d))" 2>/dev/null)" || \
+    echo "  [WARN] Could not pull benchmark.json"
+}
 
-# 3. Push metadata to device (patch_size.txt, patch_type.txt)
-printf '%s' "$PATCH_SIZE" > /tmp/bench_patch_size.txt
-printf '%s' "$PATCH_TYPE" > /tmp/bench_patch_type.txt
-
-CONTAINER=$(xcrun devicectl device info containers \
-  --device "$UDID" --bundle-id "$BUNDLE_ID" 2>/dev/null \
-  | grep -m1 'dataContainer' | awk '{print $NF}' || echo "")
-
-for META in bench_patch_size.txt bench_patch_type.txt; do
-    DEST_NAME="${META/bench_patch_/patch_}"
-    xcrun devicectl device copy to --device "$UDID" \
-      --source "/tmp/$META" \
-      --destination "${CONTAINER}/Documents/${DEST_NAME}" 2>/dev/null || true
-done
-
-# 4. Launch app (Shorebird updater will pull patch on startup)
-echo "  Launching $BUNDLE_ID (Shorebird will pull patch from CDN)..."
-xcrun devicectl device process launch \
-  --device "$UDID" \
-  --bundle-id "$BUNDLE_ID" 2>/dev/null || \
-  echo "  [WARN] Launch failed — app may not be installed"
-
-echo "  Waiting 20s for patch download + benchmark..."
-sleep 20
-
-# 5. Pull result
-echo "  Pulling benchmark.json..."
-xcrun devicectl device copy from \
-  --device "$UDID" \
-  --source "${CONTAINER}/Documents/benchmark.json" \
-  --destination "$RESULTS/shorebird_ios_${PATCH_TYPE}.json" 2>/dev/null || {
-    echo "  [WARN] Pull failed"
-  }
-
-if [ -f "$RESULTS/shorebird_ios_${PATCH_TYPE}.json" ]; then
-    echo "  Result:"
-    cat "$RESULTS/shorebird_ios_${PATCH_TYPE}.json"
-    echo ""
+if [ "$PATCH_TYPE" = "none" ]; then
+  # Baseline: no patch
+  _push_meta "0" "none"
+  printf '' > /tmp/empty.txt
+  xcrun devicectl device copy to --device "$UDID" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --source /tmp/empty.txt --destination "Documents/benchmark.json" 2>/dev/null || true
+  _launch_wait 15
+  _pull_result
+  exit 0
 fi
 
+# 1. Publish patch
+ORIG="$BENCH_DIR/lib/greet.dart"
+cp "$ORIG" "${ORIG}.bak"
+[[ "$PATCH_TYPE" == "normal" ]] && cp "$BENCH_DIR/patches/greet_v1.dart" "$ORIG"
+[[ "$PATCH_TYPE" == "cpu"    ]] && cp "$BENCH_DIR/patches/greet_cpu.dart" "$ORIG"
+
+cd "$BENCH_DIR"
+echo "  Publishing Shorebird patch..."
+PATCH_LOG=$( "$SHOREBIRD" patch ios --release-version 1.0.0+3 2>&1 )
+echo "$PATCH_LOG" | grep -E "✅|Error|Patch" | head -3
+cp "${ORIG}.bak" "$ORIG" && rm -f "${ORIG}.bak"
+
+PATCH_SIZE=$(echo "$PATCH_LOG" | grep -oE '[0-9]+ bytes' | grep -oE '[0-9]+' | tail -1 || echo "0")
+
+# 2. Clear old benchmark.json + set metadata
+printf '' > /tmp/empty.txt
+xcrun devicectl device copy to --device "$UDID" \
+  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+  --source /tmp/empty.txt --destination "Documents/benchmark.json" 2>/dev/null || true
+_push_meta "$PATCH_SIZE" "$PATCH_TYPE"
+
+# 3. Launch 1: Shorebird downloads patch (needs WiFi)
+echo "  Launch 1: downloading patch from Shorebird CDN..."
+_launch_wait 25
+
+# 4. Launch 2: patch applied, run benchmark
+echo "  Launch 2: patch active, running benchmark..."
+printf '' > /tmp/empty.txt
+xcrun devicectl device copy to --device "$UDID" \
+  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+  --source /tmp/empty.txt --destination "Documents/benchmark.json" 2>/dev/null || true
+_launch_wait 15
+
+# 5. Pull result
+_pull_result
 echo "=== Done ==="

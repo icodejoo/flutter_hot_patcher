@@ -1,50 +1,60 @@
 import 'dart:convert';
 import 'dart:ffi';
-import 'package:ffi/ffi.dart';
 import 'dart:io';
+import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'greet.dart';
 
-// ─── FFI: getrusage ───────────────────────────────────────────────────────────
+// ─── FFI: getrusage (Darwin) ──────────────────────────────────────────────────
+// On Darwin: tv_sec = int64, tv_usec = int32 (suseconds_t)
 final class Timeval extends Struct {
   @Int64() external int tv_sec;
-  @Int64() external int tv_usec;
+  @Int32() external int tv_usec;
+  @Int32() external int _pad;
 }
 
 final class Rusage extends Struct {
   external Timeval ru_utime;
   external Timeval ru_stime;
-  @Array(14) external Array<Int64> padding;
+  @Array(14) external Array<Int64> rest;
 }
 
 typedef GetrusageFn = Int32 Function(Int32 who, Pointer<Rusage> usage);
 typedef GetrusageDart = int Function(int who, Pointer<Rusage> usage);
 
-final _lib = DynamicLibrary.process();
-final _getrusage = _lib.lookupFunction<GetrusageFn, GetrusageDart>('getrusage');
+late final GetrusageDart _getrusage;
+bool _ffiOk = false;
+
+void _initFfi() {
+  try {
+    _getrusage = DynamicLibrary.process()
+        .lookupFunction<GetrusageFn, GetrusageDart>('getrusage');
+    _ffiOk = true;
+  } catch (_) {}
+}
 
 int _rssKb() {
-  if (Platform.isAndroid) {
-    try {
+  try {
+    if (Platform.isAndroid) {
       final status = File('/proc/self/status').readAsStringSync();
       final match = RegExp(r'VmRSS:\s+(\d+)').firstMatch(status);
       return match != null ? int.parse(match.group(1)!) : 0;
-    } catch (_) { return 0; }
-  }
-  // iOS: getrusage maxrss is in bytes on Darwin
-  // Use ProcessInfo.currentRss as fallback
-  try {
+    }
     return ProcessInfo.currentRss ~/ 1024;
   } catch (_) { return 0; }
 }
 
 Duration _cpuUsed() {
-  final r = calloc<Rusage>();
-  _getrusage(0, r);
-  final us = r.ref.ru_utime.tv_sec * 1000000 + r.ref.ru_utime.tv_usec +
-              r.ref.ru_stime.tv_sec * 1000000 + r.ref.ru_stime.tv_usec;
-  calloc.free(r);
-  return Duration(microseconds: us);
+  if (!_ffiOk) return Duration.zero;
+  try {
+    final r = calloc<Rusage>();
+    _getrusage(0, r);
+    final us = r.ref.ru_utime.tv_sec * 1000000 + r.ref.ru_utime.tv_usec +
+               r.ref.ru_stime.tv_sec * 1000000 + r.ref.ru_stime.tv_usec;
+    calloc.free(r);
+    return Duration(microseconds: us);
+  } catch (_) { return Duration.zero; }
 }
 
 double _cpuPercent(Duration elapsed, Duration cpuUsed) {
@@ -52,9 +62,9 @@ double _cpuPercent(Duration elapsed, Duration cpuUsed) {
   return cpuUsed.inMicroseconds / elapsed.inMicroseconds * 100.0;
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _initFfi();
   runApp(const BenchApp());
 }
 
@@ -74,18 +84,19 @@ class _BenchAppState extends State<BenchApp> {
   }
 
   Future<void> _run() async {
+    final docsDir = await _docsDir();
     final coldStart = Stopwatch()..start();
-    final patchSizeBytes = _readPatchSize();
-    final patchType = _readPatchType();
 
-    greet(); // warm up
+    final patchSizeBytes = _readFile('$docsDir/patch_size.txt', '0');
+    final patchType = _readFile('$docsDir/patch_type.txt', 'none');
+
+    greet();
     coldStart.stop();
 
-    // 1000-call latency benchmark
     final sw = Stopwatch()..start();
     for (int i = 0; i < 1000; i++) greet();
     sw.stop();
-    final greetCallUs = sw.elapsedMicroseconds ~/ 1000;
+    final greetCallUs = sw.elapsedMicroseconds / 1000.0;
 
     final rssKb = _rssKb();
 
@@ -95,7 +106,7 @@ class _BenchAppState extends State<BenchApp> {
       for (int s = 0; s < 10; s++) {
         final t0 = DateTime.now();
         final c0 = _cpuUsed();
-        greet(); // trigger the CPU work
+        greet();
         await Future.delayed(const Duration(milliseconds: 100));
         final t1 = DateTime.now();
         final c1 = _cpuUsed();
@@ -108,45 +119,43 @@ class _BenchAppState extends State<BenchApp> {
       'variant': 'shorebird',
       'platform': Platform.isIOS ? 'ios' : 'android',
       'patch_type': patchType,
-      'patch_size_bytes': patchSizeBytes,
-      'cold_start_ms': coldStart.elapsedMilliseconds,
-      'greet_call_us': greetCallUs,
+      'patch_size_bytes': int.tryParse(patchSizeBytes.trim()) ?? 0,
+      'cold_start_ms': coldStart.elapsedMicroseconds / 1000.0,
+      'greet_call_us': double.parse(greetCallUs.toStringAsFixed(2)),
       'memory_rss_kb': rssKb,
       'cpu_percent_peak': double.parse(cpuPeak.toStringAsFixed(1)),
     };
 
-    await _writeResult(result);
+    try {
+      await File('$docsDir/benchmark.json').writeAsString(jsonEncode(result));
+    } catch (e) {
+      setState(() { _status = 'ERROR writing JSON: $e'; });
+      return;
+    }
 
     setState(() {
-      _status = 'Done\n${greet()}\ncold=${result['cold_start_ms']}ms '
-                'greet=${result['greet_call_us']}μs\n'
-                'rss=${result['memory_rss_kb']}KB cpu=${result['cpu_percent_peak']}%';
+      _status = 'Done: ${greet()}\n'
+          'cold=${result['cold_start_ms']}ms '
+          'greet=${result['greet_call_us']}μs\n'
+          'rss=${result['memory_rss_kb']}KB '
+          'cpu=${result['cpu_percent_peak']}%\n'
+          'patch=$patchType';
     });
   }
 
-  int _readPatchSize() {
-    try {
-      return int.parse(File('${_docsDir()}/patch_size.txt').readAsStringSync().trim());
-    } catch (_) { return 0; }
+  String _readFile(String path, String defaultVal) {
+    try { return File(path).readAsStringSync(); }
+    catch (_) { return defaultVal; }
   }
 
-  String _readPatchType() {
-    try {
-      return File('${_docsDir()}/patch_type.txt').readAsStringSync().trim();
-    } catch (_) { return 'none'; }
-  }
-
-  String _docsDir() {
-    if (Platform.isIOS) {
-      final home = Platform.environment['HOME'] ?? '';
-      return '$home/Documents';
+  Future<String> _docsDir() async {
+    if (Platform.isAndroid) {
+      final dir = await getExternalStorageDirectory();
+      return dir?.path ??
+          '/sdcard/Android/data/com.hotpatch.bench.shorebird_demo/files';
     }
-    return '/sdcard/Android/data/com.hotpatch.bench.shorebird_demo/files';
-  }
-
-  Future<void> _writeResult(Map<String, dynamic> result) async {
-    final file = File('${_docsDir()}/benchmark.json');
-    await file.writeAsString(jsonEncode(result));
+    final dir = await getApplicationDocumentsDirectory();
+    return dir.path;
   }
 
   @override
@@ -156,7 +165,8 @@ class _BenchAppState extends State<BenchApp> {
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: Text(_status, textAlign: TextAlign.center,
+            child: Text(_status,
+                textAlign: TextAlign.center,
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 14)),
           ),
         ),
