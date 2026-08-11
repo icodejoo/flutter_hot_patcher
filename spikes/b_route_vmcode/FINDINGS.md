@@ -238,13 +238,10 @@ iOS ObjC 代码可在 isolate 创建前调用，Simulator::Current() 第一次�
    - `HasScheduledInterrupts()` 检查：GC/中断挂起时跳过原生调用回退 Simulator，避免原生栈 root 漏扫
    - `SimulatorSetjmpBuffer` RAII 包裹：Dart 异常经 `JumpToFrame→longjmp` 正确回传 Simulator
    - BL（A5）和 BLR（A2）两处拦截均已修复，Flutter.xcframework 已重建
-2. ~~iOS 真机端到端未验证~~ → **✅ 2026-08-11 准备完成，待跑机**：
-   - `fhp_shorebird_load_vmcode()` C shim 已加入 `libdart_aot_ios.a`（B3+B4 全套）
-   - `HotPatchDemo/ViewController.m` 在 `dart_run()` 前调用该 shim
-   - `vmcode_link.vmcode`：greet.aot 1576 函数 100% 链接表，随 app bundle 分发
-   - `snapshot.S` 已用 Shorebird gen_snapshot 重编（与 vmcode 偏移对齐）
-   - `project.pbxproj` 已正确添加 vmcode_link.vmcode 资源（ID 冲突已修复）
-   - 验证指南：`spikes/m3_ios_realdevice/B4_E2E_TEST_GUIDE.md`
+2. ~~iOS 真机端到端未验证~~ → **✅ 2026-08-11 PASS（iPhone 实证）**：
+   - Console: `B4 vmcode link table: LOADED` → 3223 条 SimulatorToCPU 链接表
+   - Console: `setup OK` + `baseline result = ORIGINAL` → Simulator 正常运行，无 crash
+   - 验证报告：`spikes/m3_ios_realdevice/RESULTS.md` §B4
 3. analyze_snapshot --shorebird 独立二进制只在 Linux/Android 构建（macOS GN 限制）。
 4. 每次函数调用都过 Simulator（含已链接函数），比 Shorebird 的直接 base instructions table 多一次 dispatch。
 

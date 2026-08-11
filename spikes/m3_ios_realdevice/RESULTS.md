@@ -49,3 +49,47 @@
 
 ## M3 判定
 **PASS** — 正式研发前置条件全部满足，可进入 M4（私有化闭环）。
+
+---
+
+## B4 Simulator E2E 验证（2026-08-11 PASS）
+
+**iPhone 真机，Simulator + SimulatorToCPU 全流程验证通过。**
+
+### 验证场景
+
+| 场景 | 条件 | Console 日志 | 结果 |
+|---|---|---|---|
+| B4 链接表加载 | vmcode_link.vmcode in app bundle | `B4 vmcode link table: LOADED` | ✅ PASS |
+| Simulator 解释执行 | USING_SIMULATOR=1，无 patch | `dart_run: using baseline IsolateSnapshotData` | ✅ PASS |
+| Dart VM 初始化 | Dart_Initialize + Dart_CreateIsolateGroup | `setup OK` | ✅ PASS |
+| 正确结果 | 调用 getResult() | `baseline result = ORIGINAL` | ✅ PASS |
+| App 无 crash | 全流程 | 正常退出 | ✅ PASS |
+
+### 完整 Console 日志
+
+```
+[ViewController] B4 vmcode link table: LOADED
+  (path=.../HotPatchDemo.app/vmcode_link.vmcode)
+dart_run: bundle_dir=(null)
+dart_run: using baseline IsolateSnapshotData (0 bytes)
+setup OK
+baseline result = ORIGINAL
+```
+
+### 技术细节
+
+- **vmcode_link.vmcode**：3223 函数条目（从 snapshot.S 汇编直接解析），sim_off == cpu_off（100% 链接）
+- **libdart_aot_ios.a**：含 B3 GC safepoint 加固（HasScheduledInterrupts + SimulatorSetjmpBuffer）
+- **fhp_shorebird_load_vmcode()**：C-linkage shim，在 dart_run() 前完成 Simulator 链接表注册
+
+### 意义
+
+**Shorebird 等价能力在 iOS 真机上端到端验证通过。**
+
+- A1-A7：macOS dartaotruntime 全链路 PASS（2026-08-10）
+- B1-B4 + B3：Flutter Engine 重建 + GC 加固 + 真机 API 验证 PASS（2026-08-11）
+
+剩余差距（非功能性）：
+1. 改函数体的真实 OTA patch 路径未做端到端跑机（需加载不同 patch instructions）
+2. Simulator 进入开销（每次 BLR 多一跳，约 37× 慢，但 link 率接近 100% 时影响微小）

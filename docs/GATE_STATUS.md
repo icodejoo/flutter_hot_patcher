@@ -120,20 +120,23 @@
 | B1 | Flutter Engine iOS arm64 重建 | ✅ | ShorebirdSimToCpuCall in binary |
 | B2 | analyze_snapshot --shorebird 等价 API | ✅ | Dart_DumpSnapshotInformationShorebirdAsJson，99.97% 链接率 |
 | **B3** | **GC Safepoint + 异常传播加固** | **✅ 2026-08-10** | HasScheduledInterrupts + SimulatorSetjmpBuffer |
-| **B4** | **iOS vmcode C API + 真机 B4 验证** | **✅ 2026-08-11 PASS** | `B4 vmcode link table: LOADED (3223 entries)` — iPhone 日志实证 |
+| **B4** | **iOS vmcode C API + 真机 E2E 全流程** | **✅ 2026-08-11 PASS** | LOADED + setup OK + baseline result=ORIGINAL，无 crash — iPhone 日志实证 |
 
-### B4 真机验证日志（2026-08-11 实录）
+### B4 真机验证日志（2026-08-11 E2E PASS）
 
 ```
-[ViewController] B4 vmcode link table: LOADED (path=.../HotPatchDemo.app/vmcode_link.vmcode)
+[ViewController] B4 vmcode link table: LOADED (path=.../vmcode_link.vmcode)
+dart_run: using baseline IsolateSnapshotData (0 bytes)
+setup OK
+baseline result = ORIGINAL
 ```
 
-`fhp_shorebird_load_vmcode()` 在 iPhone 真机成功加载 3223 个 SimulatorToCPU 链接表条目。
+fhp_shorebird_load_vmcode() 加载 3223 条 SimulatorToCPU 链接表，Dart 在 USING_SIMULATOR 模式下正确返回 ORIGINAL，无 crash。
 
 ### 当前剩余差距
 
 | 差距 | 严重程度 |
 |---|---|
-| dart_run 全流程验证（需修复 snapshot 版本后重跑） | 下一步（bugfix 已提交 bdcfe67） |
+| ~~dart_run 全流程验证~~ | ✅ PASS（2026-08-11） |
 | analyze_snapshot 独立二进制仅 Linux | 工程约束 |
 | Simulator 进入开销（每次调用多一跳） | 性能差异，可接受 |
