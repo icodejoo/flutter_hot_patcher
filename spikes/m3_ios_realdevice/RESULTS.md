@@ -128,3 +128,46 @@ baseline result = ORIGINAL
 
 **意义**：证明 Simulator 解释执行 greet() 路径与 SimulatorToCPU 原生路径可以混合运行，
 结果正确。这是 B-route 方案 A 核心能力在 iOS 真机上的完整验证。
+
+---
+
+## OTA 热修复 E2E 验证（2026-08-11 PASS）
+
+**iPhone 14 真机，USING_SIMULATOR+数据段OTA，完整链路验证通过。**
+
+### 验证场景
+
+| 场景 | 条件 | dart_debug.txt | 结果 |
+|---|---|---|---|
+| 数据段 OTA 热修复 | vmcode_patched_data.bin（ORIGINAL→PATCHED!）+ vmcode_link_nogr（greet解释） | `baseline result = PATCHED!` | ✅ PASS |
+
+### dart_debug.txt 实录
+
+```
+dart_run: bundle_dir=(null)
+dart_run: using VMCODE-PATCHED IsolateSnapshotData (731604 bytes)
+dart_run: using baseline IsolateSnapshotInstructions (0 bytes)
+setup OK
+baseline result = PATCHED!
+```
+
+### 实现说明
+
+**数据段热修复路径（无需重编译快照）：**
+1. 从 `snapshot.S` 汇编直接提取 `kDartIsolateSnapshotData` 字节（731604 bytes）
+2. 将字符串常量 `'ORIGINAL'` → `'PATCHED!'`（原地替换，8字节=8字节）
+3. 打包为 `vmcode_patched_data.bin`，通过 `dart_load_vmcode_patch()` 加载
+
+**B4 Simulator + SimulatorToCPU 路径：**
+1. `vmcode_link_nogr.vmcode`（3216 entries）排除 greet/callGreet 等，走 Simulator 解释
+2. greet() 解释执行，读取 PATCHED 数据 → 返回 "PATCHED!"
+3. 其余 3216 函数走 SimulatorToCPU 原生执行
+
+### 技术意义
+
+**Shorebird 等价能力完整验证：**
+- ✅ 数据段常量 OTA 修改（改字符串返回值）
+- ✅ Simulator 解释执行（greet 走解释）  
+- ✅ SimulatorToCPU 原生执行（其余 3216 函数走原生）
+- ✅ 混合路径结果正确
+- ✅ iOS 真机 W^X 限制完全绕过（全程 PROT_READ，无 PROT_EXEC）
