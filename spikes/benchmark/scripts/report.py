@@ -12,22 +12,24 @@ from typing import Optional
 RESULTS_DIR = pathlib.Path(__file__).parent.parent / "results"
 
 EXPECTED = [
-    ("hotpatch",  "ios",     "normal"),
-    ("hotpatch",  "ios",     "cpu"),
-    ("shorebird", "ios",     "none"),
-    ("shorebird", "ios",     "normal"),
-    ("shorebird", "ios",     "cpu"),
-    ("shorebird", "android", "none"),
-    ("shorebird", "android", "normal"),
-    ("shorebird", "android", "cpu"),
+    ("hotpatch",     "ios", "normal"),
+    ("hotpatch",     "ios", "cpu"),
+    ("hotpatch_aot", "ios", "none"),
+    ("hotpatch_aot", "ios", "normal"),
+    ("shorebird",    "ios", "none"),
+    ("shorebird",    "ios", "normal"),
+    ("shorebird",    "ios", "cpu"),
+    ("shorebird",    "android", "normal"),
+    ("shorebird",    "android", "cpu"),
 ]
 
 METRICS = [
-    ("patch_size_bytes", "Patch Size",  lambda v: f"{v:,} B"),
-    ("cold_start_ms",    "Cold Start",  lambda v: f"{v:.0f} ms"),
-    ("greet_call_us",    "greet() μs",  lambda v: f"{v} μs" if v else "N/A"),
-    ("memory_rss_kb",    "RSS",         lambda v: f"{v:,} KB"),
-    ("cpu_percent_peak", "CPU Peak",    lambda v: f"{v:.1f}%"),
+    ("patch_size_bytes", "Patch Size",   lambda v: f"{v:,} B"),
+    ("cold_start_ms",    "Cold Start",   lambda v: f"{v:.1f} ms"),
+    ("greet_call_ns",    "greet() ns",   lambda v: f"{v} ns" if v else "N/A"),
+    ("greet_call_us",    "greet() μs",   lambda v: f"{v:.1f} μs" if v else "N/A"),
+    ("memory_rss_kb",    "RSS",          lambda v: f"{v:,} KB"),
+    ("cpu_percent_peak", "CPU Peak",     lambda v: f"{v:.1f}%"),
 ]
 
 COLORS = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948"]
