@@ -10,6 +10,7 @@
 		BB1234560000000000000001 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000001 /* AppDelegate.m */; };
 		BB1234560000000000000003 /* dart_harness.c in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000003 /* dart_harness.c */; };
 		BB1234560000000000000005 /* builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000005 /* builtin_shim.cpp */; };
+		BB1234560000000000000006 /* snapshot.o in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006 /* snapshot.o */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +19,7 @@
 		AA1234560000000000000003 /* dart_harness.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../dart_harness.c; sourceTree = SOURCE_ROOT; };
 		AA1234560000000000000004 /* dart_harness.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ../dart_harness.h; sourceTree = SOURCE_ROOT; };
 		AA1234560000000000000005 /* builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ../builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000006 /* snapshot.o */ = {isa = PBXFileReference; lastKnownFileType = compiled.mach-o.objfile; path = ../snapshot.o; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -54,6 +56,7 @@
 				AA1234560000000000000003 /* dart_harness.c */,
 				AA1234560000000000000004 /* dart_harness.h */,
 				AA1234560000000000000005 /* builtin_shim.cpp */,
+				AA1234560000000000000006 /* snapshot.o */,
 			);
 			name = HotPatchBench;
 			sourceTree = "<group>";
@@ -128,6 +131,7 @@
 				BB1234560000000000000001 /* AppDelegate.m in Sources */,
 				BB1234560000000000000003 /* dart_harness.c in Sources */,
 				BB1234560000000000000005 /* builtin_shim.cpp in Sources */,
+				BB1234560000000000000006 /* snapshot.o in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,7 +176,6 @@
 					Foundation,
 					"-framework",
 					Security,
-					"-lresolv",
 					"-lresolv",
 					"-framework",
 					UIKit,
@@ -228,7 +231,6 @@
 					Foundation,
 					"-framework",
 					Security,
-					"-lresolv",
 					"-lresolv",
 					"-framework",
 					UIKit,
