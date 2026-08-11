@@ -22,6 +22,22 @@ metadata:
 - `scripts/push_android_shorebird.sh`：adb push metadata + shorebird patch
 - `scripts/report.py`：rich 终端表格 + Chart.js HTML，N/A 容错
 
+## iOS 实测结果（2026-08-11，iPhone 14 iOS 26.5）
+
+| 指标 | hotpatch normal | hotpatch cpu | shorebird normal | shorebird cpu |
+|------|----------------|--------------|-----------------|---------------|
+| 补丁大小 | 447 B | 514 B | 384 KB | 515 KB |
+| 冷启动 | 8.6 ms | 7 ms | 1.1 ms | 1.9 ms |
+| greet() 延迟 | N/A | N/A | 0 μs | 807 μs（解释模式！）|
+| 内存 RSS | 28 MB | 28 MB | 54 MB | 54 MB |
+| CPU 峰值 | 0% | 100% | 0% | 101% |
+
+关键发现：
+- Shorebird patch 比 hotpatch 大 860×（AOT diff vs 原始 .dill bytecode）
+- Shorebird RSS 约 2× （Flutter+Shorebird vs 裸 Dart VM）
+- Shorebird cpu patch 以解释模式运行（807μs/call），hotpatch 为 AOT
+- cpu loop 须限制 ≤10K 次（Shorebird 解释模式无法处理 1M 次）
+
 ## 待完成（手动操作）
 
 1. `shorebird init` + `shorebird release ios/android`（需 Shorebird 账号登录）
