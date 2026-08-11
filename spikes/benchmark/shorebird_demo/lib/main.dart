@@ -84,35 +84,56 @@ class _BenchAppState extends State<BenchApp> {
   }
 
   Future<void> _run() async {
-    final docsDir = await _docsDir();
+    String docsDir = '';
+    try {
+      docsDir = await _docsDir();
+    } catch (e) {
+      setState(() { _status = 'DOCS_ERR: $e'; });
+      return;
+    }
+    // Write heartbeat to verify app is running
+    try { 
+      await File('$docsDir/heartbeat.txt').writeAsString('alive'); 
+    } catch (_) {}
+    
+    // Debug: step tracking
+    Future<void> dbg(String step) async {
+      try { await File('$docsDir/debug_step.txt').writeAsString(step); } catch (_) {}
+    }
     final coldStart = Stopwatch()..start();
 
+    await dbg('reading_meta');
     final patchSizeBytes = _readFile('$docsDir/patch_size.txt', '0');
     final patchType = _readFile('$docsDir/patch_type.txt', 'none');
 
+    await dbg('greet_warmup');
     greet();
     coldStart.stop();
+    await dbg('greet_loop_start');
 
+    final int greetIter = patchType == 'cpu' ? 10 : 1000;
     final sw = Stopwatch()..start();
-    for (int i = 0; i < 1000; i++) greet();
+    for (int i = 0; i < greetIter; i++) greet();
     sw.stop();
-    final greetCallUs = sw.elapsedMicroseconds / 1000.0;
+    final greetCallUs = sw.elapsedMicroseconds / greetIter.toDouble();
 
+    await dbg('rss_measurement');
     final rssKb = _rssKb();
 
+    await dbg('cpu_measurement');
     double cpuPeak = 0.0;
     if (patchType == 'cpu') {
-      final samples = <double>[];
-      for (int s = 0; s < 10; s++) {
-        final t0 = DateTime.now();
-        final c0 = _cpuUsed();
-        greet();
-        await Future.delayed(const Duration(milliseconds: 100));
-        final t1 = DateTime.now();
-        final c1 = _cpuUsed();
-        samples.add(_cpuPercent(t1.difference(t0), c1 - c0));
-      }
-      cpuPeak = samples.reduce((a, b) => a > b ? a : b);
+      // Synchronous CPU measurement: run cpu-heavy greet() 100 times,
+      // measure wall time vs CPU time (no Future.delayed - avoids iOS background throttle)
+      final wallSw = Stopwatch()..start();
+      final cpuBefore = _cpuUsed();
+      for (int i = 0; i < 100; i++) greet();
+      wallSw.stop();
+      final cpuAfter = _cpuUsed();
+      cpuPeak = _cpuPercent(
+        Duration(microseconds: wallSw.elapsedMicroseconds),
+        cpuAfter - cpuBefore,
+      );
     }
 
     final result = {
@@ -126,6 +147,7 @@ class _BenchAppState extends State<BenchApp> {
       'cpu_percent_peak': double.parse(cpuPeak.toStringAsFixed(1)),
     };
 
+    await dbg('writing_json');
     try {
       await File('$docsDir/benchmark.json').writeAsString(jsonEncode(result));
     } catch (e) {

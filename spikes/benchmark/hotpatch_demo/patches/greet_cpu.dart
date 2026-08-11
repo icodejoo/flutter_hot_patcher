@@ -4,7 +4,7 @@ library;
 @pragma('vm:never-inline')
 String greet() {
   int sum = 0;
-  for (int i = 0; i < 1000000; i++) {
+  for (int i = 0; i < 10000; i++) {
     sum += i;
   }
   // Return fixed string to avoid buffer overflow in dart_harness
