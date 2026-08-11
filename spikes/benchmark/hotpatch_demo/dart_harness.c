@@ -274,7 +274,7 @@ const char* dart_apply_aot_patch(int variant) {
         Dart_ExitScope();
         return s_result;
     }
-    Dart_Handle dart_int = Dart_NewIntegerFromInt64((int64_t)variant);
+    Dart_Handle dart_int = Dart_NewInteger((int64_t)variant);
     Dart_ListSetAt(dart_list, 0, dart_int);
 
     Dart_Handle invoke_args[1];
@@ -328,7 +328,7 @@ const char* dart_benchmark_greet(int n) {
         Dart_ExitScope();
         return s_bench;
     }
-    Dart_ListSetAt(dart_list, 0, Dart_NewIntegerFromInt64((int64_t)n));
+    Dart_ListSetAt(dart_list, 0, Dart_NewInteger((int64_t)n));
 
     Dart_Handle invoke_args[1];
     invoke_args[0] = dart_list;
