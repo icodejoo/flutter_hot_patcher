@@ -1,35 +1,34 @@
-# Xcode Project Setup
+# HotPatchBench Xcode Setup
 
-The Xcode project `HotPatchBench.xcodeproj` now exists in this directory — no manual creation needed.
+The `HotPatchBench.xcodeproj` is already created in this directory. Follow these steps to build and run.
 
-## Opening the Project
+## Step 1: Compile AOT snapshot
 
 ```bash
-open spikes/benchmark/hotpatch_demo/HotPatchBench.xcodeproj
+cd spikes/benchmark/hotpatch_demo
+./build_aot.sh
 ```
 
-## Source Files (already in project)
+This produces `snapshot.o` (arm64 AOT of greet.dart).
 
-- `AppDelegate.m` — app entry point, programmatic UI
-- `dart_harness.c` — Dart VM harness (AOT bootstrap)
-- `builtin_shim.cpp` — Dart builtin shims
+## Step 2: Add snapshot.o to Xcode target
 
-(`measure.h` is included via `#include` — not a compile target)
+In Xcode → HotPatchBench target → Build Phases → Compile Sources:
+- Click `+` → Add Other → navigate to `spikes/benchmark/hotpatch_demo/snapshot.o`
 
-## Build Settings (pre-configured)
+## Step 3: Build Settings
 
-- **Bundle ID**: `com.hotpatch.bench.hotpatch`
-- **Team**: 7VP87G446C (update if needed via Xcode → Signing & Capabilities)
-- **Header Search Paths**: `/Users/Cruz/dart/sdk/runtime/include`
-- **Library Search Paths**: `spikes/m3_ios_realdevice/build` (Flutter engine static libs)
-- **Other Linker Flags**: Full Flutter engine link set (dart_aot_ios, boringssl, icu, etc.)
+The project inherits from M3's build settings. If the Flutter engine path changed, update:
+- `LIBRARY_SEARCH_PATHS` → path to Flutter engine static libs
+- `HEADER_SEARCH_PATHS` → path to `dart_api.h` and engine headers
 
-## Adding the AOT Snapshot
+## Step 4: Sign and deploy
 
-The greet.dart AOT snapshot (`snapshot.o`) must be compiled and linked manually:
+Set your Development Team in Signing & Capabilities, then Product → Run (or archive for IPA).
 
-1. Run `build_patch.sh` to compile greet.dart → snapshot.S → snapshot.o
-2. In Xcode: target → Build Phases → Link Binary With Libraries → add snapshot.o
-   (or add it as a file reference and include in Sources)
+## Step 5: Run push script
 
-See `build_patch.sh` for the compilation commands.
+```bash
+./scripts/push_ios_hotpatch.sh <UDID> normal
+./scripts/push_ios_hotpatch.sh <UDID> cpu
+```

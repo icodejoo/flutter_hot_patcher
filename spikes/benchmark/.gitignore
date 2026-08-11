@@ -1,2 +1,4 @@
 results/*.json
 results/report.html
+spikes/benchmark/hotpatch_demo/snapshot.S
+spikes/benchmark/hotpatch_demo/snapshot.o
