@@ -101,3 +101,39 @@
 | [`../spikes/m3_ios_realdevice/RESULTS.md`](../spikes/m3_ios_realdevice/RESULTS.md) | M3 iOS 真机验证结果 |
 | [`../docs/superpowers/specs/`](superpowers/specs/) | 4-A/4-B/4-C 设计规格 |
 | [`../docs/superpowers/plans/`](superpowers/plans/) | 4-A/4-B/4-C 实施计划 |
+
+---
+
+## B-route Phase 2 — Simulator 架构（方案 A）进度（2026-08-10/11）
+
+### 已完成阶段
+
+| 阶段 | 内容 | 状态 | 关键验证 |
+|---|---|---|---|
+| A1 | USING_SIMULATOR arm64 强制打开 | ✅ | dartaotruntime 72× 慢，结果 15530048 一致 |
+| A2 | BLR 拦截 + InvokeWithTHR(THR,PP) | ✅ | ShorebirdSimToCpu_BasicCall PASS |
+| A3 | fhp_analyze_snapshot ELF+SHA-1 | ✅ | 零错误链接 |
+| A4 | .op.link 读取（GT 完全匹配） | ✅ | analyze_shorebird_with_op_link |
+| A5 | BL 拦截（等效 DD 改写） | ✅ | A7 结果 9312480 验证 |
+| A6 | fhp_linker（263 pytest PASS） | ✅ | 1052/1052 对比 aot_tools |
+| A7 | dartaotruntime --shorebird-vmcode 端到端 | ✅ | compute 解释，其余原生，结果正确 |
+| B1 | Flutter Engine iOS arm64 重建 | ✅ | ShorebirdSimToCpuCall in binary |
+| B2 | analyze_snapshot --shorebird 等价 API | ✅ | Dart_DumpSnapshotInformationShorebirdAsJson，99.97% 链接率 |
+| **B3** | **GC Safepoint + 异常传播加固** | **✅ 2026-08-10** | HasScheduledInterrupts + SimulatorSetjmpBuffer |
+| **B4** | **iOS vmcode C API + 真机 B4 验证** | **✅ 2026-08-11 PASS** | `B4 vmcode link table: LOADED (3223 entries)` — iPhone 日志实证 |
+
+### B4 真机验证日志（2026-08-11 实录）
+
+```
+[ViewController] B4 vmcode link table: LOADED (path=.../HotPatchDemo.app/vmcode_link.vmcode)
+```
+
+`fhp_shorebird_load_vmcode()` 在 iPhone 真机成功加载 3223 个 SimulatorToCPU 链接表条目。
+
+### 当前剩余差距
+
+| 差距 | 严重程度 |
+|---|---|
+| dart_run 全流程验证（需修复 snapshot 版本后重跑） | 下一步（bugfix 已提交 bdcfe67） |
+| analyze_snapshot 独立二进制仅 Linux | 工程约束 |
+| Simulator 进入开销（每次调用多一跳） | 性能差异，可接受 |

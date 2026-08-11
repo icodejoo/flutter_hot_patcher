@@ -635,7 +635,10 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 
 **剩余项（生产级对齐）：**
 - **B3**（FFI/safepoint 加固）：✅ 已完成——HasScheduledInterrupts() 检查 + SimulatorSetjmpBuffer
-- iOS 真机端到端：在 HotPatchDemo app 调用 `Dart_ShorebirdLoadVmcode()` 并运行补丁
+- iOS 真机端到端：✅ 2026-08-11 准备完成，待跑机验证
+  - `fhp_shorebird_load_vmcode()` C shim 加入 libdart_aot_ios.a（B3+B4）
+  - HotPatchDemo ViewController 已集成，vmcode_link.vmcode 随 bundle 分发
+  - 验证指南：`spikes/m3_ios_realdevice/B4_E2E_TEST_GUIDE.md`
 
 ---
 
@@ -662,12 +665,13 @@ nm engine/ios_release/Flutter.xcframework/ios-arm64/Flutter.framework/Flutter | 
 | 差距 | 影响 | 严重程度 |
 |---|---|---|
 | **B3：GC Safepoint** | SimulatorToCPU 执行时 GC 触发 → 死锁/堆损坏 | **✅ 2026-08-10 完成** |
-| **iOS 真机端到端未验证** | B4 API 存在但未在真实 Flutter app 上跑过 | 验证缺口 |
+| ~~**iOS 真机端到端未验证**~~ | ✅ 2026-08-11 准备完成：fhp_shorebird_load_vmcode C shim + vmcode_link.vmcode，待跑机 | — |
 | **analyze_snapshot 独立二进制仅 Linux** | CI 需要 Linux build agent | 工程约束 |
 | **Simulator 进入开销** | 每次调用都进入解释器再立即跳出，比 Shorebird base instructions table 多一跳 | 性能开销 |
 
 ### 一句话结论
 
 核心架构已完整实现并端到端验证（macOS dartaotruntime）。
-Flutter.xcframework 已含所有关键能力。
-**B3（GC Safepoint 加固）已完成**（2026-08-10）。iOS 真机 E2E 验证是下一步行动项。
+Flutter.xcframework 已含所有关键能力（A1-A5+B1-B4+B3）。
+**B3（GC Safepoint 加固）已完成**（2026-08-10）。
+**iOS 真机 E2E 准备完成**（2026-08-11）：HotPatchDemo 已集成 fhp_shorebird_load_vmcode + vmcode_link.vmcode，待用户跑机验证。
