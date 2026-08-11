@@ -20,6 +20,15 @@ int dart_load_vmcode_patch(const char* staged_path);
  */
 bool fhp_shorebird_load_vmcode(const char* vmcode_path);
 
+
+/**
+ * flutter_hot_patcher OTA: Load PATCH instructions + data + link table from a
+ * vmcode_ota_patch.vmcode file. Must be called BEFORE dart_run().
+ * Reads: [N][instr_size][data_size][N×8 link entries][pad to 16384][instr][data]
+ * Returns: number of link entries loaded (>0 = success), 0 = not found, -1 = error.
+ */
+int dart_load_ota_patch(const char* vmcode_path);
+
 #ifdef __cplusplus
 }
 #endif

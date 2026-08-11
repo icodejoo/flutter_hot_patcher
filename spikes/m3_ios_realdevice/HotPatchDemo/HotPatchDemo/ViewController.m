@@ -75,6 +75,22 @@ static void report_telemetry(NSString* patch_id, BOOL success) {
         }
     }
 
+    /* flutter_hot_patcher OTA DEMO: load patched IsolateSnapshotData (data-only patch)
+       PATCH: "ORIGINAL" → "PATCHED!" in the data section (same byte length, no instructions change)
+       This combined with B4 link table (greet excluded → runs interpreted) demonstrates:
+       - greet() runs in Simulator, reads patched data constant → returns "PATCHED!"
+       - all other functions run natively via SimulatorToCPU */
+    NSString *patchedDataPath = [dataDir stringByAppendingPathComponent:@"vmcode_patched_data.bin"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
+        patchedDataPath = [[NSBundle mainBundle] pathForResource:@"vmcode_patched_data" ofType:@"bin"];
+    }
+    if (patchedDataPath && [[NSFileManager defaultManager] fileExistsAtPath:patchedDataPath]) {
+        int dataResult = dart_load_vmcode_patch([patchedDataPath UTF8String]);
+        NSLog(@"[ViewController] OTA data patch loaded: %d (1=ok,0=not found,-1=err)", dataResult);
+    } else {
+        NSLog(@"[ViewController] No patched data found — will use baseline data");
+    }
+
     /* flutter_hot_patcher B4 re-verify: Load partial link table (greet excluded → interpreted).
        Priority: 1) staged OTA file in dataDir,
                  2) vmcode_link_nogr.vmcode (greet excluded, partial link),

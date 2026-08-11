@@ -19,6 +19,78 @@ static const uint8_t* g_vmcode_isolate_data = NULL;
 static size_t         g_vmcode_isolate_data_len = 0;
 static void*          g_vmcode_mmap_addr = NULL;
 
+/* flutter_hot_patcher OTA: PATCH snapshot sections loaded from vmcode_ota_patch.vmcode */
+static const uint8_t* g_patch_instr = NULL;      /* PATCH kDartIsolateSnapshotInstructions */
+static size_t         g_patch_instr_len = 0;
+static const uint8_t* g_patch_data = NULL;       /* PATCH kDartIsolateSnapshotData */
+static size_t         g_patch_data_len = 0;
+static void*          g_patch_mmap_addr = NULL;  /* single mmap covering both sections */
+static size_t         g_patch_mmap_len = 0;
+
+/* C-linkage shims from simulator_arm64.cc (B4 + OTA) */
+extern bool fhp_shorebird_load_vmcode(const char* path);
+extern void fhp_set_base_instructions(const void* base_ptr);
+
+/**
+ * flutter_hot_patcher OTA: Load PATCH instructions + data + link table from
+ * a vmcode_ota_patch.vmcode file.
+ * Format: [uint32 N][uint32 instr_size][uint32 data_size]
+ *         [N×8 link entries][pad to 16384]
+ *         [instr_size bytes: patch instructions]
+ *         [data_size bytes: patch data]
+ * Returns: N (>0 = success), 0 = not found, -1 = error.
+ */
+int dart_load_ota_patch(const char* vmcode_path) {
+    int fd = open(vmcode_path, O_RDONLY);
+    if (fd < 0) return 0;  /* not found */
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    size_t total = (size_t)st.st_size;
+
+    if (total < 16384 + 4) { close(fd); return -1; }  /* too small */
+
+    /* Read header: N, instr_size, data_size */
+    uint32_t hdr[3] = {0, 0, 0};
+    if (read(fd, hdr, 12) != 12) { close(fd); return -1; }
+    uint32_t n_entries  = hdr[0];
+    uint32_t instr_size = hdr[1];
+    uint32_t data_size  = hdr[2];
+
+    if (n_entries > 65536 || instr_size == 0 || data_size == 0) {
+        close(fd); return -1;  /* not OTA format */
+    }
+
+    size_t expected = 16384 + instr_size + data_size;
+    if (total < expected) { close(fd); return -1; }
+
+    /* mmap the entire file to get instructions + data sections */
+    void* mapped = mmap(NULL, total, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (mapped == MAP_FAILED) return -1;
+
+    /* Store BASE instructions pointer BEFORE patching (for cpu_off resolution) */
+    fhp_set_base_instructions(kDartIsolateSnapshotInstructions);
+
+    g_patch_mmap_addr = mapped;
+    g_patch_mmap_len  = total;
+
+    /* PATCH instructions start at offset 16384 */
+    g_patch_instr     = (const uint8_t*)mapped + 16384;
+    g_patch_instr_len = instr_size;
+
+    /* PATCH data immediately follows */
+    g_patch_data      = (const uint8_t*)mapped + 16384 + instr_size;
+    g_patch_data_len  = data_size;
+
+    /* Register link table in the Simulator */
+    fhp_shorebird_load_vmcode(vmcode_path);
+
+    fprintf(stderr, "[dart_harness] OTA patch loaded: %u entries, instr=%u, data=%u\n",
+            n_entries, instr_size, data_size);
+    return (int)n_entries;
+}
+
 /**
  * Load a staged vmcode patch (patched IsolateSnapshotData) from disk into
  * read-only memory.  Call before dart_run().
@@ -96,18 +168,27 @@ const char* dart_run(const char* patch_bundle_dir) {
         g_initialized = true;
     }
 
-    /* B-route: use patched data section if available, otherwise baseline */
-    const uint8_t* iso_data = g_vmcode_isolate_data
-                              ? g_vmcode_isolate_data
-                              : kDartIsolateSnapshotData;
+    /* flutter_hot_patcher OTA: prefer PATCH sections; fallback to B-route data; else baseline */
+    const uint8_t* iso_data  = g_patch_data  ? g_patch_data
+                             : g_vmcode_isolate_data ? g_vmcode_isolate_data
+                             : kDartIsolateSnapshotData;
+    const uint8_t* iso_instr = g_patch_instr ? g_patch_instr
+                             : kDartIsolateSnapshotInstructions;
+
+    const char* mode = g_patch_instr    ? "OTA-PATCH"
+                     : g_vmcode_isolate_data ? "VMCODE-PATCHED"
+                     : "baseline";
     fprintf(dbg, "dart_run: using %s IsolateSnapshotData (%zu bytes)\n",
-            g_vmcode_isolate_data ? "VMCODE-PATCHED" : "baseline",
-            g_vmcode_isolate_data ? g_vmcode_isolate_data_len : (size_t)0);
+            mode, g_patch_data ? g_patch_data_len
+                : g_vmcode_isolate_data ? g_vmcode_isolate_data_len : (size_t)0);
+    fprintf(dbg, "dart_run: using %s IsolateSnapshotInstructions (%zu bytes)\n",
+            g_patch_instr ? "OTA-PATCH" : "baseline",
+            g_patch_instr ? g_patch_instr_len : (size_t)0);
     fflush(dbg);
 
     char* err = NULL;
     Dart_Isolate iso = Dart_CreateIsolateGroup("vm://hotpatch", "main",
-        iso_data, kDartIsolateSnapshotInstructions,
+        iso_data, iso_instr,
         NULL, NULL, NULL, &err);
     if (!iso) { fprintf(dbg, "iso err: %s\n", err ? err : "null"); fclose(dbg); free(err); return "ERROR"; }
 
