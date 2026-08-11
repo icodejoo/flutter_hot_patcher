@@ -15,6 +15,8 @@
 		BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000007 /* HotPatchDemo/patch.dill */; };
 		BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */; };
 		DD123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode in Resources */ = {isa = PBXBuildFile; fileRef = DD123456000000000000000A /* HotPatchDemo/vmcode_link.vmcode */; };
+		DD123456000000000000000E /* HotPatchDemo/vmcode_link_nogr.vmcode in Resources */ = {isa = PBXBuildFile; fileRef = DD123456000000000000000C /* HotPatchDemo/vmcode_link_nogr.vmcode */; };
+		DD123456000000000000000F /* HotPatchDemo/vmcode_link_full.vmcode in Resources */ = {isa = PBXBuildFile; fileRef = DD123456000000000000000D /* HotPatchDemo/vmcode_link_full.vmcode */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +31,8 @@
 		AA1234560000000000000008 /* HotPatchDemo/dart_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HotPatchDemo/dart_api.h; sourceTree = SOURCE_ROOT; };
 		AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = HotPatchDemo/LaunchScreen.storyboard; sourceTree = SOURCE_ROOT; };
 		DD123456000000000000000A /* HotPatchDemo/vmcode_link.vmcode */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/vmcode_link.vmcode; sourceTree = SOURCE_ROOT; };
+		DD123456000000000000000C /* HotPatchDemo/vmcode_link_nogr.vmcode */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/vmcode_link_nogr.vmcode; sourceTree = SOURCE_ROOT; };
+		DD123456000000000000000D /* HotPatchDemo/vmcode_link_full.vmcode */ = {isa = PBXFileReference; lastKnownFileType = file; path = HotPatchDemo/vmcode_link_full.vmcode; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,6 +75,8 @@
 				AA1234560000000000000008 /* HotPatchDemo/dart_api.h */,
 				AA123456000000000000000A /* HotPatchDemo/LaunchScreen.storyboard */,
 				DD123456000000000000000A /* HotPatchDemo/vmcode_link.vmcode */,
+				DD123456000000000000000C /* HotPatchDemo/vmcode_link_nogr.vmcode */,
+				DD123456000000000000000D /* HotPatchDemo/vmcode_link_full.vmcode */,
 			);
 			name = HotPatchDemo;
 			sourceTree = "<group>";
@@ -136,6 +142,8 @@
 				BB123456000000000000000A /* HotPatchDemo/patch.dill in Resources */,
 				BB123456000000000000000B /* HotPatchDemo/LaunchScreen.storyboard in Resources */,
 				DD123456000000000000000B /* HotPatchDemo/vmcode_link.vmcode in Resources */,
+				DD123456000000000000000E /* HotPatchDemo/vmcode_link_nogr.vmcode in Resources */,
+				DD123456000000000000000F /* HotPatchDemo/vmcode_link_full.vmcode in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
