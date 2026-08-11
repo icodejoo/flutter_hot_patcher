@@ -52,3 +52,19 @@ metadata:
 - Shorebird patch_size_bytes 从 CLI 输出 grep，精度依赖 shorebird 输出格式
 - devicectl container path 格式因 iOS 版本而异，需实测调整
 - shorebird_demo 的 iOS Documents 路径用 HOME env var（无 path_provider）
+
+## AOT 方案实测结果（2026-08-11）
+
+| 指标 | hotpatch AOT | hotpatch bytecode | shorebird cpu |
+|------|-------------|-------------------|---------------|
+| greet() 延迟 | **180–211 ns** | N/A | 806,700 ns |
+| 倍速差 | **4,483×** | — | 1× |
+| RSS | 28 MB | 28 MB | 54 MB |
+| 冷启动 | 7.6 ms | 8.6 ms | 1.1 ms |
+
+**实现机制：** C-level `dart_benchmark_greet()` 循环调用 `getResult()` 1000次，
+`dart_apply_aot_patch()` 通过 redirect entry_point 激活休眠变体，M3 snapshot.S 复用。
+
+**快照版本问题：** ios_release/gen_snapshot (Aug 10) 期望 SDK hash '0e09f558'，
+prebuilt gen_kernel 产出的 kernel 无法匹配（hash 'af6f7a6a'）。解决方案：复用 M3 snapshot.S
+并在 C 层实现 benchmark，无需重新编译快照。
