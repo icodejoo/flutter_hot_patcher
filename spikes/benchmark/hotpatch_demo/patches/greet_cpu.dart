@@ -4,8 +4,9 @@ library;
 @pragma('vm:never-inline')
 String greet() {
   int sum = 0;
-  for (int i = 0; i < 10000000; i++) {
+  for (int i = 0; i < 1000000; i++) {
     sum += i;
   }
-  return 'PATCHED_CPU:$sum';
+  // Return fixed string to avoid buffer overflow in dart_harness
+  return sum > 0 ? 'PATCHED_CPU' : 'PATCHED_CPU';
 }

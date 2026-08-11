@@ -10,16 +10,16 @@
 		BB1234560000000000000001 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000001 /* AppDelegate.m */; };
 		BB1234560000000000000003 /* dart_harness.c in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000003 /* dart_harness.c */; };
 		BB1234560000000000000005 /* builtin_shim.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000005 /* builtin_shim.cpp */; };
-		BB1234560000000000000006 /* snapshot.o in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006 /* snapshot.o */; };
+		BB1234560000000000000006 /* snapshot.S in Sources */ = {isa = PBXBuildFile; fileRef = AA1234560000000000000006 /* snapshot.S */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		29B97318FDCFA39411CA2CEA /* HotPatchBench.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HotPatchBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA1234560000000000000001 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ../AppDelegate.m; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000003 /* dart_harness.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../dart_harness.c; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000004 /* dart_harness.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ../dart_harness.h; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000005 /* builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ../builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
-		AA1234560000000000000006 /* snapshot.o */ = {isa = PBXFileReference; lastKnownFileType = compiled.mach-o.objfile; path = ../snapshot.o; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000001 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000003 /* dart_harness.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = dart_harness.c; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000004 /* dart_harness.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = dart_harness.h; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000005 /* builtin_shim.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = builtin_shim.cpp; sourceTree = SOURCE_ROOT; };
+		AA1234560000000000000006 /* snapshot.S */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.asm; path = snapshot.S; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,7 +56,7 @@
 				AA1234560000000000000003 /* dart_harness.c */,
 				AA1234560000000000000004 /* dart_harness.h */,
 				AA1234560000000000000005 /* builtin_shim.cpp */,
-				AA1234560000000000000006 /* snapshot.o */,
+				AA1234560000000000000006 /* snapshot.S */,
 			);
 			name = HotPatchBench;
 			sourceTree = "<group>";
@@ -131,7 +131,7 @@
 				BB1234560000000000000001 /* AppDelegate.m in Sources */,
 				BB1234560000000000000003 /* dart_harness.c in Sources */,
 				BB1234560000000000000005 /* builtin_shim.cpp in Sources */,
-				BB1234560000000000000006 /* snapshot.o in Sources */,
+				BB1234560000000000000006 /* snapshot.S in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -149,9 +149,10 @@
 				DEVELOPMENT_TEAM = 7VP87G446C;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(SRCROOT)",
 					/Users/Cruz/dart/sdk/runtime/include,
 				);
-				INFOPLIST_FILE = ../Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
@@ -204,9 +205,10 @@
 				DEVELOPMENT_TEAM = 7VP87G446C;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(SRCROOT)",
 					/Users/Cruz/dart/sdk/runtime/include,
 				);
-				INFOPLIST_FILE = ../Info.plist;
+				INFOPLIST_FILE = Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",

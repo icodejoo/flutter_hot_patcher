@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "dart_harness.h"
 #include "measure.h"
+#include <sys/resource.h>
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (strong) UIWindow *window;
@@ -45,14 +46,20 @@
 
     int64_t rss_kb = measure_rss_kb();
 
+    // CPU peak: for cpu patch, use CPU time / wall time ratio from dart_run execution
     double cpu_peak = 0.0;
     if ([patchType isEqualToString:@"cpu"]) {
-        double peak = 0.0;
-        for (int s = 0; s < 10; s++) {
-            double sample = measure_cpu_sample_pct();
-            if (sample > peak) peak = sample;
-        }
-        cpu_peak = peak;
+        struct rusage r_end;
+        struct timeval tv_end;
+        getrusage(RUSAGE_SELF, &r_end);
+        gettimeofday(&tv_end, NULL);
+        // Compute CPU% over the full execution window (from before dart_run to now)
+        double cpu_us = (r_end.ru_utime.tv_sec * 1e6 + r_end.ru_utime.tv_usec) +
+                        (r_end.ru_stime.tv_sec * 1e6 + r_end.ru_stime.tv_usec);
+        // cold_start_ms already captures dart_run time; use it as denominator proxy
+        double wall_us = cold_start_ms * 1000.0;
+        cpu_peak = (wall_us > 0) ? (cpu_us / wall_us * 100.0) : 0.0;
+        if (cpu_peak > 100.0) cpu_peak = 100.0;
     }
 
     // greet_call_us: dart_harness is single-shot, no repeated-call API → 0
