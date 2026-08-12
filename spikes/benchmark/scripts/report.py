@@ -16,6 +16,7 @@ EXPECTED = [
     ("hotpatch",     "ios", "cpu"),
     ("hotpatch_aot", "ios", "none"),
     ("hotpatch_aot", "ios", "normal"),
+    ("hotpatch_aot", "ios", "cpu"),
     ("shorebird",    "ios", "none"),
     ("shorebird",    "ios", "normal"),
     ("shorebird",    "ios", "cpu"),

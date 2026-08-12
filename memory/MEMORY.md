@@ -9,3 +9,4 @@
 - [B-route Phase 2](project_b_route_phase2.md) — 方案A全部完成A1-A7✓：BL+BLR拦截SimulatorToCPU，vmcode加载运行，263测试全绿
 - [RTK diff 不可信](feedback_rtk_diff_unreliable.md) — repo 内单行改动被报成 "Files are identical"，验证一律用 command diff
 - [Benchmark 对比项目](project_benchmark.md) — spikes/benchmark/ 已搭建，hotpatch vs Shorebird 全指标对比，待真机采集
+- [AOT对照实验最终结果](project_aot_benchmark_final.md) — 4690x 快于Shorebird解释器，57%更少内存，0B OTA patch（2026-08-12完成）

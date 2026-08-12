@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Hot-Patch Benchmark</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 1.6rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; color: #555; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1rem; font-size: 0.9rem; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: right; }
+  th { background: #f8f8f8; text-align: center; font-weight: 600; }
+  td:nth-child(1), td:nth-child(2), td:nth-child(3) { text-align: left; }
+  .na { color: #bbb; }
+  canvas { max-width: 100%; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<h1>Hot-Patch Benchmark Results</h1>
+<table>
+  <tr><th>Variant</th><th>Platform</th><th>PatchType</th><th>Patch Size</th><th>Cold Start</th><th>greet() ns</th><th>greet() μs</th><th>RSS</th><th>CPU Peak</th></tr>
+  <tr><td>hotpatch</td><td>ios</td><td>normal</td><td>447 B</td><td>8.6 ms</td><td class="na">N/A</td><td class="na">N/A</td><td>28,464 KB</td><td>0.0%</td></tr><tr><td>hotpatch</td><td>ios</td><td>cpu</td><td>514 B</td><td>7.4 ms</td><td class="na">N/A</td><td class="na">N/A</td><td>28,352 KB</td><td>100.0%</td></tr><tr><td>hotpatch_aot</td><td>ios</td><td>none</td><td>0 B</td><td>1.5 ms</td><td>174 ns</td><td class="na">N/A</td><td>23,216 KB</td><td>0.0%</td></tr><tr><td>hotpatch_aot</td><td>ios</td><td>normal</td><td>0 B</td><td>2.2 ms</td><td>173 ns</td><td class="na">N/A</td><td>23,440 KB</td><td>0.0%</td></tr><tr><td>hotpatch_aot</td><td>ios</td><td>cpu</td><td>0 B</td><td>1.7 ms</td><td>172 ns</td><td class="na">N/A</td><td>23,536 KB</td><td>0.0%</td></tr><tr><td>shorebird</td><td>ios</td><td>none</td><td>0 B</td><td>0.2 ms</td><td class="na">N/A</td><td class="na">N/A</td><td>53,104 KB</td><td>0.0%</td></tr><tr><td>shorebird</td><td>ios</td><td>normal</td><td>383,797 B</td><td>1.1 ms</td><td class="na">N/A</td><td class="na">N/A</td><td>54,480 KB</td><td>0.0%</td></tr><tr><td>shorebird</td><td>ios</td><td>cpu</td><td>515,103 B</td><td>1.9 ms</td><td class="na">N/A</td><td>806.7 μs</td><td>53,952 KB</td><td>100.6%</td></tr><tr><td>shorebird</td><td>android</td><td>normal</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td></tr><tr><td>shorebird</td><td>android</td><td>cpu</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td></tr>
+</table>
+
+<h2>Patch Size</h2>
+<canvas id="chart_patch_size_bytes" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_patch_size_bytes"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "Patch Size",
+      data: [447, 514, 0, 0, 0, 0, 383797, 515103, null, null],
+      backgroundColor: "#4e79a788",
+      borderColor: "#4e79a7",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+<h2>Cold Start</h2>
+<canvas id="chart_cold_start_ms" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_cold_start_ms"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "Cold Start",
+      data: [8.6, 7.4, 1.51, 2.232, 1.689, 0.223, 1.141, 1.936, null, null],
+      backgroundColor: "#f28e2b88",
+      borderColor: "#f28e2b",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+<h2>greet() ns</h2>
+<canvas id="chart_greet_call_ns" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_greet_call_ns"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "greet() ns",
+      data: [null, null, 174, 173, 172, null, null, null, null, null],
+      backgroundColor: "#e1575988",
+      borderColor: "#e15759",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+<h2>greet() μs</h2>
+<canvas id="chart_greet_call_us" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_greet_call_us"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "greet() μs",
+      data: [0, 0, null, null, null, 0.0, 0.0, 806.7, null, null],
+      backgroundColor: "#76b7b288",
+      borderColor: "#76b7b2",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+<h2>RSS</h2>
+<canvas id="chart_memory_rss_kb" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_memory_rss_kb"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "RSS",
+      data: [28464, 28352, 23216, 23440, 23536, 53104, 54480, 53952, null, null],
+      backgroundColor: "#59a14f88",
+      borderColor: "#59a14f",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+<h2>CPU Peak</h2>
+<canvas id="chart_cpu_percent_peak" height="80"></canvas>
+<script>
+new Chart(document.getElementById("chart_cpu_percent_peak"), {
+  type: "bar",
+  data: {
+    labels: ["hotpatch/ios/normal", "hotpatch/ios/cpu", "hotpatch_aot/ios/none", "hotpatch_aot/ios/normal", "hotpatch_aot/ios/cpu", "shorebird/ios/none", "shorebird/ios/normal", "shorebird/ios/cpu", "shorebird/android/normal", "shorebird/android/cpu"],
+    datasets: [{
+      label: "CPU Peak",
+      data: [0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.6, null, null],
+      backgroundColor: "#edc94888",
+      borderColor: "#edc948",
+      borderWidth: 1,
+      spanGaps: false
+    }]
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true } }
+  }
+});
+</script>
+
+</body>
+</html>
