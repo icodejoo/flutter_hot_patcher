@@ -7,6 +7,12 @@ extern "C" {
 const char* dart_run(const char* patch_bundle_dir);
 
 /**
+ * Returns mean ns per greet() call for the most recent bytecode OTA benchmark.
+ * Valid after dart_run() with a patch_bundle_dir. Returns 0 otherwise.
+ */
+long long dart_get_bytecode_bench_ns(void);
+
+/**
  * Load a B-route vmcode patch (staged IsolateSnapshotData file) into read-only
  * memory before dart_run() is called.
  * Returns 1=loaded, 0=no patch, -1=error.
@@ -51,3 +57,6 @@ const char* dart_benchmark_greet(int n);
 #ifdef __cplusplus
 }
 #endif
+
+void dart_benchmark_aot_capi(int n);
+long long dart_get_aot_capi_bench_ns(void);

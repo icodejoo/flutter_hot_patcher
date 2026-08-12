@@ -72,8 +72,6 @@
         variantStr = @"hotpatch_aot";
 
         // Apply AOT patch variant (pure Dart pointer update — no bytecode loading).
-        // dart_run() left the isolate alive and entered; dart_apply_aot_patch()
-        // opens its own scope, invokes applyAOTPatch([variant]), closes scope.
         int aot_variant = 0;
         if ([patchType isEqualToString:@"normal"])   aot_variant = 1;
         else if ([patchType isEqualToString:@"cpu"]) aot_variant = 2;
@@ -83,11 +81,20 @@
             NSLog(@"[BENCH/AOT] applyAOTPatch(%d) -> %s", aot_variant, result);
         }
 
-        // Benchmark: 1000 calls, get mean microseconds, convert to ns
+        // Benchmark: 1000 calls (Dart-side loop), get mean microseconds
         const char *bench_us_str = dart_benchmark_greet(1000);
         double bench_us = atof(bench_us_str);
         greet_call_ns = (long long)(bench_us * 1000.0);
-        NSLog(@"[BENCH/AOT] greet() mean = %s us = %lld ns", bench_us_str, greet_call_ns);
+        NSLog(@"[BENCH/AOT] greet() Dart-side mean = %s us = %lld ns", bench_us_str, greet_call_ns);
+
+        // C-API benchmark: N Dart_Invoke calls to AOT getResult() (same overhead as bytecode path)
+        dart_benchmark_aot_capi(3);
+        long long aot_capi_ns = dart_get_aot_capi_bench_ns();
+        NSLog(@"[BENCH/AOT-CAPI] getResult() C-API mean = %lld ns", aot_capi_ns);
+    } else {
+        // Bytecode OTA path: dart_run() already ran 3-call benchmark
+        greet_call_ns = dart_get_bytecode_bench_ns();
+        NSLog(@"[BENCH/BYTECODE] greet() mean = %lld ns", greet_call_ns);
     }
 
     // ── Memory ────────────────────────────────────────────────────────────
@@ -99,6 +106,7 @@
         cpu_peak = measure_cpu_sample_pct();
     }
 
+    long long aot_capi_bench_ns = isAOT ? dart_get_aot_capi_bench_ns() : 0;
     // ── Write benchmark.json ─────────────────────────────────────────────
     NSString *json = [NSString stringWithFormat:
         @"{"
@@ -108,12 +116,12 @@
          "\"patch_mode\":\"%@\","
          "\"patch_size_bytes\":%ld,"
          "\"cold_start_ms\":%.3f,"
-         "\"greet_call_ns\":%lld,"
+         "\"greet_call_ns\":%lld,\"aot_capi_bench_ns\":%lld,"
          "\"memory_rss_kb\":%lld,"
          "\"cpu_percent_peak\":%.1f"
          "}",
         variantStr, patchType, patchMode,
-        patchSizeBytes, cold_start_ms, greet_call_ns, rss_kb, cpu_peak];
+        patchSizeBytes, cold_start_ms, greet_call_ns, aot_capi_bench_ns, rss_kb, cpu_peak];
 
     NSString *jsonPath = [docs stringByAppendingPathComponent:@"benchmark.json"];
     [json writeToFile:jsonPath atomically:YES

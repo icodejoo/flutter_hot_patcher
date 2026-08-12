@@ -121,6 +121,7 @@ extern const uint8_t* builtin_native_symbol_shim(Dart_NativeFunction nf);
 
 static bool g_initialized = false;
 static char g_result[256] = "UNKNOWN";
+static long long g_bytecode_bench_ns = 0;
 
 static Dart_Handle setup_print(void) {
     Dart_Handle builtin = Dart_LookupLibrary(Dart_NewStringFromCString("dart:_builtin"));
@@ -234,6 +235,20 @@ const char* dart_run(const char* patch_bundle_dir) {
         CHK(patch_result, "invoke_greet");
         Dart_StringToCString(patch_result, &result_str);
         fprintf(dbg, "patch greet = %s\n", result_str ? result_str : "(null)"); fflush(dbg);
+
+        /* Benchmark: 100 calls to greet() via interpreter */
+        {
+            int BN = 3;
+            uint64_t bt0 = mach_absolute_time();
+            for (int bi = 0; bi < BN; bi++) {
+                Dart_Handle r = Dart_Invoke(patch_lib, Dart_NewStringFromCString("greet"), 0, NULL);
+                (void)r;
+            }
+            uint64_t bt1 = mach_absolute_time();
+            mach_timebase_info_data_t btb; mach_timebase_info(&btb);
+            g_bytecode_bench_ns = (long long)((bt1 - bt0) * btb.numer / btb.denom) / BN;
+            fprintf(dbg, "bytecode bench: %lld ns/call\n", g_bytecode_bench_ns); fflush(dbg);
+        }
         free(buf);
     } else {
         Dart_Handle get_fn = Dart_GetField(root_lib, Dart_NewStringFromCString("getResult")); CHK(get_fn, "getresult");
@@ -376,4 +391,33 @@ const char* dart_benchmark_greet(int n) {
 
     Dart_ExitScope();
     return s_bench;
+}
+
+/* ── Bytecode Bench Accessor ────────────────────────────────────────────── */
+long long dart_get_bytecode_bench_ns(void) {
+    return g_bytecode_bench_ns;
+}
+
+/* ── AOT C-API Bench ────────────────────────────────────────────────────── */
+/* Benchmark Dart_Invoke to a native AOT function via C API (same overhead as bytecode path) */
+static long long g_aot_capi_bench_ns = 0;
+
+void dart_benchmark_aot_capi(int n) {
+    Dart_EnterScope();
+    Dart_Handle lib = Dart_RootLibrary();
+    if (Dart_IsError(lib)) { Dart_ExitScope(); return; }
+
+    mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+    uint64_t t0 = mach_absolute_time();
+    for (int i = 0; i < n; i++) {
+        Dart_Handle r = Dart_Invoke(lib, Dart_NewStringFromCString("getResult"), 0, NULL);
+        (void)r;
+    }
+    uint64_t t1 = mach_absolute_time();
+    g_aot_capi_bench_ns = (long long)((t1 - t0) * tb.numer / tb.denom) / n;
+    Dart_ExitScope();
+}
+
+long long dart_get_aot_capi_bench_ns(void) {
+    return g_aot_capi_bench_ns;
 }
