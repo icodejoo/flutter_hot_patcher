@@ -15,12 +15,13 @@ Shorebird 是这个问题域的生产级实现。功能边界、集成形状、�
 
 ### 已开源清单（本机可查）
 
+完整清单与实测依据见 **`docs/SHOREBIRD_REFERENCE.md`**。
+
 | 组件 | 位置 | 内容 |
 |---|---|---|
-| `shorebirdtech/flutter` 引擎 fork | `~/.shorebird/bin/cache/flutter/<rev>/engine/src` | 完整源码，含全部 patch 加载钩子 |
-| `shorebirdtech/updater`（Rust） | `https://github.com/shorebirdtech/updater.git` @ DEPS `updater_rev` | 下载/校验/staging/状态机/boot 看门狗 |
-| `shorebirdtech/dart-sdk` | DEPS `dart_sdk_git` | Simulator + `ShorebirdSimToCpuCall` + `analyze_snapshot --shorebird` |
-| `shorebird_cli` | `~/.shorebird/bin/cache/flutter/<rev>/packages/shorebird_cli/` | CLI 编排逻辑 |
+| `shorebirdtech/flutter` 引擎 fork | 公开；源码已在 `~/.shorebird/bin/cache/flutter/<rev>/engine/src` | 完整源码，含全部 patch 加载钩子 |
+| `shorebirdtech/updater`（Rust） | 公开：`https://github.com/shorebirdtech/updater.git` @ DEPS `updater_rev` | 下载/校验/staging/状态机/boot 看门狗 |
+| `shorebird_cli` | `~/.shorebird/packages/shorebird_cli/` | CLI 编排逻辑 |
 
 引擎侧集成的全部相关文件（照抄，别重写）：
 
@@ -36,7 +37,11 @@ flutter/shell/platform/darwin/.../FlutterEngine.mm   # 调 ConfigureShorebird
 
 ### 当前已知违规（技术债）
 
-- **`tools/updater/`（自研 Rust updater）重复实现了 `shorebirdtech/updater`。** 应改为直接使用上游。
+- **`tools/updater/`（自研 Rust updater）重复实现了公开的 `shorebirdtech/updater`。** 应改为直接使用上游。
+- **引擎集成层尚未实现，且必须采用 Shorebird 的公开实现**（`runtime/shorebird/`、
+  `shell/common/shorebird/`、`dart_snapshot.cc` 钩子），不要自研。
+- **我们 fork 的是上游而非 Shorebird**：引擎 = `flutter/engine.git` @ `ae5c3603`，
+  Dart SDK = `dart.googlesource.com/sdk.git` @ `37bbc285d8d`。详见 `docs/SHOREBIRD_REFERENCE.md` §4。
 
 ## 规则 3：只有 Shorebird 闭源的部分才自实现，且必须从它的对外接口形状反推
 
@@ -47,8 +52,13 @@ flutter/shell/platform/darwin/.../FlutterEngine.mm   # 调 ConfigureShorebird
 
 | 组件 | 证据 | 我们的对应实现 |
 |---|---|---|
+| `shorebirdtech/dart-sdk`（VM/Simulator） | **私有仓库**：`git ls-remote` 返回 `Repository not found`；DEPS 走 SSH `git@`；本地缓存无源码，只有编译产物 | `~/dart/sdk` 上的 8 条自研 commit ✅ 合规 |
 | `aot_tools link`（linker） | `~/.shorebird/bin/cache/artifacts/aot-tools/<hash>/` 只有 `aot-tools.dill`，无源码 | `tools/linker.py` ✅ 合规 |
 | Shorebird 服务端 / check-update 协议 | 无源码 | `tools/patch_server/` ✅ 合规 |
+
+**注意**：Shorebird 最核心的 VM 改动（Simulator / SimToCpu / vmcode loader）位于**私有**的
+`shorebirdtech/dart-sdk`。所以本项目在 `~/dart/sdk` 上自研这部分是规则 3 的正确应用，不是违规。
+而它的**引擎集成层是公开的**，那部分必须直接采用（规则 2）。
 
 `tools/linker.py` 是规则 3 的正确范例：`.vmcode` 容器格式、LinkTable 编码、`subgraph_hash` 链接门槛
 全部由 `spikes/b_route_phase2_groundtruth/GROUND_TRUTH.md` 用 Shorebird 自己的二进制离线实测反推，
