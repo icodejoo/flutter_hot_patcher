@@ -4,7 +4,26 @@
 
 **Goal:** Turn the validated spikes into a shippable Flutter plugin that a standard `flutter build ios --release` app can use to receive and apply OTA patches.
 
-**Architecture:** A-route (KBC bytecode interpretation via `Dart_LoadLibraryFromBytecode`) is the primary OTA mechanism; B-route (AOT `.vmcode` pointer swap) is the hot-path variant switcher. The blocking discovery driving this plan: `Flutter.framework` currently hides all `Dart_*` symbols (105 exports, 1406 hidden `Dart_` symbols), so no plugin can reach the VM API. The fix is the gn arg `dart_lib_export_symbols = true`, which defines `DART_SHARED_LIB` and gives every `DART_EXPORT` function `visibility("default")`. Once exported, the plugin reaches the VM through `dart:ffi` — **not** MethodChannel — because `Dart_LoadLibraryFromBytecode` requires a current isolate, and only FFI calls execute with the Dart isolate entered.
+**Architecture:** A-route (KBC bytecode interpretation) is the primary OTA mechanism; B-route (AOT `.vmcode` pointer swap) is the hot-path variant switcher.
+
+> **CORRECTION (2026-08-13, during execution).** Phases 2 and 3 as originally written are wrong and must not be executed as-is. Two false premises were found by testing:
+>
+> 1. **`Dart_LoadLibraryFromBytecode` does not exist in this toolchain.** It appears only in the *vendored* `dart_api.h` copied into `spikes/m3_ios_realdevice/HotPatchDemo/` and in the prebuilt `libdart_aotruntime_product.a` the standalone demo links. It is absent from `~/dart/sdk/runtime/` entirely and from the shipped `Flutter.framework` (`nm` count: 0). The earlier plan read the demo's stale header and assumed it was the engine's.
+> 2. **`dart_lib_export_symbols = true` cannot be used.** With `DART_SHARED_LIB`, `DART_EXPORT` expands to `visibility("default")` **plus `__attribute((used))`** (`dart_api.h:48-52`). The `used` attribute defeats LTO dead-stripping across ~1400 API functions, transitively retaining Dart's vendored BoringSSL. Both BoringSSL trees are already link inputs (436 objects each, confirmed in `libFlutter.dylib.rsp`) and were previously stripped entirely — the working framework contains zero `AES_encrypt`. Enabling the flag resurrects both and the link fails with 20 duplicate symbols. Verified empirically, then reverted.
+>
+> **The real API is Dart, not C.** The current SDK and the shipped framework both implement `Internal_loadDynamicModule` / `Internal_loadDynamicModuleClosure` (`~/dart/sdk/runtime/lib/object.cc:545,612` — the latter carries the comment *"Gate 1 spike (flutter_hot_patcher)"*, i.e. this project's own VM patch). They surface in Dart as:
+>
+> ```dart
+> // ~/dart/sdk/sdk/lib/_internal/vm/lib/internal_patch.dart:467,479
+> Future<Object?> loadDynamicModule({Uri? uri, Uint8List? bytes});
+> Object? loadDynamicModuleClosure({Uri? uri, Uint8List? bytes});
+> ```
+>
+> So **no C shim and no `dart:ffi` are needed**; the isolate-entry problem that motivated FFI does not arise for a Dart-level call.
+>
+> **The remaining blocker is visibility, not linkage.** These live in `dart:_internal`, a platform-private library. Gate 1 could `import 'dart:_internal'` because it is a standalone program built with `--target vm`; a Flutter app compiled against `flutter_patched_sdk` cannot — verified: `Error: Can't access platform private library.`
+>
+> **Corrected approach for Phase 2/3:** patch the engine to re-export the capability from `dart:ui`, which *is* a platform library (so it may import `dart:_internal`) and *is* importable by app code. One small file added to `flutter/lib/ui/` and registered in the `dart:ui` source list, then an engine rebuild — which also regenerates the platform dill the app compiles against. Keep `dart_lib_export_symbols = false`. This must be designed and re-planned before implementation; do not follow the original Tasks 5-8.
 
 **Tech Stack:** Dart/Flutter plugin (dart:ffi + MethodChannel), Objective-C plugin shim, C bytecode loader, Rust updater (`libflutter_hotpatch_updater.a`), Python patch tooling, custom X1 Flutter engine (`dart_dynamic_modules = true`).
 
