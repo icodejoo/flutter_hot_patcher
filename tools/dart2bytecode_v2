@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# dart2bytecode wrapper that produces v02 DBC3 bytecode.
+# The bundled dart2bytecode.dart.snapshot outputs v01; this uses the JIT dart
+# directly against the dart2bytecode source to emit v02 (bytecodeFormatVersion=2).
+set -euo pipefail
+
+DART=~/engine_ios/src/out/host_release/dart
+D2B_SRC=~/engine_ios/src/third_party/dart/pkg/dart2bytecode/bin/dart2bytecode.dart
+
+if [ ! -f "$DART" ]; then
+    echo "ERROR: dart binary not found at $DART" >&2
+    exit 1
+fi
+if [ ! -f "$D2B_SRC" ]; then
+    echo "ERROR: dart2bytecode source not found at $D2B_SRC" >&2
+    exit 1
+fi
+
+exec "$DART" "$D2B_SRC" "$@"
