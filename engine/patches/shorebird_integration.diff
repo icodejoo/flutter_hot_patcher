@@ -1,0 +1,143 @@
+diff --git a/common/config.gni b/common/config.gni
+index b2ae1118e2..22202a76d7 100644
+--- a/common/config.gni
++++ b/common/config.gni
+@@ -166,3 +166,12 @@ build_engine_artifacts =
+     flutter_build_engine_artifacts && !is_android &&
+     (current_toolchain == host_toolchain ||
+      (is_linux && !is_chromeos && current_cpu != "arm") || is_mac || is_win)
++
++# Shorebird OTA 补丁支持（条件与 shorebirdtech/flutter 的 common/config.gni 一致）
++if (is_android || is_ios || is_linux || is_mac || is_win) {
++  feature_defines_list += [ "SHOREBIRD_PLATFORM_SUPPORTED=1" ]
++}
++
++if (is_ios) {
++  feature_defines_list += [ "SHOREBIRD_USE_INTERPRETER=1" ]
++}
+diff --git a/runtime/BUILD.gn b/runtime/BUILD.gn
+index 5c75d2f4cb..75bc6fddf2 100644
+--- a/runtime/BUILD.gn
++++ b/runtime/BUILD.gn
+@@ -114,6 +114,7 @@ source_set("runtime") {
+     "//flutter/fml",
+     "//flutter/lib/io",
+     "//flutter/shell/common:display",
++    "//flutter/shell/common/shorebird:updater",
+     "//flutter/skia",
+     "//flutter/third_party/tonic",
+     "//flutter/third_party/txt",
+@@ -124,6 +125,10 @@ source_set("runtime") {
+     # instead puts Observatory into the runner's package.
+     deps += [ "$dart_src/runtime/observatory:embedded_observatory_archive" ]
+   }
++
++  if (is_ios) {
++    deps += [ "//flutter/runtime/shorebird:patch_cache" ]
++  }
+ }
+ 
+ if (enable_unittests) {
+diff --git a/runtime/dart_snapshot.cc b/runtime/dart_snapshot.cc
+index 5943524aa9..65f4f81db4 100644
+--- a/runtime/dart_snapshot.cc
++++ b/runtime/dart_snapshot.cc
+@@ -11,6 +11,11 @@
+ #include "flutter/fml/trace_event.h"
+ #include "flutter/lib/snapshot/snapshot.h"
+ #include "flutter/runtime/dart_vm.h"
++
++#if SHOREBIRD_USE_INTERPRETER
++#include "flutter/runtime/shorebird/patch_cache.h"     // nogncheck
++#include "flutter/shell/common/shorebird/updater.h"    // nogncheck
++#endif  // SHOREBIRD_USE_INTERPRETER
+ #include "third_party/dart/runtime/include/dart_api.h"
+ 
+ namespace flutter {
+@@ -146,6 +151,15 @@ static std::shared_ptr<const fml::Mapping> ResolveIsolateData(
+                                                 true      // dontneed_safe
+   );
+ #else   // DART_SNAPSHOT_STATIC_LINK
++  // 告知 Rust updater 本次从它选定的补丁启动（内部保证每进程最多执行一次）。
++  shorebird::Updater::Instance().ReportLaunchStart();
++#if SHOREBIRD_USE_INTERPRETER
++  // 优先尝试从 Shorebird 补丁加载；无补丁则回落到基线。
++  if (auto mapping = TryLoadFromPatch(settings.application_library_path,
++                                      DartSnapshot::kIsolateDataSymbol)) {
++    return mapping;
++  }
++#endif  // SHOREBIRD_USE_INTERPRETER
+   return SearchMapping(
+       settings.isolate_snapshot_data,       // embedder_mapping_callback
+       settings.isolate_snapshot_data_path,  // file_path
+@@ -166,6 +180,13 @@ static std::shared_ptr<const fml::Mapping> ResolveIsolateInstructions(
+       true      // dontneed_safe
+   );
+ #else   // DART_SNAPSHOT_STATIC_LINK
++#if SHOREBIRD_USE_INTERPRETER
++  if (auto mapping =
++          TryLoadFromPatch(settings.application_library_path,
++                           DartSnapshot::kIsolateInstructionsSymbol)) {
++    return mapping;
++  }
++#endif  // SHOREBIRD_USE_INTERPRETER
+   return SearchMapping(
+       settings.isolate_snapshot_instr,           // embedder_mapping_callback
+       settings.isolate_snapshot_instr_path,      // file_path
+diff --git a/shell/platform/darwin/ios/BUILD.gn b/shell/platform/darwin/ios/BUILD.gn
+index 6020365844..3c76408307 100644
+--- a/shell/platform/darwin/ios/BUILD.gn
++++ b/shell/platform/darwin/ios/BUILD.gn
+@@ -175,6 +175,7 @@ source_set("flutter_framework_source") {
+   }
+ 
+   deps = [
++    "//flutter/shell/common/shorebird:shorebird",
+     ":ios_gpu_configuration",
+     "//flutter/common:common",
+     "//flutter/common/graphics",
+diff --git a/shell/platform/darwin/ios/framework/Source/FlutterDartProject.mm b/shell/platform/darwin/ios/framework/Source/FlutterDartProject.mm
+index 3f31c181f3..3235f516bf 100644
+--- a/shell/platform/darwin/ios/framework/Source/FlutterDartProject.mm
++++ b/shell/platform/darwin/ios/framework/Source/FlutterDartProject.mm
+@@ -12,6 +12,8 @@
+ #include <syslog.h>
+ 
+ #include "flutter/common/constants.h"
++#include "flutter/fml/paths.h"
++#include "flutter/shell/common/shorebird/shorebird.h"
+ #include "flutter/fml/build_config.h"
+ #include "flutter/shell/common/switches.h"
+ #include "flutter/shell/platform/darwin/common/command_line.h"
+@@ -160,6 +162,31 @@ flutter::Settings FLTDefaultSettingsForBundle(NSBundle* bundle, NSProcessInfo* p
+   // Domain network configuration
+   // Disabled in https://github.com/flutter/flutter/issues/72723.
+   // Re-enable in https://github.com/flutter/flutter/issues/54448.
++  // --- Shorebird OTA 配置（移植自 shorebirdtech/flutter，规则 2）---
++  // 必须在 settings 交给引擎之前执行：它会把已 staged 的 .vmcode 路径插到
++  // settings.application_library_path 最前面，随后 dart_snapshot.cc 的
++  // ResolveIsolateData/Instructions 会认出并加载它。
++  {
++    NSString* sbAssetsPath = [NSString stringWithUTF8String:settings.assets_path.c_str()];
++    std::string sbCachePath =
++        fml::paths::JoinPaths({getenv("HOME"), "Library/Application Support/shorebird"});
++    NSURL* sbYamlURL = [NSURL URLWithString:@"shorebird.yaml"
++                              relativeToURL:[NSURL fileURLWithPath:sbAssetsPath]];
++    NSString* sbYaml = [NSString stringWithContentsOfURL:sbYamlURL
++                                               encoding:NSUTF8StringEncoding
++                                                  error:nil];
++    if (sbYaml != nil) {
++      NSString* sbVersion = [mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
++      NSString* sbBuild = [mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"];
++      // 两次传同一个 cache_path 是上游的做法：Android 区分跨版本持久/非持久
++      // 目录，iOS 不区分。
++      flutter::ConfigureShorebird(sbCachePath, sbCachePath, settings, sbYaml.UTF8String,
++                                  sbVersion.UTF8String, sbBuild.UTF8String);
++    } else {
++      NSLog(@"[shorebird] Failed to find shorebird.yaml, not starting updater.");
++    }
++  }
++
+   settings.may_insecurely_connect_to_all_domains = true;
+   settings.domain_network_policy = "";
+ 
