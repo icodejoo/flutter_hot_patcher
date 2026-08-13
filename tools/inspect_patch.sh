@@ -11,7 +11,7 @@ QUIET="${2:-}"
 
 ENGINE_SRC=~/engine_ios/src
 DART_JIT=$ENGINE_SRC/out/host_release/dart
-DUMP_BC_SRC=$ENGINE_SRC/third_party/dart/pkg/dart2bytecode/bin/dump_bytecode.dart
+DUMP_BC_SRC=$ENGINE_SRC/flutter/third_party/dart/pkg/dart2bytecode/bin/dump_bytecode.dart
 
 [ -f "$DILL" ] || { echo "ERROR: no such file: $DILL" >&2; exit 1; }
 

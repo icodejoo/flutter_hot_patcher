@@ -5,7 +5,7 @@
 set -euo pipefail
 
 DART=~/engine_ios/src/out/host_release/dart
-D2B_SRC=~/engine_ios/src/third_party/dart/pkg/dart2bytecode/bin/dart2bytecode.dart
+D2B_SRC=~/engine_ios/src/flutter/third_party/dart/pkg/dart2bytecode/bin/dart2bytecode.dart
 
 if [ ! -f "$DART" ]; then
     echo "ERROR: dart binary not found at $DART" >&2
