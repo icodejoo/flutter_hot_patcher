@@ -1,6 +1,8 @@
 
 #include "flutter/shell/common/shorebird/shorebird.h"
 
+#include "flutter/shell/common/shorebird/fhp_snapshot_size.h"
+
 #include <cstddef>
 #include <memory>
 #include <optional>
