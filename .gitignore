@@ -29,3 +29,4 @@ spikes/ios_hotpatch_demo/
 spikes/gate2_linker/tools/kernel_linker/test/fixtures/
 tools/patch_server/patches/
 spikes/m3_ios_realdevice/build/
+tools/patch_builder/.venv/

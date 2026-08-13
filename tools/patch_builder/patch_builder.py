@@ -39,20 +39,28 @@ def build_bundle(linker_output_dir, bytecode_path, private_key_path,
     dill_dest = os.path.join(output_dir, "bytecode", "patch.dill")
     shutil.copy2(bytecode_path, dill_dest)
 
-    entry_table_dest = os.path.join(output_dir, "entry_table.bin")
-    shutil.copy2(os.path.join(linker_output_dir, "entry_table.bin"), entry_table_dest)
-
-    cid_map_dest = os.path.join(output_dir, "cid_map.bin")
-    shutil.copy2(os.path.join(linker_output_dir, "cid_map.bin"), cid_map_dest)
+    # entry_table.bin / cid_map.bin come from the kernel-linker pipeline. A pure
+    # A-route bytecode patch has neither: the dill carries its own
+    # dynModuleEntryPoint, and there is no class-id remapping. Copy them when
+    # the linker produced them, and otherwise leave them out of the bundle
+    # rather than signing placeholder files. The updater verifies whatever the
+    # manifest lists, so omitting them is consistent end to end.
+    optional_artifacts = []
+    for name in ("entry_table.bin", "cid_map.bin"):
+        src_path = os.path.join(linker_output_dir, name)
+        if os.path.exists(src_path):
+            dest = os.path.join(output_dir, name)
+            shutil.copy2(src_path, dest)
+            optional_artifacts.append((name, dest))
 
     with open(private_key_path, "rb") as f:
         private_key = load_pem_private_key(f.read(), None)
 
     artifacts = [
         {"path": "bytecode/patch.dill", "sha256": _sha256_file(dill_dest), "size": os.path.getsize(dill_dest)},
-        {"path": "entry_table.bin", "sha256": _sha256_file(entry_table_dest), "size": os.path.getsize(entry_table_dest)},
-        {"path": "cid_map.bin", "sha256": _sha256_file(cid_map_dest), "size": os.path.getsize(cid_map_dest)},
     ]
+    for name, dest in optional_artifacts:
+        artifacts.append({"path": name, "sha256": _sha256_file(dest), "size": os.path.getsize(dest)})
 
     if pointers_json_path and os.path.exists(pointers_json_path):
         pointers_dest = os.path.join(output_dir, "pointers.json")

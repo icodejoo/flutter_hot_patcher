@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# fhp — Flutter Hot Patcher CLI.
+#
+#   fhp build --source <patch.dart> --private-key <key.pem> --patch-number <n> \
+#             --app-version <ver> --output-dir <dir> [--patch-id <id>] \
+#             [--channel <ch>] [--platform ios|android]
+#   fhp inspect <patch.dill> [--quiet]
+#
+# `build` compiles the source to a v02 DBC3 dill, verifies it, and packages a
+# signed patch bundle via tools/patch_builder/patch_builder.py.
+#
+# A patch must expose exactly one @pragma('dyn-module:entry-point') function,
+# static and no-argument; return Map<String, Function> to ship several
+# functions. See tools/tests/fixtures/multi_function.dart.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PB_PY="$REPO_ROOT/tools/patch_builder/.venv/bin/python"
+PB="$REPO_ROOT/tools/patch_builder/patch_builder.py"
+
+die() { echo "fhp: $*" >&2; exit 1; }
+
+usage() {
+    sed -n '3,13p' "$0" | sed 's|^# \?||'
+}
+
+cmd_inspect() {
+    [ $# -ge 1 ] || die "inspect needs a dill path"
+    exec "$REPO_ROOT/tools/inspect_patch.sh" "$@"
+}
+
+cmd_build() {
+    local source="" private_key="" patch_number="" app_version=""
+    local output_dir="" patch_id="" channel="stable" platform="ios"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --source)       source="${2:?--source needs a value}"; shift 2 ;;
+            --private-key)  private_key="${2:?--private-key needs a value}"; shift 2 ;;
+            --patch-number) patch_number="${2:?--patch-number needs a value}"; shift 2 ;;
+            --app-version)  app_version="${2:?--app-version needs a value}"; shift 2 ;;
+            --output-dir)   output_dir="${2:?--output-dir needs a value}"; shift 2 ;;
+            --patch-id)     patch_id="${2:?--patch-id needs a value}"; shift 2 ;;
+            --channel)      channel="${2:?--channel needs a value}"; shift 2 ;;
+            --platform)     platform="${2:?--platform needs a value}"; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    [ -n "$source" ]       || die "--source is required"
+    [ -n "$private_key" ]  || die "--private-key is required"
+    [ -n "$patch_number" ] || die "--patch-number is required"
+    [ -n "$app_version" ]  || die "--app-version is required"
+    [ -n "$output_dir" ]   || die "--output-dir is required"
+    [ -f "$source" ]       || die "no such source file: $source"
+    [ -f "$private_key" ]  || die "no such private key: $private_key"
+    [ -x "$PB_PY" ]        || die "patch_builder venv missing; run:
+  python3 -m venv $REPO_ROOT/tools/patch_builder/.venv
+  $REPO_ROOT/tools/patch_builder/.venv/bin/pip install -r $REPO_ROOT/tools/patch_builder/requirements.txt"
+
+    if [ -z "$patch_id" ]; then
+        patch_id="$(basename "${source%.dart}")-p${patch_number}"
+    fi
+
+    local stage
+    stage="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$stage'" EXIT
+
+    echo "[fhp] compiling $source -> v02 dill"
+    "$REPO_ROOT/tools/build_ios_patch.sh" "$source" "$stage/patch.dill"
+
+    echo "[fhp] verifying"
+    "$REPO_ROOT/tools/inspect_patch.sh" "$stage/patch.dill" --quiet > "$stage/inspect.txt"
+
+    # patch_builder reads <manifest_dir>/manifest.json for metadata. A pure
+    # A-route bytecode patch has no linker stage, so synthesize the minimal
+    # manifest it expects, recording the real entry point so the runtime knows
+    # what to invoke.
+    mkdir -p "$stage/linker_out"
+    cp "$stage/patch.dill" "$stage/linker_out/patch.dill"
+
+    "$PB_PY" - "$stage/inspect.txt" "$stage/linker_out/manifest.json" <<'PY'
+import json, os, subprocess, sys
+
+inspect_path, out_path = sys.argv[1], sys.argv[2]
+
+entry_points, functions = [], []
+for line in open(inspect_path):
+    line = line.strip()
+    if line.startswith('entry_point: '):
+        # "<uri>::<name>" -> "<name>"
+        entry_points.append(line[len('entry_point: '):].rsplit('::', 1)[-1])
+    elif line.startswith('function: '):
+        functions.append(line[len('function: '):])
+
+if not entry_points:
+    sys.exit("fhp: no dyn-module entry point found in the compiled patch")
+
+try:
+    commit = subprocess.check_output(
+        ['git', '-C', os.path.expanduser('~/engine_ios/src/third_party/dart'),
+         'rev-parse', 'HEAD'],
+        text=True, stderr=subprocess.DEVNULL).strip()
+except Exception:
+    commit = 'unknown'
+
+json.dump({
+    'format_version': '1',
+    'dart_sdk_commit': commit,
+    'baseline_sha256': '',
+    'entry_point': entry_points[0],
+    'changed_functions': functions,
+    'icf_affected': [],
+    'affected_closure': [],
+    'class_hierarchy_changed': False,
+    'class_hierarchy': {},
+}, open(out_path, 'w'), indent=2)
+PY
+
+    echo "[fhp] packaging + signing -> $output_dir"
+    "$PB_PY" "$PB" \
+        --manifest "$stage/linker_out" \
+        --bytecode "$stage/patch.dill" \
+        --private-key "$private_key" \
+        --patch-id "$patch_id" \
+        --patch-number "$patch_number" \
+        --app-version "$app_version" \
+        --platform "$platform" \
+        --channel "$channel" \
+        --output-dir "$output_dir"
+
+    echo "[fhp] done: $output_dir"
+}
+
+case "${1:-}" in
+    build)   shift; cmd_build "$@" ;;
+    inspect) shift; cmd_inspect "$@" ;;
+    ""|-h|--help) usage ;;
+    *) die "unknown command: $1 (expected build|inspect)" ;;
+esac
