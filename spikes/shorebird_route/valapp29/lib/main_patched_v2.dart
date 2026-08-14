@@ -4,6 +4,15 @@ import 'package:flutter/material.dart';
 @pragma('vm:never-inline')
 String buildLabel() => 'OTA_PATCHED_V2';
 
+/// 把结果写入容器内文件，便于用 devicectl 读回做机器判定，
+/// 不依赖看屏幕或抓日志。该函数在 baseline 与补丁版中完全相同。
+void _writeResult(String label) {
+  // 本引擎把 Dart 跑在 Simulator 下，dart:io 文件操作会抛
+  // "Not supported on simulated architectures"，故改用 debugPrint，
+  // 经引擎日志通道输出，可用 idevicesyslog 读回做机器判定。
+  debugPrint('FHP_RESULT=$label');
+}
+
 void main() => runApp(const ValApp());
 
 class ValApp extends StatelessWidget {
@@ -12,6 +21,7 @@ class ValApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = buildLabel();
+    _writeResult(label);
     final patched = label != 'BASELINE_V1';
     return MaterialApp(
       home: Scaffold(

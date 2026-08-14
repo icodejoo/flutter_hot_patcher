@@ -20,14 +20,16 @@ import sys
 import tempfile
 from pathlib import Path
 
-_PAGE_SIZE = 4096  # macOS/iOS page size
+_PAGE_SIZE = 16384  # iOS arm64 页大小。Dart_LoadELF 要求 file_offset 页对齐；
+                    # 用 4096 会在 7122 条时算出 57344（=14×4096，但非 16384 倍数），
+                    # 设备上报 'File offset must be page-aligned.'（实测 2026-08-14）
 
 def _header_size(n_entries: int) -> int:
     content = 4 + n_entries * 8
     pages = (content + _PAGE_SIZE - 1) // _PAGE_SIZE
-    return max(pages, 4) * _PAGE_SIZE  # at least 16384 (4 pages)
+    return max(pages, 1) * _PAGE_SIZE  # 至少一页 = 16384
 
-HEADER_SIZE = _PAGE_SIZE * 4  # 16384 default; actual = dynamic per entry count
+HEADER_SIZE = _PAGE_SIZE  # 16384 默认；实际按条目数动态计算
 
 
 def run_analyze_snapshot(analyze_snapshot_bin: str, aot_file: str) -> dict:

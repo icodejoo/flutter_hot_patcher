@@ -35,8 +35,11 @@ constexpr const char* kIsolateInstructionsSymbol =
 //
 // 返回内嵌 ELF 的起始偏移。
 int FhpReadLinkHeader(const uint8_t* data, size_t size) {
-  constexpr size_t kPageSize = 4096;
-  constexpr size_t kMinPages = 4;  // 与 tools/linker.py 的 _header_size 一致
+  // iOS arm64 页大小。Dart_LoadELF 要求 file_offset 页对齐（实测：用 4096
+  // 会在 7122 条时算出 57344，非 16384 倍数，设备报
+  // "File offset must be page-aligned."）。与 tools/linker.py 保持一致。
+  constexpr size_t kPageSize = 16384;
+  constexpr size_t kMinPages = 1;
   if (data == nullptr || size < sizeof(uint32_t)) {
     return 0;
   }
