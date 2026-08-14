@@ -1,0 +1,18 @@
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 89bb65e3dbc..052f2fdde0a 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -9,8 +9,12 @@
+ #include "bin/options.h"
+ #include "bin/platform.h"
+ 
++// flutter_hot_patcher: 放宽到 macOS。上游只允许 android/linux，
++// 但本工具只是读取快照文件、不含任何 OS 相关逻辑；我们的 linker
++// (tools/linker.py) 需要在 macOS host 上分析 arm64 快照。
+ #if defined(TARGET_ARCH_IS_64_BIT) && defined(DART_PRECOMPILED_RUNTIME) &&     \
+-    (defined(DART_TARGET_OS_ANDROID) || defined(DART_TARGET_OS_LINUX))
++    (defined(DART_TARGET_OS_ANDROID) || defined(DART_TARGET_OS_LINUX) ||      \
++     defined(DART_TARGET_OS_MACOS))
+ #define SUPPORT_ANALYZE_SNAPSHOT
+ #endif
+ 

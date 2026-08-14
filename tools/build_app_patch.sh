@@ -24,7 +24,8 @@ FHP_TOOLCHAIN="${FHP_TOOLCHAIN:-x1}"
 if [ "$FHP_TOOLCHAIN" = "x1" ]; then
     E=~/engine_ios/src/out
     GEN_SNAPSHOT=$E/ios_release/gen_snapshot_arm64
-    ANALYZE=$E/ios_release/analyze_snapshot_arm64
+    # 引擎构建的那份 host 工具缺 macOS 支持；用 Dart SDK 构建的（已放宽守卫）
+    ANALYZE=~/dart/sdk/xcodebuild/ReleaseARM64/analyze_snapshot
     DARTAOT=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/dartaotruntime
     FRONTEND=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
     SDK_ROOT=$E/ios_release/flutter_patched_sdk
@@ -43,10 +44,21 @@ for f in "$GEN_SNAPSHOT" "$ANALYZE" "$DARTAOT" "$FRONTEND" "$SDK_ROOT" "$REPO_RO
     [ -e "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
 
-BASE_APP="$APP_DIR/build/ios/iphoneos/Runner.app/Frameworks/App.framework/App"
-[ -f "$BASE_APP" ] || { echo "MISSING base app: $BASE_APP（先跑一次 release 构建）" >&2; exit 1; }
+# base 取 release 构建留下的 app.dill，用同一个 gen_snapshot 重新产成 **ELF**。
+# 不直接分析 App.framework/App（Mach-O）：我们的 analyze_snapshot 只支持 ELF
+# （Dart_LoadELF），而 Shorebird 的 Mach-O 支持在其私有 dart-sdk 里。
+# 同一 dill + 同一 gen_snapshot + --deterministic ⇒ 内容一致，仅容器不同。
+BASE_DILL=$(find "$APP_DIR/.dart_tool/flutter_build" -name "app.dill" 2>/dev/null | head -1)
+[ -n "$BASE_DILL" ] || { echo "MISSING base app.dill（先跑一次 release 构建）" >&2; exit 1; }
 
 mkdir -p "$OUT_DIR"
+
+echo "[0/5] base kernel -> base ELF"
+"$GEN_SNAPSHOT" --deterministic \
+    --snapshot_kind=app-aot-elf \
+    --elf="$OUT_DIR/base.aot" \
+    "$BASE_DILL"
+BASE_APP="$OUT_DIR/base.aot"
 
 echo "[1/5] 编译改动后的 kernel dill（用 frontend_server，与 flutter build 同一路径）"
 PKG_NAME=$(python3 -c "
@@ -74,7 +86,7 @@ echo "[2/5] gen_snapshot -> patch ELF（.vmcode 内嵌必须是 ELF）"
     --elf="$OUT_DIR/patch.aot" \
     "$OUT_DIR/patch.dill"
 
-echo "[3/5] analyze_snapshot base（Mach-O）"
+echo "[3/5] analyze_snapshot base（ELF）"
 "$ANALYZE" --shorebird --out="$OUT_DIR/base.json" "$BASE_APP"
 
 echo "[4/5] analyze_snapshot patch（ELF）"
@@ -91,7 +103,7 @@ LINK_PCT=$(python3 "$REPO_ROOT/tools/linker.py" \
 
 echo ""
 echo "=== 结果 ==="
-echo "base(Mach-O): $(wc -c < "$BASE_APP" | tr -d ' ') bytes"
+echo "base(ELF):    $(wc -c < "$BASE_APP" | tr -d ' ') bytes"
 echo "patch(ELF):   $(wc -c < "$OUT_DIR/patch.aot" | tr -d ' ') bytes"
 echo "out.vmcode:   $(wc -c < "$OUT_DIR/out.vmcode" | tr -d ' ') bytes"
 echo "link%:        ${LINK_PCT}%"

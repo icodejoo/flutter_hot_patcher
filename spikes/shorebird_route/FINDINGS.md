@@ -47,45 +47,48 @@ iOS arm64 编译通过（`libupdater.a`）。构建需 `IPHONEOS_DEPLOYMENT_TARG
 （补丁必须与 base 同源）。形态：base 是 app 的 Mach-O `App`，patch 必须是 **ELF**
 （引擎侧 `patch_cache.cc` 用 `Dart_LoadELF` 打开 `.vmcode`）。
 
-## 当前阻碍：X1 缺可用的 analyze_snapshot
+## analyze_snapshot：已跑通，但我们自研的 --shorebird 模式不完整
 
-`tools/linker.py` 依赖 `analyze_snapshot --shorebird` 读取 base/patch 快照。
+### 已解决：能在 macOS 上分析 X1 的 iOS 快照
 
-| 候选 | 结果 |
+| 步骤 | 解法 |
 |---|---|
-| Shorebird 预编译的 `analyze_snapshot_arm64` | ❌ `Wrong full snapshot version`（它是 Dart 3.10，X1 是 3.7） |
-| 从 Flutter 引擎构建（已移植其 BUILD.gn 目标 + `build_analyze_snapshot = true`） | ❌ 二进制产出了，但运行报 `Unsupported platform. Requires DART_PRECOMPILED_RUNTIME` —— host 工具链下未定义 |
-| `~/dart/sdk/xcodebuild/ReleaseARM64` 既有产物（8/4） | ❌ 早于自研 `--shorebird` commit：`Unrecognized flags: shorebird` |
-| 重建 `ReleaseARM64`（已设 `build_analyze_snapshot = true`） | ❌ 同样 `Requires DART_PRECOMPILED_RUNTIME`（该目录 `dart_runtime_mode = "develop"`） |
-| 重建 `ReleaseIosARM64`（AOT 配置） | ❌ 撞 libcxx cmath 问题（`X1_ENGINE_BUILD_NOTES.md` 附錄 A 的补丁只打在引擎的 libcxx，未打在 Dart SDK 自己的 third_party/libcxx） |
+| 工具必须是 **macOS host 可执行 + iOS 目标配置** | 用引擎的 `lib/snapshot:create_macos_analyze_snapshots`（已从 Shorebird 移植该模板），**不是** Dart SDK 的 `ReleaseARM64`（那是 macOS 目标，读 iOS 快照会 SIGSEGV）|
+| `Unsupported platform` | `runtime/bin/analyze_snapshot.cc` 的守卫只允许 android/linux，放宽到 macOS（见 `engine/patches/dartsdk_analyze_snapshot_macos.diff`）|
+| `build_analyze_snapshot` 默认 false | args.gn 里置 true |
 
-**结论**：需要一个 `DART_PRECOMPILED_RUNTIME` 生效的 Dart SDK 构建，
-且其 libcxx 已打 cmath 补丁。这是一段独立的构建系统工作，未在本轮完成。
+结果：`analyze_snapshot_arm64 --shorebird` 成功读出 X1 的 iOS 快照，JSON schema 与
+Shorebird 完全同构（`name/offset/size/self_hash/subgraph_hash/op_subgraph_hash/...` 齐全）。
 
-## 后续三个选项
+**一条歧路的教训**：曾试图在 `app_snapshot.cc` 加 `--ignore_snapshot_feature_mismatch`
+绕过 `VerifyFeatures`。结果 SIGSEGV —— 那个校验保护的是真实不兼容（`product ios`
+vs `release macos` 的对象布局差异），不可绕过。该改动已撤回。
 
-1. **补完 X1 的 analyze_snapshot** —— 给 `~/dart/sdk/third_party/libcxx` 打 cmath 补丁，
-   并用 AOT/product 模式构建。工作量中等但明确。
-2. **让 linker 不依赖 analyze_snapshot** —— 自行解析快照的 function/hash 信息。
-   工作量大（等于重做 `analyze_snapshot --shorebird`）。
-3. **产品线改用 Shorebird 预编译引擎**（其 analyze_snapshot 可用），
-   X1 仅保留作 A-route 性能研究。代价：放弃在同一引擎上做 A/B 对比。
+### 剩余阻碍：`CollectAllCodes` 枚举不完整
 
-## 复现
+`runtime/vm/analyze_snapshot_api_impl.cc` 的 `CollectAllCodes`（我们自研的 B2 commit
+`d8ddec71daf`）只遍历 `cls.functions()`：
 
-```bash
-# 引擎（前置：docs/X1_ENGINE_REBUILD_FIX.md 的 BoringSSL 修复）
-export PATH="$HOME/depot_tools:$PATH"
-cd ~/engine_ios/src && ./flutter/third_party/gn/gn gen out/ios_release
-#   重打 toolchain 的 -F SubFrameworks 补丁
-ninja -C out/ios_release Flutter.xcframework gen_snapshot_arm64
-
-# app
-~/fvm/versions/3.29.0/bin/flutter build ios --release --no-codesign \
-  --no-tree-shake-icons \
-  --local-engine-src-path="$HOME/engine_ios/src" \
-  --local-engine=ios_release --local-engine-host=host_release
+```cpp
+Array& functions = Array::Handle(zone, cls.functions());
+if (functions.IsNull()) continue;
+for (...) { code = func.CurrentCode(); ... }
 ```
 
-`lib/main_patched_v2.dart` 是补丁版源码（`buildLabel()` 返回 `OTA_PATCHED_V2`），
-`lib/main.dart` 保持 baseline（`BASELINE_V1`）。
+**AOT 快照里 `cls.functions()` 多被清空**，所以只枚举到 134 个函数（应为数千），
+且 app 自身的 `buildLabel` 不在其中；部分 `offset` 为负数（把 VM 区的 Code
+按 isolate 基址算偏移）。
+
+正确做法是遍历快照的 code 对象表（`ProgramVisitor` / instructions table），
+而非类表。这是一段明确但真实的 VM 内部工作。
+
+**影响**：`tools/linker.py` 靠 `subgraph_hash` 匹配函数；枚举不全则链接无意义。
+注意 linker 此前只在 **Shorebird 的** analyze_snapshot 输出上验证过
+（`GROUND_TRUTH.md` 与 B-route 实测），从未在我们自研的输出上验证过。
+
+## 后续选项
+
+1. **修 `CollectAllCodes`** —— 改走 code 对象表。这是 X1 路线剩余的唯一阻碍，
+   修好即可打通 patch 生成 → 真机 E2E → A/B 性能对比。
+2. **产品线改用 Shorebird 预编译引擎**（其 analyze_snapshot 完整可用），
+   X1 仅留作 A-route 研究。代价：放弃同引擎 A/B 对比。
