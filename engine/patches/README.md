@@ -61,3 +61,32 @@ ninja -C out/ios_release libFlutter.dylib     # 不要用 | tail 包住
 
 前置条件：`docs/X1_ENGINE_REBUILD_FIX.md` 的 BoringSSL 双 label 修复必须已应用，
 否则链接期 20 个重复符号。
+
+## `dartsdk_simulator_ffi.diff`（2026-08-14）
+
+让 `dart:ffi` 在 ARM64 Simulator 下可用，从而 Flutter 的 platform channel
+不再在 binding 初始化阶段全挂。三个文件：
+
+- `runtime/platform/globals.h` — A1 的强开 hunk，外加新的 `SIMULATOR_HOST_ARCH_MATCH`
+  （host arch == target arch，即 ABI 屏障不存在）。**patch 自带 A1**，可直接打到干净 SDK 上。
+- `runtime/lib/ffi_dynamic_library.cc` — 禁用条件改为按 ABI 屏障而非「有没有 Simulator」
+- `runtime/vm/simulator_arm64.cc` — BLR 目标落在 Dart 指令段之外时逃逸为真实 native 调用
+  （x0-x7 + d0-d7 + 256 B 栈参数窗口，窗口按 `stack_base()` 裁剪）
+- `runtime/vm/dart_api_impl.cc` — `Dart_ShorebirdLoadVmcode` 的守卫补上 `TARGET_ARCH_ARM64`；
+  只按 `USING_SIMULATOR` 守卫会让 target-x64 的 host 构建编不过
+
+背景与实测数据见 `docs/ROUTE_A_RESEARCH.md` §3；回归 `tools/tests/test_sim_ffi.sh`。
+仅在 macOS arm64 上验证过，iOS 构建未验证。
+
+## `dartsdk_dynamic_modules_aot.diff`（2026-08-14）
+
+`dispatch_table_generator.cc` 的 `NumberSelectors` 里，把
+`Function has no assigned selector ID` 的 FATAL 改成跳过。
+
+带 `--dynamic-interface` 编 Flutter app 时，annotator 会保活一些从不被动态派发的
+成员（实测 `package:flutter/src/widgets/shortcuts.dart` 的 `KeySet._set_`），
+TFA 不会给它们分配 table selector。同文件的 `SetupSelectorRows` 本来就跳过
+`kInvalidSelectorId`，只有这处 FATAL 没有。
+
+不打这个补丁，`flutter build ios --release` 带 dynamic interface 必失败。
+详见 `docs/ROUTE_A_RESEARCH.md` §7。

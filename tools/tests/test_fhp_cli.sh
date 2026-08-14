@@ -45,14 +45,14 @@ else
   fail "fhp build failed"; cat "$TMP/fhp.out"; echo "$FAILS FAILURE(S)"; exit 1
 fi
 
-# The bundle must contain a v02 dill.
+# The bundle must contain a dill the target VM accepts.
 DILL="$TMP/bundle/bytecode/patch.dill"
 if [ -f "$DILL" ]; then
   pass "bundle contains bytecode/patch.dill"
   if "$REPO_ROOT/tools/inspect_patch.sh" "$DILL" --quiet >"$TMP/ins.out" 2>&1; then
-    pass "bundled dill is valid v02"
+    pass "bundled dill matches target VM format version"
   else
-    fail "bundled dill is not valid v02"; cat "$TMP/ins.out"
+    fail "bundled dill format version mismatch"; cat "$TMP/ins.out"
   fi
 else
   fail "bundle is missing bytecode/patch.dill"; find "$TMP/bundle" -type f

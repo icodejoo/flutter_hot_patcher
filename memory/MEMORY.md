@@ -1,12 +1,19 @@
-- [Shorebird 对齐任务现状](project_shorebird_alignment.md) — Task 1-6 完成 + OTA 真机验证 PASS，B-route 暂缓
+- [Shorebird 对齐任务现状](project_shorebird_alignment.md) — Task 1-6 完成 + OTA 真机验证 PASS，B-route Phase 1 PASS
 - [iOS 真机验证现状](project_ios_verification.md) — dart_dynamic_modules 被 mprotect 阻断，已转向 Shorebird 路线
-- [M4/M5 进度+OTA全验证](project_m4_m5_progress.md) — A-route OTA E2E PASS（2026-08-11）patch greet=OTA_NEW，Shorebird等价能力完整验证
+- [M4/M5+OTA全验证](project_m4_m5_progress.md) — A-route OTA E2E PASS（2026-08-11）但那是独立Dart embedder，非Flutter app；A-route已按规则1出局产品线
+- [知识图谱](project_graphify.md) — graphify-out/graph.html，4251节点/5780边，可用 graphify query 直接查询
 - [X1 引擎构建记录](project_x1_engine_build.md) — Flutter Engine iOS arm64 dart_dynamic_modules=true 构建完成
 - [fvm 隔离规则](feedback_isolation.md) — 禁止修改 fvm cache，始终用 --local-engine 参数
 - [文档写入模型规则](feedback_doc_writing.md) — 更新/写入文档用 Haiku model + effort low
 - [OTA验证痛点](project_ota_painpoints.md) — TCC/MDM/tunnel/ureq痛点记录
 - [记忆文件存放规则](feedback_memory_in_repo.md) — 记忆随 git repo 存放，换机器 clone 后直接可用
-- [B-route Phase 2](project_b_route_phase2.md) — 方案A全部完成A1-A7✓：BL+BLR拦截SimulatorToCPU，vmcode加载运行，263测试全绿
+- [B-route Phase 2 linker 已解决](project_b_route_phase2.md) — P0缺口#2关闭，6-7KB diff，tools/linker.py + build_b_route_vmcode.sh
+- [A/B真机对拍](project_kbc_benchmark.md) — 0.448/19.274/72.729 ns/iter；KBC快3.77×但43×与162×都用不上
+- [KBC工具链现状](project_v02_toolchain.md) — v02是外来VM格式；我们的VM只吃v01，正确流水线在tools/route_a/
+- [Route-B生产可用](project_landing_plan.md) — 真机PASS+分发链路已实现；仅设备端网络下载待复验
+- [Flutter集成结论](project_flutter_plugin_blocker.md) — 已定案：不要fork dart:ui，挂载点是引擎内部快照解析
+- [X1研究分支](project_engine_rebuild_broken.md) — Simulator下FFI已修好（拆宏+宿主代码逃逸），macOS与iOS真机均PASS
+- [Route-A真机PASS](project_route_a_archived.md) — 仍不进产品；Flutter app真机加载KBC模块PASS，FFI修复iOS运行时PASS，Route-B .vmcode真机PASS
 - [RTK diff 不可信](feedback_rtk_diff_unreliable.md) — repo 内单行改动被报成 "Files are identical"，验证一律用 command diff
 - [Benchmark 对比项目](project_benchmark.md) — spikes/benchmark/ 已搭建，hotpatch vs Shorebird 全指标对比，待真机采集
 - [AOT对照实验最终结果](project_aot_benchmark_final.md) — 4690x 快于Shorebird解释器，57%更少内存，0B OTA patch（2026-08-12完成）

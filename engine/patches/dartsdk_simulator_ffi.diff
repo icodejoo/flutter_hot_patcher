@@ -1,0 +1,474 @@
+diff --git a/runtime/lib/ffi_dynamic_library.cc b/runtime/lib/ffi_dynamic_library.cc
+index ec42580e0cb..99e434cca3b 100644
+--- a/runtime/lib/ffi_dynamic_library.cc
++++ b/runtime/lib/ffi_dynamic_library.cc
+@@ -29,7 +29,11 @@
+ 
+ namespace dart {
+ 
+-#if defined(USING_SIMULATOR) || (defined(DART_PRECOMPILER) && !defined(TESTING))
++// flutter_hot_patcher: gate on the ABI barrier, not on the mere presence of the
++// simulator. With SIMULATOR_HOST_ARCH_MATCH the host and target ABIs are the
++// same, so dart:ffi is usable even though Dart code is interpreted.
++#if (defined(USING_SIMULATOR) && !defined(SIMULATOR_HOST_ARCH_MATCH)) ||       \
++    (defined(DART_PRECOMPILER) && !defined(TESTING))
+ 
+ DART_NORETURN static void SimulatorUnsupported() {
+ #if defined(USING_SIMULATOR)
+@@ -66,8 +70,7 @@ DEFINE_NATIVE_ENTRY(Ffi_GetFfiNativeResolver, 1, 0) {
+   SimulatorUnsupported();
+ }
+ 
+-#else  // defined(USING_SIMULATOR) ||                                          \
+-       // (defined(DART_PRECOMPILER) && !defined(TESTING))
++#else  // simulator-with-foreign-ABI || precompiler
+ 
+ // If an error occurs populates |error| (if provided) with an error message
+ // (caller must free this message when it is no longer needed).
+@@ -516,7 +519,6 @@ DEFINE_NATIVE_ENTRY(Ffi_GetFfiNativeResolver, 1, 0) {
+   return Pointer::New(reinterpret_cast<intptr_t>(FfiResolve));
+ }
+ 
+-#endif  // defined(USING_SIMULATOR) ||                                         \
+-        // (defined(DART_PRECOMPILER) && !defined(TESTING))
++#endif  // simulator-with-foreign-ABI || precompiler
+ 
+ }  // namespace dart
+diff --git a/runtime/platform/globals.h b/runtime/platform/globals.h
+index 124b85be8d6..62e5175c390 100644
+--- a/runtime/platform/globals.h
++++ b/runtime/platform/globals.h
+@@ -367,8 +367,16 @@ struct simd128_value_t {
+ #endif
+ #endif
+ #elif defined(TARGET_ARCH_ARM64)
+-#if !defined(HOST_ARCH_ARM64)
++// flutter_hot_patcher A1: force Simulator on arm64 host+target too, so we can
++// interpret arm64 AOT instructions on real arm64 hardware (Shorebird-equivalent).
+ #define USING_SIMULATOR 1
++#if defined(HOST_ARCH_ARM64)
++// flutter_hot_patcher: upstream's USING_SIMULATOR conflates two things --
++// "the simulator interprets Dart code" and "host ABI != target ABI, so we
++// cannot call native code at all". Here only the first holds: the ABIs are
++// identical, so features that upstream disables purely because of the ABI
++// barrier (dart:ffi) must stay enabled. See docs/ROUTE_A_RESEARCH.md.
++#define SIMULATOR_HOST_ARCH_MATCH 1
+ #endif
+ #elif defined(TARGET_ARCH_RISCV32)
+ #if !defined(HOST_ARCH_RISCV32)
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index 55fad458b6d..740f3c7908f 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -6957,7 +6957,10 @@ DART_EXPORT char* Dart_WriteHeapSnapshot(
+ // flutter_hot_patcher B4: Load vmcode and configure Simulator link table.
+ // Uses stdio for file I/O (dart::bin not available in dart_api_impl.cc).
+ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+-#if defined(USING_SIMULATOR)
++// SetPendingVmcodeFile only exists on the arm64 simulator. USING_SIMULATOR is
++// also set for e.g. a target-x64 build on an arm64 host (out/host_release),
++// where dart::Simulator is the x64 one and has no such member.
++#if defined(USING_SIMULATOR) && defined(TARGET_ARCH_ARM64)
+   if (vmcode_path == nullptr) return false;
+   
+   FILE* f = fopen(vmcode_path, "rb");
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index a40bc72a6fc..3ad3cfb5119 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -15,7 +15,9 @@
+ 
+ #include "vm/compiler/assembler/disassembler.h"
+ #include "vm/constants.h"
++#include "vm/dart.h"
+ #include "vm/image_snapshot.h"
++#include "vm/isolate.h"
+ #include "vm/native_arguments.h"
+ #include "vm/os_thread.h"
+ #include "vm/stack_frame.h"
+@@ -25,33 +27,67 @@ namespace dart {
+ // flutter_hot_patcher B4: Static members for pending vmcode pre-loading
+ const char* Simulator::s_pending_vmcode_path_ = nullptr;
+ bool Simulator::s_pending_vmcode_applied_ = false;
++// flutter_hot_patcher OTA: base (original binary) instructions address.
++// When non-zero, cpu_off entries use this base instead of the patch snapshot base,
++// enabling true OTA patching where patch snapshot ≠ base snapshot.
++uword Simulator::s_base_instructions_ptr_ = 0;
+ 
+ void Simulator::SetPendingVmcodeFile(const char* path) {
+   s_pending_vmcode_path_ = path;
+   s_pending_vmcode_applied_ = false;
+ }
+ 
+-void Simulator::ApplyPendingVmcodeIfNeeded(Simulator* sim, uword base_instr_base) {
++// flutter_hot_patcher OTA: store the address of the original (BASE) snapshot instructions.
++// Call BEFORE replacing kDartIsolateSnapshotInstructions with PATCH instructions.
++void Simulator::SetOriginalBaseInstructions(uword base_ptr) {
++  s_base_instructions_ptr_ = base_ptr;
++}
++
++void Simulator::ApplyPendingVmcodeIfNeeded(Simulator* sim, uword patch_instr_base) {
+   if (s_pending_vmcode_path_ == nullptr || s_pending_vmcode_applied_) return;
+   s_pending_vmcode_applied_ = true;
+   
+   FILE* f = fopen(s_pending_vmcode_path_, "rb");
+   if (f == nullptr) return;
+   
+-  uint32_t n_entries = 0;
++  // flutter_hot_patcher OTA: new header format reads N, instr_size, data_size.
++  // Old format (just N): instr_size and data_size will be small/garbage but harmless.
++  uint32_t n_entries = 0, instr_size = 0, data_size = 0;
+   if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return; }
++  if (n_entries < 65536) {
++    // Peek next two uint32s — may be instr_size/data_size (OTA format) or link entries (old format)
++    // OTA format: byte 4-7 = instr_size (>0), byte 8-11 = data_size (>0)
++    // Old format: byte 4-7 = sim_off of first entry (could be any value)
++    // We distinguish by checking if s_pending_vmcode_instr_size_ was set (see below).
++    fread(&instr_size, 4, 1, f);
++    fread(&data_size, 4, 1, f);
++    // If instr_size looks implausible (>10MB or 0 with data_size>0), treat as old format
++    if (instr_size == 0 || instr_size > 10*1024*1024) {
++      // Old format: rewind to after n_entries
++      rewind(f);
++      fread(&n_entries, 4, 1, f);  // re-read n_entries
++      instr_size = 0; data_size = 0;
++    }
++  }
++  
++  // cpu_off base: use original BASE instructions if available (OTA), else patch base (self-self)
++  uword cpu_base = (s_base_instructions_ptr_ != 0) ? s_base_instructions_ptr_ : patch_instr_base;
+   
+-  sim->SetSimToCpuStartupThreshold(50000000ULL);  // 50M instructions startup window
++  sim->SetSimToCpuStartupThreshold(50000000ULL);
+   sim->SetBaseInstructionsBase(0);  // absolute addresses
+   
++  uint32_t applied = 0;
+   for (uint32_t i = 0; i < n_entries; i++) {
+     uint32_t sim_off = 0, cpu_off = 0;
+     if (fread(&sim_off, 4, 1, f) != 1 || fread(&cpu_off, 4, 1, f) != 1) break;
+-    sim->SetLinkedFunction(base_instr_base + sim_off, base_instr_base + cpu_off);
++    // sim_off is relative to PATCH instructions; cpu_off is relative to BASE instructions
++    sim->SetLinkedFunction(patch_instr_base + sim_off, cpu_base + cpu_off);
++    applied++;
+   }
+   fclose(f);
+   
+-  THR_Print("[B4] Applied %u vmcode link entries (threshold 50M)\n", n_entries);
++  THR_Print("[B4] Applied %u vmcode link entries (patch_base=0x%lx, cpu_base=0x%lx, threshold 50M)\n",
++            applied, (unsigned long)patch_instr_base, (unsigned long)cpu_base);
+ }
+ 
+ // constants_arm64.h does not define LR constant to prevent accidental direct
+@@ -1136,8 +1172,9 @@ void Simulator::UnalignedAccess(const char* msg, uword addr, Instr* instr) {
+ void Simulator::UnimplementedInstruction(Instr* instr) {
+   char buffer[128];
+   snprintf(buffer, sizeof(buffer),
+-           "Unimplemented instruction: at %p, last_pc=0x%" Px64 "\n", instr,
+-           get_last_pc());
++           "Unimplemented instruction: at %p (word=0x%08x), last_pc=0x%" Px64
++           "\n",
++           instr, instr->InstructionBits(), get_last_pc());
+   SimulatorDebugger dbg(this);
+   dbg.Stop(instr, buffer);
+   FATAL("Cannot continue execution after unimplemented instruction.");
+@@ -1745,6 +1782,117 @@ static NO_SANITIZE_UNDEFINED("function") int64_t InvokeWithTHR(
+ 
+ #endif  // __aarch64__
+ 
++// flutter_hot_patcher: host C code escape.
++//
++// Upstream never needs this. With host arch != target arch the simulator can
++// only ever be handed Dart code, so `blr` always lands on something it can
++// interpret. Here host == target, so an FFI call's `blr` lands on real host
++// machine code, which clang compiles with ADRP / PAC / NEON / LSE atomics that
++// this simulator does not model (the first one hit in practice is ADRP --
++// DecodePCRel only implements ADR). Anything outside the Dart instruction
++// images is therefore executed natively instead of interpreted.
++//
++// Stack arguments are handled by copying a fixed window from the simulated
++// stack to the host stack right before the branch, so callees with more than
++// eight integer or eight floating-point arguments read the right values.
++// Anything past that window (kHostCallStackWindow bytes) is not transferred.
++#if defined(SIMULATOR_HOST_ARCH_MATCH) && defined(__aarch64__)
++
++static bool AddressInImage(const uint8_t* image, uword addr) {
++  if (image == nullptr) return false;
++  return Image(image).contains(addr);
++}
++
++// True when `addr` is host C code rather than Dart code the simulator owns.
++static bool IsHostCodeAddress(uword addr) {
++  if (addr == 0) return false;
++
++  IsolateGroup* group = IsolateGroup::Current();
++  if (group != nullptr && group->source() != nullptr &&
++      AddressInImage(group->source()->snapshot_instructions, addr)) {
++    return false;
++  }
++  IsolateGroup* vm_group = Dart::vm_isolate_group();
++  if (vm_group != nullptr && vm_group->source() != nullptr &&
++      AddressInImage(vm_group->source()->snapshot_instructions, addr)) {
++    return false;
++  }
++  // Runtime/native call redirection trampolines live outside the images but
++  // must be interpreted so DecodeExceptionGen can dispatch them.
++  if (Instr::At(addr)->InstructionBits() ==
++      Instr::kSimulatorRedirectInstruction) {
++    return false;
++  }
++  return true;
++}
++
++struct HostCallResult {
++  int64_t x0;
++  int64_t d0;
++};
++
++// Bytes of the simulated stack handed to the callee as its stack arguments.
++// 32 slots; over-copying is harmless because the simulated stack is real
++// memory, but the caller clamps it so we never read past stack_base().
++static constexpr uword kHostCallStackWindow = 256;
++
++static NO_SANITIZE_UNDEFINED("function") HostCallResult
++CallHostFunction(uword target, const int64_t* sim_stack, uword stack_window,
++                 int64_t a0, int64_t a1, int64_t a2, int64_t a3,
++                 int64_t a4, int64_t a5, int64_t a6, int64_t a7,
++                 int64_t f0, int64_t f1, int64_t f2, int64_t f3,
++                 int64_t f4, int64_t f5, int64_t f6, int64_t f7) {
++  register int64_t r0 __asm__("x0") = a0;
++  register int64_t r1 __asm__("x1") = a1;
++  register int64_t r2 __asm__("x2") = a2;
++  register int64_t r3 __asm__("x3") = a3;
++  register int64_t r4 __asm__("x4") = a4;
++  register int64_t r5 __asm__("x5") = a5;
++  register int64_t r6 __asm__("x6") = a6;
++  register int64_t r7 __asm__("x7") = a7;
++  register double v0 __asm__("d0") = bit_cast<double>(f0);
++  register double v1 __asm__("d1") = bit_cast<double>(f1);
++  register double v2 __asm__("d2") = bit_cast<double>(f2);
++  register double v3 __asm__("d3") = bit_cast<double>(f3);
++  register double v4 __asm__("d4") = bit_cast<double>(f4);
++  register double v5 __asm__("d5") = bit_cast<double>(f5);
++  register double v6 __asm__("d6") = bit_cast<double>(f6);
++  register double v7 __asm__("d7") = bit_cast<double>(f7);
++  register uword t __asm__("x9") = target;
++  register const int64_t* stk __asm__("x10") = sim_stack;
++  __asm__ volatile(
++      "mov x19, sp\n\t"
++      "sub sp, sp, %[win]\n\t"
++      "mov x11, #0\n\t"
++      "1:\n\t"
++      "cmp x11, %[win]\n\t"
++      "b.hs 2f\n\t"
++      "ldr x12, [%[stk], x11]\n\t"
++      "str x12, [sp, x11]\n\t"
++      "add x11, x11, #8\n\t"
++      "b 1b\n\t"
++      "2:\n\t"
++      "blr %[t]\n\t"
++      "mov sp, x19\n\t"
++      : "+r"(r0), "+w"(v0)
++      : [t] "r"(t), [stk] "r"(stk), [win] "r"(stack_window),
++        "r"(r1), "r"(r2), "r"(r3), "r"(r4),
++        "r"(r5), "r"(r6), "r"(r7),
++        "w"(v1), "w"(v2), "w"(v3), "w"(v4),
++        "w"(v5), "w"(v6), "w"(v7)
++      : "memory", "cc",
++        "x8", "x11", "x12", "x13", "x14", "x15",
++        "x16", "x17", "x19", "x30",
++        "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
++        "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
++  HostCallResult result;
++  result.x0 = r0;
++  result.d0 = bit_cast<int64_t>(v0);
++  return result;
++}
++
++#endif  // SIMULATOR_HOST_ARCH_MATCH && __aarch64__
++
+ // flutter_hot_patcher A2: SimulatorToCPU assembly shim declaration.
+ // Defined in shorebird_sim_to_cpu_arm64.S.
+ // Calls a native ARM64 Dart function with simulated register state:
+@@ -1947,12 +2095,20 @@ void Simulator::DecodeUnconditionalBranch(Instr* instr) {
+   if (link && !shorebird_link_table_.empty() && icount_ > shorebird_startup_threshold_) {
+     auto it = shorebird_link_table_.find(static_cast<uword>(dest));
+     if (it != shorebird_link_table_.end()) {
++      // flutter_hot_patcher B3: GC safepoint check. If a GC or interrupt is pending,
++      // skip native dispatch and let the Simulator interpret this call instead.
++      // The Simulator will execute the safepoint poll instructions in the callee,
++      // cooperating with GC without the native stack/root visibility mismatch.
++      Thread* current_thr = Thread::Current();
++      if (current_thr != nullptr && current_thr->HasScheduledInterrupts()) {
++        // Fall through to normal Simulator interpretation by not updating PC.
++        goto bl_simulate;
++      }
+       const uword cpu_entry = it->second;  // absolute (base=0 when stored)
+       const int64_t a0 = get_register(R0), a1 = get_register(R1);
+       const int64_t a2 = get_register(R2), a3 = get_register(R3);
+       const int64_t a4 = get_register(R4), a5 = get_register(R5);
+       const int64_t a6 = get_register(R6), a7 = get_register(R7);
+-      Thread* current_thr = Thread::Current();
+       const int64_t thr_val = (current_thr != nullptr)
+           ? reinterpret_cast<int64_t>(current_thr) : get_register(THR);
+       const int64_t pp_val = get_register(PP);
+@@ -1960,13 +2116,24 @@ void Simulator::DecodeUnconditionalBranch(Instr* instr) {
+       // we call the native function and it returns to us).
+       set_pc(ret);
+       memory_.FlushAll();
+-      const int64_t result = InvokeWithTHR(
+-          cpu_entry, static_cast<uword>(thr_val), static_cast<uword>(pp_val),
+-          a0, a1, a2, a3, a4, a5, a6, a7);
+-      set_register(instr, R0, result);
++      // flutter_hot_patcher B3: Install SimulatorSetjmpBuffer so that Dart
++      // exceptions thrown from native code propagate back through the Simulator
++      // correctly (via Simulator::JumpToFrame → longjmp here).
++      {
++        SimulatorSetjmpBuffer buffer(this);
++        if (!setjmp(buffer.buffer_)) {
++          const int64_t result = InvokeWithTHR(
++              cpu_entry, static_cast<uword>(thr_val), static_cast<uword>(pp_val),
++              a0, a1, a2, a3, a4, a5, a6, a7);
++          set_register(instr, R0, result);
++        }
++        // else: Dart exception thrown; Simulator PC/SP/FP updated by JumpToFrame.
++        // Continue simulation from the updated PC (exception handler frame).
++      }
+       return;
+     }
+   }
++  bl_simulate:
+ 
+ #endif  // __aarch64__
+   set_pc(dest);
+@@ -2001,16 +2168,18 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+           // in the PATCH snapshot's instruction space.
+           auto it = shorebird_link_table_.find(static_cast<uword>(dest));
+           if (it != shorebird_link_table_.end()) {
++            // flutter_hot_patcher B3: GC safepoint check. If a GC or interrupt
++            // is pending, skip native dispatch and let the Simulator interpret.
++            Thread* current_thr_b3 = Thread::Current();
++            if (current_thr_b3 != nullptr && current_thr_b3->HasScheduledInterrupts()) {
++              break;  // Fall through to normal Simulator BLR handling below.
++            }
+             const uword cpu_entry = shorebird_base_instructions_base_ + it->second;
+             // Advance PC past the BLR (SimulatorToCPU handles the "call" inline).
+             // Do NOT set LR — the called function returns in C++, so we never
+             // execute a ret instruction in the callee. LR must remain unchanged
+             // so that when the Simulator-level ret executes, it returns correctly.
+             set_pc(ret);
+-            // Call native function via InvokeLeafRuntime (same mechanism as
+-            // existing kLeafRuntimeCall path — C ABI, no stack frame overhead).
+-            // NOTE: does NOT set THR(x26)/PP(x27) in callee. For full Dart
+-            // function support, stack switching is needed (next A2 iteration).
+             memory_.FlushAll();
+ #if defined(__aarch64__)
+             // Transfer current simulated registers to native call.
+@@ -2021,18 +2190,27 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+             // Use InvokeWithTHR to set x26=THR before calling.
+             // Use Thread::Current() instead of simulated THR (x26) because
+             // during startup the simulated x26 is initialized to a garbage icount value.
+-            Thread* current_thr = Thread::Current();
+-            const int64_t thr_val = (current_thr != nullptr)
+-                ? reinterpret_cast<int64_t>(current_thr)
++            const int64_t thr_val = (current_thr_b3 != nullptr)
++                ? reinterpret_cast<int64_t>(current_thr_b3)
+                 : get_register(THR);
+             const int64_t pp_val = get_register(PP);  // PP from simulated regs
+-            const int64_t result = InvokeWithTHR(
+-                cpu_entry, static_cast<uword>(thr_val), static_cast<uword>(pp_val),
+-                a0, a1, a2, a3, a4, a5, a6, a7);
+-            // Do NOT call ClobberVolatileRegisters() here: it would clobber LR
+-            // with a random value, causing the subsequent ret to jump to garbage.
+-            // SimulatorToCPU manages register state explicitly.
+-            set_register(instr, R0, result);
++            // flutter_hot_patcher B3: Install SimulatorSetjmpBuffer so that Dart
++            // exceptions thrown from native code propagate back through the
++            // Simulator correctly (via Simulator::JumpToFrame → longjmp here).
++            {
++              SimulatorSetjmpBuffer buffer(this);
++              if (!setjmp(buffer.buffer_)) {
++                const int64_t result = InvokeWithTHR(
++                    cpu_entry, static_cast<uword>(thr_val),
++                    static_cast<uword>(pp_val),
++                    a0, a1, a2, a3, a4, a5, a6, a7);
++                // Do NOT call ClobberVolatileRegisters() here: it would clobber
++                // LR, causing the subsequent ret to jump to garbage.
++                set_register(instr, R0, result);
++              }
++              // else: Dart exception thrown; Simulator PC/SP/FP updated by
++              // JumpToFrame. Continue simulation from the updated PC.
++            }
+             break;
+ #else
+             // Non-ARM64: fall through to normal interpreted execution
+@@ -2041,6 +2219,41 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+           }
+         }
+ 
++#if defined(SIMULATOR_HOST_ARCH_MATCH) && defined(__aarch64__)
++        if (IsHostCodeAddress(static_cast<uword>(dest))) {
++          // Do not set LR: the callee returns into C++ here, so the simulated
++          // LR must survive for the eventual simulated `ret`.
++          set_pc(ret);
++          memory_.FlushAll();
++          SimulatorSetjmpBuffer buffer(this);
++          if (!setjmp(buffer.buffer_)) {
++            // Clamp the stack-argument window so a shallow frame cannot read
++            // past the top of the simulated stack.
++            const uword sim_sp =
++                static_cast<uword>(get_register(R31, R31IsSP));
++            uword window = kHostCallStackWindow;
++            if (stack_base() > sim_sp && (stack_base() - sim_sp) < window) {
++              window = Utils::RoundDown(stack_base() - sim_sp, 16);
++            }
++            const HostCallResult r = CallHostFunction(
++                static_cast<uword>(dest),
++                reinterpret_cast<const int64_t*>(sim_sp), window,
++                get_register(R0), get_register(R1), get_register(R2),
++                get_register(R3), get_register(R4), get_register(R5),
++                get_register(R6), get_register(R7),
++                get_vregisterd(V0, 0), get_vregisterd(V1, 0),
++                get_vregisterd(V2, 0), get_vregisterd(V3, 0),
++                get_vregisterd(V4, 0), get_vregisterd(V5, 0),
++                get_vregisterd(V6, 0), get_vregisterd(V7, 0));
++            set_register(instr, R0, r.x0);
++            set_vregisterd(V0, 0, r.d0);
++          }
++          // else: a Dart exception was thrown out of host code; JumpToFrame
++          // already moved PC/SP/FP to the handler.
++          break;
++        }
++#endif  // SIMULATOR_HOST_ARCH_MATCH && __aarch64__
++
+         set_pc(dest);
+         set_register(instr, LR, ret);
+         break;
+@@ -4121,6 +4334,28 @@ void Simulator::JumpToFrame(uword pc, uword sp, uword fp, Thread* thread) {
+ 
+ }  // namespace dart
+ 
++// flutter_hot_patcher B4: C-linkage shims for dart_harness.c
++#if defined(USING_SIMULATOR)
++extern "C" bool fhp_shorebird_load_vmcode(const char* vmcode_path) {
++  if (vmcode_path == nullptr) return false;
++  FILE* f = fopen(vmcode_path, "rb");
++  if (f == nullptr) return false;
++  uint32_t n_entries = 0;
++  if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return false; }
++  fclose(f);
++  if (n_entries > 65536) return false;
++  dart::Simulator::SetPendingVmcodeFile(vmcode_path);
++  return n_entries > 0;
++}
++
++// flutter_hot_patcher OTA: register BASE instructions address so cpu_off entries
++// resolve against the original binary snapshot (not the PATCH snapshot).
++extern "C" void fhp_set_base_instructions(const void* base_ptr) {
++  dart::Simulator::SetOriginalBaseInstructions(
++      reinterpret_cast<dart::uword>(base_ptr));
++}
++#endif  // defined(USING_SIMULATOR)
++
+ #endif  // !defined(USING_SIMULATOR)
+ 
+ #endif  // defined TARGET_ARCH_ARM64

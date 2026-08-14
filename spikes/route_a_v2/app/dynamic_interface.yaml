@@ -1,0 +1,11 @@
+# Declares what a dynamic module is allowed to touch in this app.
+# Consumed by the AOT frontend (`gen_kernel --dynamic-interface=...`) to keep
+# these members alive through TFA, and by `dart2bytecode --validate=...` to
+# reject modules that reach outside the contract.
+callable:
+  - library: 'package:route_a_demo/greeting.dart'
+  - library: 'dart:core'
+  # The compiler emits this for `@pragma('dyn-module:entry-point')` itself.
+  - library: 'dart:core'
+    class: 'pragma'
+    member: '_'

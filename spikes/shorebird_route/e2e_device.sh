@@ -42,12 +42,20 @@ printf "vmcode: %s bytes | 引擎 shorebird_* 导出: %s\n" "$SIZE" \
   "$(dyld_info -exports "$APP/Frameworks/Flutter.framework/Flutter" 2>/dev/null | grep -c shorebird)"
 
 step "2. 签名"
-IDENTITY="${IDENTITY:-$(security find-identity -v -p codesigning | awk 'NR==1{print $2}')}"
-echo "身份: $IDENTITY"
-for f in "$APP/Frameworks/Flutter.framework" "$APP/Frameworks/App.framework"; do
-    [ -e "$f" ] && codesign --force --sign "$IDENTITY" --timestamp=none "$f"
-done
-codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
+# 如果 flutter build 已经带描述文件正确签过（没传 --no-codesign），就别再签一遍：
+# 用 find-identity 的第一条很可能是别的 team 的证书，重签会让描述文件对不上，
+# devicectl install 直接失败。
+if codesign --verify --deep --strict "$APP" >/dev/null 2>&1 && \
+   [ -e "$APP/embedded.mobileprovision" ]; then
+    echo "已带描述文件签好，跳过重签"
+else
+    IDENTITY="${IDENTITY:-$(security find-identity -v -p codesigning | awk 'NR==1{print $2}')}"
+    echo "身份: $IDENTITY"
+    for f in "$APP/Frameworks/Flutter.framework" "$APP/Frameworks/App.framework"; do
+        [ -e "$f" ] && codesign --force --sign "$IDENTITY" --timestamp=none "$f"
+    done
+    codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
+fi
 codesign -dv "$APP" 2>&1 | head -2
 
 step "3. 安装并跑 baseline"
@@ -69,13 +77,16 @@ root = pathlib.Path(stage)
     {"kind": "Installed", "signature": None, "size": size}))
 (root/'pointers.json').write_text(json.dumps(
     {"next_boot_patch": n, "last_booted_patch": None,
-     "currently_booting_patch": None}))
+     "currently_booting_patch": None, "boot_started_at": None}))
 print("state.json:", (root/'patches'/str(n)/'state.json').read_text())
 print("pointers.json:", (root/'pointers.json').read_text())
 PY
 
 step "5. 推送到设备"
-DEST="Library/Application Support/shorebird/shorebird_updater/$APP_ID"
+# 实测修正（2026-08-14 真机）：state root **没有** <app_id> 这一层。
+# 带 app_id 的目录 updater 完全不看，日志停在 "no active patch"。
+# 正确路径由设备上 updater 自己建的目录反推得到。
+DEST="Library/Application Support/shorebird/shorebird_updater"
 echo "目标: $DEST"
 xcrun devicectl device copy to --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \

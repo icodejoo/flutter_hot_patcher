@@ -10,7 +10,7 @@ FAILS=0
 fail() { echo "FAIL: $1"; FAILS=$((FAILS+1)); }
 pass() { echo "PASS: $1"; }
 
-# Fixture: a valid single-function v02 patch.
+# Fixture: a valid single-function patch.
 cat > "$TMP/ok.dart" <<'EOF'
 library;
 
@@ -20,16 +20,16 @@ EOF
 "$REPO_ROOT/tools/build_ios_patch.sh" "$TMP/ok.dart" "$TMP/ok.dill" >/dev/null 2>&1 \
   || { echo "FATAL: fixture build failed"; exit 1; }
 
-# 1. Valid v02 dill exits 0.
+# 1. Valid dill exits 0.
 if "$INSPECT" "$TMP/ok.dill" >"$TMP/ok.out" 2>&1; then
-  pass "valid v02 dill exits 0"
+  pass "valid dill exits 0"
 else
-  fail "valid v02 dill should exit 0; got $?"; cat "$TMP/ok.out"
+  fail "valid dill should exit 0; got $?"; cat "$TMP/ok.out"
 fi
 
-# 2. Reports version 2.
-grep -q "version: 2" "$TMP/ok.out" || fail "should report 'version: 2'"
-grep -q "version: 2" "$TMP/ok.out" && pass "reports version 2"
+# 2. Reports the target VM format version.
+grep -q "version: ${FHP_KBC_VERSION:-1}" "$TMP/ok.out" || fail "should report the target VM format version"
+grep -q "version: ${FHP_KBC_VERSION:-1}" "$TMP/ok.out" && pass "reports the target VM format version"
 
 # 3. Lists the entry point.
 grep -q "entry_point: .*greet" "$TMP/ok.out" || fail "should list greet as entry_point"
@@ -41,13 +41,13 @@ python3 -c "
 import sys
 p = sys.argv[1]
 d = bytearray(open(p,'rb').read())
-d[4] = 1
+d[4] = 99
 open(p,'wb').write(d)
 " "$TMP/bad.dill"
 if "$INSPECT" "$TMP/bad.dill" >"$TMP/bad.out" 2>&1; then
-  fail "v01 dill should exit non-zero"
+  fail "wrong-version dill should exit non-zero"
 else
-  pass "v01 dill rejected"
+  pass "wrong-version dill rejected"
 fi
 
 # 5. A non-dill file must be rejected non-zero.

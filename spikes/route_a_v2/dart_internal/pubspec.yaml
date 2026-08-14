@@ -1,0 +1,8 @@
+# The package NAME is load-bearing.
+# pkg/kernel/lib/target/targets.dart:347 allows `dart:_internal` imports only
+# from `dart:*` libraries and from packages whose path starts with
+# `dart_internal/` or `dynamic_modules/`. Renaming this package breaks the build.
+name: dart_internal
+publish_to: none
+environment:
+  sdk: '>=3.7.0 <4.0.0'

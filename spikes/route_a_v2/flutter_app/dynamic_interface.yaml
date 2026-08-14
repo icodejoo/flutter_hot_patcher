@@ -1,0 +1,7 @@
+callable:
+  - library: 'dart:core'
+  - library: 'dart:core'
+    class: 'pragma'
+    member: '_'
+  - library: 'package:route_a_flutter/patchable.dart'
+  - library: 'package:route_a_flutter/hot.dart'

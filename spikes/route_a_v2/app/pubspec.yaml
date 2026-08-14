@@ -1,0 +1,7 @@
+name: route_a_demo
+publish_to: none
+environment:
+  sdk: '>=3.7.0 <4.0.0'
+dependencies:
+  dart_internal:
+    path: ../dart_internal

@@ -27,8 +27,15 @@ if [ "$FHP_TOOLCHAIN" = "x1" ]; then
     # 必须用引擎构建的那份：它是 macOS host 可执行 + iOS 目标配置。
     # Dart SDK 的 ReleaseARM64 是 macOS 目标，读 iOS 快照会 SIGSEGV。
     ANALYZE=$E/ios_release/analyze_snapshot_arm64
-    DARTAOT=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/dartaotruntime
-    FRONTEND=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
+    # Prefer the engine's own arm64 host toolchain: the prebuilt dart-sdk is a
+    # different Dart whose kernel binary format is 122 while ~/dart/sdk is 121,
+    # so the patch dill would not match the base. Build it with
+    # tools/route_a/build_host_engine.sh.
+    HOST_SDK=$E/host_release_arm64/dart-sdk
+    [ -x "$HOST_SDK/bin/dartaotruntime" ] || \
+        HOST_SDK=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk
+    DARTAOT=$HOST_SDK/bin/dartaotruntime
+    FRONTEND=$HOST_SDK/bin/snapshots/frontend_server_aot.dart.snapshot
     SDK_ROOT=$E/ios_release/flutter_patched_sdk
 else
     SB_REV=c15ef6379403a0a55531a058bdb2c8e55bc05c98
@@ -49,7 +56,7 @@ done
 # 不直接分析 App.framework/App（Mach-O）：我们的 analyze_snapshot 只支持 ELF
 # （Dart_LoadELF），而 Shorebird 的 Mach-O 支持在其私有 dart-sdk 里。
 # 同一 dill + 同一 gen_snapshot + --deterministic ⇒ 内容一致，仅容器不同。
-BASE_DILL=$(find "$APP_DIR/.dart_tool/flutter_build" -name "app.dill" 2>/dev/null | head -1)
+BASE_DILL="${FHP_BASE_DILL:-$(find "$APP_DIR/.dart_tool/flutter_build" -name "app.dill" 2>/dev/null | head -1)}"
 [ -n "$BASE_DILL" ] || { echo "MISSING base app.dill（先跑一次 release 构建）" >&2; exit 1; }
 
 mkdir -p "$OUT_DIR"
@@ -61,6 +68,16 @@ echo "[0/5] base kernel -> base ELF"
     "$BASE_DILL"
 BASE_APP="$OUT_DIR/base.aot"
 
+# 复现 flutter 自己那串前端参数是不可靠的：它还会传 --no-link-platform、
+# --delete-tostring-package-uri、插件注册入口等，漏一个 link% 就会崩到个位数
+# （实测：一个带插件的 app 漏掉后是 2.62%）。带插件或带 dynamic interface 的
+# 工程请改让 flutter 自己编补丁 kernel，再用 FHP_PATCH_DILL 传进来：
+#   改源码 → flutter build ios ... → 取 .dart_tool/flutter_build/**/app.dill → 还原源码
+if [ -n "${FHP_PATCH_DILL:-}" ]; then
+    echo "[1/5] 用调用方提供的 patch dill: $FHP_PATCH_DILL"
+    cp "$FHP_PATCH_DILL" "$OUT_DIR/patch.dill"
+else
+
 echo "[1/5] 编译改动后的 kernel dill（用 frontend_server，与 flutter build 同一路径）"
 PKG_NAME=$(python3 -c "
 import re,sys
@@ -68,9 +85,17 @@ for l in open('$PATCHED_DIR/pubspec.yaml'):
     m=re.match(r'^name:\s*(\S+)', l)
     if m: print(m.group(1)); break
 ")
+# 若 base app 是带 dynamic interface 编的，补丁也必须带同一份，
+# 否则两边 kernel 差异远超预期改动，link% 会失真。
+DI_ARGS=()
+if [ -n "${FHP_DYNAMIC_INTERFACE:-}" ]; then
+    DI_ARGS=(--dynamic-interface "$FHP_DYNAMIC_INTERFACE")
+fi
+
 "$DARTAOT" "$FRONTEND" \
     --sdk-root "$SDK_ROOT/" \
     --target=flutter \
+    "${DI_ARGS[@]}" \
     --no-print-incremental-dependencies \
     -Ddart.vm.profile=false -Ddart.vm.product=true \
     --delete-tostring-package-uri=dart:ui \
@@ -80,6 +105,8 @@ for l in open('$PATCHED_DIR/pubspec.yaml'):
     --output-dill "$OUT_DIR/patch.dill" \
     --verbosity=error \
     "package:$PKG_NAME/main.dart"
+
+fi
 
 echo "[2/5] gen_snapshot -> patch ELF（.vmcode 内嵌必须是 ELF）"
 "$GEN_SNAPSHOT" --deterministic \

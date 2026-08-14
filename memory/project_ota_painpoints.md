@@ -22,44 +22,6 @@ OTA 真机验证（2026-08-07）遇到的主要阻断：
 
 **How to apply:** 遇到 OTA 网络问题先排查 MDM；遇到 git 失败先检查 TCC；patch_server 必须从用户 Terminal 启动。
 
----
-
-## OTA 本地局域网再验证进度（2026-08-07，进行中）
-
-**背景：** 上次用 Cloudflare tunnel 验证了端到端 OTA PASS。本次目标：直接走局域网 HTTP 验证（Mac 热点或 USB 链路），脱离 Cloudflare。
-
-**已排查的网络方案：**
-
-| 方案 | 状态 | 原因 |
-|------|------|------|
-| Android 热点 WiFi（10.39.53.x）| ❌ | AP isolation 阻断 TCP（ICMP 通，TCP 不通） |
-| USB 链路 link-local IPv4（169.254.68.198）| ⚠️ 不稳定 | iPhone 发 SYN → Mac accept → ENOTCONN/RST；server 有时不到请求 |
-| devicectl 隧道 IPv6（fdea:5397:8433::2）| ❌ | Mac 自身也无法连通；仅为 CoreDevice 控制面，不转发任意 TCP |
-
-**重要发现（iPhone → Mac 链路）：**
-- `NSLocalNetworkUsageDescription` + 权限开启后，iPhone ureq 能发出 TCP SYN 到 169.254.68.198:8765
-- 错误 `Connection reset by peer (os error 54)` 表示 TCP 握手成功但 iOS 立即 RST；server 有时看不到连接
-- `dispatch_after(5s)` 后台延迟导致 iOS 在 block 执行前挂起 App → 已撤销
-- `xcrun devicectl device process launch` 会在 App 启动瞬间建立/拆除 utun4 隧道，可能干扰 en7 路由
-
-**文件改动（本次 session）：**
-- `Info.plist`：添加 `NSLocalNetworkUsageDescription`；URL 在 169.254.68.198 ↔ [fdea:5397:8433::2] 之间切换（当前：`http://[fdea:5397:8433::2]:8765`）
-- `AppDelegate.m`：添加 `fhpLog()` 文件日志 + log 写入 `ota_debug.log`（可通过 devicectl copy 读取）；`_logPath` 在 `didFinishLaunchingWithOptions` 设置
-
-**ota_debug.log 读取命令：**
-```
-xcrun devicectl device copy from \
-  --device 00008110-000E583836F3601E \
-  --source "Library/Application Support/HotPatchUpdater/ota_debug.log" \
-  --domain-type appDataContainer \
-  --domain-identifier org.hotpatch.m3demo \
-  --destination /tmp/ota_debug.log
-```
-
-**下一步推荐：** Mac 开个人热点方案（192.168.2.1），这是最可靠的本地方案，无 AP isolation，Mac 是 DHCP 服务器，iPhone 连接后直通 192.168.2.1:8765。
-
----
-
 ### 解决方案：Mac 热点替代 Cloudflare（待验证）
 
 **方案：**

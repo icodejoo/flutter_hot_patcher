@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A multi-function patch must compile to ONE v02 dill with exactly one
+# A multi-function patch must compile to ONE dill with exactly one
 # dyn-module entry point (a no-arg map factory) plus every patched function.
 #
 # dart2bytecode rejects a second @pragma('dyn-module:entry-point') outright
@@ -27,7 +27,7 @@ fi
 "$REPO_ROOT/tools/inspect_patch.sh" "$DILL" --quiet >"$TMP/inspect.out" 2>&1 \
   || { fail "inspect rejected the dill"; cat "$TMP/inspect.out"; }
 
-grep -q "version: 2" "$TMP/inspect.out" && pass "is v02" || fail "not v02"
+grep -q "version: ${FHP_KBC_VERSION:-1}" "$TMP/inspect.out" && pass "format version matches target VM" || fail "format version does not match target VM"
 
 # Exactly one entry point, and it is the map factory.
 COUNT=$(grep '^entry_point_count:' "$TMP/inspect.out" | awk '{print $2}')

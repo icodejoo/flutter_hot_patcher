@@ -23,7 +23,8 @@ metadata:
 - Shorebird diff 算法：bidiff-1.0.0 + zstd（全部开源 MIT crates）
 - dump_blobs = analyze_snapshot --dump_blobs，产出 4 段连接 blob
 - 无 linker 情况下 B-route 退化为全量 2.9MB snapshot
-- 建议：保持 A-route（kernel bytecode diff）为主线，B-route 暂缓
+- ~~建议：保持 A-route 为主线，B-route 暂缓~~ **（2026-08-13 已推翻，见 [[project-landing-plan]]）**
+  现结论相反：B-route 为产品路径，A-route 出局。当时的"B-route 退化为全量 2.9MB"是无 linker 所致，linker 已实现，现为 6–7KB。
 - 详见：spikes/b_route_vmcode/FINDINGS.md
 
 **Why:** 替换现有热修复系统核心，对齐 Shorebird 商业产品完整能力。
@@ -69,7 +70,7 @@ metadata:
 | 优先级 | 任务 | 说明 |
 |--------|------|------|
 | 1 | 私钥管理 | 当前密钥在 tools/patch_builder/keys/，记录备份方式 |
-| 2 | B-route vmcode diff 实现 | **结论已更新**：无 linker 时 delta 仍可控（小改动 5-9KB，较大改动 ~119KB）；实现路径已明确，见 FINDINGS.md |
+| 2 | B-route vmcode diff 实现 | 需 fork Dart VM linker（multi-person-month），最后执行 |
 
 ### OTA 真机验证阻断记录（2026-08-07）
 

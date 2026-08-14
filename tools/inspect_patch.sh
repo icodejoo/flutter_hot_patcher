@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Inspect a v02 DBC3 patch dill: verify magic + version, list dynamic-module
+# Inspect a DBC3 patch dill: verify magic + version, list dynamic-module
 # entry points, and disassemble the bytecode.
 #
 # Usage: inspect_patch.sh <patch.dill> [--quiet]
-# Exit:  0 = valid v02 DBC3, non-zero = invalid
+# Exit:  0 = valid DBC3 for the target VM, non-zero = invalid
+#
+# The accepted format version is whatever the target VM's
+# runtime/vm/constants_kbc.h kBytecodeFormatVersion says. For ~/dart/sdk (and
+# therefore the X1 engine) that is 1. Override with FHP_KBC_VERSION when
+# inspecting patches built for a different VM -- e.g. the prebuilt runtime in
+# spikes/m3_ios_realdevice wants 2. See docs/ROUTE_A_RESEARCH.md.
 set -euo pipefail
 
 DILL="${1:?Usage: $0 <patch.dill> [--quiet]}"
@@ -16,7 +22,9 @@ DUMP_BC_SRC=$ENGINE_SRC/flutter/third_party/dart/pkg/dart2bytecode/bin/dump_byte
 [ -f "$DILL" ] || { echo "ERROR: no such file: $DILL" >&2; exit 1; }
 
 # --- Header check: magic "3CBD" + uint32 LE version == 2 --------------------
-python3 - "$DILL" <<'PY'
+EXPECT_VERSION="${FHP_KBC_VERSION:-1}"
+
+python3 - "$DILL" "$EXPECT_VERSION" <<'PY'
 import struct, sys
 path = sys.argv[1]
 with open(path, 'rb') as f:
@@ -31,10 +39,11 @@ if magic != b'3CBD':
 version = struct.unpack('<I', head[4:8])[0]
 print("magic: 3CBD")
 print(f"version: {version}")
-if version != 2:
-    print(f"ERROR: bytecode format version {version}, but the iOS X1 engine "
-          f"only accepts version 2. Rebuild with tools/dart2bytecode_v2.",
-          file=sys.stderr)
+expected = int(sys.argv[2])
+if version != expected:
+    print(f"ERROR: bytecode format version {version}, but the target VM only "
+          f"accepts version {expected}. Set FHP_KBC_VERSION if you meant a "
+          f"different VM.", file=sys.stderr)
     sys.exit(4)
 PY
 

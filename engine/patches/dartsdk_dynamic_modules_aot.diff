@@ -1,0 +1,24 @@
+diff --git a/runtime/vm/compiler/aot/dispatch_table_generator.cc b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+index 1863badc37b..cccbb4c8868 100644
+--- a/runtime/vm/compiler/aot/dispatch_table_generator.cc
++++ b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+@@ -461,8 +461,17 @@ void DispatchTableGenerator::NumberSelectors() {
+             // Get assigned selector ID for this function.
+             const int32_t sid = selector_map_.SelectorId(function);
+             if (sid == SelectorMap::kInvalidSelectorId) {
+-              // Probably gen_kernel was run in non-AOT mode or without TFA.
+-              FATAL("Function has no assigned selector ID.\n");
++              // flutter_hot_patcher: with a dynamic interface, TFA can retain a
++              // dynamic function that no call site dispatches to -- e.g. the
++              // implicit setter of a private field pulled in by
++              // dyn-module:implicitly-callable (observed:
++              // package:flutter/src/widgets/shortcuts.dart KeySet._set_).
++              // There is no selector row whose properties could be set, and
++              // SetupSelectorRows below already skips such functions. The
++              // upstream FATAL here predates dynamic modules and assumes the
++              // only cause is a misconfigured build, which the "Missing table
++              // selector metadata!" check above already catches.
++              continue;
+             }
+             selector_map_.SetSelectorProperties(sid, on_null_interface,
+                                                 requires_args_descriptor);

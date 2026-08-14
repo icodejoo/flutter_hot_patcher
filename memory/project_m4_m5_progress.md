@@ -5,10 +5,16 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 77e18903-1313-49b5-a10b-492ba8792d22
-  modified: 2026-08-11T04:06:00.000Z
+  modified: 2026-08-11T05:41:15.064Z
 ---
 
 **全部里程碑完成（2026-08-11）**
+
+> **作用域限定（2026-08-13 补）**：本记录的 OTA 验证是在**独立 Dart embedder**
+> （`spikes/m3_ios_realdevice/HotPatchDemo`，直接链 `libdart_aotruntime_product.a`）
+> 上完成的，**不是** Flutter app。A-route 已按顶级规则 1 出局产品线，
+> 见 [[project-landing-plan]] 与 [[project-flutter-plugin-blocker]]。
+
 
 | 里程碑 | 状态 | 关键验证 |
 |---|---|---|
@@ -46,11 +52,12 @@ result=OTA_NEW
 
 **关键技术坑（为下次会话记录）：**
 - dart2bytecode (Aug 2026) 产出 3CBD v01，iOS Dart VM 只接受 v02
-  → 解法：对 v02 模板做等长二进制替换
+  → 解法：对 v02 模板做等长二进制替换（或找到产出 v02 的编译参数）
 - iOS 数据容器 UUID 每次重装变化，注入 staged_dir 必须先获取 fhp_init dataDir
-- devicectl copy to 的文件没有 Data Protection 豁免时会被沙盒隔离（导致 fopen 失败）
-  → 解法：使用 appDataContainer domain 写，路径与 fhp_init 的 dataDir 一致
-- A-route 激活时必须跳过 vmcode_patched_data.bin 加载（ViewController 已修复）
+- devicectl copy to 文件路径必须与 fhp_init dataDir 一致（/var/mobile/...，不加 /private）
+- A-route 激活时必须跳过 vmcode_patched_data.bin 加载（ViewController.m 已修复）
 - dart_debug.txt 在 appDataContainer/tmp/dart_debug.txt，不在 temporary domain
+- 企业防火墙/AP isolation 阻断直连，Cloudflare tunnel HTTPS 也被阻断
+  → 绕过：devicectl device copy to 直接注入文件，无需网络
 
 **How to apply:** 所有 Shorebird 等价能力完整验证。项目核心技术目标达成。

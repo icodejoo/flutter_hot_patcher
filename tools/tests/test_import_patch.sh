@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A patch importing dart:math and dart:convert must compile to a v02 dill whose
+# A patch importing dart:math and dart:convert must compile to a dill whose
 # module actually contains the importing functions.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -21,7 +21,7 @@ fi
 "$REPO_ROOT/tools/inspect_patch.sh" "$DILL" >"$TMP/inspect.out" 2>&1 \
   || { fail "inspect rejected the dill"; cat "$TMP/inspect.out"; }
 
-grep -q "version: 2" "$TMP/inspect.out" && pass "is v02" || fail "not v02"
+grep -q "version: ${FHP_KBC_VERSION:-1}" "$TMP/inspect.out" && pass "format version matches target VM" || fail "format version does not match target VM"
 
 grep -q "entry_point: .*::patchEntry\$" "$TMP/inspect.out" \
   && pass "entry point is patchEntry" || fail "entry point is not patchEntry"
