@@ -47,48 +47,70 @@ iOS arm64 编译通过（`libupdater.a`）。构建需 `IPHONEOS_DEPLOYMENT_TARG
 （补丁必须与 base 同源）。形态：base 是 app 的 Mach-O `App`，patch 必须是 **ELF**
 （引擎侧 `patch_cache.cc` 用 `Dart_LoadELF` 打开 `.vmcode`）。
 
-## analyze_snapshot：已跑通，但我们自研的 --shorebird 模式不完整
+## analyze_snapshot：已修复并跑通
 
-### 已解决：能在 macOS 上分析 X1 的 iOS 快照
+### 构建侧（三件事缺一不可）
 
-| 步骤 | 解法 |
+| 问题 | 解法 |
 |---|---|
-| 工具必须是 **macOS host 可执行 + iOS 目标配置** | 用引擎的 `lib/snapshot:create_macos_analyze_snapshots`（已从 Shorebird 移植该模板），**不是** Dart SDK 的 `ReleaseARM64`（那是 macOS 目标，读 iOS 快照会 SIGSEGV）|
-| `Unsupported platform` | `runtime/bin/analyze_snapshot.cc` 的守卫只允许 android/linux，放宽到 macOS（见 `engine/patches/dartsdk_analyze_snapshot_macos.diff`）|
-| `build_analyze_snapshot` 默认 false | args.gn 里置 true |
+| 工具必须是 **macOS host 可执行 + iOS 目标配置** | 从**引擎**构建（`lib/snapshot:create_macos_analyze_snapshots`，模板移植自 Shorebird）。**不能**用 Dart SDK 的 `ReleaseARM64` —— 那是 macOS 目标，读 iOS 快照会 SIGSEGV |
+| `Unsupported platform` | `runtime/bin/analyze_snapshot.cc` 守卫只允许 android/linux，放宽到 macOS |
+| `build_analyze_snapshot` 默认 false | args.gn 置 true |
 
-结果：`analyze_snapshot_arm64 --shorebird` 成功读出 X1 的 iOS 快照，JSON schema 与
-Shorebird 完全同构（`name/offset/size/self_hash/subgraph_hash/op_subgraph_hash/...` 齐全）。
+**歧路教训**：曾在 `app_snapshot.cc` 加 flag 绕过 `VerifyFeatures`，SIGSEGV。
+那个校验保护的是真实不兼容（`product ios` vs `release macos` 的对象布局），已撤回。
 
-**一条歧路的教训**：曾试图在 `app_snapshot.cc` 加 `--ignore_snapshot_feature_mismatch`
-绕过 `VerifyFeatures`。结果 SIGSEGV —— 那个校验保护的是真实不兼容（`product ios`
-vs `release macos` 的对象布局差异），不可绕过。该改动已撤回。
+### 枚举侧：CollectAllCodes 重写
 
-### 剩余阻碍：`CollectAllCodes` 枚举不完整
+自研的 B2 实现有三个 bug：遍历 `cls.functions()`（AOT 下多被清空）、
+闭包循环误置于 cid 循环内（重复 NumCids 遍）、`payload == 0` 永不成立
+导致 VM 区 Code 混入产生负偏移。
 
-`runtime/vm/analyze_snapshot_api_impl.cc` 的 `CollectAllCodes`（我们自研的 B2 commit
-`d8ddec71daf`）只遍历 `cls.functions()`：
+改为可达对象图遍历（对齐上游 `DumpInterestingObjects`）。
+**决定性的一步**是把 `object_store()->instructions_tables()` 加入根集 ——
+AOT 的 bare-instructions 模式下绝大多数 Code 不再从类/库可达，
+而挂在 `InstructionsTable` 的 `code_objects_` 上。
 
-```cpp
-Array& functions = Array::Handle(zone, cls.functions());
-if (functions.IsNull()) continue;
-for (...) { code = func.CurrentCode(); ... }
+| | 函数数 | 负偏移 | app 自身代码 |
+|---|---|---|---|
+| 原实现 | 134 | 有 | ❌ |
+| 图遍历后 | 1983 | 0 | ❌ |
+| 加 instructions_tables | **7122** | **0** | **✅ buildLabel / ValApp.build** |
+
+（参照：Shorebird 自己的 app 是 7368，量级吻合。）
+
+## 端到端结果（Mac 侧全通）
+
+真实 Flutter app、X1 引擎、我们的 linker：
+
+```
+base(ELF):    4,076,952 bytes
+patch(ELF):   4,076,952 bytes
+out.vmcode:   4,134,296 bytes
+link%:        100.00%
+bipatch diff: 38,277 bytes
 ```
 
-**AOT 快照里 `cls.functions()` 多被清空**，所以只枚举到 134 个函数（应为数千），
-且 app 自身的 `buildLabel` 不在其中；部分 `offset` 为负数（把 VM 区的 Code
-按 isolate 基址算偏移）。
+`.vmcode` 结构已逐项核对：LinkTable 7122 条、头部补齐到 57344
+（= 14 页，与引擎里 `FhpReadLinkHeader` 的算法一致）、内嵌 ELF 逐字节等于
+`patch.aot` 且魔数为 `7f454c46`。补丁内容也已核实：
+`patch.aot` 只含 `OTA_PATCHED_V2`，`base.aot` 只含 `BASELINE_V1`。
 
-正确做法是遍历快照的 code 对象表（`ProgramVisitor` / instructions table），
-而非类表。这是一段明确但真实的 VM 内部工作。
+link% 100% 对"仅改字符串常量"是预期结果 —— 与 `GROUND_TRUTH.md` 的发现一致：
+等长/变长常量改动够不到代码段，`.text` 与 base 逐字节相同。
 
-**影响**：`tools/linker.py` 靠 `subgraph_hash` 匹配函数；枚举不全则链接无意义。
-注意 linker 此前只在 **Shorebird 的** analyze_snapshot 输出上验证过
-（`GROUND_TRUTH.md` 与 B-route 实测），从未在我们自研的输出上验证过。
+## 未完成：真机 E2E
 
-## 后续选项
+两台已配对 iPhone 当前均为 `unavailable` / `transport: None`，USB 也检测不到，
+无法执行。`e2e_device.sh` 已写好（含签名、安装、补丁推送路径、冷重启验证），
+设备接上后 `DEVICE=<id> ./e2e_device.sh` 即可。
 
-1. **修 `CollectAllCodes`** —— 改走 code 对象表。这是 X1 路线剩余的唯一阻碍，
-   修好即可打通 patch 生成 → 真机 E2E → A/B 性能对比。
-2. **产品线改用 Shorebird 预编译引擎**（其 analyze_snapshot 完整可用），
-   X1 仅留作 A-route 研究。代价：放弃同引擎 A/B 对比。
+补丁在设备上的存放路径取自引擎源码 `shell/common/shorebird/shorebird.cc:147-162`：
+`<appDataContainer>/Library/Application Support/shorebird/shorebird_updater/<app_id>/`
+
+## 尚未验证的两件事
+
+1. **补丁在设备上是否真的生效** —— Mac 侧链路全通，但引擎侧的加载路径
+   （`ResolveIsolateData` 钩子 → `FhpReadLinkHeader` → `Dart_LoadELF`）
+   只在编译期验证过，未在真机运行时验证。
+2. **A/B 性能对比** —— 需要真机；这是"X1 还是 Shorebird"决策的依据。
