@@ -24,8 +24,9 @@ FHP_TOOLCHAIN="${FHP_TOOLCHAIN:-x1}"
 if [ "$FHP_TOOLCHAIN" = "x1" ]; then
     E=~/engine_ios/src/out
     GEN_SNAPSHOT=$E/ios_release/gen_snapshot_arm64
-    # 引擎构建的那份 host 工具缺 macOS 支持；用 Dart SDK 构建的（已放宽守卫）
-    ANALYZE=~/dart/sdk/xcodebuild/ReleaseARM64/analyze_snapshot
+    # 必须用引擎构建的那份：它是 macOS host 可执行 + iOS 目标配置。
+    # Dart SDK 的 ReleaseARM64 是 macOS 目标，读 iOS 快照会 SIGSEGV。
+    ANALYZE=$E/ios_release/analyze_snapshot_arm64
     DARTAOT=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/dartaotruntime
     FRONTEND=~/engine_ios/src/flutter/prebuilts/macos-x64/dart-sdk/bin/snapshots/frontend_server_aot.dart.snapshot
     SDK_ROOT=$E/ios_release/flutter_patched_sdk

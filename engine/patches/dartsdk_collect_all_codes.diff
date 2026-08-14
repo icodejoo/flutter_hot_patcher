@@ -1,0 +1,175 @@
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 12503489dcf..954d01769d9 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -499,73 +499,116 @@ struct CodeEntry {
+   const uint8_t* payload;
+ };
+ 
++// 枚举快照中的全部 Code 对象。
++//
++// 早期实现遍历 cls.functions()，但 **AOT 快照里该数组多被清空**，
++// 结果只找到一百多个函数、遗漏 app 自身代码；且它把 VM 区的 Code 也按
++// isolate 基址算偏移，产生负值。
++//
++// 这里改用与上游 SnapshotAnalyzer::DumpInterestingObjects 相同的可达对象图
++// 遍历：从 global object pool、libraries、class table、closure_functions 出发
++// 递归 VisitPointers，沿途收集 Code。凡 payload 落在 isolate instructions
++// 基址之前的（即 VM 区）一律跳过。
+ void CollectAllCodes(
+     IsolateGroup* isolate_group,
+     const uintptr_t isolate_instr_base,
+     std::vector<CodeEntry>& out_codes) {
+-  Zone* zone = Thread::Current()->zone();
+-  
+-  // Walk all functions via class table
+-  ClassTable* class_table = isolate_group->class_table();
+-  Code& code = Code::Handle(zone);
+-  Function& func = Function::Handle(zone);
+-  
+-  for (intptr_t cid = 0; cid < class_table->NumCids(); ++cid) {
+-    if (!class_table->HasValidClassAt(cid)) continue;
+-    Class& cls = Class::Handle(zone, class_table->At(cid));
+-    if (cls.IsNull()) continue;
+-    
+-    Array& functions = Array::Handle(zone, cls.functions());
+-    if (functions.IsNull()) continue;
+-    
+-    for (intptr_t i = 0; i < functions.Length(); ++i) {
+-      func ^= functions.At(i);
+-      if (func.IsNull()) continue;
+-      code = func.CurrentCode();
+-      if (code.IsNull()) continue;
+-      uintptr_t payload = static_cast<uintptr_t>(code.PayloadStart());
+-      if (payload == 0) continue;  // VM instructions
+-      
+-      CodeEntry entry;
+-      entry.name = func.QualifiedUserVisibleNameCString();
+-      entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
+-      entry.size = code.Size();
+-      entry.payload = reinterpret_cast<const uint8_t*>(payload);
+-      entry.index_in_entries = -1;  // filled later
+-      out_codes.push_back(std::move(entry));
++  Thread* thread = Thread::Current();
++  Zone* zone = thread->zone();
++  Heap* heap = isolate_group->heap();
++
++  std::vector<const Code*> discovered;
++
++  heap->ResetObjectIdTable();
++  {
++    NoSafepointScope ns(thread);
++
++    FieldVisitor visitor(isolate_group);
++    std::function<void(ObjectPtr)> handle_object = [&](ObjectPtr value) {
++      if (!value.IsHeapObject()) return;
++      // 每个对象只处理一次。
++      if (heap->GetObjectId(value) != 0) return;
++      heap->SetObjectId(value, 1);
++
++      if (value->GetClassId() == kCodeCid) {
++        discovered.push_back(&Code::Handle(zone, Code::RawCast(value)));
++      }
++
++      value->untag()->VisitPointers(&visitor);
++    };
++    visitor.init(&handle_object);
++
++    Object& object = Object::Handle(zone);
++
++    // 对象池中可达的一切（AOT 下绝大多数 Code 由此可达）
++    object = isolate_group->object_store()->global_object_pool();
++    if (!object.IsNull()) handle_object(object.ptr());
++
++    // 所有库
++    object = isolate_group->object_store()->libraries();
++    if (!object.IsNull()) {
++      object = GrowableObjectArray::Cast(object).data();
++      if (!object.IsNull()) object.ptr().untag()->VisitPointers(&visitor);
+     }
+-    
+-    // Also check closures
+-    GrowableObjectArray& closures = GrowableObjectArray::Handle(zone,
+-        isolate_group->object_store()->closure_functions());
+-    if (closures.IsNull()) continue;
+-    for (intptr_t i = 0; i < closures.Length(); ++i) {
+-      func ^= closures.At(i);
+-      if (func.IsNull()) continue;
+-      code = func.CurrentCode();
+-      if (code.IsNull()) continue;
+-      uintptr_t payload = static_cast<uintptr_t>(code.PayloadStart());
+-      if (payload == 0) continue;
+-      CodeEntry entry;
++
++    // 所有类
++    auto class_table = isolate_group->class_table();
++    for (intptr_t cid = 0; cid < class_table->NumCids(); ++cid) {
++      if (!class_table->HasValidClassAt(cid)) continue;
++      object = class_table->At(cid);
++      if (!object.IsNull()) handle_object(object.ptr());
++    }
++
++    // 闭包函数（只需一次；旧实现误置于 cid 循环内，重复了 NumCids 遍）
++    object = isolate_group->object_store()->closure_functions();
++    if (!object.IsNull()) handle_object(object.ptr());
++
++    // AOT 的 bare-instructions 模式下，绝大多数 Code 不再从类/库可达，
++    // 而是挂在 InstructionsTable 的 code_objects_ 上。把这些表交给遍历器，
++    // 其内部指针会被 VisitPointers 走到，从而覆盖 app 自身的代码。
++    object = isolate_group->object_store()->instructions_tables();
++    if (!object.IsNull()) handle_object(object.ptr());
++  }
++
++  Function& func = Function::Handle(zone);
++  Object& owner = Object::Handle(zone);
++
++  for (const Code* code_ptr : discovered) {
++    const Code& code = *code_ptr;
++    if (code.IsNull()) continue;
++
++    const uintptr_t payload = static_cast<uintptr_t>(code.PayloadStart());
++    // payload == 0 出现在被树摇掉的 VM 快照条目上；
++    // payload < base 表示该 Code 位于 VM instructions 区，不属于本快照。
++    if (payload == 0 || payload < isolate_instr_base) continue;
++
++    CodeEntry entry;
++    owner = code.owner();
++    if (!owner.IsNull() && owner.IsFunction()) {
++      func ^= owner.ptr();
+       entry.name = func.QualifiedUserVisibleNameCString();
+-      entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
+-      entry.size = code.Size();
+-      entry.payload = reinterpret_cast<const uint8_t*>(payload);
+-      entry.index_in_entries = -1;
+-      out_codes.push_back(std::move(entry));
++    } else if (code.IsStubCode()) {
++      entry.name = std::string("[Stub] ") + code.Name();
++    } else {
++      entry.name = code.Name();
+     }
++    entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
++    entry.size = code.Size();
++    entry.payload = reinterpret_cast<const uint8_t*>(payload);
++    entry.index_in_entries = -1;  // 排序后填充
++    out_codes.push_back(std::move(entry));
+   }
+-  
+-  // Sort by offset
++
++  // 按偏移排序并按偏移去重（同一段代码可能被多个 owner 引用）
+   std::sort(out_codes.begin(), out_codes.end(),
+             [](const CodeEntry& a, const CodeEntry& b) {
+               return a.offset < b.offset;
+             });
+-  // Deduplicate by offset
+   out_codes.erase(std::unique(out_codes.begin(), out_codes.end(),
+-      [](const CodeEntry& a, const CodeEntry& b) { return a.offset == b.offset; }),
+-      out_codes.end());
+-  // Assign indices
++                              [](const CodeEntry& a, const CodeEntry& b) {
++                                return a.offset == b.offset;
++                              }),
++                  out_codes.end());
+   for (intptr_t i = 0; i < static_cast<intptr_t>(out_codes.size()); ++i) {
+     out_codes[i].index_in_entries = i;
+   }
