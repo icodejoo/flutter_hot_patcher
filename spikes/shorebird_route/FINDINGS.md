@@ -99,18 +99,60 @@ bipatch diff: 38,277 bytes
 link% 100% 对"仅改字符串常量"是预期结果 —— 与 `GROUND_TRUTH.md` 的发现一致：
 等长/变长常量改动够不到代码段，`.text` 与 base 逐字节相同。
 
-## 未完成：真机 E2E
+## 步骤 1 与 2：已全部脚本化，等设备
 
-两台已配对 iPhone 当前均为 `unavailable` / `transport: None`，USB 也检测不到，
-无法执行。`e2e_device.sh` 已写好（含签名、安装、补丁推送路径、冷重启验证），
-设备接上后 `DEVICE=<id> ./e2e_device.sh` 即可。
+两台已配对 iPhone 现为 `unavailable` / `transport: None`，USB 检测不到，无法执行。
+Mac 侧能验的都验了。
 
-补丁在设备上的存放路径取自引擎源码 `shell/common/shorebird/shorebird.cc:147-162`：
-`<appDataContainer>/Library/Application Support/shorebird/shorebird_updater/<app_id>/`
+### 步骤 1：验证补丁在设备上生效 —— `e2e_device.sh`
 
-## 尚未验证的两件事
+离线已验证的部分：
 
-1. **补丁在设备上是否真的生效** —— Mac 侧链路全通，但引擎侧的加载路径
-   （`ResolveIsolateData` 钩子 → `FhpReadLinkHeader` → `Dart_LoadELF`）
-   只在编译期验证过，未在真机运行时验证。
-2. **A/B 性能对比** —— 需要真机；这是"X1 还是 Shorebird"决策的依据。
+| 检查项 | 结果 |
+|---|---|
+| 引擎 `FhpReadLinkHeader` 算出的 ELF 偏移 vs 实际 | 57344 == 57344 ✅ |
+| 该偏移处魔数 | `7f454c46` ✅ |
+| 从该偏移读出的内容 == `patch.aot` | ✅ |
+| 最终 framework 含 `ConfigureShorebird` 提示串 | ✅ |
+| 含 `shorebird_updater` / `dlc.vmcode` / `next_boot_patch` | ✅ |
+| 含 `patch_cache` 的加载日志串 | ✅ |
+| 含**我写的** `vmcode link header` 错误串 | ✅（证明 `FhpReadLinkHeader` 已编入）|
+
+设备侧注入格式**取自上游源码而非猜测**：
+
+```
+<state_root>/patches/<N>/dlc.vmcode
+<state_root>/patches/<N>/state.json   {"kind":"Installed","signature":null,"size":N}
+<state_root>/pointers.json            {"next_boot_patch":N,...}
+```
+- 目录常量 `library/src/cache/lifecycle.rs:53-55`
+- `state_root` = `<app_storage>/shorebird_updater/<app_id>`（`shorebird.cc:158-159`）
+- `PatchState` 为 internally tagged（`lifecycle.rs:59` `#[serde(tag="kind")]`）
+- `ReleasePointers` 字段见 `lifecycle.rs:129-141`
+
+### 步骤 2：A/B 性能对比 —— `bench_device.sh`
+
+热函数用**与历史数据同一个** 10K 迭代累加
+（`spikes/benchmark/hotpatch_demo/patches/greet_cpu.dart`），以便与
+Shorebird 806.7µs / A-route 156.4µs 直接可比。
+
+**一个差点搞砸的设计问题**：最初只改标签函数，但那样 `hotLoop` 的
+`subgraph_hash` 不变 → 会被 link 回原生 → 测到的仍是 AOT 速度，
+根本测不到解释器。改为让 `hotLoop` 自身变化（迭代数 10000→10001）。
+
+已用工具链实测校验：**7079 个函数中恰好 1 个未匹配，就是 `hotLoop`**
+（hash `03be54b8` → `4340c59e`），其余全部 link 回原生 —— 干净的对照实验。
+（0.01% 工作量差相对 4000× 量级差可忽略。）
+
+判读标准：
+
+| 结果 | 含义 |
+|---|---|
+| X1 解释 ≈ 806,700 ns | 我们的 B-route 与 Shorebird 同级；「5.15× 更快」只属于 A-route(KBC)，不属于产品路径 |
+| X1 解释 明显优于 806,700 ns | 我们的 SimulatorToCPU 实现有优势 —— 这才构成选 X1 而非 Shorebird 引擎的理由 |
+
+设备接上后：
+```bash
+DEVICE=<id> ./e2e_device.sh     # 步骤 1
+DEVICE=<id> ./bench_device.sh   # 步骤 2
+```
