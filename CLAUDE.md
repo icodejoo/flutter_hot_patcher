@@ -35,14 +35,27 @@ flutter/shell/common/shorebird/snapshots_data_handle.{h,cc}
 flutter/shell/platform/darwin/.../FlutterEngine.mm   # 调 ConfigureShorebird
 ```
 
-### 当前已知违规（技术债）
+### 技术债状态（2026-08-14 更新）
 
-- **`tools/updater/`（自研 Rust updater）重复实现了公开的 `shorebirdtech/updater`。** 应改为直接使用上游。
-- **引擎集成层尚未实现，且必须采用 Shorebird 的公开实现**（`runtime/shorebird/`、
-  `shell/common/shorebird/`、`dart_snapshot.cc` 钩子），不要自研。
-- **我们 fork 的是上游而非 Shorebird**：引擎 = `flutter/engine.git` @ `ae5c3603`，
-  Dart SDK = `dart.googlesource.com/sdk.git` @ `37bbc285d8d`。详见 `docs/SHOREBIRD_REFERENCE.md` §4。
+- ~~`tools/updater/` 重复实现了公开的 `shorebirdtech/updater`~~ **已解决**：
+  产品线改用 Shorebird 预编译引擎，其中已内置上游 Rust updater。
+  `tools/updater/` 仅保留给归档的 Route-A spike（`spikes/m3_ios_realdevice/`、
+  `spikes/benchmark/hotpatch_demo/`）使用，**不在生产链路上，勿再加功能**。
+- ~~引擎集成层尚未实现~~ **已解决**：Route-B 直接用 Shorebird 预编译引擎，无需自行集成。
+  X1 上的移植成果保留在 `engine/patches/`（研究分支）。
+- **我们 fork 的是上游而非 Shorebird**：引擎 `flutter/engine.git` @ `ae5c3603`，
+  Dart SDK `dart.googlesource.com/sdk.git` @ `37bbc285d8`（见 `docs/SHOREBIRD_REFERENCE.md` §4）。
+  该 fork 已转为研究分支，**产品不依赖它**。
 
+### 当前生产形态
+
+| 环节 | 来源 |
+|---|---|
+| 引擎 / updater / patch_cache / 看门狗 | Shorebird 预编译（规则 2） |
+| linker（`.vmcode`） | 自研 `tools/linker.py`（规则 3，aot_tools 闭源） |
+| 打包+签名+分发 | 自研 `tools/broute/`（规则 3，服务端协议闭源） |
+
+完整流程见 `docs/RUNBOOK_ROUTE_B.md`，结论见 `docs/PRODUCTION_RELEASE.md`。
 ## 规则 3：只有 Shorebird 闭源的部分才自实现，且必须从它的对外接口形状反推
 
 自实现之前先证明它闭源。自实现时不要自由发挥：以 Shorebird 的对外接口/文件格式为契约，

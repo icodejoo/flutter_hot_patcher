@@ -60,6 +60,49 @@ A-route（KBC 字节码），不属于产品路径 —— 该结论已在 `RESUL
 
 自研的只有闭源那三块（linker / patch_builder / patch_server），符合规则 3。
 
+## 分发链路（自建服务端）
+
+按设备更新器的真实协议实现（`third_party/updater/library/src/network.rs`、
+`cache/signing.rs`），非猜测。
+
+| 工具 | 职责 |
+|---|---|
+| `tools/broute/keygen.py` | RSA 密钥对；公钥填入 `shorebird.yaml` 的 `patch_public_key` |
+| `tools/broute/publish.py` | `.vmcode` → zstd bipatch 增量 + sha256 + RSA 签名 → 补丁仓库 |
+| `tools/broute/server.py` | `/api/v1/patches/check`、`/api/v1/patches/events`、下载端点 |
+
+操作手册：`docs/RUNBOOK_ROUTE_B.md`
+
+### 两项关键校验（已实测，非假设）
+
+1. **增量基准正确**：`analyze_snapshot --dump_blobs` 产出 **3,181,996 字节**，
+   与设备日志 `SetBaseSnapshot mappings ... total=3181996` 完全一致 ——
+   证明它就是设备端 `file_provider` 提供的 4 段拼接内容。
+2. **签名算法正确**：按 `RSA_PKCS1_2048_8192_SHA256` 对 **hex hash 字符串**签名，
+   独立自验通过，与 `signing.rs:37` 一致。公钥为 base64 DER SPKI（294 字节）。
+
+### 实测体积
+
+| | 字节 |
+|---|---|
+| `.vmcode`（解压后） | 4,423,848 |
+| 下发增量（zstd bipatch） | **400,945（9.1%）** |
+
+### 协议一致性测试
+
+`bash tools/tests/test_broute_server.sh` —— 9 项断言全通过：
+有补丁下发 / 带签名 / 带回滚列表 / 已最新不下发 / app_id 不匹配不下发 /
+未知 release 不下发 / 下载字节一致 / 事件端点 201 / 事件落盘。
+
+### 验证边界（如实说明）
+
+- **协议**：回环上完整验证 + 9 项自动化断言 ✅
+- **签名**：算法自验通过 ✅，但**未在设备上跑过一次带签名的下载**
+- **设备侧补丁应用**：已用 USB 注入完整验证（`BASELINE_V1` → `OTA_PATCHED_V2`）✅
+- **设备经网络下载**：**未通过** —— 本机环境阻断，Mac 连自己的 LAN IP 都返回
+  HTTP 000（防火墙已关、服务端监听 `*:8765`、回环正常）。与既有记录的企业网络
+  阻断一致，属环境问题而非代码缺陷。生产部署到可达的 HTTPS 端点后需复验一次。
+
 ## 本轮修复的两个真实缺陷
 
 **1. `.vmcode` 头部对齐必须是 16384，不是 4096**
@@ -103,13 +146,20 @@ Shorebird 的私有 dart-sdk 显然修了这一点。
 
 | 门 | 命令 | 状态 |
 |---|---|---|
-| v02 工具链 | `bash tools/tests/test_inspect_patch.sh` | PASS |
-| 多函数补丁 | `bash tools/tests/test_multi_function_patch.sh` | PASS |
-| 跨库 import | `bash tools/tests/test_import_patch.sh` | PASS |
-| `fhp` CLI | `bash tools/tests/test_fhp_cli.sh` | PASS |
+| 分发协议一致性 | `bash tools/tests/test_broute_server.sh` | PASS（9 项）|
+| v02 工具链（Route-A，已归档但保留在 CI） | `bash tools/tests/test_inspect_patch.sh` | PASS |
+| 多函数补丁（Route-A） | `bash tools/tests/test_multi_function_patch.sh` | PASS |
+| 跨库 import（Route-A） | `bash tools/tests/test_import_patch.sh` | PASS |
+| `fhp` CLI（Route-A） | `bash tools/tests/test_fhp_cli.sh` | PASS |
 | patch_builder | `tools/patch_builder/.venv/bin/python -m pytest tools/patch_builder/test_patch_builder.py` | 10 passed |
 | 真机 OTA | 见上，`BASELINE_V1 → OTA_PATCHED_V2` | PASS |
 | A/B 性能 | 见上，138× | PASS |
+
+## Route-A 已归档
+
+Route-A（KBC 字节码）按规则 1 出局产品线，归档于 `archive/route_a/README.md`
+（含四项约束、15.64 ns/迭代 实测、三个恢复条件）。其工具链与四个测试套件
+**保留在 CI 门里**，防止腐坏。
 
 ## 已知限制
 

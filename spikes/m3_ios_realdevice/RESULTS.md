@@ -1,5 +1,20 @@
 # M3 iOS 真机 Demo 结果
 
+> **2026-08-14 更正（真机复测）**
+>
+> 文中「A-route 比 Shorebird 快 5.15×」的测量本身成立，但**只适用于 A-route
+> （KBC 字节码解释）**，而 A-route 已按顶级规则 1 出局产品线。
+>
+> 产品路径 B-route 与 Shorebird 机制同构（ARM64 Simulator 解释 AOT 代码）。
+> 同一引擎、同一函数、同一设备的实测：原生 4,502 ns/call vs 解释 623,070 ns/call
+> （138×），每迭代 62.30 ns，与历史 Shorebird 的 80.67 ns/迭代**同量级**。
+>
+> 另：文中称 Shorebird 使用「Dart 字节码 VM」有误 —— 它用的是 ARM64 Simulator
+> 解释 AOT 机器码。详见 `docs/SHOREBIRD_REFERENCE.md` §3 与
+> `docs/PRODUCTION_RELEASE.md`。
+
+
+
 ## 设备
 - iPhone 14 (iPhone14,7), UDID: 040F89ED-E7CC-54B0-A7BB-908EE82C0224
 - iOS 26.5 (SDK iPhoneOS26.5)
@@ -221,3 +236,75 @@ patch greet = OTA_NEW
 - ✅ A-route 与 B-route 完全隔离
 - ✅ iOS W^X 合规（全程不触发 mprotect PROT_EXEC）
 - ✅ Updater 状态机 staged_dir → next_boot → pending_confirmation → confirmed_good
+
+---
+
+## KBC 解释器性能对照实验（2026-08-13 PASS）
+
+**目的**：量化 A-route（KBC）与 AOT 的性能差距，与 Shorebird 做公平对比。
+
+### 实验设计（控制变量）
+
+| 项 | A-route KBC | Shorebird KBC |
+|----|-------------|---------------|
+| 设备 | iPhone 14 | iPhone 14 |
+| 函数体 | 10K iter sum loop（相同） | 10K iter sum loop（相同） |
+| 计时方法 | C 侧（含 C-API 开销，已分离） | Dart 侧 |
+| 基线隔离 | 同次跑 simple greet 测 C-API 开销并相减 | — |
+
+### 实测数据
+
+```
+simple bench (C-API overhead): 1000 calls, per_call = 297 ns
+loop bench  (10K iter):         1000 calls, per_call = 156,660 ns
+pure KBC execution:             loop - simple = 156,363 ns
+loop result: cpu:49995000  ← 计算结果正确
+```
+
+| 方案 | 10K iter 纯执行时间 | vs AOT |
+|------|-------------------|--------|
+| AOT dormant（native） | **172 ns** | 1× |
+| A-route KBC（X1 engine） | **156,363 ns** | **909×** |
+| Shorebird KBC | **806,700 ns** | **4,692×** |
+| A-route vs Shorebird | — | **5.15× 更快** |
+
+### 结论
+
+1. A-route KBC 比 Shorebird 快 **5.15×**（同函数、同设备、公平对比）
+2. A-route KBC 比 AOT 慢 **909×**（重计算场景），适用于 UI / 业务逻辑，不适用热路径
+3. "A-route 与 Shorebird 速度完全等价"结论**不成立**——X1 engine 与 Shorebird 打包的 VM build 不同
+
+---
+
+## 落地方案决策（2026-08-13）
+
+### 最终方案：A+B 双轨（Darwin 平台）
+
+**核心约束**：iOS W^X 封死所有 AOT OTA 路径，任意代码下发只能走解释器。
+
+| 轨道 | 机制 | 适用场景 | 性能 |
+|------|------|---------|------|
+| **A-route（主轨）** | KBC 解释（Dart_LoadLibraryFromBytecode） | 任意 OTA：UI、业务逻辑、A/B | 156 µs/10K-iter（比 Shorebird 快 5×） |
+| **B-route（辅轨）** | AOT dormant 激活（vmcode pointer swap） | 性能热路径预置变体切换 | native（172 ns/10K-iter） |
+
+**OTA bundle 结构**：
+```
+bundle/
+├── patch.dill         → A-route：任意新函数逻辑（KBC 解释）
+└── vmcode_patch       → B-route：热路径变体激活（AOT native）
+```
+
+**差异化 vs Shorebird**：
+- 同等 iOS 合规（W^X 绕过）、同等任意代码能力
+- KBC 快 5×（X1 engine 优化）
+- 热路径可走 AOT（Shorebird 无此能力）
+
+### 已知缺口（待攻关）
+
+| 优先级 | 缺口 | 影响 |
+|--------|------|------|
+| P0 | **v02 dill 编译工具链**：dart2bytecode 只产 v01，生产无法用 | A-route 无法推送任意新代码 |
+| P0 | **B-route linker**：无 linker diff ~300KB，实际项目不可用 | B-route 包大小不可接受 |
+| P1 | **真实 Flutter 应用集成**：当前仅 demo app + 手写 snapshot.S | 产品化前置 |
+| P2 | **多函数 patch**：只测了单函数，库间依赖未验证 | 功能完整性 |
+| P2 | **OTA 交付加固**：企业防火墙阻断过 tunnel | 可靠性 |
