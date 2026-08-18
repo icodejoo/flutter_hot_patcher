@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# fhpb — Route-B 热修复全流程 CLI（tools/broute/cli.py 的入口）。
+#
+#   fhpb init     --app-dir <dir> --base-url <url>
+#   fhpb release  --app-dir <dir> --repo <dir> [--build]
+#   fhpb patch    --app-dir <dir> --repo <dir> --private-key <pem>
+#   fhpb list     --repo <dir>
+#   fhpb rollback --repo <dir> --patch <n> [--undo]
+#   fhpb serve    --repo <dir> [--port 8765] [--app-id <id>]
+#
+# 手册见 docs/RUNBOOK_ROUTE_B.md。
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_PY="$REPO_ROOT/tools/.venv/bin/python"
+
+if [ -x "$VENV_PY" ]; then
+    PY="$VENV_PY"
+else
+    PY="$(command -v python3)"
+    if ! "$PY" -c 'import cryptography' 2>/dev/null; then
+        echo "fhpb: 缺 cryptography。建 venv：" >&2
+        echo "  python3 -m venv $REPO_ROOT/tools/.venv" >&2
+        echo "  $REPO_ROOT/tools/.venv/bin/pip install -r $REPO_ROOT/tools/requirements.txt" >&2
+        exit 1
+    fi
+fi
+
+exec "$PY" "$REPO_ROOT/tools/broute/cli.py" "$@"

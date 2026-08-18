@@ -1,0 +1,17 @@
+# 补丁签名私钥 —— 泄露即等于可以给所有设备推任意可执行代码
+tools/broute/keys/
+*.pem
+
+# Python
+tools/.venv/
+__pycache__/
+*.pyc
+
+# 补丁仓库与构建产物
+/srv/
+*.vmcode
+*.aot
+*.dill
+*.blob
+
+.DS_Store
