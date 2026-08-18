@@ -1,3 +1,4 @@
+- [待实现清单](project_roadmap.md) — 自建分发基础设施居首；CDN 无需可信；Range/base_url 两个实测坑
 - [v1 生产分支](project_v1_release.md) — 生产在 v1 孤儿分支(11文件/268KB)，研发在 route-a-research；两线已分叉
 - [必须实跑验证](feedback_verify_by_running.md) — 本仓库读代码得出的结论四次全错，写文档前先跑
 - [Route-B CLI 全流程](project_route_b_cli.md) — 定案只走 Route-B；fhpb 覆盖 init/release/patch/rollback，真实 app 打包 PASS
