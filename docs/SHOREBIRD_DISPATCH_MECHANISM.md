@@ -360,3 +360,42 @@ br   x11
 `_SimBridgeTemplateBody` 恰好在其后 16 KB（2048 × 8）。
 5 项 CPU→Sim 单测与 2 项 A2 单测全部通过。
 
+### 真机验证：`vm_remap` 在 iOS 上可用（**PASS**）
+
+C1/C2 的宿主单测跑在 macOS 上，而 `vm_remap` 能不能在 **iOS 代码签名下**
+复制可执行页并执行副本，只有设备能回答 —— 这是整条自建引擎路线的地基，
+所以在往上堆 C3 之前先验它。
+
+探针刻意只测 **OS 控制的那一件事**（trampoline 的 PC 相对算术是纯软件，
+宿主 7 项单测已覆盖，不必在真机重复）。代码与复现步骤见
+`spikes/vm_remap_probe/`。
+
+iPhone 14 / iOS 26.6，2026-08-18：
+
+```
+FHP_PROBE=PASS remap_ok exec_ok got=41 page=16384
+           src=0x100554000 dst=0x100718000 cur=5 max=5
+```
+
+| 检查项 | 结果 |
+|---|---|
+| `vm_remap(copy=1, R\|X)` 复制 `__TEXT` 可执行页 | `KERN_SUCCESS` |
+| 返回保护位 | `cur=max=5` = `VM_PROT_READ\|VM_PROT_EXECUTE` |
+| 执行副本 | 成功，`got=41`（`20*2+1`）|
+| 页大小 | 16384，与 `SimBridge::kPageSize` 一致 |
+
+`src` 在 app 的 `__TEXT`，`dst` 是 remap 出的新地址，副本被真实执行且结果正确。
+
+**结论：自建引擎路线的唯一平台级风险点已排除。** 此前关于「iOS 禁 W^X
+所以要造 trampoline 或预留 stub 槽位」的顾虑都不成立 —— `vm_remap`
+就是官方允许的那条路，我们的具体用法（16 KB 页、`copy=1`、`R|X`）原样可用。
+
+#### 两个操作坑
+
+- **设备上拿不到日志**：`NSLog` 的动态字符串被 os_log 按 `<private>` 屏蔽，
+  2 万行 syslog 里一个字都没有；`%{public}@` 在 Swift 的 `NSLog` 里也不被解析
+  （原样打印 `{public}@`）。最终靠
+  `devicectl device process launch --console` + `print()` 走 stdout 拿到。
+- **换 Apple ID 会改 team**，app-identifier 前缀随之改变
+  （`7VP87G446C` → `WAL983V9MH`），iOS 以
+  `MismatchedApplicationIdentifierEntitlement` 拒绝升级安装，必须先卸载再装。
