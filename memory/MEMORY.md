@@ -1,3 +1,5 @@
+- [v1 生产分支](project_v1_release.md) — 生产在 v1 孤儿分支(11文件/268KB)，研发在 route-a-research；两线已分叉
+- [必须实跑验证](feedback_verify_by_running.md) — 本仓库读代码得出的结论四次全错，写文档前先跑
 - [Route-B CLI 全流程](project_route_b_cli.md) — 定案只走 Route-B；fhpb 覆盖 init/release/patch/rollback，真实 app 打包 PASS
 - [Shorebird 对齐任务现状](project_shorebird_alignment.md) — Task 1-6 完成 + OTA 真机验证 PASS，B-route Phase 1 PASS
 - [iOS 真机验证现状](project_ios_verification.md) — dart_dynamic_modules 被 mprotect 阻断，已转向 Shorebird 路线

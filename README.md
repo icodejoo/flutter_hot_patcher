@@ -1,5 +1,9 @@
 # flutter_hot_patcher
 
+> **要用它发补丁？看 [`v1` 分支](https://github.com/icodejoo/flutter_hot_patcher/tree/v1)。**
+> 那是生产分支：11 个文件、单提交、268 KB clone。
+> 本分支是研发线，含全部研究记录、A/B 实验、引擎补丁与真机验证过程。
+
 自研 Flutter 逐函数热更新（Code Push）方案，目标覆盖 iOS + Android，核心是一套
 **逐函数差分替换 + 编译期约束的 linker**，配合官方 Dart 字节码解释器实现 iOS 端合规热更。
 

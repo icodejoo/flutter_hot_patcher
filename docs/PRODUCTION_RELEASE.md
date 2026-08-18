@@ -1,5 +1,39 @@
 # 生产落地结论
 
+## v1 发布分支（2026-08-18）
+
+生产代码收敛到 **`v1` 分支 / `v1.0.0` tag**，单提交孤儿分支，11 个文件，
+clone 268 KB（研发分支 65 MB）。
+
+```
+README.md  .gitignore  docs/RUNBOOK_ROUTE_B.md
+tools/fhpb  tools/requirements.txt  tools/linker.py  tools/build_app_patch.sh
+tools/broute/{cli.py,server.py}
+tools/tests/{test_fhpb_lifecycle.sh,test_broute_server.sh}
+```
+
+剔除的：`spikes/`、`engine/`（产品用 Shorebird 预编译引擎，不需要任何引擎补丁）、
+`archive/`、`memory/`、Route-A 工具链与其四个测试套件、
+`tools/{patch_builder,patch_server,updater,fhp,dart2bytecode_v2,flutter_engine_ios,flutter_plugin}`、
+全部研究文档、`CLAUDE.md`（其中 7 处引用指向 v1 已删除的文件）。
+
+`build_app_patch.sh` 的 `FHP_TOOLCHAIN=x1` 分支整体移除 —— 它指向 `~/engine_ios`
+与已删除的 `tools/route_a/build_host_engine.sh`。venv 从 `tools/patch_builder/.venv`
+迁到 `tools/.venv` + `tools/requirements.txt`。
+
+**保留的**：`cli.py` 的发布护栏（link% 门限、app_id 匹配、kernel 同源校验、
+补丁号高水位）与两个测试套件。它们不是验证脚手架，是拦住补丁在线上静默失效的
+检查，每一条都对应一个已发生过的真实缺陷。
+
+孤儿化的附带效果：**v1 的历史不含那把已公开的签名私钥**。
+
+### 验证方式
+
+从 GitHub 全新 clone `v1`、从零建 venv、跑完整链路，产出
+`sha256 6e65c67dd857ad0a6d99bc1043032ff91af237275d9b0c5f462443faf48cf426` ——
+与裁剪前逐字节相同。测试门 50 + 9 项在干净检出中全过。
+
+
 > 2026-08-14 真机验证完成（iPhone 14 / iOS 26.6，UDID `00008110-000E583836F3601E`）
 
 ## 决定：产品线采用 Shorebird 预编译引擎，X1 转为研究分支
