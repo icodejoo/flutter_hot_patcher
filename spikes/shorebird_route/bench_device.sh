@@ -36,7 +36,8 @@ echo "构建完成"
 step "B. 生成 benchmark 补丁（hotLoop 走解释器）"
 cp "$V/lib/main_bench_patched.dart" "$V/lib/main.dart"
 rm -rf /tmp/benchpatch
-bash "$REPO_ROOT/tools/build_app_patch.sh" "$V" "$V" /tmp/benchpatch 2>&1 | tail -5
+# 这个 benchmark 要的是 X1 引擎（同引擎 A/B 对拍）；产品默认已改为 shorebird
+FHP_TOOLCHAIN=x1 bash "$REPO_ROOT/tools/build_app_patch.sh" "$V" "$V" /tmp/benchpatch 2>&1 | tail -5
 cp "$V/lib/main_bench_baseline.dart" "$V/lib/main.dart"
 
 echo "确认只有 hotLoop 未匹配："

@@ -17,9 +17,10 @@ PATCHED_DIR="${2:?usage: $0 <app_dir> <patched_lib_dir> <out_dir>}"
 OUT_DIR="${3:?usage: $0 <app_dir> <patched_lib_dir> <out_dir>}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 工具链：默认用 X1 引擎（补丁必须与 base 同源 —— base 是 X1 的 gen_snapshot 产出的）。
-# 设 FHP_TOOLCHAIN=shorebird 可切到 Shorebird 预编译引擎。
-FHP_TOOLCHAIN="${FHP_TOOLCHAIN:-x1}"
+# 工具链：默认 Shorebird 预编译引擎 —— 这是唯一的产品路径。
+# 补丁必须与 base 同源，所以基线也必须是同一套工具链构建的。
+# FHP_TOOLCHAIN=x1 切到 X1 引擎，仅供研究（Route-A / 同引擎 A/B 对拍）使用。
+FHP_TOOLCHAIN="${FHP_TOOLCHAIN:-shorebird}"
 
 if [ "$FHP_TOOLCHAIN" = "x1" ]; then
     E=~/engine_ios/src/out

@@ -1,5 +1,27 @@
 # X1 引擎的 Shorebird 集成改动
 
+> **产品线不需要本目录的任何补丁。**（2026-08-18 定案）
+>
+> Route-B 是唯一的产品方案，它全程用 Shorebird 的预编译产物：
+> `gen_snapshot_arm64` / `analyze_snapshot_arm64` / `patch` / `flutter`，
+> 加上纯 Python 的 `tools/linker.py`。产品发布链路（`tools/fhpb`）
+> 一次也不碰自建引擎，因此**不需要重建引擎、也不需要打这里的补丁**。
+>
+> 本目录整体转为**研究档案**，按路线归属如下：
+>
+> | 补丁 | 归属 | 产品是否需要 |
+> |---|---|---|
+> | `shorebird_integration.diff` + `shorebird_files/` | X1 引擎集成 Shorebird 引擎层 | 否 |
+> | `dartsdk_collect_all_codes.diff` | 自研 analyze_snapshot 的枚举修复 | 否（产品用 Shorebird 的） |
+> | `dartsdk_analyze_snapshot_macos.diff` | 同上，macOS 宿主 | 否 |
+> | `dartsdk_simulator_ffi.diff` | **Route-A/B 共存**才需要 | 否 |
+> | `dartsdk_dynamic_modules_aot.diff` | **Route-A 专用** | 否 |
+>
+> 最后两项只为「同一个引擎里同时跑 Route-A 和 Route-B」而存在。
+> 既然 Route-A 已出局，它们不再有产品意义，仅作研究记录保留。
+> 清理前的完整存档：tag `route-a-research-backup-20260818`。
+
+
 引擎树（`~/engine_ios`）不在本仓库版本控制内，故把改动存于此以便复现。
 所有内容遵循 `CLAUDE.md` 的规则 2/3：能拿来用的直接拷，只有闭源缺口才自实现。
 
