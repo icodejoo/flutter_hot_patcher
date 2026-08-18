@@ -272,6 +272,25 @@ def cmd_release(a) -> int:
                    "App 二进制")
     gen_snapshot = need(pathlib.Path(a.gen_snapshot or DEFAULT_GEN_SNAPSHOT), "gen_snapshot")
 
+    # --force 会重算基线（App.baseline / app.dill / base.aot / base.blob），
+    # 而已发布的增量是对着**旧** base.blob 算的 —— 留着它们，设备下载后
+    # inflate 出来的字节对不上 hash，补丁永远装不上，且现场毫无提示。
+    old_idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
+    if old_idx["patches"]:
+        if not a.discard_patches:
+            die(f"release {rv} 下已有补丁 {[p['number'] for p in old_idx['patches']]}，"
+                "而 --force 会重算基线，这些补丁的增量将全部失效。\n"
+                "确认要作废它们请加 --discard-patches；否则请改用新的版本号。")
+        retired = max(p["number"] for p in old_idx["patches"])
+        shutil.rmtree(rel / "patches", ignore_errors=True)
+        # 保留高水位：新补丁必须用更大的编号，否则装了旧 #N 的设备
+        # 会认为自己已是最新，永远收不到新补丁。
+        write_json(rel / "index.json",
+                   {"patches": [], "rolled_back": [],
+                    "high_water": max(retired, old_idx.get("high_water", 0))})
+        print(f"[release] 已作废旧补丁 {[p['number'] for p in old_idx['patches']]}（基线已变）；"
+              f"新补丁将从 #{max(retired, old_idx.get('high_water', 0)) + 1} 起编号")
+
     (rel / "patches").mkdir(parents=True, exist_ok=True)
 
     # 归档 kernel：补丁必须对着**同一份** app.dill 编，否则 cid / 符号对不上。
@@ -347,16 +366,32 @@ def sign_hash(hash_hex: str, key_path: pathlib.Path) -> str:
 
 
 def next_patch_number(idx: dict) -> int:
-    return max((p["number"] for p in idx["patches"]), default=0) + 1
+    """下一个补丁号。
+
+    绝不复用已经发出去过的编号 —— 设备判「是否需要下载」用的是
+    `current_patch_number >= latest`，复用编号会让已装旧 #N 的设备认为
+    自己已是最新，从而一直跑在基于旧基线的补丁上。所以作废补丁时把最高
+    编号记进 high_water，之后只增不减。
+    """
+    used = max((p["number"] for p in idx["patches"]), default=0)
+    return max(used, idx.get("high_water", 0)) + 1
 
 
 def publish_vmcode(repo: pathlib.Path, rv: str, vmcode: pathlib.Path, *,
                    number: int, base_url: str, channel: str,
                    private_key: Optional[pathlib.Path], note: Optional[str],
-                   patch_tool: pathlib.Path) -> dict:
+                   patch_tool: pathlib.Path, allow_overwrite: bool = False) -> dict:
     """把一个 .vmcode 变成可下发的增量条目，并写进 index.json。"""
     rel = release_dir(repo, rv)
     base_blob = need(rel / "base.blob", "base.blob（先跑 fhpb release）")
+
+    # 覆盖一个已发布的编号，会让已经装了它的设备停在旧内容上（它们看
+    # current >= latest 就不再下载），新旧设备就此分叉。这条检查放在这里
+    # 而不是命令层，是为了让 publish.py 那个旧入口也拦得住。
+    existing = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
+    if not allow_overwrite and any(p["number"] == number for p in existing["patches"]):
+        die(f"补丁 #{number} 已存在。覆盖会让已安装它的设备与新设备内容不一致；"
+            "确需覆盖请加 --force，通常应当直接发下一个编号。")
     delta = rel / "patches" / f"{number}.bin"
     delta.parent.mkdir(parents=True, exist_ok=True)
     run([patch_tool, base_blob, vmcode, delta])
@@ -381,9 +416,19 @@ def publish_vmcode(repo: pathlib.Path, rv: str, vmcode: pathlib.Path, *,
     idx = load_json(idx_path, {"patches": [], "rolled_back": []})
     idx["patches"] = [p for p in idx["patches"] if p["number"] != number] + [entry]
     idx["patches"].sort(key=lambda p: p["number"])
+    idx["high_water"] = max(idx.get("high_water", 0), number)
     write_json(idx_path, idx)
     write_json(rel / "patches" / f"{number}.json", entry)
     return entry
+
+
+def read_yaml_field(path: pathlib.Path, field: str):
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        if line.startswith(field + ":"):
+            return line.split(":", 1)[1].strip()
+    return None
 
 
 def cmd_patch(a) -> int:
@@ -391,7 +436,14 @@ def cmd_patch(a) -> int:
     repo = pathlib.Path(a.repo).resolve()
     rv = a.release_version or detect_release_version(app_dir)
     rel = release_dir(repo, rv)
-    need(rel / "release.json", f"release {rv}（先跑 fhpb release）")
+    meta = load_json(need(rel / "release.json", f"release {rv}（先跑 fhpb release）"))
+
+    # 补丁必须发给它自己那个 app。装错 app 的补丁 = 往设备推一份完全不同的
+    # 快照，后果比装不上严重得多，所以这里硬拦。
+    app_id = read_yaml_field(app_dir / "shorebird.yaml", "app_id")
+    if meta.get("app_id") and app_id and app_id != meta["app_id"] and not a.force:
+        die(f"app_id 不匹配：工程是 {app_id}，release {rv} 是 {meta['app_id']}。\n"
+            "补丁会被发给错误的应用。确认无误请加 --force。")
 
     key = pathlib.Path(a.private_key).resolve() if a.private_key else None
     if key:
@@ -417,15 +469,34 @@ def cmd_patch(a) -> int:
     if (rel / "base.aot").exists():
         env["FHP_BASE_AOT"] = str(rel / "base.aot")
     print(f"[patch] 构建 .vmcode（基线 {rv}）…")
-    r = subprocess.run(["bash", str(REPO_ROOT / "tools/build_app_patch.sh"),
+    # FHP_BUILD_SCRIPT 只用于测试注入桩件；生产路径走仓库里的那份。
+    build_script = os.environ.get("FHP_BUILD_SCRIPT",
+                                  str(REPO_ROOT / "tools/build_app_patch.sh"))
+    r = subprocess.run(["bash", build_script,
                         str(app_dir), str(a.source_dir or app_dir), str(out_dir)],
                        env=env, text=True, capture_output=True)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:
         sys.stderr.write(r.stderr)
         die("build_app_patch.sh 失败")
-    link_pct = next((ln.split(":", 1)[1].strip()
-                     for ln in r.stdout.splitlines() if ln.startswith("link%:")), "?")
+    # 真实输出是 "link%:        100.00%" —— 带尾随 % 号，解析时要去掉
+    link_pct = next((ln.split(":", 1)[1].strip().rstrip("%")
+                     for ln in r.stdout.splitlines() if ln.startswith("link%:")), None)
+
+    # link% 塌方是补丁与基线不同源的已知信号（实测：编译参数漏了几个 →
+    # 2.62%）。这种补丁装上去等于换掉大半个快照，必须在发布前拦住，
+    # 而不是印一行数字就放行。正常改几个函数应当仍在 100% 附近。
+    if link_pct is None:
+        die("解析不到 link%，无法判断补丁是否与基线同源，拒绝发布")
+    try:
+        link_val = float(link_pct)
+    except ValueError:
+        die(f"link% 解析失败：{link_pct!r}")
+    if link_val < a.min_link_pct:
+        die(f"link% {link_val:.2f}% 低于门限 {a.min_link_pct:.2f}%。\n"
+            "补丁与基线很可能不同源（编译参数不一致、或对错了 release）。\n"
+            "带插件/dynamic interface 的工程见 docs/RUNBOOK_ROUTE_B.md 的 FHP_PATCH_DILL。\n"
+            "确认这就是预期结果请用 --min-link-pct 显式放低门限。")
 
     vmcode = need(out_dir / "out.vmcode", "out.vmcode")
     idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
@@ -434,7 +505,8 @@ def cmd_patch(a) -> int:
     entry = publish_vmcode(repo, rv, vmcode, number=number, base_url=base_url,
                            channel=a.channel, private_key=key, note=a.note,
                            patch_tool=need(pathlib.Path(a.patch_tool or DEFAULT_PATCH_TOOL),
-                                           "patch 工具"))
+                                           "patch 工具"),
+                           allow_overwrite=a.force)
 
     ratio = 100 * entry["size_compressed"] / entry["size_uncompressed"]
     print(f"\n[patch] #{entry['number']} → {rel/'patches'/f'{number}.bin'}\n"
@@ -514,10 +586,25 @@ def cmd_rollback(a) -> int:
     idx["rolled_back"] = sorted(rolled)
     write_json(idx_path, idx)
 
-    live = [p["number"] for p in idx["patches"] if p["number"] not in rolled]
-    print(f"补丁 #{a.patch} {verb}（release {rv}）\n"
-          f"设备下次 check 会收到 rolled_back={idx['rolled_back']} 并卸载对应补丁。\n"
-          f"回滚后设备将落到：{'补丁 #' + str(live[-1]) if live else '基线（无补丁）'}")
+    print(f"补丁 #{a.patch} {verb}（release {rv}）")
+    if a.undo:
+        print("服务端恢复下发它；未装的设备下次 check 即可取得。")
+        return 0
+
+    # 说清楚两段式：先卸载回基线，再在后续 check 里取到仍可用的最新补丁。
+    # 不是「立刻落到上一个补丁」—— 中间会有一次运行在基线上。
+    print(f"服务端立即停止下发它，并把 rolled_back={idx['rolled_back']} 带给设备。")
+    print("已装该补丁的设备：下次 check 卸载它 → 先回到基线运行，"
+          "再由后续 check 取得仍可用的最新补丁。")
+    by_channel = {}
+    for p in idx["patches"]:
+        if p["number"] not in rolled:
+            by_channel[p.get("channel", "stable")] = p["number"]
+    if by_channel:
+        print("各通道当前仍可下发：" +
+              "、".join(f"{c} → #{n}" for c, n in sorted(by_channel.items())))
+    else:
+        print("已无可下发补丁，设备将停留在基线。")
     return 0
 
 
@@ -639,6 +726,8 @@ def main() -> int:
     p.add_argument("--analyze-snapshot", default=None)
     p.add_argument("--gen-snapshot", default=None)
     p.add_argument("--force", action="store_true", help="覆盖同名 release")
+    p.add_argument("--discard-patches", action="store_true",
+                   help="配合 --force：作废该 release 下已发布的补丁（基线变了它们必然失效）")
     p.set_defaults(func=cmd_release)
 
     p = sub.add_parser("patch", help="生成、签名并发布一个补丁")
@@ -654,6 +743,10 @@ def main() -> int:
     p.add_argument("--note", default=None, help="备注，随 fhpb list 显示")
     p.add_argument("--out-dir", default=None)
     p.add_argument("--patch-tool", default=None)
+    p.add_argument("--min-link-pct", type=float, default=90.0,
+                   help="link%% 低于此值拒绝发布，默认 90（正常应接近 100）")
+    p.add_argument("--force", action="store_true",
+                   help="跳过 app_id 匹配与补丁号覆盖检查")
     p.set_defaults(func=cmd_patch)
 
     p = sub.add_parser("list", help="查看 release 与补丁状态")

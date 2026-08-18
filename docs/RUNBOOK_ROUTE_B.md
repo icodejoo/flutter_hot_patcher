@@ -113,6 +113,22 @@ tools/fhpb verify --repo /srv/patches --app-dir <你的工程>
 验的是设备会验的东西：增量大小与 index 一致、`hash_signature` 能被
 `shorebird.yaml` 里那把公钥验过、hash 等于 `.vmcode` 的 sha256。
 
+## 发布护栏（会主动拦你）
+
+这些不是提示，是**拒绝执行**，因为对应的都是线上会静默失效的场景：
+
+| 拦截 | 原因 | 放行方式 |
+|---|---|---|
+| `link%` 低于 90 | 补丁与基线不同源，装上等于换掉大半个快照 | `--min-link-pct` 显式放低 |
+| 解析不到 `link%` | 无法判断是否同源，不赌 | 无 |
+| `app_id` 与 release 不符 | 补丁会被发给错误的应用 | `--force` |
+| 补丁号已存在 | 已装该号的设备不会重下，新旧设备就此分叉 | `--force`（通常应直接发下一号）|
+| 已有补丁时 `release --force` | 基线重算后旧增量必然失效 | `--discard-patches` |
+
+`--discard-patches` 作废旧补丁后，**新补丁不会从 1 重新编号**。
+`index.json` 记着 `high_water`，编号只增不减 —— 否则装了旧 #1 的设备
+看到新 #1 会认为自己已是最新，永远收不到补丁。
+
 ## 起服务
 
 ```bash
@@ -159,7 +175,7 @@ release 1.0.0+1   app_id=1111…   建于 2026-08-18T01:47:21+00:00
 
 ```bash
 bash tools/tests/test_broute_server.sh      # 协议一致性，9 项
-bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期语义，27 项
+bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期语义 + 发布护栏，40 项
 ```
 
 ## 排障

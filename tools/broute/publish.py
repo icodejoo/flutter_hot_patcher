@@ -27,6 +27,7 @@ def main() -> int:
     ap.add_argument("--channel", default="stable")
     ap.add_argument("--private-key", help="RSA 私钥；省略则不签名")
     ap.add_argument("--note", default=None)
+    ap.add_argument("--force", action="store_true", help="允许覆盖已发布的补丁号")
     ap.add_argument("--patch-tool", default=None)
     # 兼容旧命令行：base.blob 现在由 fhpb release 产出，这里不再需要 App 二进制
     ap.add_argument("--app-binary", help=argparse.SUPPRESS)
@@ -38,7 +39,8 @@ def main() -> int:
         number=a.patch_number, base_url=a.base_url, channel=a.channel,
         private_key=pathlib.Path(a.private_key) if a.private_key else None,
         note=a.note,
-        patch_tool=cli.need(pathlib.Path(a.patch_tool or cli.DEFAULT_PATCH_TOOL), "patch 工具"))
+        patch_tool=cli.need(pathlib.Path(a.patch_tool or cli.DEFAULT_PATCH_TOOL), "patch 工具"),
+        allow_overwrite=a.force)
 
     ratio = 100 * entry["size_compressed"] / entry["size_uncompressed"]
     print(f"[publish] patch #{entry['number']} -> {a.repo}/releases/"

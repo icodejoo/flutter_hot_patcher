@@ -137,6 +137,93 @@ grep -q '"hash_signature"' "$IDX" && pass "补丁已签名" || fail "补丁未�
 NEXT=$("$PY" -c "import json,sys;i=json.load(open('$IDX'));print(max(p['number'] for p in i['patches'])+1)")
 [ "$NEXT" = "4" ] && pass "补丁编号自增到 4" || fail "编号自增错误：$NEXT"
 
+# --- 3b) 发布护栏 ---------------------------------------------------------------
+# 覆盖已发布的编号会让已装该补丁的设备与新设备分叉
+pub 1 stable >"$TMP/dup.txt" 2>&1 && fail "覆盖已发布的补丁号未被拒绝" \
+  || pass "覆盖已发布的补丁号被拒绝"
+
+# --force 重发 release 会重算基线，旧增量必然失效，不能默默留着
+rel_run --force >"$TMP/f1.txt" 2>&1 && fail "有补丁时 --force 未被拦" \
+  || pass "有补丁时 --force 被拦（旧增量会失效）"
+grep -q "discard-patches" "$TMP/f1.txt" && pass "提示了 --discard-patches" || fail "未提示补救方式"
+
+# 显式作废后才允许，且必须真的清干净
+rel_run --force --discard-patches >/dev/null 2>&1
+"$PY" -c "
+import json,sys
+i=json.load(open('$IDX')) if __import__('pathlib').Path('$IDX').exists() else {'patches':[]}
+sys.exit(0 if not i['patches'] else 1)" \
+  && pass "--discard-patches 清空了失效补丁" || fail "旧补丁仍留在 index.json"
+[ ! -f "$REL/patches/1.bin" ] && pass "失效增量文件已删除" || fail "失效 .bin 仍在"
+
+# 编号不能回绕：装了旧 #3 的设备看到新 #3 会以为自己已是最新，永远收不到补丁
+HW=$("$PY" -c "import json;print(json.load(open('$IDX')).get('high_water',0))")
+[ "$HW" = "3" ] && pass "作废后记下高水位 3" || fail "high_water 错误：$HW"
+pub 4 stable >/dev/null 2>&1
+"$PY" -c "
+import sys,pathlib
+sys.path.insert(0,'$REPO_ROOT/tools/broute'); import cli, json
+i=json.load(open('$IDX'))
+sys.exit(0 if cli.next_patch_number(i)==5 else 1)" \
+  && pass "作废后新编号从高水位继续（不回绕到 1）" || fail "编号回绕了，设备会收不到补丁"
+
+# 重新铺一遍供后续用例
+rm -rf "$REL/patches" "$IDX"; mkdir -p "$REL/patches"
+pub 1 stable >/dev/null 2>&1
+pub 2 beta   >/dev/null 2>&1
+pub 3 stable >/dev/null 2>&1
+
+# --- 3c) cmd_patch 的护栏（用桩件替掉真实构建） ---------------------------------
+# 桩件：产出一个假的 out.vmcode，link% 由 FAKE_LINK 指定
+cat > "$BIN/build_stub.sh" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$3"; head -c 4096 /dev/urandom > "$3/out.vmcode"
+# 格式必须与 build_app_patch.sh 一致：数值带尾随 % 号
+echo "link%:        ${FAKE_LINK:-100.00}%"
+SH
+chmod +x "$BIN/build_stub.sh"
+export FHP_BUILD_SCRIPT="$BIN/build_stub.sh"
+
+patch_run(){ "$PY" "$CLI" patch --app-dir "$APP" --repo "$REPO" \
+             --private-key "$KEYS/patch_private.pem" --patch-tool "$BIN/patch" \
+             --base-url "http://127.0.0.1:$PORT" "$@"; }
+
+# link% 塌方 = 补丁与基线不同源，这是已知失败信号，必须拦
+FAKE_LINK=2.62 patch_run >"$TMP/lp.txt" 2>&1 && fail "link% 2.62% 仍被发布" \
+  || pass "link% 低于门限被拒绝"
+grep -q "min-link-pct" "$TMP/lp.txt" && pass "提示了 --min-link-pct" || fail "未提示放宽方式"
+
+# 显式放低门限则允许（留给确实预期低 link% 的场景）
+FAKE_LINK=2.62 patch_run --min-link-pct 1 >/dev/null 2>&1 \
+  && pass "显式放低门限后可发布" || fail "放低门限仍失败"
+
+# 解析不到 link% 时必须拒绝，而不是当作通过
+cat > "$BIN/build_nolink.sh" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$3"; head -c 4096 /dev/urandom > "$3/out.vmcode"; echo "done"
+SH
+chmod +x "$BIN/build_nolink.sh"
+FHP_BUILD_SCRIPT="$BIN/build_nolink.sh" patch_run >/dev/null 2>&1 \
+  && fail "解析不到 link% 却放行" || pass "解析不到 link% 时拒绝发布"
+
+# app_id 不匹配：补丁会被发给错误的应用
+cp "$APP/shorebird.yaml" "$TMP/yaml.bak"
+"$PY" -c "
+import pathlib
+p=pathlib.Path('$APP/shorebird.yaml')
+p.write_text(p.read_text().replace('app_id: APP1','app_id: SOMEONE-ELSE'))"
+patch_run >"$TMP/aid.txt" 2>&1 && fail "app_id 不匹配仍发布" || pass "app_id 不匹配被拒绝"
+patch_run --force >/dev/null 2>&1 && pass "--force 可绕过 app_id 检查" || fail "--force 未生效"
+cp "$TMP/yaml.bak" "$APP/shorebird.yaml"
+
+unset FHP_BUILD_SCRIPT
+# 上面几发把编号推高了，重置成后续用例期望的 1/2/3
+rm -rf "$REL/patches" "$IDX"
+mkdir -p "$REL/patches"
+pub 1 stable >/dev/null 2>&1
+pub 2 beta   >/dev/null 2>&1
+pub 3 stable >/dev/null 2>&1
+
 # --- 4) 回滚 -------------------------------------------------------------------
 "$PY" "$CLI" rollback --repo "$REPO" --release-version 1.2.3+7 --patch 3 >/dev/null 2>&1
 grep -q '"rolled_back": \[' "$IDX" && "$PY" -c "
