@@ -269,6 +269,31 @@ import json,sys;d=json.loads('''$R''')
 sys.exit(0 if d.get('patch_available') and d['patch']['number']==3 else 1)" \
   && pass "rollback --undo 后重新下发 #3" || { fail "undo 未生效"; echo "  $R"; }
 
+# --- 5b) 协议兼容与健壮性 --------------------------------------------------------
+# 旧客户端发的是 patch_number 而非 current_patch_number（network.rs:252）。
+# 只认新字段的话，旧客户端每次启动都会重下一遍已装的补丁。
+R=$(req "{$BASE,\"channel\":\"stable\",\"patch_number\":3}")
+echo "$R" | grep -q '"patch_available": false' \
+  && pass "兼容旧客户端的 patch_number 字段" || { fail "旧客户端会被重复下发"; echo "  $R"; }
+
+# 增量文件缺失时不能下发：设备只会 404，还会记一次安装失败
+command mv "$REL/patches/3.bin" "$TMP/3.bin.hidden"
+R=$(req "{$BASE,\"channel\":\"stable\"}")
+"$PY" -c "
+import json,sys;d=json.loads('''$R''')
+sys.exit(0 if (not d.get('patch_available')) or d['patch']['number']!=3 else 1)" \
+  && pass "增量文件缺失的补丁不下发" || { fail "下发了没有文件的补丁"; echo "  $R"; }
+command mv "$TMP/3.bin.hidden" "$REL/patches/3.bin"
+
+# index.json 必须原子写，服务端不能读到半截
+"$PY" -c "
+import sys,pathlib,json
+sys.path.insert(0,'$REPO_ROOT/tools/broute'); import cli
+p=pathlib.Path('$TMP/atomic.json')
+cli.write_json(p, {'a':1})
+sys.exit(0 if p.exists() and not list(p.parent.glob('*.tmp')) else 1)" \
+  && pass "write_json 原子且不留 .tmp" || fail "原子写有问题"
+
 # --- 6) verify：签名验签 --------------------------------------------------------
 "$PY" "$CLI" verify --repo "$REPO" --patch 1 --app-dir "$APP" >"$TMP/v.txt" 2>&1 \
   && pass "verify 通过（签名 + 大小）" || { fail "verify 失败"; cat "$TMP/v.txt"; }

@@ -62,7 +62,12 @@ class Handler(BaseHTTPRequestHandler):
     def _check(self, req):
         app_id = req.get("app_id")
         rv = req.get("release_version", "")
+        # 新客户端发 current_patch_number；旧客户端发 patch_number
+        # （network.rs:252 "Supersedes the legacy `patch_number` field"）。
+        # 只读新字段的话，旧客户端每次启动都会被判成「没装补丁」而重下一遍。
         current = req.get("current_patch_number")
+        if current is None:
+            current = req.get("patch_number")
         channel = req.get("channel") or "stable"
         print(f"[check] app_id={app_id} release={rv} current={current} "
               f"channel={channel} platform={req.get('platform')} arch={req.get('arch')}")
@@ -80,9 +85,18 @@ class Handler(BaseHTTPRequestHandler):
 
         rolled = idx.get("rolled_back", [])
         # 已下线的不能再下发；未标 channel 的旧条目按 stable 处理。
-        eligible = [p for p in idx["patches"]
-                    if p["number"] not in rolled
-                    and p.get("channel", "stable") == channel]
+        # 同时跳过增量文件缺失的条目 —— 下发了设备也只会 404，
+        # 还会把它记成一次失败的安装。
+        eligible = []
+        for p in idx["patches"]:
+            if p["number"] in rolled:
+                continue
+            if p.get("channel", "stable") != channel:
+                continue
+            if not (REPO / "releases" / rv / "patches" / f"{p['number']}.bin").exists():
+                print(f"[check] 跳过 #{p['number']}：增量文件缺失")
+                continue
+            eligible.append(p)
         if not eligible:
             self._json(200, {"patch_available": False,
                              "rolled_back_patch_numbers": rolled})

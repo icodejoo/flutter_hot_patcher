@@ -88,7 +88,13 @@ tools/fhpb patch --app-dir <你的工程> --repo /srv/patches \
 ```
 
 补丁号自动自增，`base_url` 从 `shorebird.yaml` 读，release 自动对上当前
-`Info.plist` 的版本。灰度用 `--channel beta`（默认 `stable`）。
+`Info.plist` 的版本。
+
+> **`--channel` 不是灰度开关。** 设备的通道来自它自己包里的 `shorebird.yaml`，
+> 是**构建期**固定的（`config.rs:145`，缺省 `stable`）。发到 `beta` 只有那些
+> 以 `channel: beta` 构建并安装的设备能收到；已经装了 stable 包的设备永远收不到，
+> 且不会有任何报错。要做通道分发，得先 `fhpb init --channel beta` 出一个单独的包。
+> 发到非 stable 通道时 `fhpb patch` 会警告。
 
 产出：
 
@@ -175,7 +181,7 @@ release 1.0.0+1   app_id=1111…   建于 2026-08-18T01:47:21+00:00
 
 ```bash
 bash tools/tests/test_broute_server.sh      # 协议一致性，9 项
-bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期语义 + 发布护栏，40 项
+bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 协议兼容，43 项
 ```
 
 ## 排障
@@ -189,6 +195,16 @@ bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期语义 + 发布护�
 | `Patch signature is invalid` | `patch_public_key` 与签名私钥不配对；跑 `fhpb verify` 定位 |
 | link% 异常低 | 补丁 kernel 的编译参数与基线不一致，见上面 `FHP_PATCH_DILL` 那条 |
 | 设备连不上服务端 | 本环境（企业网络）会阻断设备→Mac 直连；调试时改用 USB 注入，见 `spikes/shorebird_route/e2e_device.sh` |
+
+## 密钥保管
+
+签名私钥是**端上唯一的信任根** —— 拿到它就等于能给所有设备推任意可执行代码。
+
+- `tools/broute/keys/` 已加入 `.gitignore`，私钥权限 600
+- **本仓库 `ce6fada` 曾提交过一把私钥**（未推送到远端）。该密钥必须视为已泄露：
+  正式发布前务必 `fhpb init --force` 换一把新的，并重新构建 app
+  （公钥编译在包里，换钥必须重新发版）。彻底清除还需重写这段历史。
+- 生产环境应把私钥放在离线/KMS 中，不要落在开发机的仓库目录里
 
 ## 验证边界（如实说明）
 

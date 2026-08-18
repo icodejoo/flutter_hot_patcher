@@ -155,7 +155,7 @@ Shorebird 的私有 dart-sdk 显然修了这一点。
 | 门 | 命令 | 状态 |
 |---|---|---|
 | 分发协议一致性 | `bash tools/tests/test_broute_server.sh` | PASS（9 项）|
-| 全生命周期语义 + 发布护栏 | `bash tools/tests/test_fhpb_lifecycle.sh` | PASS（40 项）|
+| 全生命周期 + 护栏 + 协议兼容 | `bash tools/tests/test_fhpb_lifecycle.sh` | PASS（43 项）|
 | 打包链路（真实 app） | `fhpb release` + `fhpb patch` | PASS（link% 100%，增量 9.1%）|
 | v02 工具链（Route-A，已归档但保留在 CI） | `bash tools/tests/test_inspect_patch.sh` | PASS |
 | 多函数补丁（Route-A） | `bash tools/tests/test_multi_function_patch.sh` | PASS |

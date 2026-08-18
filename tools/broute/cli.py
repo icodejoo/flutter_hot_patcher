@@ -91,8 +91,11 @@ def load_json(p: pathlib.Path, default=None):
 
 
 def write_json(p: pathlib.Path, obj) -> None:
+    """原子写：服务端可能正在读同一个 index.json，不能让它读到半截。"""
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, p)
 
 
 def list_releases(repo: pathlib.Path):
@@ -229,11 +232,13 @@ def cmd_init(a) -> int:
                 app_id = line.split(":", 1)[1].strip()
         print(f"[init] {yaml_path.name} 已存在，沿用 app_id={app_id}（--force 可覆盖）")
 
+    channel_line = f"channel: {a.channel}\n" if a.channel else ""
     yaml_path.write_text(
         "# Route-B 更新器配置。不含机密，应提交到版本库。\n"
         f"app_id: {app_id}\n"
         f"base_url: {a.base_url}\n"
         "auto_update: true\n"
+        + channel_line +
         f"patch_public_key: {pub}\n")
     print(f"[init] 已写 {yaml_path}")
 
@@ -460,6 +465,17 @@ def cmd_patch(a) -> int:
                     base_url = line.split(":", 1)[1].strip()
     if not base_url:
         die("拿不到 base_url：给 --base-url，或在 shorebird.yaml 里配好")
+
+    # channel 来自 app 自己的 shorebird.yaml，是**构建期**属性
+    # （config.rs:145 读 yaml，缺省 "stable"）。发到一个没有任何在网设备
+    # 处于其中的通道，结果是补丁谁也收不到，且没有任何报错。
+    if a.channel != "stable":
+        app_channel = read_yaml_field(app_dir / "shorebird.yaml", "channel") or "stable"
+        if app_channel != a.channel:
+            print(f"[warn] 发到通道 {a.channel!r}，但本工程 shorebird.yaml 的 channel 是 "
+                  f"{app_channel!r}。设备的通道在构建时就固定了，只有以 "
+                  f"channel: {a.channel} 构建并安装的设备才会收到这个补丁。",
+                  file=sys.stderr)
 
     out_dir = pathlib.Path(a.out_dir).resolve() if a.out_dir else repo / ".build" / rv
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -714,6 +730,8 @@ def main() -> int:
     p.add_argument("--base-url", required=True, help="设备可达的分发地址")
     p.add_argument("--keys", default=str(REPO_ROOT / "tools/broute/keys"))
     p.add_argument("--app-id", default=None, help="默认随机生成")
+    p.add_argument("--channel", default=None,
+                   help="写入 shorebird.yaml 的更新通道；构建期固定，缺省 stable")
     p.add_argument("--force", action="store_true", help="覆盖已有 shorebird.yaml")
     p.set_defaults(func=cmd_init)
 

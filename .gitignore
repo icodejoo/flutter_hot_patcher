@@ -30,3 +30,8 @@ spikes/gate2_linker/tools/kernel_linker/test/fixtures/
 tools/patch_server/patches/
 spikes/m3_ios_realdevice/build/
 tools/patch_builder/.venv/
+
+# 补丁签名私钥 —— 泄露即等于可以给所有设备推任意可执行代码
+tools/broute/keys/
+*.pem
+!**/patch_public.pem
