@@ -399,3 +399,71 @@ FHP_PROBE=PASS remap_ok exec_ok got=41 page=16384
 - **换 Apple ID 会改 team**，app-identifier 前缀随之改变
   （`7VP87G446C` → `WAL983V9MH`），iOS 以
   `MismatchedApplicationIdentifierEntitlement` 拒绝升级安装，必须先卸载再装。
+
+### C3b：拆分构建的完整测试套件差分（**回归 0**）
+
+抽样通过不算数，跑了全部 3143 个 VM 测试，两种配置各一遍再差分：
+
+| | 默认（`USING_SIMULATOR`）| 拆分（`FHP_NO_SIMULATOR_CODEGEN`）|
+|---|---|---|
+| PASS | 2374 | 2376 |
+| FAIL | 770 | 767 |
+| 自述平台 | `macos_simarm64` | **`macos_arm64`** |
+
+- **默认 PASS 而拆分 FAIL 的：0 个** —— 没有任何回归
+- 反向修好 3 个：`DartAPI_DartInitializeAfterCleanup`、
+  `DartAPI_SetTimelineRecorderCallback`、`Id`（原生代码生成下才通过）
+- 仅默认存在 2 个：A2 的两个测试，守卫是 `USING_SIMULATOR`，拆分下按预期编译掉
+
+770 个基线失败多为需要 `--dfe` 快照等环境依赖，两边一致，不影响差分结论。
+
+#### 测试判据本身出过三次错（值得记）
+
+1. 用 `timeout(1)` —— macOS 没有这个命令，3144 个测试全被记成 FAIL
+2. 内层命令没重定向 stdin —— 把喂给 `while` 的 `--list` 管道吃掉了
+3. 用 `grep -q "CRASH\|FAIL"` 判定 —— **看不见断言失败**。
+   `run_vm_tests` 打印的是 `error: expected: <42> but was: <21>` 并返回非零，
+   两个关键词一个都不含。据此做出的「8 项全部 PASS 无回归」是不成立的。
+
+现在的判据是**退出码 + 输出含 `error:`**。
+
+### C4：混合栈的执行模式记账（**已完成，5 项单测通过**）
+
+`~/dart/sdk` commit `a2dd8810dff`，新增 `runtime/vm/sim_transition.{h,cc}`。
+
+补丁代码模拟执行、基线代码原生执行之后，同一个栈上两种帧交替，
+异常展开 / profiler / 崩溃报告都需要知道每一帧是哪种模式，而 PC 本身说明不了。
+
+`SimTransition` 记录每次跨越并串成链，两个方向是子类，`IsSimulating()`
+只差比较极性 —— 这不是设计出来的，是从 Shorebird 二进制里读出来的
+（两个实现各 16 字节，只差 `cset w0,eq` 与 `cset w0,ne`）：
+
+```
+SimulatorToCPU::IsSimulating(pc)  ->  pc == boundary
+CPUToSimulator::IsSimulating(pc)  ->  pc != boundary
+```
+
+把 `IsSimulating` 做成虚函数正是关键：栈遍历方不必知道自己在看哪个方向。
+
+链头放在线程局部而不是挂在 Simulator 上 —— 第一次跨越可能发生在该线程
+还没有 Simulator 之前。链为空时 `StackFrameIsSimulating` 返回 false，
+这对未打补丁的 app 是正确答案（返回 true 会让 profiler 把每个正常进程都误报成模拟执行）。
+
+`SimBridge` 现在会在 `Simulator::Call` 外层作用域内压一个 `CPUToSimulator`。
+
+### C5：引擎侧接线（代码完成，真机 A/B 待引擎构建）
+
+两处改动：
+
+**1. `Dart_ShorebirdLoadVmcode` 的守卫**（`~/dart/sdk` commit `b145442d5c5`）
+
+原本是 `USING_SIMULATOR`，而 C3a 之后**生产配置恰恰关掉它**，
+于是该入口在生产构建里编译成 `return false`，引擎永远填不上 link table。
+改为 `SIMULATOR_AVAILABLE`。两种配置都已验证：拆分构建里符号确实存在，
+此前是被编译掉的。
+
+**2. 引擎调用它**（`~/engine_ios/src/flutter/runtime/shorebird/patch_cache.cc`）
+
+`TryLoadFromPatch` 成功加载 `.vmcode` 后，调用 `Dart_ShorebirdLoadVmcode`
+把 link table 交给 VM。**此前引擎从不调用它** —— 这正是之前 A/B benchmark
+上「打不打补丁都是 70–74 ns/迭代」的原因：逃逸机制从未启动。

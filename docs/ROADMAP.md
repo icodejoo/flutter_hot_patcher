@@ -106,8 +106,13 @@ GET  <download_url>            ← 可以是任意 CDN / 对象存储，无需�
 进入模拟器 → 执行不可执行内存里的代码」这条承重链路。详见
 [SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md) §9。
 
-**C2 已完成**：模板改由已签名 `__TEXT` 提供（`36dfb368c43`），
-全流程不再写可执行内存，是 iOS 可用的形态。
+**C1–C5 代码已完成**（`~/dart/sdk` 5 个提交 + 引擎接线一处），机制细节与验证见 [SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md)：
+
+- C1 `SimBridge`（CPU→Sim），C2 模板取自已签名 `__TEXT`
+- **真机验证 `vm_remap` PASS** —— 唯一的平台级风险点已排除
+- C3a/C3b 拆分 `SIMULATOR_AVAILABLE` 与 `USING_SIMULATOR`，3143 个测试差分**回归 0**，拆分构建确为原生代码生成
+- C4 混合栈执行模式记账（`SimTransition`）
+- C5 引擎接线：修好 `Dart_ShorebirdLoadVmcode` 在生产配置下的守卫，并让 `patch_cache.cc` 真正调用它
 
 仍需：去掉 A1 无条件强开、Transition 记账抽象、
 引擎侧接线（当前引擎从不调用 `Dart_ShorebirdLoadVmcode`，link table 从未填充）。
