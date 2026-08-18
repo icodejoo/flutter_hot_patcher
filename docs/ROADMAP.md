@@ -88,21 +88,21 @@ GET  <download_url>            ← 可以是任意 CDN / 对象存储，无需�
 
 ## 5. 自建引擎（摆脱对 Shorebird 预编译产物的依赖）
 
- 都是公开仓库，**但 dart-sdk fork 未公开**
+`shorebirdtech/{flutter,engine,updater}` 都是公开仓库，**但 dart-sdk fork 未公开**
 （查过 shorebirdtech 组织全量 33 个仓库，没有 dart-sdk）。我们用的是他们编译好的
- /  / ，不是源码。
+`gen_snapshot` / `analyze_snapshot` / `Flutter.xcframework`，不是源码。
 
 双模执行机制已通过反汇编对照搞清，见
 **[SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md)**。
-结论：我们缺的是 （原生→模拟器方向），它靠切换  里
+结论：我们缺的是 `CPUToSimulator`（原生→模拟器方向），它靠切换 `Thread` 里
 缓存的 7 个 stub 入口实现，**不需要新建可执行内存**，所以 iOS 的 W^X 不是障碍。
 
-已有的（，8 个提交，备份在 ）：
-模拟器→原生逃逸（A2/A5/A7）、（B2）、
-（B4）。
+已有的（`~/dart/sdk`，8 个提交，备份在 `~/fhp_backups/dartsdk-20260818/`）：
+模拟器→原生逃逸（A2/A5/A7）、`analyze_snapshot --shorebird`（B2）、
+`Dart_ShorebirdLoadVmcode`（B4）。
 
-仍需： 等效物、去掉 A1 无条件强开、Transition 记账抽象、
-引擎侧接线（当前引擎从不调用 ，link table 从未填充）。
+仍需：`CPUToSimulator` 等效物、去掉 A1 无条件强开、Transition 记账抽象、
+引擎侧接线（当前引擎从不调用 `Dart_ShorebirdLoadVmcode`，link table 从未填充）。
 
 **这条路也可能是授权问题的出路** —— 若使用他们的预编译产物在条款上有障碍，
 自建引擎是合规替代。
