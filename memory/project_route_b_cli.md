@@ -1,6 +1,6 @@
 ---
 name: project-route-b-cli
-description: Route-B 定为唯一产品方案；fhpb CLI 覆盖 init/release/patch/verify/rollback/list/serve 全流程（2026-08-18）
+description: Route-B 定为唯一产品方案；fhpb CLI 全流程 + 发布护栏 + 换钥；私钥已公开待轮换（2026-08-18）
 metadata: 
   node_type: memory
   type: project
@@ -42,6 +42,20 @@ metadata:
 - **设备经网络下载 + inflate 增量：仍未验过**。本地无 inflate 实现，
   `fhpb verify` 只能验签名与 hash；且本机网络阻断设备→Mac 直连。
   这是唯一剩下的缺口，见 [[project-landing-plan]]。
+
+## 私钥已公开（必须处理）
+
+`ce6fada` 的 `tools/broute/keys/patch_private.pem` **已推送到公开仓库**
+`github.com/icodejoo/flutter_hot_patcher`。用户知情并决定 demo 阶段接受，
+**正式发布前必须 `tools/fhpb rotate-key --app-dir <工程>`**。
+`tools/broute/keys/` 现已 gitignore。
+
+## 换钥的两个反直觉点（实测，别凭想象）
+
+- `fhpb init --force` **换不了钥**（幂等，复用已有密钥），而且原来会**重新随机 app_id**
+  → 等于让线上设备全失联。已修：init 保留 app_id，换钥必须用 `rotate-key`。
+- 换钥后**必须重新发版**才生效：公钥编译进包。老版本设备只能用
+  `keys/retired/<时间戳>/` 的旧钥继续签，泄露场景下应停发并引导升级。
 
 ## 待办
 
