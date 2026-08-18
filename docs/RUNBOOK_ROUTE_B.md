@@ -22,7 +22,7 @@ SB=~/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98
 ```
 
 App 必须用 **Shorebird 的 Flutter SDK** 构建（`$SB/bin/flutter`）。
-X1 引擎不可用于产品，原因见 `docs/PRODUCTION_RELEASE.md`。
+补丁与基线必须同源，所以基线也必须用这套 SDK 构建 —— 这是本仓库唯一支持的组合。
 
 `fhpb` 需要 `cryptography`，缺时按它的提示建 venv：
 
@@ -195,7 +195,7 @@ bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 换钥 
 | `File offset must be page-aligned.` | `.vmcode` 头部未按 **16384** 对齐；确认用的是当前版 `tools/linker.py` |
 | `Patch signature is invalid` | `patch_public_key` 与签名私钥不配对；跑 `fhpb verify` 定位 |
 | link% 异常低 | 补丁 kernel 的编译参数与基线不一致，见上面 `FHP_PATCH_DILL` 那条 |
-| 设备连不上服务端 | 本环境（企业网络）会阻断设备→Mac 直连；调试时改用 USB 注入，见 `spikes/shorebird_route/e2e_device.sh` |
+| 设备连不上服务端 | 企业网络常会阻断设备→开发机直连。先在开发机上用 `curl` 打 `base_url` 自测；仍不通就绕开网络，把 `.vmcode` 直接推到设备的 更新器状态目录（布局见下节），验证补丁本身是好的。USB 注入脚本在研发分支 `route-a-research` 的 `spikes/shorebird_route/e2e_device.sh` |
 
 ## 密钥保管与换钥
 
