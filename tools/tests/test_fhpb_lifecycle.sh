@@ -78,6 +78,56 @@ grep -q "shorebird.yaml" "$APP/pubspec.yaml" && pass "init 挂进 pubspec assets
 "$PY" "$CLI" init --app-dir "$APP" --base-url "http://127.0.0.1:$PORT" --keys "$KEYS" >/dev/null 2>&1
 grep -q "^app_id: APP1" "$APP/shorebird.yaml" && pass "init 幂等，app_id 不变" || fail "重跑 init 换掉了 app_id"
 
+# --- 1b) 换钥 -------------------------------------------------------------------
+# init 是幂等的，换不了钥 —— 这是刻意的，换钥后果太重（必须重新发版）
+export PYTHONPATH="$REPO_ROOT/tools/broute"
+FP_BEFORE=$("$PY" -c "
+import hashlib,sys;print(hashlib.sha256(open('$KEYS/patch_private.pem','rb').read()).hexdigest())")
+"$PY" "$CLI" init --app-dir "$APP" --base-url "http://127.0.0.1:$PORT" --keys "$KEYS" --force >/dev/null 2>&1
+FP_AFTER=$("$PY" -c "
+import hashlib,sys;print(hashlib.sha256(open('$KEYS/patch_private.pem','rb').read()).hexdigest())")
+[ "$FP_BEFORE" = "$FP_AFTER" ] && pass "init --force 不动私钥（换钥要用 rotate-key）" \
+  || fail "init 意外换了私钥"
+# --force 只覆盖 yaml，绝不能顺带换掉 app_id
+grep -q "^app_id: APP1" "$APP/shorebird.yaml" \
+  && pass "init --force 保住 app_id（换掉=设备全失联）" || fail "--force 换掉了 app_id"
+
+# rotate-key 才真的换，且必须保住 app_id、同步 yaml 公钥、归档旧钥
+PK_BEFORE=$(grep "^patch_public_key:" "$APP/shorebird.yaml")
+"$PY" "$CLI" rotate-key --app-dir "$APP" --keys "$KEYS" >/dev/null 2>&1
+FP_ROT=$("$PY" -c "
+import hashlib;print(hashlib.sha256(open('$KEYS/patch_private.pem','rb').read()).hexdigest())")
+PK_AFTER=$(grep "^patch_public_key:" "$APP/shorebird.yaml")
+[ "$FP_AFTER" != "$FP_ROT" ] && pass "rotate-key 换了私钥" || fail "rotate-key 没换私钥"
+[ "$PK_BEFORE" != "$PK_AFTER" ] && pass "rotate-key 同步更新 yaml 公钥" || fail "yaml 公钥未更新"
+grep -q "^app_id: APP1" "$APP/shorebird.yaml" && pass "rotate-key 保住 app_id" || fail "换钥改了 app_id"
+[ -f "$KEYS/retired"/*/patch_private.pem ] 2>/dev/null \
+  && pass "旧钥已归档（老版本仍需它签补丁）" || fail "旧钥被丢弃了"
+
+# 换钥后旧签名必须验不过 —— 这正是换钥的意义
+"$PY" - "$KEYS" <<'PY'
+import base64, pathlib, sys
+sys.path.insert(0, __import__('os').environ['PYTHONPATH'])
+import cli
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
+keys = pathlib.Path(sys.argv[1])
+old = sorted((keys / "retired").iterdir())[-1] / "patch_private.pem"
+sig = cli.sign_hash("deadbeef", old)                      # 用旧钥签
+new_pub = base64.b64decode((keys / "patch_public_key.b64").read_text().strip())
+k = serialization.load_der_public_key(new_pub)
+try:
+    k.verify(base64.b64decode(sig), b"deadbeef", padding.PKCS1v15(), hashes.SHA256())
+    sys.exit(1)   # 新公钥竟然验过了旧签名
+except InvalidSignature:
+    sys.exit(0)
+PY
+[ $? -eq 0 ] && pass "旧钥签名在新公钥下验不过" || fail "换钥后旧签名仍有效"
+
+# 恢复给后续用例：app_id 必须仍是 APP1
+grep -q "^app_id: APP1" "$APP/shorebird.yaml" || fail "换钥流程污染了 app_id"
+
 # --- 2) release ----------------------------------------------------------------
 rel_run(){ "$PY" "$CLI" release --app-dir "$APP" --repo "$REPO" \
            --analyze-snapshot "$BIN/analyze_snapshot" --gen-snapshot "$BIN/gen_snapshot" "$@"; }

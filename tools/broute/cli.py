@@ -8,6 +8,7 @@
     fhpb patch     改完源码后生成、签名并发布一个补丁
     fhpb list      查看 release 与补丁状态
     fhpb rollback  下线某个补丁（设备下次 check 时卸载）
+    fhpb rotate-key 换签名私钥（旧钥归档；必须重新发版才生效）
     fhpb serve     起分发服务端
 
 补丁仓库布局（--repo）：
@@ -223,14 +224,17 @@ def cmd_init(a) -> int:
         pub = gen_keypair(keys)
         print(f"[init] 已生成密钥 {keys}（patch_private.pem 不要提交）")
 
-    app_id = a.app_id or str(uuid.uuid4())
+    # app_id 是设备取补丁的身份。换掉它 = 线上所有设备立刻失联，
+    # 所以 --force（意思是「覆盖这个 yaml」）绝不能顺带重新随机一个。
+    # 只有显式 --app-id 才换。
     yaml_path = app_dir / "shorebird.yaml"
-    if yaml_path.exists() and not a.force:
-        existing = yaml_path.read_text()
-        for line in existing.splitlines():
-            if line.startswith("app_id:"):
-                app_id = line.split(":", 1)[1].strip()
-        print(f"[init] {yaml_path.name} 已存在，沿用 app_id={app_id}（--force 可覆盖）")
+    existing_app_id = read_yaml_field(yaml_path, "app_id")
+    app_id = a.app_id or existing_app_id or str(uuid.uuid4())
+    if existing_app_id and a.app_id and a.app_id != existing_app_id:
+        print(f"[warn] app_id 由 {existing_app_id} 改为 {a.app_id}；"
+              "已安装的设备将再也收不到补丁。", file=sys.stderr)
+    elif existing_app_id:
+        print(f"[init] 沿用已有 app_id={existing_app_id}")
 
     channel_line = f"channel: {a.channel}\n" if a.channel else ""
     yaml_path.write_text(
@@ -252,6 +256,59 @@ def cmd_init(a) -> int:
           f"base_url         {a.base_url}\n"
           f"patch_public_key {pub[:32]}…\n\n"
           f"下一步：fhpb release --app-dir {app_dir} --repo <补丁仓库>")
+    return 0
+
+
+def cmd_rotate_key(a) -> int:
+    """换一把新的签名私钥。
+
+    `init` 是**幂等**的：已有密钥就复用，所以它换不了钥。换钥是独立动作，
+    因为后果比 init 重得多 —— 公钥编译在包里，换钥必须重新发版。
+    """
+    app_dir = pathlib.Path(a.app_dir).resolve() if a.app_dir else None
+    keys = pathlib.Path(a.keys).resolve()
+    old_priv = keys / "patch_private.pem"
+
+    if old_priv.exists():
+        # 旧钥不能直接删：还在网上的老版本包内嵌的是旧公钥，
+        # 要继续给它们发补丁就得用旧钥签。归档而不是丢弃。
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        retired = keys / "retired" / stamp
+        retired.mkdir(parents=True, exist_ok=True)
+        for name in ("patch_private.pem", "patch_public.pem", "patch_public_key.b64"):
+            if (keys / name).exists():
+                shutil.move(str(keys / name), str(retired / name))
+        print(f"[rotate] 旧密钥已归档到 {retired}")
+    else:
+        print(f"[rotate] {keys} 下没有现存密钥，直接生成新的")
+
+    pub = gen_keypair(keys)
+    print(f"[rotate] 已生成新密钥 {keys}")
+
+    if app_dir:
+        yaml_path = need(app_dir / "shorebird.yaml", "shorebird.yaml")
+        lines = yaml_path.read_text().splitlines()
+        out, replaced = [], False
+        for line in lines:
+            if line.startswith("patch_public_key:"):
+                out.append(f"patch_public_key: {pub}")
+                replaced = True
+            else:
+                out.append(line)
+        if not replaced:
+            out.append(f"patch_public_key: {pub}")
+        yaml_path.write_text("\n".join(out) + "\n")
+        # app_id 必须原封不动，否则等于把设备也一起换掉了
+        print(f"[rotate] 已更新 {yaml_path} 的 patch_public_key"
+              f"（app_id={read_yaml_field(yaml_path, 'app_id')} 未改动）")
+
+    print(f"\n新公钥 {pub[:40]}…\n\n"
+          "接下来必须做（顺序不能反）：\n"
+          "  1. 用新的 shorebird.yaml 重新构建并**发布一个新版本**到商店 —— \n"
+          "     公钥是编译进包的，不重新发版新钥不会生效\n"
+          "  2. 对新版本跑 fhpb release，之后的补丁用新私钥签\n"
+          "  3. 老版本的设备内嵌的还是旧公钥：要么用归档的旧私钥继续签，\n"
+          "     要么停止给老版本发补丁（旧钥若已泄露，应当停止）\n")
     return 0
 
 
@@ -734,6 +791,11 @@ def main() -> int:
                    help="写入 shorebird.yaml 的更新通道；构建期固定，缺省 stable")
     p.add_argument("--force", action="store_true", help="覆盖已有 shorebird.yaml")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("rotate-key", help="换一把新的签名私钥（旧钥归档）")
+    p.add_argument("--app-dir", default=None, help="同时更新它的 shorebird.yaml")
+    p.add_argument("--keys", default=str(REPO_ROOT / "tools/broute/keys"))
+    p.set_defaults(func=cmd_rotate_key)
 
     p = sub.add_parser("release", help="归档一个基线版本")
     p.add_argument("--app-dir", required=True)

@@ -12,6 +12,7 @@
 | `fhpb list` | 看 release 与补丁状态 |
 | `fhpb verify` | 按设备侧规则复核一个已发布的补丁 |
 | `fhpb rollback` | 下线某个补丁 |
+| `fhpb rotate-key` | 换签名私钥（旧钥归档，必须重新发版才生效）|
 | `fhpb serve` | 起分发服务端 |
 
 ## 前置
@@ -181,7 +182,7 @@ release 1.0.0+1   app_id=1111…   建于 2026-08-18T01:47:21+00:00
 
 ```bash
 bash tools/tests/test_broute_server.sh      # 协议一致性，9 项
-bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 协议兼容，43 项
+bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 换钥 + 协议兼容，50 项
 ```
 
 ## 排障
@@ -196,15 +197,47 @@ bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 协议�
 | link% 异常低 | 补丁 kernel 的编译参数与基线不一致，见上面 `FHP_PATCH_DILL` 那条 |
 | 设备连不上服务端 | 本环境（企业网络）会阻断设备→Mac 直连；调试时改用 USB 注入，见 `spikes/shorebird_route/e2e_device.sh` |
 
-## 密钥保管
+## 密钥保管与换钥
 
 签名私钥是**端上唯一的信任根** —— 拿到它就等于能给所有设备推任意可执行代码。
 
 - `tools/broute/keys/` 已加入 `.gitignore`，私钥权限 600
-- **本仓库 `ce6fada` 曾提交过一把私钥**（未推送到远端）。该密钥必须视为已泄露：
-  正式发布前务必 `fhpb init --force` 换一把新的，并重新构建 app
-  （公钥编译在包里，换钥必须重新发版）。彻底清除还需重写这段历史。
 - 生产环境应把私钥放在离线/KMS 中，不要落在开发机的仓库目录里
+
+### ⚠️ 本仓库的私钥已公开
+
+`ce6fada` 提交过一把私钥，且该提交**已推送到公开仓库**
+`github.com/icodejoo/flutter_hot_patcher`。这把钥匙必须当作已泄露 ——
+删除仓库也收不回来（GitHub 会索引、fork 会缓存）。
+
+当前处于 demo 阶段，尚无生产 app 内嵌该公钥，所以影响可控。
+**但在任何正式发布之前必须换钥。**
+
+### 换钥
+
+```bash
+tools/fhpb rotate-key --app-dir <你的工程>
+```
+
+它做三件事：把旧密钥归档到 `tools/broute/keys/retired/<时间戳>/`、
+生成新密钥对、把 `shorebird.yaml` 的 `patch_public_key` 换成新公钥。
+**`app_id` 原封不动** —— 换掉 `app_id` 等于让线上所有设备失联。
+
+> `fhpb init` 换不了钥。它是幂等的：已有密钥就复用。换钥后果太重
+> （必须重新发版），所以做成独立命令，不会被 `init` 误触发。
+> 同理 `init --force` 只覆盖 yaml，也不会重新随机 `app_id`。
+
+换钥后**必须**按顺序做完，否则新钥不生效：
+
+1. 用新的 `shorebird.yaml` 重新构建，并**发布一个新版本到商店**
+   —— 公钥是编译进包的，不重新发版，设备手里还是旧公钥
+2. 对新版本跑 `fhpb release`，此后的补丁用新私钥签
+3. 老版本的设备内嵌的仍是旧公钥。要继续给它们发补丁，只能用
+   `retired/` 里归档的旧私钥签；**若旧钥已泄露，应当停止给老版本发补丁**，
+   改为引导用户升级到新版本
+
+旧钥不会被删除就是为了第 3 步 —— 但泄露场景下它只是让你能有序收场，
+不是让你继续用。
 
 ## 验证边界（如实说明）
 
