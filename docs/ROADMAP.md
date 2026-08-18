@@ -101,7 +101,12 @@ GET  <download_url>            ← 可以是任意 CDN / 对象存储，无需�
 模拟器→原生逃逸（A2/A5/A7）、`analyze_snapshot --shorebird`（B2）、
 `Dart_ShorebirdLoadVmcode`（B4）。
 
-仍需：`CPUToSimulator` 等效物、去掉 A1 无条件强开、Transition 记账抽象、
+**C1 已完成**：`CPUToSimulator` 等效物 `SimBridge`（`~/dart/sdk` commit
+`348397748e8`），5 项单测通过，含「原生代码调用 vm_remap 出的 trampoline →
+进入模拟器 → 执行不可执行内存里的代码」这条承重链路。详见
+[SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md) §9。
+
+仍需：模板改由 `StubCodeCompiler` 提供（C2，iOS 必需）、去掉 A1 无条件强开、Transition 记账抽象、
 引擎侧接线（当前引擎从不调用 `Dart_ShorebirdLoadVmcode`，link table 从未填充）。
 
 **这条路也可能是授权问题的出路** —— 若使用他们的预编译产物在条款上有障碍，

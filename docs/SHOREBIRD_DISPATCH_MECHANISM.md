@@ -277,3 +277,59 @@ Shorebird 的 `WrapperAllocator` / `AllocateMetadata` 是照它做的，命名�
 - 三个固定 thunk（`0x76b02c` / `0x76b408` / `0x76a424`）的具体职责。
 - `Thread` 那 7 个偏移（`0x208`/`0x268`/`0x908`–`0x928`）对应哪些 stub 字段，
   需要用我们自己的 `Thread` 布局比对确定 —— 实现时按字段名选，不照搬偏移。
+
+## 9. 实现进展
+
+### C1：`SimBridge` —— CPU → Simulator 方向（**已完成，单测通过**）
+
+`~/dart/sdk` commit `348397748e8`。新增
+`runtime/vm/sim_bridge.{h,cc}` 与 `runtime/vm/shorebird_cpu_to_sim_test.cc`。
+
+给一个位于只读（补丁）映射里的目标地址，返回一个**原生可调用**的地址；
+调用它即进入模拟器执行该目标并返回结果。布局照 `FfiCallbackMetadata`：
+
+```
+[RX] 模板页   trampoline i:  adr x9, #0            ; 自身地址
+                             b   body
+             body:           x10 = x9 & ~(RegionAlignment()-1)
+                             x10 += EnterFnOffset()
+                             x11 = [x10]           ; 从 RW 半区取 helper 指针
+                             x4  = x9              ; 身份，作第 5 参数
+                             br  x11
+[RW] 数据页   [0]   uword  EnterSimulatorFromNative
+             [1..] uword  targets[TrampolinesPerRegion()]
+```
+
+模板经 `DuplicateRX`（即 `vm_remap`）复制，副本字节完全相同，
+身份与 helper 地址都由自身 PC 推出。
+
+**单测 5 项全过**，其中两项是承重的：
+
+- `NativeCallEntersSimulator` —— 真实原生代码通过普通 C 函数指针调用
+  remap 出来的 trampoline，落进模拟器，执行一段**不可执行内存**里的代码，
+  返回正确值
+- `ManyTrampolinesDistinct` —— 同一个 remap 区域里 4 个 trampoline
+  各自解析到自己的目标，坐实「机器码相同 + 按 PC 索引」这个设计
+
+A2 既有单测与上游 `DuplicateRXVirtualMemory` 均无回归。
+
+#### 过程中踩的三个坑（都是跑出来的，不是读出来的）
+
+1. **`constexpr` 变量不能在类体内调用本类的 `constexpr` 成员函数** ——
+   类在那里还不完整。改成 `constexpr` 函数即可，这也是
+   `FfiCallbackMetadata` 写成函数形式的原因。
+2. **`DuplicateRX` 按 `source->size()` 重映射** ——
+   把整个 template region（含 RW 半区）传进去，会把目标区域全部设成 R|X，
+   随后写 helper 指针就 bus error。模板必须只覆盖 RX 半区。
+3. **`LDR` 的 imm12 是 12 位缩放立即数**，最大可达 `4095*8 = 32760`，
+   而 `EnterFnOffset()` 是 32768 —— 直接编码会溢出到相邻字段，
+   生成一条完全不同的指令。`ASSERT` 在 release 构建是空操作所以没拦住，
+   崩溃 PC 恰好是 trampoline 自己的指令字节才暴露出来。
+   改用 `ADD imm12 lsl #12` + `LDR`，并换成 `static_assert`。
+
+#### 已知边界
+
+当前模板是**运行时写出来再 mprotect 成 RX** 的 —— macOS 允许，**iOS 不允许**。
+生产必须让模板来自已签名 `__TEXT` 里的代码，即一个 `StubCodeCompiler` stub，
+与 `FfiCallbackMetadata` 用 `StubCode::FfiCallbackTrampoline()` 的做法一致。
+这是下一个增量（C2）。
