@@ -327,9 +327,36 @@ A2 既有单测与上游 `DuplicateRXVirtualMemory` 均无回归。
    崩溃 PC 恰好是 trampoline 自己的指令字节才暴露出来。
    改用 `ADD imm12 lsl #12` + `LDR`，并换成 `static_assert`。
 
-#### 已知边界
+### C2：模板改由 `__TEXT` 提供（**已完成，单测通过**）
 
-当前模板是**运行时写出来再 mprotect 成 RX** 的 —— macOS 允许，**iOS 不允许**。
-生产必须让模板来自已签名 `__TEXT` 里的代码，即一个 `StubCodeCompiler` stub，
-与 `FfiCallbackMetadata` 用 `StubCode::FfiCallbackTrampoline()` 的做法一致。
-这是下一个增量（C2）。
+`~/dart/sdk` commit `36dfb368c43`。新增 `runtime/vm/sim_bridge_arm64.S`，
+删除运行时的 `EmitTemplateRX`。
+
+C1 的模板是运行时写出再 mprotect 成 RX 的 —— macOS 允许、**iOS 不允许**，
+所以 C1 只是宿主侧的验证载体。C2 把模板放进**已签名的 `__TEXT`**，
+这才是生产形态：全流程不再有任何一处写可执行内存。
+
+上游是从 `StubCodeCompiler` stub 取模板（`StubCode::FfiCallbackTrampoline`）。
+加进全局 stub 列表要给每个架构补桩、还会进快照，所以这里改用汇编文件
+（与我们树里既有的 `shorebird_sim_to_cpu_arm64.S` 同一做法）。机制无差别，
+模板只是「链接器放进 `__TEXT` 的代码」而不是 stub 对象。
+
+共享体按 PC 相对定位自己那份副本：
+
+```asm
+adr  x10, _SimBridgeTemplateStart   ; vm_remap 之后指向*本副本*的起始
+add  x10, x10, #8, lsl #12          ; -> RW 半区的 helper 槽
+ldr  x11, [x10]
+mov  x4, x9
+br   x11
+```
+
+`.align 14` 让模板落在 16 KB 边界，副本里的区域算术才依然成立；
+`EnsureTemplateLocked` 运行时断言对齐、RX 上界、以及汇编里写死的偏移
+与 `EnterFnOffset()` 一致。
+
+**核实过，不是靠测试通过推断的**：`_SimBridgeTemplateStart` 位于
+`__TEXT __text` 的 `0x100070000`，16 KB 对齐，反汇编确为预期的 `adr`/`b` 对，
+`_SimBridgeTemplateBody` 恰好在其后 16 KB（2048 × 8）。
+5 项 CPU→Sim 单测与 2 项 A2 单测全部通过。
+

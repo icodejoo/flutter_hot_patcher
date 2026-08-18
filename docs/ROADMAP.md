@@ -106,7 +106,10 @@ GET  <download_url>            ← 可以是任意 CDN / 对象存储，无需�
 进入模拟器 → 执行不可执行内存里的代码」这条承重链路。详见
 [SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md) §9。
 
-仍需：模板改由 `StubCodeCompiler` 提供（C2，iOS 必需）、去掉 A1 无条件强开、Transition 记账抽象、
+**C2 已完成**：模板改由已签名 `__TEXT` 提供（`36dfb368c43`），
+全流程不再写可执行内存，是 iOS 可用的形态。
+
+仍需：去掉 A1 无条件强开、Transition 记账抽象、
 引擎侧接线（当前引擎从不调用 `Dart_ShorebirdLoadVmcode`，link table 从未填充）。
 
 **这条路也可能是授权问题的出路** —— 若使用他们的预编译产物在条款上有障碍，
