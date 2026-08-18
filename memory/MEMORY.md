@@ -1,3 +1,4 @@
+- [Route-B CLI 全流程](project_route_b_cli.md) — 定案只走 Route-B；fhpb 覆盖 init/release/patch/rollback，真实 app 打包 PASS
 - [Shorebird 对齐任务现状](project_shorebird_alignment.md) — Task 1-6 完成 + OTA 真机验证 PASS，B-route Phase 1 PASS
 - [iOS 真机验证现状](project_ios_verification.md) — dart_dynamic_modules 被 mprotect 阻断，已转向 Shorebird 路线
 - [M4/M5+OTA全验证](project_m4_m5_progress.md) — A-route OTA E2E PASS（2026-08-11）但那是独立Dart embedder，非Flutter app；A-route已按规则1出局产品线

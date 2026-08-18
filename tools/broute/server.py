@@ -63,8 +63,9 @@ class Handler(BaseHTTPRequestHandler):
         app_id = req.get("app_id")
         rv = req.get("release_version", "")
         current = req.get("current_patch_number")
+        channel = req.get("channel") or "stable"
         print(f"[check] app_id={app_id} release={rv} current={current} "
-              f"platform={req.get('platform')} arch={req.get('arch')}")
+              f"channel={channel} platform={req.get('platform')} arch={req.get('arch')}")
 
         if APP_ID and app_id != APP_ID:
             # app_id 不匹配一律不下发，避免把补丁发给别的应用
@@ -77,8 +78,17 @@ class Handler(BaseHTTPRequestHandler):
                              "rolled_back_patch_numbers": []})
             return
 
-        latest = idx["patches"][-1]
         rolled = idx.get("rolled_back", [])
+        # 已下线的不能再下发；未标 channel 的旧条目按 stable 处理。
+        eligible = [p for p in idx["patches"]
+                    if p["number"] not in rolled
+                    and p.get("channel", "stable") == channel]
+        if not eligible:
+            self._json(200, {"patch_available": False,
+                             "rolled_back_patch_numbers": rolled})
+            return
+
+        latest = eligible[-1]
         if current is not None and current >= latest["number"]:
             self._json(200, {"patch_available": False,
                              "rolled_back_patch_numbers": rolled})

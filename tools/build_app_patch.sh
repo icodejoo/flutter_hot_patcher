@@ -61,12 +61,19 @@ BASE_DILL="${FHP_BASE_DILL:-$(find "$APP_DIR/.dart_tool/flutter_build" -name "ap
 
 mkdir -p "$OUT_DIR"
 
-echo "[0/5] base kernel -> base ELF"
-"$GEN_SNAPSHOT" --deterministic \
-    --snapshot_kind=app-aot-elf \
-    --elf="$OUT_DIR/base.aot" \
-    "$BASE_DILL"
-BASE_APP="$OUT_DIR/base.aot"
+# FHP_BASE_AOT：release 归档时已经产过并验过的 base ELF。直接复用可省一次
+# gen_snapshot，也保证补丁对的就是当初归档的那份基线（fhpb release 会传它）。
+if [ -n "${FHP_BASE_AOT:-}" ]; then
+    echo "[0/5] 复用已归档的 base ELF: $FHP_BASE_AOT"
+    BASE_APP="$FHP_BASE_AOT"
+else
+    echo "[0/5] base kernel -> base ELF"
+    "$GEN_SNAPSHOT" --deterministic \
+        --snapshot_kind=app-aot-elf \
+        --elf="$OUT_DIR/base.aot" \
+        "$BASE_DILL"
+    BASE_APP="$OUT_DIR/base.aot"
+fi
 
 # 复现 flutter 自己那串前端参数是不可靠的：它还会传 --no-link-platform、
 # --delete-tostring-package-uri、插件注册入口等，漏一个 link% 就会崩到个位数
@@ -95,7 +102,7 @@ fi
 "$DARTAOT" "$FRONTEND" \
     --sdk-root "$SDK_ROOT/" \
     --target=flutter \
-    "${DI_ARGS[@]}" \
+    ${DI_ARGS[@]+"${DI_ARGS[@]}"} \
     --no-print-incremental-dependencies \
     -Ddart.vm.profile=false -Ddart.vm.product=true \
     --delete-tostring-package-uri=dart:ui \

@@ -65,11 +65,19 @@ A-route（KBC 字节码），不属于产品路径 —— 该结论已在 `RESUL
 按设备更新器的真实协议实现（`third_party/updater/library/src/network.rs`、
 `cache/signing.rs`），非猜测。
 
-| 工具 | 职责 |
+整条链路收在一个 CLI 里（`tools/fhpb` → `tools/broute/cli.py`）：
+
+| 命令 | 职责 |
 |---|---|
-| `tools/broute/keygen.py` | RSA 密钥对；公钥填入 `shorebird.yaml` 的 `patch_public_key` |
-| `tools/broute/publish.py` | `.vmcode` → zstd bipatch 增量 + sha256 + RSA 签名 → 补丁仓库 |
-| `tools/broute/server.py` | `/api/v1/patches/check`、`/api/v1/patches/events`、下载端点 |
+| `fhpb init` | app_id + RSA 密钥对 + `shorebird.yaml` + pubspec asset；幂等 |
+| `fhpb release` | 归档基线（App/app.dill/base.aot/base.blob），并**当场用 gen_snapshot 验 kernel 同源** |
+| `fhpb patch` | 改动 → `.vmcode` → zstd bipatch 增量 + sha256 + RSA 签名 → 补丁仓库；补丁号自增、支持 `--channel` |
+| `fhpb verify` | 按设备侧规则复核：增量大小、签名验签、hash |
+| `fhpb rollback` | 下线/恢复某补丁；服务端立刻停发并把列表带给设备 |
+| `fhpb list` | release 与补丁状态 |
+| `fhpb serve` | `/api/v1/patches/check`、`/api/v1/patches/events`、下载端点 |
+
+`tools/broute/{keygen,publish}.py` 保留为旧入口，实现已统一到 `cli.py`，不再各写一份。
 
 操作手册：`docs/RUNBOOK_ROUTE_B.md`
 
@@ -147,6 +155,8 @@ Shorebird 的私有 dart-sdk 显然修了这一点。
 | 门 | 命令 | 状态 |
 |---|---|---|
 | 分发协议一致性 | `bash tools/tests/test_broute_server.sh` | PASS（9 项）|
+| 全生命周期语义 | `bash tools/tests/test_fhpb_lifecycle.sh` | PASS（27 项）|
+| 打包链路（真实 app） | `fhpb release` + `fhpb patch` | PASS（link% 100%，增量 9.1%）|
 | v02 工具链（Route-A，已归档但保留在 CI） | `bash tools/tests/test_inspect_patch.sh` | PASS |
 | 多函数补丁（Route-A） | `bash tools/tests/test_multi_function_patch.sh` | PASS |
 | 跨库 import（Route-A） | `bash tools/tests/test_import_patch.sh` | PASS |
