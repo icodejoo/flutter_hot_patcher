@@ -76,6 +76,11 @@ bash tools/tests/test_fhpb_lifecycle.sh   # 全生命周期 + 护栏 + 换钥，
 bash tools/tests/test_broute_server.sh    # 分发协议一致性，9 项
 ```
 
+## 待实现
+
+见 **[docs/ROADMAP.md](docs/ROADMAP.md)**：自建分发基础设施（服务器/云/CDN）、
+设备端网络下载验证、私钥轮换、`base_url` 护栏、Android 支持。
+
 ## 已知限制
 
 - 仅 iOS；Android 未实现

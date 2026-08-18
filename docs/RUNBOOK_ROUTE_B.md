@@ -138,6 +138,12 @@ tools/fhpb verify --repo /srv/patches --app-dir <你的工程>
 
 ## 起服务
 
+> ⚠️ **`fhpb serve` 是开发用服务端，不要直接上生产。**
+> 151 行，无 TLS、无鉴权、无限流、不支持 `Range`（断点续传会退化成整包重下）。
+> 生产部署方案见 [docs/ROADMAP.md](ROADMAP.md) §1 —— 要点是：
+> `check`/`events` 必须是你自己的服务，而**下载可以放任意 CDN**，
+> 因为设备会独立校验 sha256 与签名，CDN 无需可信。
+
 ```bash
 tools/fhpb serve --repo /srv/patches --port 8765 --app-id <你的 app id>
 ```
