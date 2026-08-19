@@ -467,3 +467,52 @@ CPUToSimulator::IsSimulating(pc)  ->  pc != boundary
 `TryLoadFromPatch` 成功加载 `.vmcode` 后，调用 `Dart_ShorebirdLoadVmcode`
 把 link table 交给 VM。**此前引擎从不调用它** —— 这正是之前 A/B benchmark
 上「打不打补丁都是 70–74 ns/迭代」的原因：逃逸机制从未启动。
+
+### 已确诊的缺陷：A2 逃逸实际上几乎从不触发
+
+`ShorebirdSimToCpu_BasicCall` 失败（期望 42 得到 21）。插桩后一次定位：
+
+```
+[A2] BLR dest=0x1040a42f8 table=1 icount=6 thr=0
+[A2] HIT but interrupts pending -> break
+```
+
+link table 命中了，但 `Thread::HasScheduledInterrupts()` 为真，走了这一段
+（`simulator_arm64.cc`，B3 的 GC safepoint 检查）：
+
+```cpp
+if (current_thr_b3 != nullptr && current_thr_b3->HasScheduledInterrupts()) {
+  break;  // Fall through to normal Simulator BLR handling below.
+}
+```
+
+**两个问题：**
+
+1. **`break` 的语义与注释相反。** 它在 `switch` 的 `case` 里，`break` 是
+   **跳出整个 switch**，不是"继续往下走正常 BLR 处理"。结果是这次调用被
+   **整个跳过** —— 被调函数从未执行，`x0` 保持传入值。测试报的
+   "expected 42 but was 21" 里的 21 正是那个原封不动的参数。
+
+2. **中断挂起不是罕见路径，是常态。** 在一个什么都没做的单测里、
+   第 6 条指令处就已经为真。也就是说 **A2 的逃逸在实际运行中几乎从不发生**。
+
+这解释了为什么之前的 A/B benchmark 上「打不打补丁都是 70–74 ns/迭代」——
+除了引擎从不调用 `Dart_ShorebirdLoadVmcode`（C5 已修）之外，
+即便 link table 填上了，逃逸也会被这个分支吃掉。
+
+#### 修复尝试与现状
+
+把 `break` 改成条件包裹、让中断挂起时落到正常的模拟 BLR
+（`set_pc(dest); set_register(LR, ret)`），结果**测试挂死**（超时 10 分钟）。
+说明「中断挂起时交给模拟器解释执行」这条路本身还有问题，不是换个控制流就能了事。
+已回退到已知状态，不留未经验证的改动。
+
+**这是当前最高优先级的待办**，排在真机 A/B 之前：逃逸不工作的话，
+真机上量到的数字无法解释。可能的方向（均未验证）：
+
+- 先处理挂起的中断再逃逸，而不是放弃逃逸
+- 判断该不该逃逸时根本不看 `HasScheduledInterrupts()` ——
+  逃逸目标是正常的 Dart AOT 代码，本来就会自己检查 safepoint，
+  且逃逸路径已经传了 THR 并装了 `SimulatorSetjmpBuffer`
+- 查清回退后为何会挂死：解释执行那段 C++ 编译出的原生代码时可能撞上
+  未实现指令

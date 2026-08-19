@@ -114,6 +114,10 @@ GET  <download_url>            ← 可以是任意 CDN / 对象存储，无需�
 - C4 混合栈执行模式记账（`SimTransition`）
 - C5 引擎接线：修好 `Dart_ShorebirdLoadVmcode` 在生产配置下的守卫，并让 `patch_cache.cc` 真正调用它
 
+**最高优先级**：A2 逃逸实际几乎从不触发（`break` 语义错误 + 中断常态挂起），
+已确诊未修复，详见 [SHOREBIRD_DISPATCH_MECHANISM.md](SHOREBIRD_DISPATCH_MECHANISM.md)
+末节。此项不解决，真机 A/B 的数字无法解释。
+
 仍需：去掉 A1 无条件强开、Transition 记账抽象、
 引擎侧接线（当前引擎从不调用 `Dart_ShorebirdLoadVmcode`，link table 从未填充）。
 
