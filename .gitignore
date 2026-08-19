@@ -7,6 +7,9 @@ tools/.venv/
 __pycache__/
 *.pyc
 
+# 自研 Dart VM fork 的离线备份 —— origin 是公开仓库，这些不能推上去
+/archive/
+
 # 补丁仓库与构建产物
 /srv/
 *.vmcode
