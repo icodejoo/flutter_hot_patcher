@@ -18,3 +18,6 @@ __pycache__/
 *.blob
 
 .DS_Store
+.claude
+.pytest_cache
+.tokensave
