@@ -113,13 +113,33 @@
       kind 7 是唯一不直接取名字的臂（先 `Disassembler::Disassemble` 再取名），已**直接查证**非靠排除法。
       ⚠️ **entry 流两个模型都实测 0/1380**：「每指令一个 `RawInstructionBits`」、
       以及「PP 加载换成 `ObjectPoolLoadIndex`」→ **流不是「每字一个 entry」**。
-- [ ] 任务 23：**解出 entry 流的构造（22 个 push 点）** ⬅️ **当前任务**
-      地址：`0x10019672c`..`0x100197540`（起点 `AccumulateRecursive`，明显不止一个函数被内联）。
-      已排除的候选（实测 0/1380，别重试）：每指令一个 raw；raw + pool-index。
-      未试的候选：开头带一个 `OffsetFromPayloadStart` 或 `CodeName`；
-      一条指令产生多个 entry；**只对被分类的形态产生 entry**（其余不进流）。
-      🎁 oracle 已就位：`probe_subgraph_hash.py` + 1380 个函数逐个验证，
-      且 `self_hash` 已证只依赖指令字节 → 可完全离线闭环。
+- [~] 任务 23：**entry 流已解到 253/1380** ✅ spike `2e4e01e`
+      `AccumulateRecursive` 开头 `sub x27, x24, x0`（= `pc - payload_start`）
+      再 `orr x24, x8, x27, lsl #32` → **Entry 就是一个 64 位寄存器：低半是 kind、高半是 value**，
+      这**独立印证了 kind 编号**（kind 1 确实是 `OffsetFromPayloadStart`）。
+      它把 entry push 进**三个** vector（`+0x40`/`+0x78`/`+0xb0`，间距 0x38 → 三个 `Hasher`），
+      其中 **`+0xb0` 被 `depth==0` 门控** → 这就是 `self_hash` 只算函数自身、
+      另两个累积整个 walk 的原因。
+      **三条规则（每条都是「取当前模型最小的错例 → 暴力搜出唯一修法 → 全量复测」）**：
+      | 模型 | 命中 |
+      |---|---:|
+      | 开头 `(1,0)` + 每指令 `(7, word)` | 77 |
+      | + 跳转：本地 `(5, target)`、外部 `(4, 序号)` | 190 |
+      | + PP 加载 `(2, 序号)`，并吃掉它的补齐 NOP | **253** |
+      🔑 **value 是「函数内的序号」不是真实索引** —— 暴力搜 `_printClosure` 得到 `(2,0)`
+      而它的池索引是 319。**这正是三轮前量到的跨快照稳定性的成因**
+      （两个闭包加载不同池槽却同 `self_hash`，因为都是各自的第 0 个）。
+      🔑 **PP 加载独占整个补齐 footprint** —— 没有任何单槽替换能修好 `_printClosure`，
+      加载 + 两个 NOP 塌成**一个** entry。
+      模型已存进 `probe_subgraph_hash.py`（不是写在文档里），下轮从 253 起步。
+- [ ] 任务 24：**补齐剩下三个 kind，把 253 推到 1380** ⬅️ **当前任务**
+      缺的是 `DispatchTableCall`(3) / `FieldTableLoadIndex`(6) / `IndirectStaticCall`(8)，
+      外加其它 PP 寻址形态（`ldp`/`stp` off PP、`add`+`ldr`、`movz`/`movk` 寄存器偏移型）
+      —— 它们现在都掉进 `RawInstructionBits` 了。
+      **方法已验证有效，照用**：取当前模型最小的错例 → 暴力搜单槽/多槽修法 → 全量复测。
+      🎁 `./probe_subgraph_hash.py` 直接跑出 `self_hash reconstructed exactly: N/1380`，
+      **这个数字就是判据**，每轮该涨。
+      ⚠️ 到 1380/1380 之后才谈实现进树（届时 `--dump_object_pool_link_data` 才有生产方）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -182,7 +202,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `a360547`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `2e4e01e`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
