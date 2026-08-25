@@ -26,19 +26,21 @@
       **修法就在猜的地方**：`SkipBackOverObjectPoolLoadPadding` 加在三个解码入口，
       **八个调用点一个都不用动**。`op_rewrite_check` 不再 BLOCKED，编辑器重新活了。
       详见下方任务卡。
-- [ ] 任务 14：**造一对真正不同的 base/patch，让生产路径上的 `nonidentity != 0`** ⬅️ **当前任务**
-      ⚠️ **我起草这条时先写错了一个前提，当场核实后改掉的**（任务 5 的教训第二次生效）：
-      原稿写的是「缺的是最后一根线，链接器的表还没交到 image writer 手里」。
-      **假的。** `image_snapshot.cc:599` 已经在读
-      `ShorebirdLinker::shared()->object_pool_mapping()`，`linker.cc:388` 已经在写它。
-      **线早就接上了。**
-      真正的缺口是**输入**：现有 fixture 的 base 与 patch 是近乎相同的程序
-      （`base.ct` 与 `patch.ct` 甚至逐字节相同），1421 项全部映射到自身，
-      所以生产路径上 `nonidentity` 恒为 0 —— 改写分支只有单测和任务 8 的
-      **合成** 映射（`mapping[i]=i+1`）覆盖过，**从没有一次是链接器自己算出来的映射**。
-      要做的是造一对真有差异的程序（加/删函数、改常量池内容），跑完整链路，
-      判据是 `nonidentity > 0` **且**改写后的快照能跑出正确输出。
-      ⚠️ 别用「没崩」当判据（任务 8 的教训）；⚠️ 验证要含 kernel 规模（任务 13 的教训）。
+- [x] 任务 14：**造一对真正不同的 base/patch，让映射不再是恒等** ✅ spike `e9223a4`
+      `g_insert.dart` + `op_real_mapping_check.sh`（`verify_all` 现 **9 项**）。
+      2321 个池访问、分布距离 592、四个阶段计数与他们逐行相同（backfill **19** 不是 16）。
+      ⚠️ **但它不取代 `op_aggregator_check`**，这是实测出来的，详见下方任务卡。
+- [ ] 任务 15：**给 `ImageWriter::Write` 的自校验一个会失败的机会** ⬅️ **当前任务**
+      任务 14 让改写分支第一次跑在真映射上，但**判据仍是「和他们的计数一样」**，
+      不是「改写后的字节是对的」。他们自带的那个 oracle（索引未变时重新汇编 +
+      逐字节自比，打 `Expected:`/`Actual:`）**只覆盖恒等站点**；
+      真正被改写的那 592 个站点**没有任何逐字节判据**。
+      要做的是：让编辑器在改写后**用自己的解码器把新字节读回来**，
+      确认读回的索引 == mapping 要求的索引，不一致就报错。
+      这是纯本地的不变量，不需要 base 快照，也不需要跑起来。
+      ⚠️ 动手前先核实前提：`grep -n 'Expected:' runtime/vm/shorebird/object_pool_editor.cc`
+      看现有自校验到底在哪个分支上，**别照着这段描述改**（任务 5/14 的教训）。
+      ⚠️ 判据必须是「把 mapping 改坏 → 变红」，不是「跑通了」。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -83,18 +85,21 @@ cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./verify_all.sh
 ## 📊 基线（2026-08-25 实测，非记账）
 
 ```
-verify_reproduction.sh     checked 24 artifact(s), 0 failure(s)
+verify_reproduction.sh     checked 28 artifact(s), 0 failure(s)
 dd_pass_check.sh           0 failure(s)
 dd_runtime_check.sh        0 failure(s)
 op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
 op_rewrite_check.sh        0 failure(s)
+op_real_mapping_check.sh   0 failure(s)
 run_vm_tests               143 passed
-8 ran, 0 failed, 0 skipped, 0 blocked
+9 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 7 个 harness 全部能正确报错（`7 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`d99ff81f8e7`（dart-sdk） / `d21d04d`（fhp-research）。
+`--self-test` 模式下 8 个 harness 全部能正确报错（`8 ran, 0 failed, 1 skipped`）。
+工作树 clean。HEAD：`d99ff81f8e7`（dart-sdk） / `e9223a4`（fhp-research）。
+⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
+不是新写了什么 —— **数字变了要能说出为什么**。
 ✅ **`op_rewrite_check` 的 BLOCKED 已解除**（任务 13 让补齐回到树上，编辑器重新活了）。
 
 **补齐现在是开着的**，所以每个 AOT 快照都比以前大：
@@ -515,6 +520,77 @@ gen_kernel 规模的段错误。**规模本身就是一个未被覆盖的维度�
 不写期望索引表；并且**调真的 `LoadWordFromPoolIndex` 并临时翻 `FLAG_precompiled_mode`**
 （同文件既有测试就是这么翻的），而不是在测试里重抄一遍它发什么。
 两条都在负控制下变红，不是摆设。
+
+## ✅ 任务 14 已完成（spike `e9223a4`）：真映射第一次跑起来，以及它**没有**证明的东西
+
+### 先把前提量出来，不凭记忆
+
+memo 上写着「1421 项全部映射到自身」。**这次是量的**：拿 `patch.dill` 对 `base.op`
+链接，1122 个不同的 PP 偏移**一个都没动**。恒等这件事从记账变成了实测。
+
+原因是 fixture 太温和：`c_body.dart` 只把 `x + 1` 改成 `x + 2`，
+`d_sig.dart` 只改签名，`b_shift.dart` 只加两行注释 —— **没有一个会挪动池的顺序**。
+
+### `g_insert.dart`：插在前面，后面全体位移
+
+新增一个带自己字符串常量的函数并在 `main` **开头**调用它，
+它贡献的池条目排在 `main` 原有条目之前 → 其后全部位移。
+这是真实补丁的常态形状，也是这里唯一一个映射非恒等的 fixture。
+
+```
+2321 个池访问；linked vs unlinked 分布距离 = 592
+四个阶段计数 606 / 0 / 13 / 1113 / 292 / 19   ← 与他们逐行相同
+```
+
+**backfill 19 而不是 16** —— 这个数字变了，说明各阶段确实被问了新问题，而我们答得和他们一样。
+
+### 两个判据，缺一不可
+
+| 判据 | 单独用会怎样 |
+|---|---|
+| 分布距离 > 0 | **错的映射也能过** |
+| 阶段计数 == 他们 | **退化 fixture 上人人都对**，等于没测 |
+
+self-test 喂退化 fixture（距离 0）→ 必须报失败。已实测。
+
+### 🔴 最重要的一条：**它不取代 `op_aggregator_check`，而且这是实测的**
+
+我本来以为「有了真程序 fixture，合成 fixture 就多余了」。**动手量了一下，反了**：
+
+```
+把投票权重 1.0/N 改成常数 1.0：
+  op_real_mapping_check   绿   ← 真程序 fixture 测不到
+  shorebird_info_check    绿
+  op_aggregator_check     红   ← 只有合成 fixture 测得到
+```
+
+原因和任务 1/2 记的是同一条：**真实程序里每个匹配组都是 1:1**，
+每个键只有一个候选，**权重从来不参与决定**。
+→ **真输入够到的是改写路径，够不到的是投票算术。** 两个检查测的是不相交的东西，
+已写进 `verify_all.sh` 的注释，免得下一个人当冗余删掉。
+
+⚠️ 这条同时是「负控制全绿要先确认补丁真的进去了」的正面例子：
+两个绿之所以可信，是因为**同一次构建里 `op_aggregator_check` 变红了**。
+只有两个绿的话，分不清「测不到」和「没编译进去」。
+
+### ⚠️ 仍然没有的东西：被改写的那 592 个站点没有逐字节判据
+
+他们自带的 `Expected:`/`Actual:` 自校验**只在索引未变时触发**，
+所以它覆盖的恰恰是**没被改写**的站点。真正改写过的字节，
+目前只由「阶段计数和他们一样」间接背书。→ 任务 15。
+
+### ⚠️ 链接产物**故意不执行**
+
+它的池访问指向 **base 快照**的槽位（这正是链接补丁的意义），
+单独跑没有意义。正确性靠的是与他们 `gen_snapshot` 的对照，不是「跑起来没崩」。
+
+### 顺手记两条环境坑
+
+- **`timeout` 在 macOS 上不存在**（要 `gtimeout`），照抄 Linux 写法会得到 `exit 127`，
+  长得像脚本失败。
+- 生成步骤写进 `dd_pipeline.sh` 之后**真的跑了一遍**（不是只读一遍），
+  产出的 `insert.{ct,op,dill}` 与手工那份**逐字节相同**。
+  「记录下来但从没被调用过的步骤」正是这个目录存在的理由。
 
 # 📖 关键参考文档（别重新推导）
 
