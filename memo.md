@@ -39,19 +39,24 @@
       装载路线与「直接比两侧池内容」都被**快照版本 hash 墙**挡死（双向实测），
       但映射可以**从代码里反推出来**：`op_real_mapping_check` 现在有第三个判据——
       **我们实际应用的映射与他们的逐条相同（1123 条，零分歧）**。详见下方任务卡。
-- [ ] 任务 17：**给 `analyze_snapshot` 补上 Shorebird 那组 flag** ⬅️ **当前任务**
-      本轮实测发现的真缺口：他们的 `analyze_snapshot --help` 列了
-      `--shorebird` / `--dump_object_pool_link_data` / `--dump_blobs` /
-      `--dump_object_pool` / `--dump_class_table` / `--disassemble` / `--no_pp_hash`，
-      **我们的 `--help` 一条都没有**。
-      ⚠️ **先核实再动手**（任务 5/14/15 的教训，本轮又生效一次）：
-      `--shorebird` **在源码里是有的**（`runtime/bin/analyze_snapshot.cc:28,226`），
-      只是没进 help 文本 → **不要重写它**，先 `grep` 清楚哪些真缺、哪些只是没写进 help。
-      🎁 **oracle 完备**：他们的 flag 描述串可以逐字节对照（`--help` 输出），
-      `--dump_object_pool` 的 JSON 形状也有他们的真实输出可比
-      （`{"object_pool_size","code_infos","pairs","entries"}`，entries 有 index/offset/code）。
-      ⚠️ 但**跨实现的产物无法互读**（版本 hash 墙），所以判据只能是
-      「同一份*我们自己的*快照，dump 出来的结构与他们的 schema 一致」+ flag 串逐字节相同。
+- [~] 任务 17：**`analyze_snapshot` 的 flag 面** —— 能做的那部分做完了，其余**依赖缺失**
+      ✅ `fbcefad7224` + spike `f989967`：`--shorebird` 补进 help（与他们逐字节相同），
+      新增 `analyze_snapshot_help_check.sh`（`verify_all` 现 **10 项**），
+      把「还差几个 flag」变成**每轮实测的数字**：7 documented / 14 lines withheld。
+      ⚠️ **另外六个不是懒得做，是缺子系统**（本轮查证）：
+      `--dump_object_pool_link_data` / `--no_pp_hash` 需要 **`op_subgraph_hash`**
+      （私有子系统，我们没有；`ObjectPoolLinkInfo::WriteToStream` **已实现且逐字节验证过**
+      → **缺的是生产方不是格式**）；`--dump_blobs` 需要四个 region 的**长度**，
+      而 `Dart_SnapshotAnalyzerInformation` 结构里根本没带。
+- [ ] 任务 18：**`subgraph_hasher`：先确认它到底是不是「两边都 0」的口径陷阱** ⬅️ **当前任务**
+      它现在是**唯一挡住 `--dump_object_pool_link_data` 的东西**，
+      而那个 flag 是整条 pipeline 对他们二进制的最后一处硬依赖
+      （`dd_pipeline.sh` 的 `.op` 文件目前只能由**他们的** `analyze_snapshot` 产出）。
+      ⚠️ **memo 符号表里 `SubgraphHasher` 记的是「他们 0 / 我们 0，已知口径陷阱」**——
+      **先把这条查清楚再动手**：0 可能是因为名字猜错，也可能因为它被内联。
+      判据：`op_subgraph_hash` 的值我们**已经能读到**（他们的 `.op` 文件里就是），
+      所以 oracle 是现成的——**给同一个函数算出同样的 40 字符 hash 就是对的**。
+      ⚠️ 先花少量时间确认可行性（任务 16 的做法），**够不到就写进挂起池转下一项**。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -109,11 +114,12 @@ shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
 op_rewrite_check.sh        0 failure(s)
 op_real_mapping_check.sh   0 failure(s)
+analyze_snapshot_help_check.sh 0 failure(s)
 run_vm_tests               143 passed
-9 ran, 0 failed, 0 skipped, 0 blocked
+10 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 8 个 harness 全部能正确报错（`8 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`8c9ae52a50d`（dart-sdk） / `463ba49`（fhp-research）。
+`--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
+工作树 clean。HEAD：`fbcefad7224`（dart-sdk） / `f989967`（fhp-research）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
 ✅ **`op_rewrite_check` 的 BLOCKED 已解除**（任务 13 让补齐回到树上，编辑器重新活了）。
@@ -143,7 +149,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 | `DDSlotMapping::` | 2 | 2 | 持平 |
 | `IndirectStaticCall` | 68 | 64 | ⚠️ 差 4，**未查证**（原始行数受 strip 影响，不可直接比）|
 | `groupBy` | 2 | 0 | ⚠️ **不是缺口**：我们的 `GroupBy` 是头文件模板，被内联 |
-| `SubgraphHasher` / `CascadeLimiter` / `ClassTableMapper` | 0 | 0 | ⚠️ 已知口径陷阱，两边 0 读不出结论 |
+| `SubgraphHasher` / `CascadeLimiter` / `ClassTableMapper` | 0 | 0 | ⚠️ 已知口径陷阱，两边 0 读不出结论。**但 `op_subgraph_hash` 这个能力我们确实没有**（任务 17 实测：它挡住了 `--dump_object_pool_link_data`）→ 任务 18 |
 
 → **除 `IndirectStaticCall` 待查外，不再有「一侧为 0」的私有子系统。**
 
@@ -715,6 +721,59 @@ patch[762]='rex'                    ->  base[762]='null'
 | 3 逐条映射 | **红：484 条不同**，且给出 `index 764: ours -> 766, theirs -> 765` |
 
 这条负控制花费为零——四份快照本来就在这个检查里生成。
+
+## 〜 任务 17 部分完成（`fbcefad7224` + spike `f989967`）：把「还差多少」变成一个数字
+
+### 核实前提救了这一轮
+
+任务卡写的是「我们的 `--help` 一条 Shorebird flag 都没有」——**症状对，结论会错**。
+`--shorebird` **在源码里是有的**（`analyze_snapshot.cc:28,226`，B2 就实现了），
+只是从没进过 help 文本。照着「补上 flag」去写就会重写一个已经能用的东西。
+
+### 做了什么
+
+补上 `--shorebird` 的三行 help（与他们**逐字节相同**），
+**没有**补另外六个——**help 里写一个 parser 会拒绝的 flag，比 help 短更糟**。
+
+新增 `analyze_snapshot_help_check.sh`：**拿他们的 `--help`，删掉那六个 flag 的块，
+要求剩下的与我们的逐字节相同**。
+
+```
+--help matches theirs with 6 unimplemented flag(s) removed
+(7 documented, 14 lines withheld)
+```
+
+✅ **判据刻意不是「我们的是他们的子集」**——子集判据在 help 为空时也通过。
+它是**重建 + 相等**，所以我们打印的每一行每轮都在跟他们对。
+✅ 实现掉一个 flag = 从脚本的 `MISSING` 列表里删掉它的名字 →
+检查会保留它的行并**变红，直到 help 也补上** —— 这正是「有人会发现 help 忘了更新」的时刻。
+
+### 🔴 尾随空格是契约的一部分，第一次跑就抓到了
+
+他们每行都补到 **76 列**，唯独 `Shorebird options:` 前的分隔行是**裸 `\n`**。
+我按「都补到 76」写，第一次跑就红了，diff 直接指出是第 11 行。
+✅ **一个会 strip 空白的检查会在这里放过错误的 padding，而 padding 恰恰是最容易写错的部分。**
+
+### 两个方向的负控制（都已还原）
+
+| 负控制 | 结果 |
+|---|---|
+| 清空 `MISSING` 列表（= self-test） | 红：列出 14 行我们没打印的 |
+| 把我们**打印的**某行挪一个空格 | 红：直接引出那一行 |
+
+✅ **self-test 只覆盖「我们少打印」这个方向**，第二个才覆盖「我们打印错了」。
+两个方向要分别测。
+
+### ⚠️ 另外六个 flag 是**依赖缺失**，不是没做
+
+| flag | 缺什么 |
+|---|---|
+| `--dump_object_pool_link_data`、`--no_pp_hash` | **`op_subgraph_hash`**。⚠️ 注意：`ObjectPoolLinkInfo::WriteToStream` **已实现且逐字节验证过** → **缺的是生产方，不是格式** |
+| `--dump_blobs` | 四个 region 的**长度**，`Dart_SnapshotAnalyzerInformation` 结构里没带 |
+| `--dump_object_pool` / `--dump_class_table` / `--disassemble` | JSON 生产方 |
+
+→ 这就是任务 18 的由来：`op_subgraph_hash` 是**整条 pipeline 对他们二进制的最后一处硬依赖**
+（`.op` 文件目前只能由他们的 `analyze_snapshot` 产出）。
 
 # 📖 关键参考文档（别重新推导）
 
