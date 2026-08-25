@@ -33,7 +33,8 @@
 | **Deserializer 的 Shorebird 面**（新，2026-08-24） | **大部分已实现**：`EntryPoints`(48B, ctor 逐条转写)、`WrapperForRunTarget` 两臂、`Stats`+`PrintShorebirdStats`、`instructions_type_{vm,app}` 闸门、`ReadIndirectStaticCallTable`。字段名与 ctor 参数表全部来自**他们引擎的 dSYM**（`Deserializer+0xc0..0xd8`）。⚠️**2026-08-25 实测订正：原记的三项「未做」全部已完成**——`WrapCode` 在 `app_snapshot.cc:817`（`1076a3598b6`，方法见 [[reference-dwarf-inline-call-lines]]）且**有真调用点**（:9943）；`InBaseSnapshot`/`UnwrapEntryPoint` 已实现并在 `shorebird_test.cc:541-588` 有单测。此行「未做」是活得比工作久的过期记账 |
 | **patch 加载链路**（新，2026-08-24） | 三个 C 入口已实现（`Shorebird_ReadLinkHeader`/`SetBaseSnapshots`/`UsingLinking`，`b283033b4df`）。🔑 **调用方是开源的**——引擎源码就在本机且 revision 匹配（`patch_cache.cc:39`、`shell/.../shorebird.cc:93`），这部分**不需要逆向**（规则 2）。⚠️**2026-08-25 实测订正：`shorebird_base_instructions_table_` 已建出**（`60cec3c40c2`，字段在 `app_snapshot.cc:1029`、接线在 :9336、`:9637` 打 no/yes），成功路径已进常设回归（`efa07a3774e`）|
 | Simulator / SimToCpu / SimBridge | 已移植到 3.12.2，`.o` 也确实生成了；`nm gen_snapshot` 为 0。⚠️**2026-08-24 订正：一半是找错了二进制**——wrapper/allocator 是**运行期**设施，本来就不该出现在 `gen_snapshot` 里；它在引擎里，`Flutter.framework` 有 `WrapperAllocator::AllocateMetadata()` @0x7d0728，被 `Deserializer::WrapperForRunTarget(LinkOracle::RunTarget)` 的两个 lambda 各调一次（反汇编实测只有这 2 处）。所以「接调用点」是**运行期**的事，且要先有 `LinkOracle`。**2026-08-24：已接上**（`1f836a400a6`），两个 allocator 挂在 `IsolateGroup` 上（他们的名字：`shorebird_cpu_to_sim_wrappers_`@0x8d0 / `shorebird_sim_to_cpu_wrappers_`@0x8d8） |
-| `Dart_ShorebirdLoadVmcode`、`analyze_snapshot --shorebird` | B2/B4 已移植 |
+| `Dart_ShorebirdLoadVmcode` | B2 已移植 |
+| `analyze_snapshot --shorebird` | 🔴 **「B4 已移植」曾是一句空账**（2026-08-25 实测订正）：它在树里、`--help` 里没有、而且**对我们自己的快照产出 0 个函数**——因为它遍历堆找 `Code`，而 bare-instructions AOT 下 app 函数根本没有独立 `Code` 对象。同一个二进制在上游默认模式下还会 **abort**（4 个无名 stub 撞 `UNREACHABLE`）。**现已真正可用**：改为枚举 `InstructionsTable`，我们的快照给出 **1589 个函数**，首条 `offset 128/size 44` 与他们逐字相同；`self_hash` 换成复刻算法后，与**他们的**哈希按 name+size 配对命中 **777/950**。⚠️ `subgraph_hash`/`op_subgraph_hash` **仍是 `self_hash`、仍然是错的**（需要模拟 callee walk）|
 | 真机 A/B：验证 C6 删掉 safepoint guard 后的安全性 | 未做，目前零实测 |
 
 **完成度以实测为准，不凭记账**（方法与逐项数字见 spike README「How much is actually
@@ -58,13 +59,19 @@ reproduced」）：两边 `nm -a | c++filt` 数各私有子系统的标志符号
 ⚠️ **口径说明**：我们的计数高于他们之处**不代表进展**——我们的构建未 strip、带 STABS 重复符号，他们的已 strip。只有「一侧为 0」是有意义的判据。
 ⚠️ 两条口径陷阱：`sim bridge` 与 `subgraph_hasher`/`cascade_limiter` 在此表里两边都是 0，
 前者是匹配串失效、后者在 `analyze_snapshot` 侧，**都不能读作「双方都没有」**。
+🔴 **2026-08-25 已换二进制实测，后者是真缺口**：在 `analyze_snapshot` 里
+`SubgraphHasher` **他们 12 / 我们 0**、`CascadeLimiter` **他们 18 / 我们 0**。
+**这是目前仅剩的两个「一侧为 0」的私有子系统**，且是同一块工作
+（`CascadeLimiter` 给 `SubgraphHasher` 的 walk 定界）。
+⚠️ 同批实测里 `sha1_`（他们 2 / 我们 0）**不是缺口**：我们有同功能的 `FhpSHA1Transform`，只是名字不同。
+**「一侧为 0」是必要条件不是充分条件——名字对不上也会给 0。**
 ⚠️ 曾按「已移植」记成 15–20%，实测发现那部分没进产物 —— **进度也要实测**。
 ⚠️ **第三条口径陷阱（2026-08-20）**：本表的「0」只能读作「产物里没有这个符号」，
 **不能读作「这段代码没被编译」**——`static` 函数被内联后，编译与没编译在 `nm` 里一模一样
 （`InvokeWithTHR` 就这样被我误判过）。要回答「有没有被编译」只能往 `#if` 块里插 `#error`，
 并对一个已知会编译的块做同样的阳性对照。
 
-私有子系统 **5/12** 有实质存在，其中 **2 个基本完成**（`linker.cc` 标志符号持平；stub 生成器 16/16 输出已逐字对比）、11 个 flag 完成 **10.5** 个（`print_shorebird_info` 的引擎半已实现，只剩 gen_snapshot 半等三阶段映射）、**16 个私有 stub 全部有真 body**（14 个是他们新增的；2 个是上游 stub——`ResumeInterpreter` 开箱即中 12/13，`Resume` 被 Shorebird 加了 18 条）。逐字节命中率：CallClangCode **38/38**、两个 Safepoint 各 72/73、RunDartOnCPU 80/87、CPU→Sim 60/68、ResumeOnSimulator 56/66、Resume 40/48、CallSimFromFfi 29/31、CallToRuntime 32/39、三个 Native 各 27/34、CallNativeThroughSafepoint 30/42、ResumeInterpreter 12/13、ResumeOnCPU 1/4、Sim→CPU 6/7。**所有不一致都只是 Thread 位移字段**——他们的 Shorebird 块在结构中部、我们只能追加，属结构性差异，不可关闭。
+私有子系统 **5/12** 有实质存在，其中 **2 个基本完成**（`linker.cc` 标志符号持平；stub 生成器 16/16 输出已逐字对比）、11 个 **gen_snapshot** flag 完成 **10.5** 个（`print_shorebird_info` 的引擎半已实现，只剩 gen_snapshot 半等三阶段映射；⚠️ **2026-08-25 订正：这个「11 个」只覆盖 `gen_snapshot`**——`analyze_snapshot` 那一组另有 7 个，我们实现了 4 个（`--shorebird`/`--out`/`--dump_class_table`，加上「文档化但按他们的样子刻意不注册」的 `--no_pp_hash`），还差 3 个：`--dump_object_pool`、`--dump_object_pool_link_data`、`--dump_blobs`，前两个卡在 `SubgraphHasher`；`--disassemble` 曾实现后**回退**，它撞上 VM 自己的同名 flag）、**16 个私有 stub 全部有真 body**（14 个是他们新增的；2 个是上游 stub——`ResumeInterpreter` 开箱即中 12/13，`Resume` 被 Shorebird 加了 18 条）。逐字节命中率：CallClangCode **38/38**、两个 Safepoint 各 72/73、RunDartOnCPU 80/87、CPU→Sim 60/68、ResumeOnSimulator 56/66、Resume 40/48、CallSimFromFfi 29/31、CallToRuntime 32/39、三个 Native 各 27/34、CallNativeThroughSafepoint 30/42、ResumeInterpreter 12/13、ResumeOnCPU 1/4、Sim→CPU 6/7。**所有不一致都只是 Thread 位移字段**——他们的 Shorebird 块在结构中部、我们只能追加，属结构性差异，不可关闭。
 → **实现约 36–42%**（2026-08-24 一轮内的多项落地；⚠️**这次上调的主要不是新面积，而是「原本就存在的东西现在接上了、并且真的在跑」**——DD 全链路、wrapper 子系统、patch 加载入口。三阶段映射与 base instructions 一行未动）（2026-08-24 两次重测：先是 `DDTableBuilder`/`DDSlotMapping::` 持平，再是 `IndirectStaticCallInstr::` 19/19 集合相同。**DD core 能被符号看见的部分现已全部持平**。⚠️ 旧注「不代表机制能跑、零符号的 IL pass 量不到、没有任何测试构造过这个类」**已全部作废**：IL pass 已实现（`b13e2a0d54e`，方法见 `reference_differential_flag_oracle`），该类有 5 个单测真正构造并执行它，**整条链路已端到端跑通**——1043 函数 / 1622 处间接调用点，输出完全正确）；逆向/oracle 约 **80–85%**。
 
 **读这个百分比之前，三条限定（缺一条就会读错）**
