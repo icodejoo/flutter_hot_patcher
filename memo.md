@@ -159,12 +159,24 @@
       pool / ext / field 都赢过各自的常数 0 与常数 1
       （1070 vs 777/614、535/254、1063/1012）→ 它们确实是序号。
       ✅ 五条规则也都做过扰动负控制：delta 分别 -277/-68/-141/-19/-5，**无死条款**。
-- [ ] 任务 26：**继续把 1070 推向 1380** ⬅️ **当前任务**
-      仍缺：`DispatchTableCall`(3)、`IndirectStaticCall`(8)，
-      以及其它 PP 寻址形态（`ldp`/`stp` off PP、`add`+`ldr`、`movz`/`movk` 寄存器偏移型）。
-      **方法（本轮验证过最有效的那个）**：对某一类错例，
-      **在多个函数上分别暴力解出该 entry 的值，再看答案分布** ——
-      分布是常数就是常数，是 0,1,2… 就是序号。**不要先猜公式再打分。**
+- [~] 任务 26：**entry 流 1070 → 1082/1380** ✅ spike `ce5adbb`
+      字段表还有**三指令形态**：`ldr xN,[THR,#off]` ; `add xM,xN,#imm` ; `ldar xD,[xM]`
+      （位移在 `add` 里，且 `ldar`/`stlr` 也算访问）。
+      🔴 **它第一次跑出「毫无变化」，我差点当成假设被证伪。**
+      规则是对的，错的是我的 `add` 匹配掩码用了 `0x7f800000` —— **把 bit 31 掩掉了，
+      于是永远匹配不上**。
+      ✅ **与 CLAUDE.md 里 `ldr [xN,#0x48]` 那次假红同型：
+      一个「不可能命中的判据」和一个「命中了但没发现东西的判据」，报告的字面结果一模一样。
+      假设产出「恰好零变化」时，先确认匹配器真的能匹配，再去信这个结果。**
+      ⚠️ 另测得：**剩下 310 个错例没有一个能靠「替换单个 entry」修好** → 剩下的全是多指令塌缩。
+- [ ] 任务 27：**继续把 1082 推向 1380** ⬅️ **当前任务**
+      仍缺 `DispatchTableCall`(3) 与 `IndirectStaticCall`(8)，以及其它多指令塌缩形态
+      （`ldp`/`stp` off PP、`add`+`ldr` 的池变体、`movz`/`movk` 寄存器偏移型）。
+      **方法（按有效性排序）**：
+      ① `python3 /tmp/it2.py [n]` 看第 n 小的错例 + 自动暴力搜（单槽/塌2/塌3）；
+      ② 对某一类，**在多个函数上分别解值再看分布**（任务 25 的教训）；
+      ③ **每加一条规则，先确认它真的被匹配到**（本轮教训）——
+      「零变化」优先怀疑匹配器，不要先怀疑假设。
       判据：`./probe_subgraph_hash.py` 的 `reconstructed exactly: N/1380`。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
@@ -228,7 +240,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `057b97f`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `ce5adbb`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
