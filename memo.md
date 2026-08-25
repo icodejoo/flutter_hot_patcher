@@ -15,11 +15,12 @@
 - [x] 任务 4：`LinkedValue<T>` ✅ `b85ebe6c36a`。不只是重命名 —— 类表现在携带完整 `ClassInfo`，
       步长 `0x70`、偏移 `+0x00/+0x38` 与他们一致；3 个 `static_assert` 钉住布局；负控制换序 → 9 红
 - [~] 任务 5：**已核实为「非缺陷」，不做**（理由见下方任务卡）
-- [~] 任务 6：接进 `ImageWriter::Write` —— **拆成了 6a/6b/6c，6a 已完成**
+- [x] 任务 6：接进 `ImageWriter::Write` —— **6a/6b/6c 全部完成**
   - [x] **6a 补齐前置**：三个池发射器路由到 `PadLoadStore` ✅ `eb17b43924d`。
         NOP 数 **0 → 4636**（他们 4598）。⚠️**这一条 memo 原本完全没记，是动手才发现的真依赖**
-  - [ ] **6b**：`ShorebirdLinker` 拥有 mapping 表（+0x28 槽）⬅️ **当前任务**
-  - [ ] **6c**：`ImageWriter::Write` 里的 walk 调 `ObjectPoolEditor::Edit`
+  - [x] **6b**：mapping 表落到 `ShorebirdLinker + 0x28` ✅ `66a46515eb5`（recon (c)5 的开放问题已关闭）
+  - [x] **6c**：`ImageWriter::Write` 调 `ObjectPoolEditor::Edit` ✅ 同一提交。
+        实测 **2324 个站点**走了他们的自校验且全过；⚠️**改写路径生产零覆盖**
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -68,7 +69,7 @@ run_vm_tests               137 passed
 7 ran, 0 failed, 0 skipped
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`eb17b43924d`（dart-sdk） / `9d5fb26`（fhp-research）。
+HEAD：`66a46515eb5`（dart-sdk） / `9d5fb26`（fhp-research）。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -240,7 +241,36 @@ memo 原来把任务 6 的依赖只写成「mapping 表所有者未定」。动�
 门控放在**三个调用点**而不是 `PadLoadStore` 内部，这样测试里刻意构造补齐 fixture
 的直接调用仍然有效。
 
-### 🔑 6b：mapping 表的所有者已定位
+### ✅ 6b/6c 已完成（`66a46515eb5`）
+
+**6b**：`gap1_`（+0x28，原注「类型未知，无任何已测函数访问」）就是 `object_pool_mapping_`。
+`InitializeWithObjectPoolLinkInfo` 现在保存 `LinkObjectPools` 的结果而不是丢弃它。
+`sizeof==0x88` 的 static_assert 确认该槽被正好填满。
+
+**6c**：`ImageWriter::Write` 在 `WriteText` **之前**遍历每个非 trampoline 的
+Instructions payload。位置是被迫的 —— 编辑是原地的，必须趁字节还在编译器手里。
+
+**实测（临时插桩，因为「构建通过」和「没报错」与「根本没跑」是同一种输出）**：
+```
+带 link data ：187 payload + 1589 payload，检测到 2324 个站点，ok=1
+不带 link data：无 mapping，钩子静默
+```
+→ **自校验路径在 2324 个真实站点上跑通**。这是他们那个免费 oracle：
+拿本编辑器的解码器与发射器，去对照同一批发射器在编译期产出的代码。
+**这是 `object_pool_editor.cc` 至今最强的证据。**
+
+⚠️ **改写路径生产零覆盖**：`nonidentity=0` —— 本 fixture 的 base 与 patch 是近乎相同的程序，
+1421 项全部映射到自身。改写只有单测覆盖。
+
+### 🔴 第一个负控制是恒等变换（第 19 种陷阱再次命中）
+
+反转 `AssembleReplacement` 的 kind-1 分支 → **什么都没变**。
+因为对 `ldr xN,[PP,#imm]`，`LoadFromOffset` 与 `LoadWordFromPoolIndex`
+**发射的是同一条指令**，两条臂在常见情形下一致。
+改成「拿 `op.index + 1` 去做自校验」才真正移动了字节 →
+`Expected:` / `Actual:` 触发、两个镜像 `ok` 都变 false。
+
+### 🔑（原记录）6b 的地址证据
 
 recon (c)5 记的是 `[[0x100521xxx + 0x4b0] + 0x28]` → `[x8]` → `x8[index]`，当时判为「未确定」。
 但 `linker.cc` 的注释里记着**他们的 ShorebirdLinker 单例指针就在 `0x1005214b0`** —— 两处是同一个地址。
