@@ -12,9 +12,11 @@
       ✅ 与任务 1 同一提交 —— 它们在同一个循环体里，拆开实现不了
 - [x] 任务 3：判别性合成 fixture ✅ `9d5fb26`。**他们的 gen_snapshot 报 8/7/0/121，我们逐行相同**；
       三个负控制各自把数字打歪（8/8/0/120、7/6/0/122、4/4/0/124）→ **任务 1/2 已从「转写的」升级成「验证过的」**
-- [ ] 任务 4：`LinkedValue<T>` 模板落地（目前用裸 `PoolIndexPair`）⬅️ **当前任务**
-- [ ] 任务 5：收紧 `object_pool_editor` 的两条软断言，修 kind-1/2 在 2²⁴ 之后的计数误读
-- [ ] 任务 6：把 `ObjectPoolEditor` 接进 `ImageWriter::Write`（依赖任务 1 产出 `mapping[]`）
+- [x] 任务 4：`LinkedValue<T>` ✅ `b85ebe6c36a`。不只是重命名 —— 类表现在携带完整 `ClassInfo`，
+      步长 `0x70`、偏移 `+0x00/+0x38` 与他们一致；3 个 `static_assert` 钉住布局；负控制换序 → 9 红
+- [~] 任务 5：**已核实为「非缺陷」，不做**（理由见下方任务卡）
+- [ ] 任务 6：把 `ObjectPoolEditor` 接进 `ImageWriter::Write` ⬅️ **当前任务**
+      依赖的 `mapping[]` 已由任务 1 产出 → **阻塞已解除**
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -63,7 +65,7 @@ run_vm_tests               137 passed
 7 ran, 0 failed, 0 skipped
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`ab58e28152d`（dart-sdk） / `9d5fb26`（fhp-research）。
+HEAD：`b85ebe6c36a`（dart-sdk） / `9d5fb26`（fhp-research）。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -180,19 +182,40 @@ size==1 过滤      ：4 / 4 / 0 / 124
 `nm` 给出实例 `vector<LinkedValue<ClassInfo>>` / `vector<LinkedValue<unsigned long>>`。
 元素序 `{base, patch}` 由 `mapping[second] = first` 证明。
 
-## 任务 5：`object_pool_editor` 的两个软点
+## ❌ 任务 5：**已核实为非缺陷，关闭**（2026-08-25 实测）
 
-1. **两条断言用了 `ASSERT` 而非 `RELEASE_ASSERT`** → release 构建里被编译掉，
-   `ObjectPoolEditor_CountFollowsPrepareLargeOffset` 在 product 里什么都不守。
-2. **kind-1/2 在 offset 2²⁴ 之后计数分歧**：发射器 3、计数器 2，
-   **这是我们自己读错了折叠 ladder**（recon 里那段），不是他们的 bug。
-3. kind-3 index 62：发射器 2、计数器 3 —— 尚未定性，先查清再动。
+原任务卡的三条，逐条查证的结果：
 
-## 任务 6：接进 `ImageWriter::Write`
+1. ~~「两条断言用了 `ASSERT` 而非 `RELEASE_ASSERT` → release 被编译掉」~~ **前提错误**。
+   钉住那两处分歧的是 `ObjectPoolEditor_CountFollowsPrepareLargeOffset` 里的
+   **`EXPECT_EQ`**，而 `EXPECT` 系列是无条件的 `dart::Expect(...)` 调用
+   （`platform/assert.h:358`），**不是 `ASSERT`，release 下不会被编译掉**。
+   我此前把「测试里的断言」与「`PadLoadStore` 里的 `ASSERT`」混为一谈了。
+2. `PadLoadStore` 里确实有两个 `ASSERT`，但 `assembler_arm64.cc:1077-1081`
+   **已经写明了为什么刻意不用 `RELEASE_ASSERT`**：那个等式在本树里不成立，
+   「一个已知为假的检查比没有检查更糟」。**这是已论证的决定，不是待办。**
+3. kind-1/2 在 2²⁴ 的计数分歧：`OBJECT_POOL_EDITOR_RECON.md:404` 明确指示
+   **「不要重新推导那个内联 ladder；六种 kind 全部调用我们已有的
+   `InstructionCountForLoadStoreFromOffset`，常量折叠是编译器产物」**。
+   我们当前实现正是如此。
+
+⚠️ **仍然成立的一个真实分歧，但不可达**：他们内联的 ladder 在 offset `2²⁴` 给 3，
+我们测量 `PrepareLargeOffset` 得 2 → 该处我们的编辑器会**拒绝**改写而不是改写它。
+后果是安全的（自检拦下），且 offset 2²⁴ 需要 **2097150 条 pool 条目（16MB 对象池）**，
+真实 app 差几个数量级。**记为已知、已被测试钉住、不可达的偏差，不追。**
+
+✅ **方法论**：任务卡上的「待修项」在动手前要先核实前提。这一条的三项里有两项
+是我自己早先记错，如果照着改会**引入**问题（把一个已知为假的断言升级成 release 断言）。
+
+## 任务 6：接进 `ImageWriter::Write` ⬅️ **当前任务，阻塞已解除**
 
 唯一生产调用方是**上游** `dart::ImageWriter::Write`（`image_snapshot.cc`，我们本来就有这个文件）。
 全 `__text` BL 扫描 13 处，其中 10 处在其体内。
-**依赖**：那个循环要读 old→new 索引映射表 = 任务 1 产出的 `mapping[]`。**任务 1 不完成做不了。**
+
+**原阻塞**：那个循环要读 old→new 索引映射表，而「该表的所有者未定」。
+**现已解除**：`ComputeObjectPoolMapping` 就是它的生产者，任务 1/3 已把它验证到
+与他们逐行相同。`ObjectPoolEditor::Edit` 的签名已经收 `mapping.data()` + size
+（见 `object_pool_editor_test.cc` 里的 `IdentityMapping`），接口是对得上的。
 
 🎁 **他们自带 oracle**：`ImageWriter::Write` 在索引未变时会重新汇编并逐字节自校验，
 打印 `"Expected:\n"` / `"Actual:\n"`（两串在二进制里各恰好 1 次，已验）。
