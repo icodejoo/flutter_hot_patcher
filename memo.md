@@ -254,16 +254,37 @@
       **那是检查工作正常，不是扰动**。所以 self-test 改成损坏一个字节，
       它只证明「比较能发现差异」，不证明 dump 内容对。**这条检查靠正面结果立身。**
       负控制：发射 `cid+1` → 变红并引出差异条目。
-- [ ] 任务 32：**`--disassemble`** ⬅️ **当前任务**
-      四个缺口里唯一**不依赖 `op_subgraph_hash`** 的那个（另外三个都依赖，见任务 30/31）。
-      他们的描述：`Include disassembly in the JSON output. Off by default.`
-      ⚠️ **先核实再动手**（这一族教训已生效五次）：
-      `grep -n "DumpCode\|Disassembler" runtime/vm/analyze_snapshot_api_impl.cc` ——
-      `SnapshotAnalyzer::DumpCode` 已经存在（`analyze_snapshot_api_impl.cc:292/359`），
-      **很可能又是接线而不是新写**。先确认它现在往 JSON 里放什么。
-      🎁 判据同上：拿他们 `--disassemble --shorebird --out=` 的输出当契约；
-      注意**反汇编文本可能含地址**，那就不是布局无关的，
-      **届时判据要退成 schema 比对 + 我们自己的自洽性**，别硬追逐字节。
+- [~] 任务 32：**`--disassemble` 未实现（已回退），但挖出两个更重要的既有 bug**
+      本轮**没有代码留下**——写的实现回退了，因为它撞上一个**先于我的改动就存在**的崩溃。
+      ① 🎁 **契约已拿到**：`--disassemble` **只影响 `--shorebird` 那份 JSON**
+      （对普通 `--out` 逐字节无差别），给每个函数加一个 `disassembly` 字符串数组，
+      用 Dart 自己的反汇编文本格式（`r0`/`thr`/`tmp`，且**跳转是相对位移** `bl +100`）。
+      → **相对位移意味着它与布局无关**，将来实现后**可以像类表那样逐字节对**。
+      ② 🔴 **既有 bug A：`--disassemble` 会让我们的 `analyze_snapshot` 段错误。**
+      原因是**名字冲突**：VM 自己就有 `disassemble` flag（`flag_list.h:30,37`），
+      我们的 bin 不消费它，它就落到 `Dart_SetVMFlags` 打开 VM 的反汇编，然后崩。
+      ⚠️ **我差点把这个记成「我的实现有 bug」**——回退后**在 HEAD 上重跑仍然 139**，
+      才确认它先于我的改动存在。**回退不只是撤销，它也是一次判据。**
+      ③ 🔴 **既有 bug B（更重要）：`--shorebird` 在我们自己的快照上产出 0 个函数。**
+      10 次运行全部 exit 0、全部 175 字节、`functions: []`；他们同一模式在他们快照上是 **1380**。
+      ⚠️ **`verify_all` 11 项全绿**——因为**没有任何一项检查跑过「我们的 analyze_snapshot
+      在我们自己的快照上的 `--shorebird`」**。`verify_reproduction` 比的是 gen_snapshot 的产物。
+      **这是检查矩阵的一个洞，不是运气。**
+      ⚠️ 另外实测：我们的 `--shorebird` JSON 本来就是**简化占位**
+      （三个哈希都填同一个值、多个数组恒空，源码注释写着 "simplified"）。
+      CLAUDE.md 里「`analyze_snapshot --shorebird` B2/B4 已移植」**要按此订正**：
+      它在树里，但**产不出东西**。
+- [ ] 任务 33：**修 `--shorebird` 的 0 函数** ⬅️ **当前任务**
+      它挡着 `--disassemble`（没有函数就没有东西可反汇编），
+      而且它本身是被当成「已移植」记了很久的东西。
+      入口：`runtime/vm/analyze_snapshot_api_impl.cc` 的 `CollectAllCodes(ig, base, codes)`。
+      ⚠️ **先确认它为什么空**：是遍历方式不对、还是 `vm_isolate_instructions` 基址不对
+      （`Dart_DumpClassTableAsJson` 走的是完全不同的路径且工作正常，可作对照）。
+      🎁 **判据现成**：他们在他们快照上是 1380；我们在**同一程序**的快照上也该是 1380，
+      且 `offset`/`size` 应能对上（`probe_subgraph_hash.py` 就是靠这两个字段取指令字节的）。
+      ✅ **修好后立刻补一条检查**——本轮已证明这个洞存在于检查矩阵里。
+      ⚠️ 再动 `--disassemble` 之前先解决 bin/VM 的 `disassemble` 名字冲突：
+      他们的 bin **确实消费了它**（他们不崩且能出数组），所以冲突是可解的。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
