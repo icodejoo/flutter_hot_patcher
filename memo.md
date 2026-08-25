@@ -104,16 +104,22 @@
       但**「字符串表顺序 = 枚举顺序」被 `Hash()` 的 switch 证伪**
       （它的 `==7` 臂走的是 `Disassembler::Disassemble`，不是取名字）。
       **把看起来合理的表写进实现就是编造**，所以留空。
-- [ ] 任务 22：**解出 kind 编号 + 每个 kind 的 value** ⬅️ **当前任务**
-      两件事，都有确切地址，见 `fhp-research/.../SUBGRAPH_HASHER_RECON.md`：
-      ① **kind 编号**：老实解 `Hash()` 在 `0x1001960ac` 的那个 switch
-      （`<=3 / <=5 / ==6 / ==8 / ==7 / default`，注意 `==7` 臂是反汇编路径不是取名）。
-      ② **每个 kind 的 value 与触发它的指令形态**：22 个 push 点，
-      全在 `0x10019672c`..`0x100197540`（起点是 `AccumulateRecursive` 但明显不止一个函数被内联进去）。
-      🎁 **oracle 已就位且很强**：`probe_subgraph_hash.py` 能对 1380 个函数逐个验证；
-      而且 `self_hash` **只依赖指令字节**（已证），所以这一条可以**完全离线闭环**，
-      不需要 subgraph 那两个先解出来。
-      ⚠️ 先做 ①，它便宜且 ② 依赖它。够不到就转下一项。
+- [~] 任务 22：**kind 编号已解出（①完成）；entry 流未解（②未完）** ✅ spike `a360547`
+      跟着 `Hash()` 在 `0x1001960ac` 的 switch 逐臂追到它加载的字符串：
+      | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+      |---|---|---|---|---|---|---|---|---|
+      | `CodeName` | `OffsetFromPayloadStart` | `ObjectPoolLoadIndex` | `DispatchTableCall` | `ExternalBranchTargetIndex` | `LocalBranch` | `FieldTableLoadIndex` | `RawInstructionBits` | `IndirectStaticCall` |
+      🔴 **果然不是字符串表顺序** —— 上一轮如果按「看起来合理」的表写下去，**九个里错五个**。
+      kind 7 是唯一不直接取名字的臂（先 `Disassembler::Disassemble` 再取名），已**直接查证**非靠排除法。
+      ⚠️ **entry 流两个模型都实测 0/1380**：「每指令一个 `RawInstructionBits`」、
+      以及「PP 加载换成 `ObjectPoolLoadIndex`」→ **流不是「每字一个 entry」**。
+- [ ] 任务 23：**解出 entry 流的构造（22 个 push 点）** ⬅️ **当前任务**
+      地址：`0x10019672c`..`0x100197540`（起点 `AccumulateRecursive`，明显不止一个函数被内联）。
+      已排除的候选（实测 0/1380，别重试）：每指令一个 raw；raw + pool-index。
+      未试的候选：开头带一个 `OffsetFromPayloadStart` 或 `CodeName`；
+      一条指令产生多个 entry；**只对被分类的形态产生 entry**（其余不进流）。
+      🎁 oracle 已就位：`probe_subgraph_hash.py` + 1380 个函数逐个验证，
+      且 `self_hash` 已证只依赖指令字节 → 可完全离线闭环。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -176,7 +182,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `5a1585f`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `a360547`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
