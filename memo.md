@@ -236,18 +236,34 @@
       （含经池的调用与 dispatch 调用）、`AccumulateRecursive` 的深度界、`CascadeLimiter`。
       **这是与逐指令模型完全不同、且大得多的一块工作。**
       **1185/1380 不是「凑整停下」，而是逐字节局部方法的真实终点。**
-- [ ] 任务 31：**转向未被阻塞的 `analyze_snapshot` flag** ⬅️ **当前任务**
-      ⚠️ **这是一次刻意的范围调整，不是放弃**：SubgraphHasher 的状态已完整落盘
-      （`SUBGRAPH_HASHER_RECON.md` + `probe_subgraph_hash.py` 跑出 1185/1380），
-      随时可续；但它接下来的每一步都要先建 walk 模拟器，**性价比明显低于下面这些**。
-      **不需要 SubgraphHasher 的 flag（help 缺口 5 → 可降到 2）**：
-      ① `--dump_class_table`：类表转 JSON。我们已有完整 `ClassTableLinkInfo` 相关设施。
-      ② `--disassemble`：把反汇编加进 JSON。我们有 `Disassembler`。
-      ⚠️ 仍被阻塞的：`--dump_object_pool`（它的 `code_infos` 要三个哈希）、
-      `--dump_object_pool_link_data`（同）、`--dump_blobs`（要四个 region 的长度）。
-      ⚠️ **先核实再动手**（这一族教训已经生效四次）：动手前先
-      `grep -n 'Dart_DumpClassTable\|Dart_DumpObjectPool' runtime/` 看我们有没有已有实现。
-      判据：`analyze_snapshot_help_check.sh` 的 withheld 数下降 + 它的 self-test 仍能报错。
+- [x] 任务 31：**`--dump_class_table` 已实现，且与他们逐字节相同** ✅ `734abc41d10` + spike `7e81769`
+      `619 cids / 529 classes`，`cmp` 干净。**help 缺口 5 → 4。**
+      ✅ **它小，是因为它是「接线」不是「新写」**：`GetClassTableLinkInfo` 早就在走活 isolate
+      的类表并产出 `{id,name,hash}`，而我们的
+      `--print_class_table_link_debug_info_to` **恰好就是他们 `--dump_class_table` 的 schema**；
+      哈希也早就已知与他们一致（`print_class_table_link_info_to` 逐字节相同）。
+      实际工作只是：给已有 JSON writer 加个 buffer 变体、加 API 入口、接 flag。
+      ✅ **动手前先查了 `vm_sources.gni`**：`link_info.cc` 无 `DART_PRECOMPILED_RUNTIME` 门控，
+      本来就在 analyze_snapshot 所属的 AOT 运行时里。**若不在，这就是完全另一个量级的改动。**
+      🔑 **新增 `class_table_dump_check.sh`（`verify_all` 现 11 项）**：
+      拿**我们对我们快照**的 dump 比**他们对他们快照**的 dump，要求逐字节相同 ——
+      这在这里成立，是因为类表 dump **不含任何依赖布局的东西**；
+      也是唯一可行的比法（两边 analyze_snapshot 互相读不了对方的快照）。
+      ⚠️ **self-test 明确比检查本身弱，头注释已写明**：最自然的扰动（改用 `insert.dill`）
+      **产出逐字节相同的 dump** —— 因为 `g_insert.dart` 只加函数不加类，
+      **那是检查工作正常，不是扰动**。所以 self-test 改成损坏一个字节，
+      它只证明「比较能发现差异」，不证明 dump 内容对。**这条检查靠正面结果立身。**
+      负控制：发射 `cid+1` → 变红并引出差异条目。
+- [ ] 任务 32：**`--disassemble`** ⬅️ **当前任务**
+      四个缺口里唯一**不依赖 `op_subgraph_hash`** 的那个（另外三个都依赖，见任务 30/31）。
+      他们的描述：`Include disassembly in the JSON output. Off by default.`
+      ⚠️ **先核实再动手**（这一族教训已生效五次）：
+      `grep -n "DumpCode\|Disassembler" runtime/vm/analyze_snapshot_api_impl.cc` ——
+      `SnapshotAnalyzer::DumpCode` 已经存在（`analyze_snapshot_api_impl.cc:292/359`），
+      **很可能又是接线而不是新写**。先确认它现在往 JSON 里放什么。
+      🎁 判据同上：拿他们 `--disassemble --shorebird --out=` 的输出当契约；
+      注意**反汇编文本可能含地址**，那就不是布局无关的，
+      **届时判据要退成 schema 比对 + 我们自己的自洽性**，别硬追逐字节。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -306,12 +322,13 @@ op_aggregator_check.sh     0 failure(s)
 op_rewrite_check.sh        0 failure(s)
 op_real_mapping_check.sh   0 failure(s)
 analyze_snapshot_help_check.sh 0 failure(s)
+class_table_dump_check.sh  0 failure(s)
 run_vm_tests               143 passed
-10 ran, 0 failed, 0 skipped, 0 blocked
+11 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `b1439cd`（fhp-research）。
-`analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
+`--self-test` 模式下 10 个 harness 全部能正确报错（`10 ran, 0 failed, 1 skipped`）。
+工作树 clean。HEAD：`734abc41d10`（dart-sdk） / `7e81769`（fhp-research）。
+`analyze_snapshot` help 缺口：**4 个 flag**（任务 17 是 6、任务 18 是 5）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
 ✅ **`op_rewrite_check` 的 BLOCKED 已解除**（任务 13 让补齐回到树上，编辑器重新活了）。
