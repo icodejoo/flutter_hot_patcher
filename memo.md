@@ -72,13 +72,34 @@
       ✅ **方法上值得留的一条：比「划分」，不要比「摘要」。**
       框架未知 ⇒ 任何候选都算不出摘要；但「这两个函数 hash 相同」与框架无关，
       照样可观测。①-④ 全靠这个才够得到。
-- [ ] 任务 20：**反汇编 `Hasher::Hash()` @ `0x100195fb8`（1756 字节）** ⬅️ **当前任务**
-      **经验路线已穷尽**（任务 19 实测：所有候选框架给出同一个划分），只剩反汇编。
-      地址与全部已知事实见 `fhp-research/.../SUBGRAPH_HASHER_RECON.md`，**别重新推导**。
-      要解的就一件事：**喂进 SHA-1 的到底是什么**（长度前缀？逐指令？种子？`Entry` 是什么？）。
-      🎁 解出框架后，①-④ 已经把归一化给出来了，`self_hash` 应该当场可验（1380 个逐个对）。
-      ⚠️ 量级同 `object_pool_editor`（那次是 4 个函数 / 多轮）。
-      ⚠️ 每轮先确认还够得到，**够不到就写进挂起池转下一项**（任务 16 的做法）。
+- [x] 任务 20：**SHA-1 的框架已解出** ✅ spike `848c903`（反汇编 `Hasher::Hash()`）
+      ```
+      self_hash = SHA1( 对每个 Entry: le32(e.first) ‖ le32(e.second) )
+      ```
+      **不是对指令字节做哈希**——这就是上一轮 `sha1(bytes)` 全 0 的原因。
+      证据全来自反汇编：`vector<Entry>` 在 `this+0x18`，
+      `count=(end-begin)>>3` → **`sizeof(Entry)==8`**；
+      `ldp w25,w24,[x21,#-0x4]` 一次读两个 int32；
+      每个字段**逐字节小端**喂入（`strb` / `lsr #8` / `#16` / `#24`）；
+      每字节 index 加一，等于 `0x40` 就调 `sha1_transform` 并把位计数加 `0x200`。
+      **标准 SHA-1、无自定义种子**：`0x100266a50` 处 32 字节 = 标准 IV + K0..K2，
+      K3(`0xca62c1d6`) 由函数头的 `mov/movk` 给出（读常量时**做了对照**：
+      先确认已知指令地址在同一 file-offset 映射下解码正确）。
+      ⚠️ **ABI 陷阱复发并已记录**：`Hash()` 返回 `std::string` → **sret，`x1` 才是 `this`**，
+      把 `x0` 当 `this` 会让整个函数的偏移全错。
+      🔑 **它同时改写了上一轮的说法**：所谓「归一化」**从来不是字节掩码**——
+      PP 位移与跳转目标不进摘要，是因为**没人把它们放进 `Entry`**，不是被掩掉了。
+- [ ] 任务 21：**恢复 entry 流：`Entry` 的 kind 与 value 到底是什么** ⬅️ **当前任务**
+      `Entry = {int32 kind; int32 value}`，kind 至少 0..8
+      （log 分支用 `<=3 / <=5 / ==6 / ==7 / ==8 / default` 分派）。
+      **两条路，先走便宜的那条**：
+      ① 🎁 **他们自带日志**：`Hash()` 里有一条被 `this+0x30` 的 bool 门控的分支，
+      会把每个 entry 格式化后经 `dart::Log` 打印出来。**打开它就是 ground truth，不是解读。**
+      门控很可能是 `SubgraphHasher` 构造函数收的那个 `char const*`（疑似函数名过滤器）。
+      ⚠️ `--disassemble` **不是**这个门（已试，无任何输出）。**值得先花一次探测。**
+      ② 反汇编构造函数（`0x100195c54`，868B）与 `AccumulateRecursive`（`0x100196694`）。
+      🎁 解出后 oracle 立即可用：`probe_subgraph_hash.py` 已能对 1380 个函数逐个验证。
+      ⚠️ 每轮先确认还够得到，够不到就转下一项。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -141,7 +162,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `1a3ee52`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `848c903`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
