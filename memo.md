@@ -394,19 +394,31 @@
       实测 `base.so`：blob **669622** 字节 = data **302390** + instructions **367232**；
       而 ELF 的 `.rodata`+`.text` 是 302496+367264 = 669760 —— **差 138 字节是 section 的对齐填充**，
       即**它用的是 VM 知道的真实长度，不是 ELF section 长度**。
-- [ ] 任务 41：**实现 `--dump_blobs`** ⬅️ **当前任务**
-      契约已量出（见任务 40），**唯一未解的就是那四个长度从哪来**——
-      `Dart_SnapshotAnalyzerInformation` 只带指针不带长度（CLAUDE.md 早就记了这条）。
-      候选（都在手边、按代价排序）：
-      ① instructions 侧：`InstructionsTable` 有 `start_pc_`/`end_pc_`
-      （`start_pc` 私有但 `EntryPointForOffset(0)` 能取到；`end_pc` 同样私有，
-      `InstructionsLengthAt` 的实现里用了它，可照抄取法）；
-      ② data 侧：快照头自带长度（`Snapshot::length()`）；
-      ③ 兜底：ELF section 长度——**但实测证明那是错的**（多 138 字节的对齐填充）。
-      🎁 判据：我们对**我们自己**快照的 blob，长度应等于「四段真实长度之和」，
-      且开头 16 字节应是快照 data 的魔数；再用同样的拆分把它切回四段、与源 region 逐字节比。
-      ⚠️ **不能跨实现逐字节比**（两边快照不同），所以判据是自洽 + 结构，
-      **别为了拿到「与他们逐字节相同」而去比两个不同的程序**。
+- [x] 任务 41：**`--dump_blobs` 已实现** ✅ `b8fd30973c6` + spike `f856472`
+      我们自己的快照：**504742 字节**，按各 region 的**声明长度**切回去，
+      四段与 ELF 逐字节相同、无剩余。help 缺口 **4 → 3**。
+      长度来源（`Dart_SnapshotAnalyzerInformation` 不带，这曾是它被记为"阻塞"的原因）：
+      data 段用 `Snapshot::length()`；instructions 段用 `Image` 自带的 size 字段。
+      🎁 **掉出来一个独立交叉验证**：isolate instructions 段量得 **295248** 字节，
+      而这恰好是 `--shorebird` 走 `InstructionsTable` 时**最后一个函数的结束位置**——
+      两个互不相干的来源give出同一个数。
+      🔴 **第一版检查是废的，负控制当场证明了**：它靠「在 blob 里搜下一段的开头」
+      来定边界——**边界读自被测物本身**。把每个 instructions 段截短 4 字节，
+      它照样"round trip 通过"。改成**从 ELF 自己的头部重算长度**后，同一个负控制立刻变红。
+      ✅ **可复用规则：检查的期望值必须来自被测物之外。**
+      🔴 **另一个自己的错**：我在 `verify_all` 只看了 `tail -3` 就提交，
+      **漏掉了 `1 failed`**——`analyze_snapshot_help_check` 正确地红了
+      （实现了 flag 却没从 withheld 名单里删掉）。**检查按设计工作，是我没读输出。**
+      提交信息里「4 → 2」也写错了（`--disassemble` 仍未实现），已 amend 订正为 4 → 3。
+- [ ] 任务 42：**收尾一轮：把「读输出」这件事变成不可跳过的** ⬅️ **当前任务**
+      本轮暴露了一个流程缺陷：`./verify_all.sh 2>&1 | tail -3` 会**把失败行滚出视野**，
+      而末行的 `11 ran, 1 failed` 很容易被当成"跑完了"。
+      要做的（小而具体）：给 `verify_all.sh` 加一个**非零退出时的显式摘要**——
+      在最后一行之后，若 `failed > 0` 则**再打印一次失败的检查名**，
+      使得任何 `tail -N`（N≥2）都必然看到失败项。
+      ⚠️ 判据必须是「制造一个失败，然后确认 `tail -3` 能看到它」——
+      **不要只看它在全量输出里能看到**，那本来就能看到。
+      ⚠️ 这是 harness 改动，不碰 dart-sdk；改完 `--self-test` 仍须全绿。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
