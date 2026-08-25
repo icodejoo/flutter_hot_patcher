@@ -14,7 +14,14 @@
       常设检查 `op_rewrite_check.sh` 已进 `verify_all`（现 8 项）
 - [~] 任务 9：`GetBestMapping` 的不可破平票 —— **已测出分歧，转入挂起池**
       `ead5f153d8d` + spike `3277b35`。他们 `14/8/0/120`、我们 `14/13/0/115`
-- [ ] 任务 10：`IndirectStaticCall` 68 vs 64 ⬅️ **当前任务** —— 先查清差额是 strip 差异还是真缺口
+- [ ] 任务 10：`IndirectStaticCall` 68 vs 64 ⬅️ **当前任务**
+      ⚠️ **先证明差额是真的，再考虑做**。原始 `nm` 行数不可直接比（他们已 strip、我们没有）。
+      判据必须是**去重方法名的集合 diff**：两边各
+      `nm -a | c++filt | grep -o 'IndirectStaticCallInstr::[A-Za-z_]*' | sort -u`
+      再 `comm -3`。**两个方向都为空才叫持平。**
+      ⚠️ 别用 `DDTable\|IndirectStaticCall` 这种正则量它 —— 会把 `DDTableBuilder` 算进来
+      （前缀污染，已踩过两次）。2026-08-24 的记录说这个集合曾经是 19/19 持平，
+      **所以最可能的结论是「差额是 strip 差异，不是缺口」** —— 但要验过才算。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
