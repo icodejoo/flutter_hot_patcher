@@ -89,17 +89,31 @@
       把 `x0` 当 `this` 会让整个函数的偏移全错。
       🔑 **它同时改写了上一轮的说法**：所谓「归一化」**从来不是字节掩码**——
       PP 位移与跳转目标不进摘要，是因为**没人把它们放进 `Entry`**，不是被掩掉了。
-- [ ] 任务 21：**恢复 entry 流：`Entry` 的 kind 与 value 到底是什么** ⬅️ **当前任务**
-      `Entry = {int32 kind; int32 value}`，kind 至少 0..8
-      （log 分支用 `<=3 / <=5 / ==6 / ==7 / ==8 / default` 分派）。
-      **两条路，先走便宜的那条**：
-      ① 🎁 **他们自带日志**：`Hash()` 里有一条被 `this+0x30` 的 bool 门控的分支，
-      会把每个 entry 格式化后经 `dart::Log` 打印出来。**打开它就是 ground truth，不是解读。**
-      门控很可能是 `SubgraphHasher` 构造函数收的那个 `char const*`（疑似函数名过滤器）。
-      ⚠️ `--disassemble` **不是**这个门（已试，无任何输出）。**值得先花一次探测。**
-      ② 反汇编构造函数（`0x100195c54`，868B）与 `AccumulateRecursive`（`0x100196694`）。
-      🎁 解出后 oracle 立即可用：`probe_subgraph_hash.py` 已能对 1380 个函数逐个验证。
-      ⚠️ 每轮先确认还够得到，够不到就转下一项。
+- [~] 任务 21：**entry 的 kind 名字全拿到了；编号没拿到（刻意不猜）** ✅ spike `5a1585f`
+      他们自己的字符串表（`0x1002c9c14` 起连续）：
+      `CodeName` / `RawInstructionBits` / `OffsetFromPayloadStart` /
+      `ObjectPoolLoadIndex` / `DispatchTableCall` / `IndirectStaticCall` /
+      `FieldTableLoadIndex` / `ExternalBranchTargetIndex` / `LocalBranch` / `Unknown`。
+      → **摘要 = 每条指令一个「分类过的」entry**，第二个字段装的是
+      **有意义的那部分（池索引 / 字段表索引 / 跳转目标），不是编码出来的位移** ——
+      这正是前两轮从外部量到的「归一化」的机制。
+      ✅ **`CodeName` 不进 `self_hash`（已证，不是假定）**：全库恰好只有两组
+      「同字节不同名」的函数，两组都是 `self_hash` 相同、
+      `subgraph_hash`/`op_subgraph_hash` 不同 → 名字在 subgraph 那两个里。
+      ⚠️ **kind 编号刻意留空**：push 点上看到的常量是 1/2/4/6/7/8，
+      但**「字符串表顺序 = 枚举顺序」被 `Hash()` 的 switch 证伪**
+      （它的 `==7` 臂走的是 `Disassembler::Disassemble`，不是取名字）。
+      **把看起来合理的表写进实现就是编造**，所以留空。
+- [ ] 任务 22：**解出 kind 编号 + 每个 kind 的 value** ⬅️ **当前任务**
+      两件事，都有确切地址，见 `fhp-research/.../SUBGRAPH_HASHER_RECON.md`：
+      ① **kind 编号**：老实解 `Hash()` 在 `0x1001960ac` 的那个 switch
+      （`<=3 / <=5 / ==6 / ==8 / ==7 / default`，注意 `==7` 臂是反汇编路径不是取名）。
+      ② **每个 kind 的 value 与触发它的指令形态**：22 个 push 点，
+      全在 `0x10019672c`..`0x100197540`（起点是 `AccumulateRecursive` 但明显不止一个函数被内联进去）。
+      🎁 **oracle 已就位且很强**：`probe_subgraph_hash.py` 能对 1380 个函数逐个验证；
+      而且 `self_hash` **只依赖指令字节**（已证），所以这一条可以**完全离线闭环**，
+      不需要 subgraph 那两个先解出来。
+      ⚠️ 先做 ①，它便宜且 ② 依赖它。够不到就转下一项。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -162,7 +176,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `848c903`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `5a1585f`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
