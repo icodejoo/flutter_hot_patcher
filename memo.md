@@ -6,10 +6,12 @@
 
 ## 📋 当前核心任务
 
-- [ ] 任务 1：实现 `ObjectPoolMappingsAggregator`（加权投票 + `GetBestMapping`），
-      替换 `linker.cc:367-394` 里靠「组恰好 1 成员」过滤的 `ComputeObjectPoolLinkResults`
-- [ ] 任务 2：`self_pp` / `subgraph_pp` 的 sticky `csel` 选择 + `self_hash_` 回落分支
+- [x] 任务 1：实现 `ObjectPoolMappingsAggregator`（加权投票 + `GetBestMapping`）
+      ✅ `ab58e28152d`。9 个单测，4 个负控制全红后还原。`verify_all` 6 ran / 0 failed / **137 passed**
+- [x] 任务 2：`self_pp` / `subgraph_pp` 的 sticky `csel` 选择 + `self_hash_` 回落分支
+      ✅ 与任务 1 同一提交 —— 它们在同一个循环体里，拆开实现不了
 - [ ] 任务 3：造**判别性合成 fixture**，用他们的 `gen_snapshot` 做 oracle 判定任务 1/2 真的对了
+      ⬅️ **当前任务**。任务 1/2 目前是「照着反汇编转写的」，不是「行为验证过的」
 - [ ] 任务 4：`LinkedValue<T>` 模板落地（目前用裸 `PoolIndexPair`）
 - [ ] 任务 5：收紧 `object_pool_editor` 的两条软断言，修 kind-1/2 在 2²⁴ 之后的计数误读
 - [ ] 任务 6：把 `ObjectPoolEditor` 接进 `ImageWriter::Write`（依赖任务 1 产出 `mapping[]`）
@@ -56,10 +58,11 @@ dd_pass_check.sh           0 failure(s)
 dd_runtime_check.sh        0 failure(s)
 op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
-run_vm_tests               128 passed
+run_vm_tests               137 passed
 6 ran, 0 failed, 0 skipped
 ```
-两个 ninja 配置均 `no work to do`。工作树 clean，HEAD = `f426f46f5b0`。
+两个 ninja 配置均 `no work to do`。工作树 clean。
+HEAD：`ab58e28152d`（dart-sdk） / `5b8c55f`（fhp-research）。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -84,78 +87,50 @@ run_vm_tests               128 passed
 
 # 📌 任务卡（含验收判据与负控制）
 
-## 任务 1：`ObjectPoolMappingsAggregator` — 加权投票
+## ✅ 任务 1+2 已完成（`ab58e28152d`）——但**判据是弱的，别读成已验证**
 
-**为什么必须做**：`linker.cc:367-394` 当前实现**已知不是他们的算法**，
-只是在当前 fixture 上碰巧给出相同的 1121。两处结构性错误：
+实现了 `ObjectPoolMappingsAggregator`（`votes_` + `used_` + `GetBestMapping`）替换掉
+原先靠「组恰好 1 成员」过滤的配对，并把索引向量改成 sticky 条件选择。
 
-| | 我们 | 他们 |
-|---|---|---|
-| 歧义组（组内 >1 成员） | `size() != 1` 直接丢弃 | **保留并投票**（§2.2c 穷举四种编码，全部 0 命中） |
-| 仲裁 | `std::set<pair>` 去重 | `votes_[patch][base] += 1.0/N` + argmax + **全局单射** |
+**⚠️ `shorebird_info_check.sh` 八行仍全同，但这不是证据。**
+在「每个匹配组都 1:1、每个索引对都是双射」的 fixture 上，每个内层投票表只有一个候选、
+贪心永不拒绝 —— **投票与旧过滤必然给出同一答案**。所以任务 3 不是锦上添花，
+它是唯一能判定这份实现对错的东西。
 
-**算法全文**（`OP_AGGREGATOR_RECON.md` §(a)4/5/6/9，逐条经反汇编证实）：
+### 🔴 本轮学到的（第 20 种假绿）：**负控制可能测不到它想测的东西**
 
-```c++
-struct ObjectPoolMappingsAggregator {           // 0x40 字节
-  std::unordered_map<uword, std::unordered_map<uword, double>> votes_;  // +0x00, 40B
-  std::vector<uword> used_;                                             // +0x28, 24B
-};
+按计划做的第一个负控制是「把权重 `1.0/N` 改成常数 1.0」→ **全绿**。
+原因不是测试弱，是**权重公式当时零覆盖**：`AddVote` 系列直接传权重进去，
+link-results 系列每个键只有一个候选。
 
-// 累加（内联在调用方）：权重是 CodeInfo 记录数，不是索引数
-w = 1.0 / (base_buffer.size() + patch_group.size());
-votes_[pIdx[i]][bIdx[i]] += w;
+更深一层：score 与事件数**通常同向变化**——一个组贡献 `|base|×|patch|` 次
+权重 `1/(|base|+|patch|)` 的投票，所以 `score = count/(b+p)`，大组一般两边都赢。
+要让除数可观测，必须**刻意挑一对让两者判断相反的组**：
 
-intptr_t GetBestMapping(uword patch_index) {
-  auto candidates = votes_[patch_index];        // ⚠️ operator[]，缺键要 default-insert
-  std::vector<std::pair<uword,double>> sorted(candidates.begin(), candidates.end());
-  std::sort(sorted.begin(), sorted.end(), [&patch_index](auto& a, auto& b) {
-    if (a == b) return false;                   // 显式短路，是他们写的不是编译器产物
-    if (a.second != b.second) return a.second > b.second;
-    return a.first == patch_index;              // 平票时恒等映射胜出
-  });
-  for (auto& c : sorted) {
-    if (std::find(used_.begin(), used_.end(), c.first) != used_.end()) continue;
-    used_.push_back(c.first);                   // 全局单射，跨调用不清空
-    return c.first;
-  }
-  return -1;
-}
 ```
-
-**三个不可从签名推出、必须照做的细节**：
-- `used_` 是 `std::vector` 不是 `set`（8 字节步长 + 4× 展开的**线性** find + `push_back`）
-- `GetBestMapping` **按 patch 索引升序**调用一次（`std::set<uword>` 驱动），这才让贪心确定
-- **绝不 `reserve()`** 那个 unordered_map 的拷贝——桶宽历史决定平票时的残留顺序
-
-**验收判据**：
-- ⚠️ **`verify_all.sh` 全绿在这项任务上不是判据**（§(c)2：当前 fixture 判别不出两种算法）
-- 真判据是**任务 3 的合成 fixture**。任务 1 只需保证 1121/1113/292/16 不变 + 单测覆盖
-  投票/平票/单射三条路径
-
-**负控制**（必须变红才算数）：
-1. 把权重 `1.0/N` 改成常数 `1.0` → 多候选场景下 argmax 结果应变
-2. 删掉 `used_` 的单射检查 → 两个 patch 索引会映射到同一 base 索引
-3. 平票比较改成 `a.first != patch_index` → 恒等映射不再优先
-
-## 任务 2：sticky `csel` 与 `self_hash_` 回落
-
-```c++
-bool use_self_pp = false;                       // 每个 patch op_subgraph_hash_ 组重置一次
-for (const CodeInfo& pC : patch_group) {
-  if (base_buffer.empty()) {                    // 0x10019c50c cmp x21,x24（唯一入边）
-    base_buffer += base_self_hash_groups[pC.self_hash_];
-    use_self_pp = true;                         // ⚠️ sticky：内层回边绕过那个写 0
-  }
-  const size_t off = use_self_pp ? 0x30 /*self_pp*/ : 0x48 /*subgraph_pp*/;
-  ...
-}
+组 A：2 base × 2 patch = 4 次事件，权重 1/4 → 1.000   ← 加权时赢
+组 B：1 base × 5 patch = 5 次事件，权重 1/6 → 0.833   ← 数事件时赢
 ```
-我们现在**无条件用 `self_pp_indices_`**，一般情况下是错的（base subgraph 组存在时该用 `subgraph_pp`）。
+→ 新增 `ObjectPoolLinkResults_WeightIsNormalisedByGroupSize`，此后负控制 1 才会红。
 
-⚠️ **我在这里踩过假红**：曾用「全函数零个 `ldr [xN,#0x48]`」去否证 `+0x48` 的读取——
-但那个偏移是**寄存器施加**的（`add x8,x20,x8`），立即数形式本就不可能存在。
-**否证一个断言，判据必须可能命中它。**
+✅ **判据**：负控制不红时，先问「这一行改动在现有测试的定义域里语义真的变了吗」，
+而不是先怀疑测试太弱。第 19 种（负控制是恒等变换）与这一种是同一族病。
+
+### 四个负控制的实测结果（全部还原）
+
+| 负控制 | 红的测试数 |
+|---|---|
+| 权重 `1.0/N` → 常数 `1.0` | 1 |
+| 删掉 `used_` 单射检查 | 2 |
+| 平票 `a.first == key` → `!=` | 2 |
+| 索引向量无条件用 `self_pp` | 2 |
+
+### 三处刻意偏离（都已在代码注释里标注）
+
+1. 他们内层循环界是 `max(patch.size(), 1)` 且**同时索引两个向量** → base 更短或 patch 为空时越界读。
+   我们按较短者取界。**为了保真去复刻一个内存越界，是拿真 bug 换一个我们根本观测不到的一致性。**
+2. 他们的第四张 `groupBy(patch, self_hash_)` 建了从不读 → 我们不建。
+3. 他们的比较器按引用捕获 key，我们按值 —— 无可观测差异。
 
 ## 任务 3：判别性合成 fixture（**任务 1/2 的唯一真判据**）
 
