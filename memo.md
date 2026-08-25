@@ -308,18 +308,35 @@
       现在顺手用默认模式 dump 一遍，非零退出或空输出即失败。
       负控制：stash 掉修复重建 → 变红并打印 `exit 134`。
       🔴 **`--shorebird` 仍是 0 函数**（任务 33 的基址 bug，本轮未动）。
-- [ ] 任务 35：**修 `--shorebird` 的基址** ⬅️ **当前任务**
-      诊断早已完成（任务 33），**不要重复插桩**：
-      `CollectAllCodes` 发现 1608 个 Code，**全部**被 `payload < isolate_instr_base` 滤掉，
-      因为 `info.vm_isolate_instructions` 高于所有 payload。
-      🎁 **本轮新增了一个可用的对照**：默认模式现在能跑通并 dump 出 1776 个 Code，
-      而它用的是**同一个** `info_.vm_isolate_instructions` 算 `offset`。
-      → **先看默认模式 dump 出来的 `offset` 是否合理**（应落在 0..指令区大小内）。
-      如果它也荒谬，那基址对两条路都是错的，**改一处即可修两条**；
-      如果它合理，那问题只在 `CollectAllCodes` 的过滤条件。**这个判别几乎免费。**
-      ⚠️ 判据：`--shorebird` 在我们快照上给出 **1380 个函数**（与他们同程序同数），
-      且 `offset`/`size` 能被 `probe_subgraph_hash.py` 用来取出正确指令字节。
-      ✅ 修好后把 `--shorebird` 也纳入 `class_table_dump_check.sh` 那条「跑得通」断言。
+- [~] 任务 35：**诊断完成，且推翻了「基址错了」这个前提**（本轮无代码，是纯诊断）
+      ① **免费判别器给了明确答案**：默认模式 1776 个 Code 的 `offset`
+      **全部为负**（min `-78157752`，max `0`）→ **两条路都错**，不是只有 `--shorebird`。
+      ② 🔴 **但接着测出「基址错了」是错的**：
+      `instructions_tables` 只有 1 张表，它的 `start_pc` = `0x1046f7680`
+      **恰好等于 `info.vm_isolate_instructions`**。**基址一直是对的。**
+      ③ **真正的原因**：payload 全在这个 image **之下**（最大值离基址仅 3.6KB，
+      最小值在 74MB 之外）→ **被发现的 1608 个 Code 全是 VM/stub 的，
+      一个 app 函数都没有**。
+      🔑 **因为在 bare-instructions 的 AOT 里，app 函数根本没有独立的 `Code` 对象**——
+      它们只存在于 `InstructionsTable`（pc→offset）。
+      → **`CollectAllCodes`「遍历堆找 Code」这个做法从根上就不对**，
+      不管基址怎么修都不会有 app 函数。
+      ✅ 这与 CLAUDE.md 早就记下的一致：`--shorebird` 的 `functions` 数组
+      对应**序列化器的 code 表**、`index_in_entries` 0..1379（**1380 条**）。
+- [ ] 任务 36：**把 `--shorebird` 改成枚举 `InstructionsTable`** ⬅️ **当前任务**
+      **不要再修基址**（任务 35 已证明它是对的），要换枚举方式。
+      现成的公开接口（`runtime/vm/object.h`，都已存在）：
+      `EntryPointAt(index)` / `PayloadStartAt(index)` / `code_objects()` /
+      `FirstEntryWithCode()` / `EntryPointForOffset(offset)` /
+      **`InstructionsLengthAt(index)`（这是我们自己加的 Shorebird 方法，已实现）**。
+      ⚠️ `start_pc()` 是私有的；要基址用 `EntryPointForOffset(0)`（本轮就是这么取的）。
+      🎁 **判据是硬的**：条数应为 **1380**，与他们同程序同数；
+      且 `offset`/`size` 要能被 `probe_subgraph_hash.py` 用来取出正确的指令字节
+      —— 那个脚本已经能对 1185/1380 个函数复现 `self_hash`，
+      **拿我们自己的 dump 跑一遍就是最强的端到端判据**。
+      ✅ 名字从 `code_objects()`（只覆盖 `FirstEntryWithCode()` 之后的部分）取；
+      其余按他们的样子给 `[unknown stub]` 之类。
+      ✅ 完成后把 `--shorebird` 纳入 `class_table_dump_check.sh` 的「跑得通」断言。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
