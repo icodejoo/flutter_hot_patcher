@@ -22,16 +22,23 @@
       `DispatchTableCallInstr` 都有同名工厂）→ 不是发明。**原始 `nm` 行数差 = strip 差异，已确认。**
 - [~] 任务 11：**中断** —— 造 fixture 时撞上一个我自己引入的回归（见下），优先修它
 - [x] 任务 12：修 `dd_runtime_check` 的假绿 + 回退补齐 ✅ `0dfe634b44e` + spike `115249c`
-- [ ] 任务 13：**让补齐能与反向定长解析共存** ⬅️ **当前任务，也是重新打开对象池改写的唯一路径**
-      🔑 **证据已就位，方向明确**：他们快照里 **2299 个 PP 加载无一例外跟着 `nop,nop`**
-      （含调用序列内部）→ **他们改的是反向解析，不是选择性路由**。
-      要改的是 `runtime/vm/instructions_arm64.cc`：`:32` 的
-      `DecodeLoadWordFromPool(pc - 2 * Instr::kInstrSize, ...)` 假定固定回退 2 条指令；
-      `:47` 的 `DecodeLoadDoubleWordFromPool` 同理。还要看 `code_patcher_arm64.cc:21`。
-      🎁 **这些是运行期函数 → 引擎 dSYM 覆盖得到**，可用 `DW_AT_call_line` 法
-      （见 [[reference-dwarf-inline-call-lines]]，解开 `WrapCode` 就是它）。
-      ⚠️ 验证必须包含 **`copy_gen_kernel_snapshot` 重建后再跑 kernel 编译** ——
-      小程序（hello.dart）全过而 gen_kernel 段错误，这个规模差异是本轮全部教训的来源。
+- [x] 任务 13：**让补齐能与反向定长解析共存** ✅ `d99ff81f8e7` + spike `d21d04d`
+      **修法就在猜的地方**：`SkipBackOverObjectPoolLoadPadding` 加在三个解码入口，
+      **八个调用点一个都不用动**。`op_rewrite_check` 不再 BLOCKED，编辑器重新活了。
+      详见下方任务卡。
+- [ ] 任务 14：**造一对真正不同的 base/patch，让生产路径上的 `nonidentity != 0`** ⬅️ **当前任务**
+      ⚠️ **我起草这条时先写错了一个前提，当场核实后改掉的**（任务 5 的教训第二次生效）：
+      原稿写的是「缺的是最后一根线，链接器的表还没交到 image writer 手里」。
+      **假的。** `image_snapshot.cc:599` 已经在读
+      `ShorebirdLinker::shared()->object_pool_mapping()`，`linker.cc:388` 已经在写它。
+      **线早就接上了。**
+      真正的缺口是**输入**：现有 fixture 的 base 与 patch 是近乎相同的程序
+      （`base.ct` 与 `patch.ct` 甚至逐字节相同），1421 项全部映射到自身，
+      所以生产路径上 `nonidentity` 恒为 0 —— 改写分支只有单测和任务 8 的
+      **合成** 映射（`mapping[i]=i+1`）覆盖过，**从没有一次是链接器自己算出来的映射**。
+      要做的是造一对真有差异的程序（加/删函数、改常量池内容），跑完整链路，
+      判据是 `nonidentity > 0` **且**改写后的快照能跑出正确输出。
+      ⚠️ 别用「没崩」当判据（任务 8 的教训）；⚠️ 验证要含 kernel 规模（任务 13 的教训）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -83,13 +90,19 @@ op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
 op_rewrite_check.sh        0 failure(s)
-run_vm_tests               141 passed
-7 ran, 0 failed, 0 skipped, 1 blocked
+run_vm_tests               143 passed
+8 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`0dfe634b44e`（dart-sdk） / `115249c`（fhp-research）。
-⚠️ **`op_rewrite_check` 现在是 BLOCKED**（补齐已回退，编辑器因此惰化）——
-这是如实状态，不是待修的 harness 问题。
+`--self-test` 模式下 7 个 harness 全部能正确报错（`7 ran, 0 failed, 1 skipped`）。
+工作树 clean。HEAD：`d99ff81f8e7`（dart-sdk） / `d21d04d`（fhp-research）。
+✅ **`op_rewrite_check` 的 BLOCKED 已解除**（任务 13 让补齐回到树上，编辑器重新活了）。
+
+**补齐现在是开着的**，所以每个 AOT 快照都比以前大：
+`gen_kernel_aot.dart.snapshot` 13.2M → 14.1M；hello.dart 的 AOT 产物
+NOP 数 0 → **4584**（他们同一程序 4598）。
+⚠️ **重建 `copy_gen_kernel_snapshot` 是必须的**，否则 kernel 编译会撞版本串不匹配
+（`product ... but the VM has release ...` = 你在拿 Release 的 dartaotruntime
+跑 Product 的快照，两个配置两套产物）。
 
 
 ## 📊 私有子系统符号实测（2026-08-25，规则 0 的规定方法）
@@ -445,6 +458,63 @@ kernel 编译就一直失败（`Wrong full snapshot version`），而这个检�
 ✅ **第二条**：**小程序全过不等于能用。** hello.dart 规模的快照一切正常，
 gen_kernel 规模的段错误。**规模本身就是一个未被覆盖的维度。**
 
+
+## ✅ 任务 13 已完成（`d99ff81f8e7` + spike `d21d04d`）：修法就在上一轮猜的地方
+
+上一轮回退时写下的判断是对的，而且**是那个计数救的**：他们快照里 2299 个 PP 加载
+无一例外跟着 `nop,nop`（含调用序列内部）→ 他们改的是反向解析，不是路由。
+照着这条做，一次就中。
+
+### 一个函数覆盖八个调用点
+
+`SkipBackOverObjectPoolLoadPadding` 加在三个解码入口
+（`DecodeLoadWordFromPool` / `DecodeLoadDoubleWordFromPool` / `DecodeLoadWordImmediate`），
+**八个调用点一个都没动**。原因是它们全都传「补齐之后那个地址」而不是「load 的地址」：
+`CallPattern` 的 `pc - 2 * Instr::kInstrSize` 指的是 `Call()` 发的那条 `ldr`，
+补齐插在它和池加载之间，所以只要解码器自己往回跳过 NOP 就够了。
+
+⚠️ **`DecodeLoadWordImmediate` 要跳两次**：一次在开头（裸池加载），
+一次在 `orri` 之后 —— 补齐在 load 与 orri **之间**，不在 orri 后面。
+只加开头那次会让 odd-value 那条路静默走进 case 3 的断言。
+
+### 常量放哪：AOT 运行期编译不到编译器头文件
+
+`kObjectPoolLoadStoreMinInstructionCount` 在 `assembler_arm64.h`，
+而 `instructions_arm64.cc` 要进 `dartaotruntime`（不 build 编译器）。
+→ 在 `constants_arm64.h` 的 `Instr` 里复述成
+`kMaxObjectPoolLoadPaddingInstructions`，并在 `assembler_arm64.h` 里
+`static_assert` 把两个数钉在一起。**复述必须带编译期的绳子，否则就是等着漂移。**
+
+### 门控留着，但理由换了（旧注释已作废）
+
+`FLAG_precompiled_mode` 那道闸门**不再是正确性所必需**。旧注释说「JIT 下补齐会崩，
+`IL_IndirectStaticCall_SerializationRoundTrip` 与 `IsolateReload_ShapeChange_Const_AddSlot`
+为证」—— 那两条现在带补齐也过。闸门保留的真实理由只剩「JIT 永远不 renumber 池，
+补它就是每个池访问白付两个字」。**注释已改写；活得比工作久的注释本轮又抓到一条。**
+
+### 🔴 两个负控制，第二个才是真判据
+
+| 负控制 | 结果 |
+|---|---|
+| 跳过循环界 → 0，跑新单测 | 两条都 exit 255 |
+| 跳过循环界 → 0，跑 gen_kernel | **`SEGV_ACCERR`，不产 dill** |
+
+第二个**只重建 Product 的 `dartaotruntime`**，快照仍是补齐过的那份 —— 这样才把
+**解码器**与**发射器**分开，证明变红的是解码器。这就是上一轮那个回归，原样复现再关掉。
+
+### 🔴 又踩一次「exit=0 是 tail 的」
+
+第一次跑那两条测试时用了 `... | tail -8`，打出满屏 CRASH 却报 `exit=0`。
+**管道里最后一个命令的退出码不是被测程序的。** 真实原因还是老朋友：
+少了 `--dfe=gen/kernel_service.dill`，跟补齐一点关系没有。
+✅ 判据：**先 `>log 2>&1; echo $?`，再去看 log**，别在同一行里既过滤又判成败。
+
+### 单测怎么写才不是自证
+
+`Arm64PadLoadStoreRemainsDecodable` + 双字版：**拿补齐的解码结果去对不补齐的解码结果**，
+不写期望索引表；并且**调真的 `LoadWordFromPoolIndex` 并临时翻 `FLAG_precompiled_mode`**
+（同文件既有测试就是这么翻的），而不是在测试里重抄一遍它发什么。
+两条都在负控制下变红，不是摆设。
 
 # 📖 关键参考文档（别重新推导）
 
