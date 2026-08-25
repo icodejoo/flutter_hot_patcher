@@ -274,17 +274,37 @@
       （三个哈希都填同一个值、多个数组恒空，源码注释写着 "simplified"）。
       CLAUDE.md 里「`analyze_snapshot --shorebird` B2/B4 已移植」**要按此订正**：
       它在树里，但**产不出东西**。
-- [ ] 任务 33：**修 `--shorebird` 的 0 函数** ⬅️ **当前任务**
-      它挡着 `--disassemble`（没有函数就没有东西可反汇编），
-      而且它本身是被当成「已移植」记了很久的东西。
-      入口：`runtime/vm/analyze_snapshot_api_impl.cc` 的 `CollectAllCodes(ig, base, codes)`。
-      ⚠️ **先确认它为什么空**：是遍历方式不对、还是 `vm_isolate_instructions` 基址不对
-      （`Dart_DumpClassTableAsJson` 走的是完全不同的路径且工作正常，可作对照）。
-      🎁 **判据现成**：他们在他们快照上是 1380；我们在**同一程序**的快照上也该是 1380，
-      且 `offset`/`size` 应能对上（`probe_subgraph_hash.py` 就是靠这两个字段取指令字节的）。
-      ✅ **修好后立刻补一条检查**——本轮已证明这个洞存在于检查矩阵里。
-      ⚠️ 再动 `--disassemble` 之前先解决 bin/VM 的 `disassemble` 名字冲突：
-      他们的 bin **确实消费了它**（他们不崩且能出数组），所以冲突是可解的。
+- [~] 任务 33：**0 函数已定位到确切原因；范围比预想的大**（本轮仍无代码留下）
+      **不是遍历的问题——遍历是好的。** 插桩实测：
+      ```
+      PROBE discovered=1608 base=0x107763680
+      PROBE zero=0 below=1608 kept=0 payload_range=[0x102cc1ec8,0x107762844]
+      ```
+      **1608 个 Code 全被 `payload < isolate_instr_base` 滤掉**，因为那个基址
+      **高于所有 payload**（最大 `0x107762844`，基址 `0x107763680`）。
+      四个区指针实测：
+      `vm_data 0x1076e4340 / vm_instructions 0x107750000 /
+      isolate_data 0x1076ecec0 / isolate_instructions 0x107763680`
+      → `info.vm_isolate_instructions` **不是 ELF 快照里指令实际被映射到的地址**。
+      🔴 **范围比任务卡预想的大**：**上游的默认模式（不带 `--shorebird`）在同一个
+      快照上直接 abort（exit 134）**。所以坏的不只是 shorebird 那条路，
+      **是我们的 `analyze_snapshot` 处理「我们自己的 AOT ELF 快照」这件事整体坏掉**。
+      ✅ **`--dump_class_table` 正常**（619/529 与他们逐字节相同）——
+      因为它只碰类表、不碰任何代码 payload。这也解释了为什么它昨天能一次做对。
+- [ ] 任务 34：**修 `analyze_snapshot` 对我们自己 AOT ELF 快照的处理** ⬅️ **当前任务**
+      诊断已完成（见任务 33），**不要重复插桩**。要回答的就一个问题：
+      **ELF 快照被加载后，指令区真正的基址从哪里取？**
+      线索：payload 最大值 `0x107762844` 落在 `vm_instructions`(`0x107750000`) 区间内，
+      而最小值 `0x102cc1ec8` 在 74MB 之外 —— 说明 payload 来自**不止一个映射**，
+      且 isolate 那块不在 `info.vm_isolate_instructions` 指的地方。
+      候选：`isolate_group->object_store()->instructions_tables()` 自带基址；
+      或上游 `Image`/`ImageReader` 有现成取法。
+      ⚠️ **先看上游默认模式为什么 abort**——它是上游代码，
+      **上游代码在上游快照上不该崩**，所以很可能是我们的构建/加载方式不对，
+      而不是 `CollectAllCodes` 的逻辑。**修那里可能一次修好两条路。**
+      ⚠️ 判据：`--shorebird` 在我们快照上给出 **1380 个函数**（与他们同程序同数），
+      且 `offset`/`size` 能被 `probe_subgraph_hash.py` 用来取出正确的指令字节。
+      ✅ 修好后**必须补一条检查**（任务 32 已证明检查矩阵有这个洞）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
