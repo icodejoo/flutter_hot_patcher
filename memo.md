@@ -436,19 +436,35 @@
       只是模仿了形状、破坏了契约**——用一个无法观测的保真度，换一个下游的静默失败。
       **等 walk 实现了再把键加回来。**
       负控制：把 `subgraph_hash` 加回去 → `class_table_dump_check` 变红。
-- [ ] 任务 44：**清点「静默失败」这一族，看还有没有同型的** ⬅️ **当前任务**
-      本会话已经栽了三次**同一种**形状：
-      占位 `self_hash`、坏 `FhpSHA1`、假 `subgraph_hash` ——
-      **产出看起来合法、消费者不报错、错误只在语义层**。
-      任务 43 还发现 `tools/linker.py` 有「配不上就静默排除」这条设计。
-      要做的是**一次有界的清点**（不是重构）：
-      在 `tools/` 与 `runtime/vm/shorebird/` 里找「失败时不发声」的地方——
-      具体线索：`except: pass`、`continue` 掉错误分支、
-      `if (!ok) return`、以及**返回默认值而不是报错**的函数。
-      **判据是产出一份清单 + 每条注明「它静默时下游会拿到什么」**，
-      不要求本轮修任何一条。
-      ⚠️ 清点完**先挑一条最危险的**（能进生产链路的）在下一轮修，其余记进 memo。
-      ⚠️ 别把它做成大重构——本会话的教训是小步 + 每步有判据。
+- [x] 任务 44：**清点完成，并且把这一族的判别标准找准了**（本轮无代码，是清点轮）
+      🔑 **原来的说法「静默失败」是错的分类。** 实测把它劈成了两半：
+      | 形状 | 生产链路上会怎样 |
+      |---|---|
+      | **静默丢弃**（`linker.py` 配不上就 skip） | ✅ **已被兜住**：`broute/cli.py:568` 用 `min_link_pct` 门限拦，`linker.py:161` 也会警告 <80% |
+      | **静默错值**（值合法、语义错） | 🔴 **反而击穿那道门限** |
+      **实测**：把 `subgraph_hash` 换回本会话之前的假值（= `self_hash`），
+      对真实 base/patch 跑 `build_link_table` → **1588 条、link% = 99.82%**。
+      → **那道覆盖率门限会毫无察觉地放行。**
+      ✅ **所以真正的判别标准不是「有没有声音」，而是：
+      错误值会不会让下游的成功指标看起来更好。**
+      丢弃会拉低 link%（被抓住）；错值会拉高 link%（抓不住）。
+      这解释了本会话三次栽跟头为什么都是**生产者**侧（占位 `self_hash`、坏 SHA-1、假
+      `subgraph_hash`），而不是消费者侧。
+      📋 **仍存的同型嫌疑（都在 `--shorebird` 的输出里，都是「合法形状、错内容」）**：
+      `subgraph_pp` **直接复用 `self_pp`**（subgraph 应含被调方，所以是错的）；
+      `self_selectors` / `subgraph_selectors` / `self_field_table` /
+      `subgraph_field_table` / `callees` **五个数组硬编码为空**——
+      消费者读到的是「这个函数没有」，而不是「我们没算」。
+- [ ] 任务 45：**把任务 43 的规则套用到那六个字段** ⬅️ **当前任务**
+      规则已由任务 43/44 立好：**算不出来就不发，别发一个形状合法的错值。**
+      六个：`subgraph_pp`（复用了 `self_pp`）、`self_selectors`、`subgraph_selectors`、
+      `self_field_table`、`subgraph_field_table`、`callees`（后五个硬编码空数组）。
+      ⚠️ **先查消费者**（任务 43 的做法，那次查出了最坏情况）：
+      `command grep -rn "self_pp\|subgraph_pp\|callees\|self_selectors" tools/ ~/Documents/fhp-research`
+      —— **有人读就是活的错数据，没人读就只是待办**，两种情况的紧迫度不同。
+      ⚠️ `self_pp` 本身是**算出来的**（`GetSelfPPIndices`），先确认它对不对再决定留不留。
+      判据：改完 `verify_all` 全绿；并加一条检查钉住「不发假字段」这条规则
+      （`class_table_dump_check.sh` 里已有 `subgraph_hash` 的先例，照着扩）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
