@@ -9,10 +9,10 @@
 > 任务 1-6 已全部完成（见下方任务卡）。以下是 **2026-08-25 重新符号实测**后的新清单。
 
 - [x] 任务 7：`field_hasher.cc` ✅ `ecd1e5b5b20`。**最后一个「一侧为 0」的私有子系统已关闭**
-- [ ] 任务 8：让改写路径有生产覆盖 ⬅️ **当前任务**
-      现状：`ImageWriter::Write` 的自校验路径跑了 2324 站点，但 `nonidentity=0`
-      → **改写从未在生产中执行过**。需要一对 pool 顺序真正不同的 base/patch
-- [ ] 任务 9：`GetBestMapping` 平票且双方都非恒等时的顺序（unordered_map 桶布局 + introsort）
+- [x] 任务 8：改写路径的生产覆盖 ✅ `041fe7f24a3` + spike `c958c6f`。
+      **第一次跑就是 bus error**（代码页写保护）→ 真实 bug 已修；
+      常设检查 `op_rewrite_check.sh` 已进 `verify_all`（现 8 项）
+- [ ] 任务 9：⬅️ **当前任务** `GetBestMapping` 平票且双方都非恒等时的顺序（unordered_map 桶布局 + introsort）
       当前 fixture 零覆盖；**绝不 `reserve()`**
 - [ ] 任务 10：`IndirectStaticCall` 68 vs 64 —— 先查清差额是 strip 差异还是真缺口，再决定做不做
 
@@ -59,11 +59,12 @@ dd_runtime_check.sh        0 failure(s)
 op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
+op_rewrite_check.sh        0 failure(s)
 run_vm_tests               140 passed
-7 ran, 0 failed, 0 skipped
+8 ran, 0 failed, 0 skipped
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`ecd1e5b5b20`（dart-sdk） / `821d0a3`（fhp-research）。
+HEAD：`041fe7f24a3`（dart-sdk） / `c958c6f`（fhp-research）。
 
 
 ## 📊 私有子系统符号实测（2026-08-25，规则 0 的规定方法）
@@ -323,6 +324,30 @@ recon (c)5 记的是 `[[0x100521xxx + 0x4b0] + 0x28]` → `[x8]` → `x8[index]`
 **`ProductARM64/gen_snapshot`，而我只重建了 Release**。重建 Product 后立刻变成 **6 failures**。
 ✅ **判据**：负控制不红时，先确认**被那个检查实际执行的那个二进制**是新的，
 而不是「我刚才 build 过」——两个配置是两个二进制。
+
+
+## ✅ 任务 8 已完成（`041fe7f24a3` + spike `c958c6f`）：改写路径**第一次跑就崩了**
+
+`ImageWriter::Write` 挂上之后，自校验路径在 2324 个站点上全过 —— 但 `nonidentity=0`，
+**改写分支一次都没执行过**。给它一个非恒等映射（base 索引整体 +1）后，
+第一次 memcpy 就是 **`Bus error: BUS_ADRALN`**：指令 payload 在**代码页**上，而代码页是写保护的。
+在此之前编辑器只读不写，所以这个 bug 一直藏着。
+
+修法：`WritableCodePages` 作用域。`CodeRelocator::Relocate` 同样原地改写指令、
+同样需要它、连 isolate group 的选法都一样（`app_snapshot.cc:157`）。
+⚠️ 他们有没有等价作用域**不可观测** —— recon 显示的是裸 memcpy，但 StackResource 会被内联掉。
+
+**判据不是「没崩」，是「改到哪去了」**：`mapping[i]=i+1` 要求每个 PP 相对偏移移动 8 字节。
+改写后的偏移分布距「基线平移一槽」**58**，距「基线原样」**2440**。
+
+### 🔴 判据换过一次，第一版有碰撞底噪
+
+第一版数「逐个移动了的站点」→ 恒等映射也能拿到 **797/2318**，
+因为这个规模的快照里本来就有大量偏移的「上一槽邻居」同时存在。
+改成比较**整个偏移分布的距离**就没有这个底噪：
+改写时 `58 vs 2440`，恒等时 `2494 vs 0`，两个假设干净地互换。
+
+✅ **这条是单测买不到的**：改写分支自 `f426f46f5b0` 就有单测，且全程全绿。
 
 
 # 📖 关键参考文档（别重新推导）
