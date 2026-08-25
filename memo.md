@@ -361,19 +361,30 @@
       （占位符和坏摘要都会那样）。负控制：把 `FhpRot(b,30)` 改成 29 → 变红。
       ⚠️ `subgraph_hash`/`op_subgraph_hash` **仍是 `self_hash`，仍然是错的**——
       键保留以对齐 schema，代码注释已写明值不可信。它们需要模拟 walk（任务 30 的结论）。
-- [ ] 任务 38：**重新实测一次「私有子系统符号」表** ⬅️ **当前任务**
-      距上次实测（2026-08-25，memo 里那张表）已经过了很多轮，
-      而这些轮里落地了：`object_pool_editor` 全家、`PadLoadStore` + 解码器补齐、
-      `--dump_class_table`、`--shorebird` 枚举与 `self_hash`、`field_hasher`……
-      **规则 0 要求「完成度以实测为准，不凭记账」，而我已经连续多轮只加不量。**
-      做法（memo 里已有既定口径，别改）：
-      `nm -a | c++filt | sort -u` 双边同口径，他们先 `lipo -thin arm64`，我们 `--mode=product`；
-      **只有「一侧为 0」是有意义的判据**。
-      ⚠️ **量之前先问「这个子系统该出现在哪个产物里」**（任务 18 的教训：
-      `SubgraphHasher` 在 `analyze_snapshot` 而不在 `gen_snapshot`，
-      当年因此被误记成「两边都 0 的口径陷阱」整整一轮）。
-      ⚠️ 顺带核对 CLAUDE.md 里几条已知过期的记账：
-      「`analyze_snapshot --shorebird` B2/B4 已移植」——**它当时产不出东西，现在才真能用**。
+- [x] 任务 38：**符号表已重测，并加了 `analyze_snapshot` 那一列** ✅（本轮无代码，是测量轮）
+      唯一符号：他们 gs 32373 / 我们 34067（上次 34055）；他们 as 17194 / 我们 23851。
+      🔴 **结构性改动：上一版只量 `gen_snapshot`**，于是把所有住在 analyze_snapshot 里的
+      子系统都记成了「两边都 0 的口径陷阱」。**换个产物量，缺口就现形。**
+      → **真实的「一侧为 0」缺口只剩两个，都在 `analyze_snapshot` 里：
+      `SubgraphHasher`（12/0）与 `CascadeLimiter`（18/0）**，后者是**本轮首次量到的**。
+      两者其实是同一块：`CascadeLimiter` 就是给 `SubgraphHasher` 的 walk 定界的。
+      ✅ 顺带修正：`FieldHasher` 2/**6**（上次记 2/2）；`LinkOracle` 在 as 侧 **16/16 持平**。
+      ✅ **方法教训**：`sha1_` 那行（他们 2 / 我们 0）差点被记成第三个缺口，
+      **查了才知道我们有同功能的 `FhpSHA1Transform`，只是名字不同**。
+      **「一侧为 0」是必要条件、不是充分条件——名字对不上也会给 0。**
+- [ ] 任务 39：**更新 CLAUDE.md 的完成度与几条过期记账** ⬅️ **当前任务**
+      规则 0 要求完成度以实测为准，而 CLAUDE.md 里那份还停在 2026-08-24。
+      本轮起要改的（**都有本会话的实测支撑，不是凭印象**）：
+      ① 「`analyze_snapshot --shorebird` B2/B4 已移植」→ **当时产不出东西**
+      （0 个函数，任务 32-36），**现在才真能用**（1589 个函数、`self_hash` 与他们逐字符相同）；
+      ② 私有子系统表要加 analyze_snapshot 一列，并记入 **`CascadeLimiter` 这个新缺口**（任务 38）；
+      ③ 「11 个私有 flag 全部完成」只对 gen_snapshot 成立；
+      `analyze_snapshot` 还差 **3 个** flag（`--dump_object_pool` /
+      `--dump_object_pool_link_data` / `--dump_blobs`），且前两个卡在 `SubgraphHasher`；
+      ④ `--disassemble` 已实现？**没有**——写过又回退了（任务 32），
+      且它撞上 VM 自己的同名 flag。
+      ⚠️ **只改有实测支撑的条目**；没测过的别动，也别顺手上调百分比。
+      ⚠️ CLAUDE.md 是规则文件，**改它要格外保守**：只订正事实，不改规则本身。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -451,31 +462,41 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 跑 Product 的快照，两个配置两套产物）。
 
 
-## 📊 私有子系统符号实测（2026-08-25，规则 0 的规定方法）
+## 📊 私有子系统符号实测（2026-08-25 **第二次**，任务 38）
 
 `nm -a | c++filt | sort -u` 双边同口径（他们先 `lipo -thin arm64`，我们 `--mode=product`）。
-他们 32373 / 我们 34055 唯一符号。**只有「一侧为 0」是有意义的判据**——
-我们计数更高不代表进展（我们未 strip）。
+唯一符号数：他们 gen_snapshot **32373** / 我们 **34067**（上次 34055）；
+他们 analyze_snapshot **17194** / 我们 **23851**。
+**只有「一侧为 0」是有意义的判据**——我们计数更高不代表进展（我们未 strip）。
 
-| 标志符号 | 他们 | 我们 | 判读 |
-|---|---:|---:|---|
-| `ShorebirdLinker::` | 20 | 38 | ✅ |
-| `ObjectPoolMappings` | 8 | **10** | ✅ 本轮之前是 0 |
-| `LinkedValue` | 4 | **12** | ✅ 本轮之前是 0 |
-| `ObjectPoolEditor` | 2 | 4 | ✅ |
-| `FieldHasher` | 2 | **2** | ✅ 任务 7 关闭 |
-| `DDTableBuilder` | 8 | 8 | 持平 |
-| `DDSlotMapping::` | 2 | 2 | 持平 |
-| `IndirectStaticCall` | 68 | 64 | ⚠️ 差 4，**未查证**（原始行数受 strip 影响，不可直接比）|
-| `groupBy` | 2 | 0 | ⚠️ **不是缺口**：我们的 `GroupBy` 是头文件模板，被内联 |
-| `SubgraphHasher` / `CascadeLimiter` | 0 | 0 | 🔴 **这一行是错的，2026-08-25 任务 18 实测订正**：它们不在 `gen_snapshot` 里，在 **`analyze_snapshot`** 里（`dart::snapshot_analyzer::` 命名空间）。换个二进制量：**他们 4+ / 我们 0**，是**真实的一侧为 0**，不是口径陷阱 |
-| `ClassTableMapper` | 0 | 0 | ⚠️ 仍是口径陷阱（我们的映射器已实现，只是不叫这个名字） |
+🔴 **这次最重要的结构性改动：表里加了 analyze_snapshot 那一列。**
+上一版只量 `gen_snapshot`，于是把住在 analyze_snapshot 里的子系统全记成了
+「两边都 0 的口径陷阱」。**换个产物量，缺口就现形了。**
 
-🔴 **上面这句「不再有一侧为 0 的私有子系统」是错的**（任务 18 订正）：
-`SubgraphHasher` 就是，只是它住在 `analyze_snapshot` 而我们只量了 `gen_snapshot`。
-✅ **可复用规则：符号表的「两边都 0」在换一个二进制之前不算结论。**
-量之前先问「这个子系统应该出现在哪个产物里」——运行期设施在引擎、
-分析器设施在 `analyze_snapshot`、编译期设施才在 `gen_snapshot`。
+| 标志符号 | 他们 gs | 我们 gs | 他们 as | 我们 as | 判读 |
+|---|---:|---:|---:|---:|---|
+| `ShorebirdLinker::` | 20 | 38 | 0 | 0 | ✅ |
+| `ObjectPoolMappings` | 8 | 10 | 0 | 0 | ✅ |
+| `LinkedValue` | 4 | 12 | 0 | 0 | ✅ |
+| `ObjectPoolEditor` | 2 | 4 | 0 | 0 | ✅ |
+| `FieldHasher` | 2 | **6** | 0 | 0 | ✅（上次 2/2）|
+| `DDTableBuilder` | 8 | 8 | 0 | 0 | 持平 |
+| `DDSlotMapping::` | 2 | 2 | 0 | 0 | 持平 |
+| `DDSlotVoters` | 6 | 10 | 2 | 0 | ✅ gs 侧有；as 侧他们只有一个 `kVersion` 常量 |
+| `IndirectStaticCallInstr::` | 42 | 32 | 0 | 0 | ⚠️ 原始行数受 strip 影响，**不可直接比**（任务 10 已按去重方法名集合结案）|
+| `LinkOracle` | 0 | 10 | 16 | **16** | ✅ **as 侧持平** |
+| **`SubgraphHasher`** | 0 | 0 | **12** | **0** | 🔴 **真实缺口**（任务 18 发现，仍在）|
+| **`CascadeLimiter`** | 0 | 0 | **18** | **0** | 🔴 **真实缺口，本轮首次量到**（`dart::CascadeLimiter::Run` + `CascadeLimiterEntry`）|
+| `ClassTableMapper` | 0 | 0 | 0 | 0 | ⚠️ 口径陷阱：我们的映射器已实现，只是不叫这个名字 |
+| `sha1_` | 0 | 0 | 2 | 0 | ⚠️ **口径陷阱，已查证**：我们有 `FhpSHA1Transform`（2 个符号），只是名字不同 |
+| `WrapperAllocator` | 34 | 4 | 36 | 12 | ⚠️ **这一行不可用**（32/34 是 `std::function` 样板，其余方法全被内联）|
+
+→ **真实的「一侧为 0」缺口只剩两个，都在 `analyze_snapshot` 里：
+`SubgraphHasher` 与 `CascadeLimiter`。** 两者是同一块（后者给前者的 walk 定界）。
+
+✅ **本轮的方法教训**：`sha1_` 那一行差点被记成第三个缺口。
+**查一下才知道我们有同功能的 `FhpSHA1Transform`**——
+**「一侧为 0」是必要条件不是充分条件，名字对不上也会给 0。**
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
