@@ -221,17 +221,33 @@
       ⚠️ **若计数器真跨 walk 共享，则 `self_hash` 就不是「只依赖函数字节」的函数** ——
       而那正是关于它的第一条结论。那条结论**只建立在两组同字节函数上（样本量 2）**。
       **两者必有一个要让步**，现在说出来比以后撞上便宜。
-- [ ] 任务 30：**判定「序号 map 是否跨 walk 共享」** ⬅️ **当前任务**
-      这是唯一挡着 1185 → 1380 的东西，且它决定 `self_hash` 的**本质**
-      （是否可由单个函数的字节独立算出）。
-      **建议的判据（都便宜）**：
-      ① 对 `Timer._createTimer`，把它两处池引用之间那个 `bl` 的**被调方及其子树**
-      的去重池引用数算出来，看是不是 50；
-      ② 找几个「基数为 0 且第一处池引用在 bl 之后」的通过函数，
-      确认它们的被调子树池引用数确实为 0（若不是 → 假设被证伪）；
-      ③ 若证实，则 `self_hash` 需要**调用图 + 模拟 walk** 才能复现，
-      工程量显著变大 —— **届时先在 memo 里把这件事说清楚，再决定要不要继续**。
-      ⚠️ 别再用「提出公式 → 看分数」（这一族已经错了三次）。
+- [x] 任务 30：**判定完成 —— 跨 walk 共享「强支持，未证明」，并据此重新划定范围** ✅ spike `b1439cd`
+      **支持**：`Timer._createTimer`（两处池引用要 0 和 51）——
+      它第一处池引用**之前**那个调用的子树在任何深度下都含 **0** 个池引用
+      （这是「第一处为 0」的必要条件，**是一次真正的证伪机会，假设活下来了**）；
+      两处之间的调用子树在深度 ≥12 时含 **39** 个（想要 50）——
+      我的 walk 只跟直接 `bl`、只认最简单的 `ldr [PP,#imm]`，**39 是低估不是矛盾**。
+      **反对**：没有能判别的证据。那两组同字节函数**被调方不同**
+      （`Allocate Object` vs `Allocate _X509CertificateImpl` 等），看着能一锤定音——
+      **但四个 stub 的子树池引用数都是 0**，两个假设给出同一个哈希。
+      → 上一轮标记的矛盾**不是被解决，是被消解**：样本量 2 本就回答不了这个问题；
+      「`self_hash` 只依赖字节」应降级为「在一个几乎没有重复的语料里找不到反例」。
+      🔴 **代价已写清**：剩下 195 个函数需要**模拟 walk**——完整的调用点识别
+      （含经池的调用与 dispatch 调用）、`AccumulateRecursive` 的深度界、`CascadeLimiter`。
+      **这是与逐指令模型完全不同、且大得多的一块工作。**
+      **1185/1380 不是「凑整停下」，而是逐字节局部方法的真实终点。**
+- [ ] 任务 31：**转向未被阻塞的 `analyze_snapshot` flag** ⬅️ **当前任务**
+      ⚠️ **这是一次刻意的范围调整，不是放弃**：SubgraphHasher 的状态已完整落盘
+      （`SUBGRAPH_HASHER_RECON.md` + `probe_subgraph_hash.py` 跑出 1185/1380），
+      随时可续；但它接下来的每一步都要先建 walk 模拟器，**性价比明显低于下面这些**。
+      **不需要 SubgraphHasher 的 flag（help 缺口 5 → 可降到 2）**：
+      ① `--dump_class_table`：类表转 JSON。我们已有完整 `ClassTableLinkInfo` 相关设施。
+      ② `--disassemble`：把反汇编加进 JSON。我们有 `Disassembler`。
+      ⚠️ 仍被阻塞的：`--dump_object_pool`（它的 `code_infos` 要三个哈希）、
+      `--dump_object_pool_link_data`（同）、`--dump_blobs`（要四个 region 的长度）。
+      ⚠️ **先核实再动手**（这一族教训已经生效四次）：动手前先
+      `grep -n 'Dart_DumpClassTable\|Dart_DumpObjectPool' runtime/` 看我们有没有已有实现。
+      判据：`analyze_snapshot_help_check.sh` 的 withheld 数下降 + 它的 self-test 仍能报错。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -294,7 +310,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `5ee9e22`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `b1439cd`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
