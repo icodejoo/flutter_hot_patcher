@@ -20,17 +20,18 @@
       （`aot_call_specializer.cc:1222`）；他们没有该符号是因为**他们那个 IL pass 完全内联**。
       且 `FromCall` 是**上游本家族的惯用法**（`StaticCallInstr`/`PolymorphicInstanceCallInstr`/
       `DispatchTableCallInstr` 都有同名工厂）→ 不是发明。**原始 `nm` 行数差 = strip 差异，已确认。**
-- [ ] 任务 11：验证装着 **256 网格稀疏 dispatch table** 的快照能真正执行 ⬅️ **当前任务**
-      CLAUDE.md 长期挂着这条「⚠️ 仍未验证」。本轮已确立两件事：
-      (a) `kOffsetAlignment = 256` 在 `runtime/vm/compiler/aot/dispatch_table_generator.cc:150`，对 AOT 生效；
-      (b) **他们的表也在 256 网格上** —— `out_dd/base.dt`（他们的 gen_snapshot 产出）
-          123 个 selector 偏移**无一例外**都是 256 的倍数，max=9728。
-      ⚠️ **现有 `dd_runtime_check.sh` 的覆盖不足以结案**：`fixtures/hello.dart` 只有 2 个接收者的
-      虚调用，很可能被编译成 polymorphic inline cache 或干脆内联，**不保证走了 dispatch table**。
-      要做的：造一个**无法去虚化**的 fixture（多实现者 + 运行期不可预测的接收者），
-      用我们的 `gen_snapshot` + `dartaotruntime` 跑，并 dump 它的 dispatch table 确认
-      (i) 偏移全在 256 网格上、(ii) 行数足够多、(iii) 输出正确。
-      编译链路照 `dd_runtime_check.sh`：`gen_kernel_aot.dart.snapshot` + `vm_platform.dill` → `gen_snapshot` → `dartaotruntime`。
+- [~] 任务 11：**中断** —— 造 fixture 时撞上一个我自己引入的回归（见下），优先修它
+- [x] 任务 12：修 `dd_runtime_check` 的假绿 + 回退补齐 ✅ `0dfe634b44e` + spike `115249c`
+- [ ] 任务 13：**让补齐能与反向定长解析共存** ⬅️ **当前任务，也是重新打开对象池改写的唯一路径**
+      🔑 **证据已就位，方向明确**：他们快照里 **2299 个 PP 加载无一例外跟着 `nop,nop`**
+      （含调用序列内部）→ **他们改的是反向解析，不是选择性路由**。
+      要改的是 `runtime/vm/instructions_arm64.cc`：`:32` 的
+      `DecodeLoadWordFromPool(pc - 2 * Instr::kInstrSize, ...)` 假定固定回退 2 条指令；
+      `:47` 的 `DecodeLoadDoubleWordFromPool` 同理。还要看 `code_patcher_arm64.cc:21`。
+      🎁 **这些是运行期函数 → 引擎 dSYM 覆盖得到**，可用 `DW_AT_call_line` 法
+      （见 [[reference-dwarf-inline-call-lines]]，解开 `WrapCode` 就是它）。
+      ⚠️ 验证必须包含 **`copy_gen_kernel_snapshot` 重建后再跑 kernel 编译** ——
+      小程序（hello.dart）全过而 gen_kernel 段错误，这个规模差异是本轮全部教训的来源。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -83,10 +84,12 @@ shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
 op_rewrite_check.sh        0 failure(s)
 run_vm_tests               141 passed
-8 ran, 0 failed, 0 skipped
+7 ran, 0 failed, 0 skipped, 1 blocked
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`ead5f153d8d`（dart-sdk） / `3277b35`（fhp-research）。
+HEAD：`0dfe634b44e`（dart-sdk） / `115249c`（fhp-research）。
+⚠️ **`op_rewrite_check` 现在是 BLOCKED**（补齐已回退，编辑器因此惰化）——
+这是如实状态，不是待修的 harness 问题。
 
 
 ## 📊 私有子系统符号实测（2026-08-25，规则 0 的规定方法）
@@ -402,6 +405,45 @@ recon §(c)4 原记「未确定、零覆盖」。**现在不再是未确定的�
 `op_aggregator_check.sh` 本轮真的因 flake 失败了。实测他们的二进制**约一半概率**才吐出报告
 （`zone.cc` 的 OOM 是真间歇性的），3 次重试仍有 1/8 失败率 → 改成 10 次。
 **实测确认输出路径不是原因**：`/dev/null` 与真实文件 flake 率相同（3/5 vs 2/5）。
+
+
+## 🔴🔴 本轮最重要的事：我在任务 6a 引入了一个回归，被一个陈旧文件掩盖了整个会话
+
+### 假绿本体：`dd_runtime_check` 一直在用**昨天的 kernel**
+
+它把 `app.dill` 写进**持久目录** `out_ddrun/`，然后用 `[ -s app.dill ]` 当判据。
+自从 `dartaotruntime` 被重建而 `gen_kernel_aot.dart.snapshot` 没跟着重建之后，
+kernel 编译就一直失败（`Wrong full snapshot version`），而这个检查**一直通过** ——
+命中的是**前一天**留下的 dill。整个会话的绿都没编译任何东西。
+
+✅ 修法：先 `rm -f`，再检查**编译器自己的退出状态**，并在版本不匹配时打印该重建什么。
+
+### 修完立刻暴露出真问题：补齐让 `gen_kernel` 段错误
+
+`gen_kernel_aot.dart.snapshot` 是**我们自己的 gen_snapshot** 产出的。
+带补齐重建 → 启动即 `SEGV_ACCERR`（无栈）。关掉补齐重建 → 正常编译出 4.4MB dill。
+**一行开关的 A/B，所以补齐就是原因。**
+
+**机制**：补齐与**固定距离的反向读取**不兼容。
+`instructions_arm64.cc:32` 的 `DecodeLoadWordFromPool(pc - 2 * Instr::kInstrSize, ...)`
+假定池加载正好结束在调用前 2 条指令处；插入 NOP 就把它推开了。
+`:47` 的 `DecodeLoadDoubleWordFromPool` 同理 —— kind 1 和 kind 3，两个最常用的发射器。
+
+### ⚠️ 但结论**不是**「补齐是错的」
+
+实测他们自己的快照：**2299 个 PP 加载全部跟着 `nop,now`**，无一例外，**包括调用序列内部**。
+→ **他们的反向解析能处理补齐**，所以修法在解码器那边，不在路由那边。
+我当时「也许 narrow 一下就行」的猜测**被这个计数证伪了**。
+
+### 为什么选择回退而不是继续修
+
+一棵编译不出 kernel 的树不能留过夜。回退后编辑器重新惰化，
+`op_rewrite_check.sh` 因此报 **BLOCKED**（不是 pass 也不是 fail）。
+
+✅ **可复用规则（第 21 种假绿）**：**把中间产物写进持久目录 + 用「文件存在」当判据 = 定时炸弹。**
+判据必须是**产生它的那一步的退出状态**。
+✅ **第二条**：**小程序全过不等于能用。** hello.dart 规模的快照一切正常，
+gen_kernel 规模的段错误。**规模本身就是一个未被覆盖的维度。**
 
 
 # 📖 关键参考文档（别重新推导）
