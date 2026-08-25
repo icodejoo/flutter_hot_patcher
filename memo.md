@@ -14,14 +14,23 @@
       常设检查 `op_rewrite_check.sh` 已进 `verify_all`（现 8 项）
 - [~] 任务 9：`GetBestMapping` 的不可破平票 —— **已测出分歧，转入挂起池**
       `ead5f153d8d` + spike `3277b35`。他们 `14/8/0/120`、我们 `14/13/0/115`
-- [ ] 任务 10：`IndirectStaticCall` 68 vs 64 ⬅️ **当前任务**
-      ⚠️ **先证明差额是真的，再考虑做**。原始 `nm` 行数不可直接比（他们已 strip、我们没有）。
-      判据必须是**去重方法名的集合 diff**：两边各
-      `nm -a | c++filt | grep -o 'IndirectStaticCallInstr::[A-Za-z_]*' | sort -u`
-      再 `comm -3`。**两个方向都为空才叫持平。**
-      ⚠️ 别用 `DDTable\|IndirectStaticCall` 这种正则量它 —— 会把 `DDTableBuilder` 算进来
-      （前缀污染，已踩过两次）。2026-08-24 的记录说这个集合曾经是 19/19 持平，
-      **所以最可能的结论是「差额是 strip 差异，不是缺口」** —— 但要验过才算。
+- [x] 任务 10：`IndirectStaticCall` 68 vs 64 → **不是缺口，已结案**（本轮实测）
+      去重方法名集合 diff：他们 19、我们 20，**「只在他们那边」为空**。
+      多出的 `IndirectStaticCallInstr::FromCall` 是我们的外联工厂，被 DD IL pass 真实调用
+      （`aot_call_specializer.cc:1222`）；他们没有该符号是因为**他们那个 IL pass 完全内联**。
+      且 `FromCall` 是**上游本家族的惯用法**（`StaticCallInstr`/`PolymorphicInstanceCallInstr`/
+      `DispatchTableCallInstr` 都有同名工厂）→ 不是发明。**原始 `nm` 行数差 = strip 差异，已确认。**
+- [ ] 任务 11：验证装着 **256 网格稀疏 dispatch table** 的快照能真正执行 ⬅️ **当前任务**
+      CLAUDE.md 长期挂着这条「⚠️ 仍未验证」。本轮已确立两件事：
+      (a) `kOffsetAlignment = 256` 在 `runtime/vm/compiler/aot/dispatch_table_generator.cc:150`，对 AOT 生效；
+      (b) **他们的表也在 256 网格上** —— `out_dd/base.dt`（他们的 gen_snapshot 产出）
+          123 个 selector 偏移**无一例外**都是 256 的倍数，max=9728。
+      ⚠️ **现有 `dd_runtime_check.sh` 的覆盖不足以结案**：`fixtures/hello.dart` 只有 2 个接收者的
+      虚调用，很可能被编译成 polymorphic inline cache 或干脆内联，**不保证走了 dispatch table**。
+      要做的：造一个**无法去虚化**的 fixture（多实现者 + 运行期不可预测的接收者），
+      用我们的 `gen_snapshot` + `dartaotruntime` 跑，并 dump 它的 dispatch table 确认
+      (i) 偏移全在 256 网格上、(ii) 行数足够多、(iii) 输出正确。
+      编译链路照 `dd_runtime_check.sh`：`gen_kernel_aot.dart.snapshot` + `vm_platform.dill` → `gen_snapshot` → `dartaotruntime`。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
