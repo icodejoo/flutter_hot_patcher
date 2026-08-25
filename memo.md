@@ -372,19 +372,26 @@
       ✅ **方法教训**：`sha1_` 那行（他们 2 / 我们 0）差点被记成第三个缺口，
       **查了才知道我们有同功能的 `FhpSHA1Transform`，只是名字不同**。
       **「一侧为 0」是必要条件、不是充分条件——名字对不上也会给 0。**
-- [ ] 任务 39：**更新 CLAUDE.md 的完成度与几条过期记账** ⬅️ **当前任务**
-      规则 0 要求完成度以实测为准，而 CLAUDE.md 里那份还停在 2026-08-24。
-      本轮起要改的（**都有本会话的实测支撑，不是凭印象**）：
-      ① 「`analyze_snapshot --shorebird` B2/B4 已移植」→ **当时产不出东西**
-      （0 个函数，任务 32-36），**现在才真能用**（1589 个函数、`self_hash` 与他们逐字符相同）；
-      ② 私有子系统表要加 analyze_snapshot 一列，并记入 **`CascadeLimiter` 这个新缺口**（任务 38）；
-      ③ 「11 个私有 flag 全部完成」只对 gen_snapshot 成立；
-      `analyze_snapshot` 还差 **3 个** flag（`--dump_object_pool` /
-      `--dump_object_pool_link_data` / `--dump_blobs`），且前两个卡在 `SubgraphHasher`；
-      ④ `--disassemble` 已实现？**没有**——写过又回退了（任务 32），
-      且它撞上 VM 自己的同名 flag。
-      ⚠️ **只改有实测支撑的条目**；没测过的别动，也别顺手上调百分比。
-      ⚠️ CLAUDE.md 是规则文件，**改它要格外保守**：只订正事实，不改规则本身。
+- [x] 任务 39：**CLAUDE.md 的三条过期记账已按实测订正** ✅ `035f95e`
+      只改事实、**不动规则**，**也没有顺手上调百分比**（36–42% 原样保留）。
+      ① `analyze_snapshot --shorebird`「B4 已移植」是**一句空账**——
+      它在树里、help 里没有、对我们自己的快照产出 **0 个函数**；现已真能用（1589 个）。
+      ② 「口径陷阱」那条补上了它一直缺的数字：换到 `analyze_snapshot` 量，
+      `SubgraphHasher` **12/0**、`CascadeLimiter` **18/0**，是**仅剩的两个一侧为 0**。
+      同时写明 `sha1_`（2/0）**不是**缺口，免得它变成第四条错记账。
+      ③ 「11 个 flag 完成」只覆盖 `gen_snapshot`；`analyze_snapshot` 另有 7 个，
+      我们 4 个，还差 3 个；`--disassemble` 记为**已回退**而不是已实现。
+- [ ] 任务 40：**给 `CascadeLimiter` 做可行性侦察** ⬅️ **当前任务**
+      它和 `SubgraphHasher` 是仅剩的两个真缺口，且**它可能是先决条件**：
+      任务 30 的结论是「剩下 195 个函数需要模拟 callee walk」，
+      而 `CascadeLimiter` 正是给那个 walk 定界的东西 —— **先解它，walk 才有终止规则**。
+      已知（任务 18 实测）：`dart::CascadeLimiter::Run(unordered_map<long, unordered_set<long>> const&,
+      vector<long> const&, vector<string> const&, long, long long)`，
+      外加 `dart::CascadeLimiterEntry`；introsort 实例在 `0x100192080`（说明它对结果排序）。
+      **签名本身就给了很多**：入参是「图（邻接表）+ 一组种子 + 一组名字 + 两个数值上限」。
+      ⚠️ 按任务 16/30 的做法：**先花少量时间判断够不够得到**，
+      够不到就写进挂起池转下一项，**不要连试三轮**。
+      ⚠️ 它在 `analyze_snapshot` 里（不是 gen_snapshot）——量错产物已经坑过一次。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
