@@ -480,17 +480,31 @@
       ✅ **这条比对已进常设检查**——它就是抓漂移的那个东西。
       负控制：关掉三指令字段形态 → 报「25 个函数不一致」。
       ⚠️ `subgraph_field_table` 仍然缺席（它要 callee walk），未越界。
-- [ ] 任务 47：**回到主线：给 `--compute_dd_table` 做可行性侦察** ⬅️ **当前任务**
-      `analyze_snapshot` 这条线已经收干净了（7 个 flag 实现 5 个，输出不含任何假字段）。
-      剩下两个未实现的 flag 都卡在 `SubgraphHasher` 的 callee walk（任务 30 定性为大工程）。
-      **但 `--compute_dd_table` 是另一条独立的线**（任务 40 已证明它与 walk 无关）：
-      它**连他们的 help 都没列**，而 `dd_pipeline.sh` 一直在用它产 `base.ddtable`。
-      🎁 **oracle 现成且强**：CLAUDE.md 记着「`--compute_dd_table` 格式已逐字节解出」，
-      且 `out_dd/base.ddtable` 就是他们产的真值 → **可以逐字节对**。
-      ⚠️ **先核实那句「格式已逐字节解出」到底解到什么程度**（本会话已有多次
-      「记账比实际乐观」的先例），再决定要不要开工。
-      ⚠️ `CascadeLimiter`（他们 18 / 我们 0）是它的一部分，量级未知 ——
-      **按任务 16/30 的做法先估，够不到就写进挂起池。**
+- [x] 任务 47：**可行性判定：`--compute_dd_table` 没有被那个大 walk 挡住** ✅ spike `1215236`
+      ✅ **CLAUDE.md 那句「格式已逐字节解出」是准的**（本轮核实，不是所有记账都乐观）：
+      解码他们的 `base.ddtable` **3969/3969 字节全部消耗**，67 条，
+      与 README 记的条数一致。格式：
+      `count:u, { hash:str, index:u, size:u } * count`，
+      字符串是**每字符一个 signed varint**（`'a'`→`61 c0`、`'0'`→`f0`）。
+      🔴 **但 README 把键的名字写错了，而这个错误正好指向最坏的结论**：
+      它写的是 `subgraph_hash`（需要 callee walk，未解），
+      实测 **67 个哈希里 67 个是 `self_hash`**、只有 1 个出现在 `subgraph_hash` 里
+      （那是某个函数两个哈希恰好相同）。已订正 README。
+      → **`--compute_dd_table` 用的是我们已经实现的 `self_hash`**
+      （对他们 777/950），**不被那个大工程阻塞**。
+      ⚠️ 仍未知：**67 条是怎么从 1380 个函数里选出来的**（`CascadeLimiter` 应该就是选择器），
+      以及 `size` 的确切含义与 `--dd_max_bytes` 的反向关系（README 记了现象未记机制）。
+- [ ] 任务 48：**解「67 条是怎么选出来的」** ⬅️ **当前任务**
+      这是 `--compute_dd_table` 唯一剩下的未知（格式已解、键已确认可算）。
+      🎁 **oracle 极强**：他们的 `base.ddtable` 就是真值，**可逐字节对**；
+      而且 README 记了一组现象可以当判据：
+      `--dd_max_bytes` 16→619 条、64→561、256→438、1024→244，**默认只有 67**
+      —— **条数随上限增大而减少**，这个反向关系本身就是机制的强约束。
+      ⚠️ **先别急着反汇编 `CascadeLimiter::Run`**：先用**已有数据**做一轮统计——
+      把 67 条的 `self_hash` 拿回 `--shorebird` 输出里查出对应函数，
+      看它们在 size / 调用数 / 名字上有没有共同点。**分布法在这个会话里赢过公式法三次。**
+      ⚠️ `CascadeLimiter::Run` 的签名已知（任务 18/40），真要反汇编时它在
+      `analyze_snapshot` 里、`0x100192080` 附近有 introsort 实例。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
