@@ -10,9 +10,9 @@
       ✅ `ab58e28152d`。9 个单测，4 个负控制全红后还原。`verify_all` 6 ran / 0 failed / **137 passed**
 - [x] 任务 2：`self_pp` / `subgraph_pp` 的 sticky `csel` 选择 + `self_hash_` 回落分支
       ✅ 与任务 1 同一提交 —— 它们在同一个循环体里，拆开实现不了
-- [ ] 任务 3：造**判别性合成 fixture**，用他们的 `gen_snapshot` 做 oracle 判定任务 1/2 真的对了
-      ⬅️ **当前任务**。任务 1/2 目前是「照着反汇编转写的」，不是「行为验证过的」
-- [ ] 任务 4：`LinkedValue<T>` 模板落地（目前用裸 `PoolIndexPair`）
+- [x] 任务 3：判别性合成 fixture ✅ `9d5fb26`。**他们的 gen_snapshot 报 8/7/0/121，我们逐行相同**；
+      三个负控制各自把数字打歪（8/8/0/120、7/6/0/122、4/4/0/124）→ **任务 1/2 已从「转写的」升级成「验证过的」**
+- [ ] 任务 4：`LinkedValue<T>` 模板落地（目前用裸 `PoolIndexPair`）⬅️ **当前任务**
 - [ ] 任务 5：收紧 `object_pool_editor` 的两条软断言，修 kind-1/2 在 2²⁴ 之后的计数误读
 - [ ] 任务 6：把 `ObjectPoolEditor` 接进 `ImageWriter::Write`（依赖任务 1 产出 `mapping[]`）
 
@@ -58,11 +58,12 @@ dd_pass_check.sh           0 failure(s)
 dd_runtime_check.sh        0 failure(s)
 op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
+op_aggregator_check.sh     0 failure(s)
 run_vm_tests               137 passed
-6 ran, 0 failed, 0 skipped
+7 ran, 0 failed, 0 skipped
 ```
-两个 ninja 配置均 `no work to do`。工作树 clean。
-HEAD：`ab58e28152d`（dart-sdk） / `5b8c55f`（fhp-research）。
+`--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
+HEAD：`ab58e28152d`（dart-sdk） / `9d5fb26`（fhp-research）。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -132,16 +133,45 @@ link-results 系列每个键只有一个候选。
 2. 他们的第四张 `groupBy(patch, self_hash_)` 建了从不读 → 我们不建。
 3. 他们的比较器按引用捕获 key，我们按值 —— 无可观测差异。
 
-## 任务 3：判别性合成 fixture（**任务 1/2 的唯一真判据**）
+## ✅ 任务 3 已完成（`9d5fb26`）——聚合器现在是**验证过的**，不再是转写的
 
-现有 fixture 判别不出来，因为每个匹配组都是 1:1、每个内层 map 只有一个权重 0.5 的候选，
-贪心永远不拒绝。要造的输入（`op_link_info_check.sh` 已有 writer，他们的 `gen_snapshot` 读它）：
-1. 某个 `op_subgraph_hash_` 组在一侧有 **2 个成员**（触发歧义组：我们丢弃、他们投票）
-2. 两个 patch 索引的最佳候选是**同一个 base 索引**（触发单射拒绝与 `-1` 返回）
-3. 一个 patch 的 `op_subgraph_hash_` 在 base 中**不存在**（触发 `self_hash_` 回落 + sticky）
+`spikes/shorebird_linkinfo_oracle/make_op_fixture.py` + `op_aggregator_check.sh`
+（已进 `verify_all.sh`，现在是 7 项检查）。
 
-然后 diff 我们的四行报告与他们的。**这一步做完，任务 1/2 才从「照着反汇编抄的」
-升级成「行为验证过的」。**
+**设计上的核心约束**：报告只有四个数字，所以**只改变映射目标的错误是观测不到的**。
+每个组都被设计成把一种具体错误变成一个**计数**差异：
+
+| 组 | base×patch | 抓什么 |
+|---|---|---|
+| S2 | 2×2 | 歧义组被丢弃而非投票 |
+| CONTEST | 2×2 | 全局单射（第二个 patch 索引必须拿到 -1） |
+| FALLBACK | 1×1 | `self_hash_` 回落 + 索引向量切换 |
+| SG | 1×1 | base 组存在时用 `subgraph_pp` |
+| W1+W2 | 2×2, 1×5 | **权重除数** |
+
+**W1/W2 是最不显然的一对**：两组都投 patch 索引 80，W1 得 `4×1/4 = 1.000`、
+W2 得 `5×1/6 = 0.833` → 加权选 W1、数事件选 W2。而 W1 的 base 索引是 **5**、W2 的是 **82**，
+**只有后者过得了 stage 1 的 `>=8` 闸门** —— 这才把「换了个映射目标」变成「line 2 变了」。
+
+**实测结果**：
+```
+他们的 gen_snapshot：8 / 7 / 0 / 121   ← 与我从反汇编手推的一致
+我们的            ：8 / 7 / 0 / 121   ← 逐行相同
+常数权重          ：8 / 8 / 0 / 120
+无条件 self_pp    ：7 / 6 / 0 / 122
+size==1 过滤      ：4 / 4 / 0 / 124
+```
+
+### 🔴 写 harness 时踩的两个坑（都记下来）
+
+1. **他们的 `gen_snapshot` 会打 `Out of memory`**（zone.cc:96）——报告在链接器初始化时打，
+   OOM 在之后写快照时发生。**偶发地会把报告输出一起吞掉** → harness 必须重试，
+   否则会把 flake 读成「他们没输出」。
+2. **我的第一版 self-test 扰动不是扰动**：把 `synth_base.op` 同时当 base 和 patch，
+   报出来**还是 8/7/0/121** —— 因为每组都恒等配对，而闸门下那个 base 索引仍是 5。
+   **它长得像一个通过的 self-test，实际什么都没比。**
+   现在改用「删掉 W1 组的 base」，已知会给 8/8/0/120。
+   → 这是[[feedback-false-green-traps]]第 18 种（两个输入相同）在 self-test 上的变体。
 
 ## 任务 4：`LinkedValue<T>`
 
