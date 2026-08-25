@@ -132,14 +132,24 @@
       🔑 **PP 加载独占整个补齐 footprint** —— 没有任何单槽替换能修好 `_printClosure`，
       加载 + 两个 NOP 塌成**一个** entry。
       模型已存进 `probe_subgraph_hash.py`（不是写在文档里），下轮从 253 起步。
-- [ ] 任务 24：**补齐剩下三个 kind，把 253 推到 1380** ⬅️ **当前任务**
-      缺的是 `DispatchTableCall`(3) / `FieldTableLoadIndex`(6) / `IndirectStaticCall`(8)，
-      外加其它 PP 寻址形态（`ldp`/`stp` off PP、`add`+`ldr`、`movz`/`movk` 寄存器偏移型）
-      —— 它们现在都掉进 `RawInstructionBits` 了。
-      **方法已验证有效，照用**：取当前模型最小的错例 → 暴力搜单槽/多槽修法 → 全量复测。
-      🎁 `./probe_subgraph_hash.py` 直接跑出 `self_hash reconstructed exactly: N/1380`，
-      **这个数字就是判据**，每轮该涨。
-      ⚠️ 到 1380/1380 之后才谈实现进树（届时 `--dump_object_pool_link_data` 才有生产方）。
+- [~] 任务 24：**entry 流 253 → 277/1380** ✅ spike `eb80c18`
+      同一个循环：取最小错例 → 暴力搜修法 → 全量复测。
+      | 新增规则 | 命中 |
+      |---|---:|
+      | 字段表：`ldr xN,[THR,#off]` + 经 `xN` 的访问 → `(6, 序号)`，**两条指令塌成一个 entry** | 258 |
+      | 条件跳转也算跳转，且 `LocalBranch` 装的是**相对下一条指令的 delta** | **277** |
+      🔑 **`LocalBranch` 的值是 `delta-1`**（暴力搜 `[Stub] Type Test Type: Object`
+      对一个目标在字节 12 的 `b.eq` 返回 `(5,1)`）；绝对偏移和原始位移都只得 258。
+      🔴 **上一轮模型里那条「绝对偏移」从来没被执行过** —— 在把条件跳转纳入之前，
+      语料里几乎所有本地跳转都掉进 `RawInstructionBits`，所以那条规则**对错都是同一个分数**。
+      ✅ **可复用教训：模型的总分在涨，不代表它每一条规则都被检验过。**
+- [ ] 任务 25：**继续把 277 推向 1380** ⬅️ **当前任务**
+      仍缺：`DispatchTableCall`(3)、`IndirectStaticCall`(8)，
+      以及其它 PP 寻址形态（`ldp`/`stp` off PP、`add`+`ldr`、`movz`/`movk` 寄存器偏移型）。
+      **方法不变**：`python3 /tmp/iter.py` 式的「最小错例 + 暴力搜（单槽/塌 2/塌 3）」，
+      每轮跑 `./probe_subgraph_hash.py` 看 `reconstructed exactly` 这个数。
+      ⚠️ **每加一条规则，要确认它真的被执行到**（本轮教训）：
+      可以临时把该规则改坏，分数不变就说明它零覆盖。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -202,7 +212,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `2e4e01e`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `eb80c18`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
