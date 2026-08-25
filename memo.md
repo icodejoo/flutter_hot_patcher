@@ -6,21 +6,15 @@
 
 ## 📋 当前核心任务
 
-- [x] 任务 1：实现 `ObjectPoolMappingsAggregator`（加权投票 + `GetBestMapping`）
-      ✅ `ab58e28152d`。9 个单测，4 个负控制全红后还原。`verify_all` 6 ran / 0 failed / **137 passed**
-- [x] 任务 2：`self_pp` / `subgraph_pp` 的 sticky `csel` 选择 + `self_hash_` 回落分支
-      ✅ 与任务 1 同一提交 —— 它们在同一个循环体里，拆开实现不了
-- [x] 任务 3：判别性合成 fixture ✅ `9d5fb26`。**他们的 gen_snapshot 报 8/7/0/121，我们逐行相同**；
-      三个负控制各自把数字打歪（8/8/0/120、7/6/0/122、4/4/0/124）→ **任务 1/2 已从「转写的」升级成「验证过的」**
-- [x] 任务 4：`LinkedValue<T>` ✅ `b85ebe6c36a`。不只是重命名 —— 类表现在携带完整 `ClassInfo`，
-      步长 `0x70`、偏移 `+0x00/+0x38` 与他们一致；3 个 `static_assert` 钉住布局；负控制换序 → 9 红
-- [~] 任务 5：**已核实为「非缺陷」，不做**（理由见下方任务卡）
-- [x] 任务 6：接进 `ImageWriter::Write` —— **6a/6b/6c 全部完成**
-  - [x] **6a 补齐前置**：三个池发射器路由到 `PadLoadStore` ✅ `eb17b43924d`。
-        NOP 数 **0 → 4636**（他们 4598）。⚠️**这一条 memo 原本完全没记，是动手才发现的真依赖**
-  - [x] **6b**：mapping 表落到 `ShorebirdLinker + 0x28` ✅ `66a46515eb5`（recon (c)5 的开放问题已关闭）
-  - [x] **6c**：`ImageWriter::Write` 调 `ObjectPoolEditor::Edit` ✅ 同一提交。
-        实测 **2324 个站点**走了他们的自校验且全过；⚠️**改写路径生产零覆盖**
+> 任务 1-6 已全部完成（见下方任务卡）。以下是 **2026-08-25 重新符号实测**后的新清单。
+
+- [x] 任务 7：`field_hasher.cc` ✅ `ecd1e5b5b20`。**最后一个「一侧为 0」的私有子系统已关闭**
+- [ ] 任务 8：让改写路径有生产覆盖 ⬅️ **当前任务**
+      现状：`ImageWriter::Write` 的自校验路径跑了 2324 站点，但 `nonidentity=0`
+      → **改写从未在生产中执行过**。需要一对 pool 顺序真正不同的 base/patch
+- [ ] 任务 9：`GetBestMapping` 平票且双方都非恒等时的顺序（unordered_map 桶布局 + introsort）
+      当前 fixture 零覆盖；**绝不 `reserve()`**
+- [ ] 任务 10：`IndirectStaticCall` 68 vs 64 —— 先查清差额是 strip 差异还是真缺口，再决定做不做
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -65,11 +59,33 @@ dd_runtime_check.sh        0 failure(s)
 op_link_info_check.sh      0 failure(s)
 shorebird_info_check.sh    0 failure(s)
 op_aggregator_check.sh     0 failure(s)
-run_vm_tests               137 passed
+run_vm_tests               140 passed
 7 ran, 0 failed, 0 skipped
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`66a46515eb5`（dart-sdk） / `9d5fb26`（fhp-research）。
+HEAD：`ecd1e5b5b20`（dart-sdk） / `821d0a3`（fhp-research）。
+
+
+## 📊 私有子系统符号实测（2026-08-25，规则 0 的规定方法）
+
+`nm -a | c++filt | sort -u` 双边同口径（他们先 `lipo -thin arm64`，我们 `--mode=product`）。
+他们 32373 / 我们 34055 唯一符号。**只有「一侧为 0」是有意义的判据**——
+我们计数更高不代表进展（我们未 strip）。
+
+| 标志符号 | 他们 | 我们 | 判读 |
+|---|---:|---:|---|
+| `ShorebirdLinker::` | 20 | 38 | ✅ |
+| `ObjectPoolMappings` | 8 | **10** | ✅ 本轮之前是 0 |
+| `LinkedValue` | 4 | **12** | ✅ 本轮之前是 0 |
+| `ObjectPoolEditor` | 2 | 4 | ✅ |
+| `FieldHasher` | 2 | **2** | ✅ 任务 7 关闭 |
+| `DDTableBuilder` | 8 | 8 | 持平 |
+| `DDSlotMapping::` | 2 | 2 | 持平 |
+| `IndirectStaticCall` | 68 | 64 | ⚠️ 差 4，**未查证**（原始行数受 strip 影响，不可直接比）|
+| `groupBy` | 2 | 0 | ⚠️ **不是缺口**：我们的 `GroupBy` 是头文件模板，被内联 |
+| `SubgraphHasher` / `CascadeLimiter` / `ClassTableMapper` | 0 | 0 | ⚠️ 已知口径陷阱，两边 0 读不出结论 |
+
+→ **除 `IndirectStaticCall` 待查外，不再有「一侧为 0」的私有子系统。**
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -287,6 +303,27 @@ recon (c)5 记的是 `[[0x100521xxx + 0x4b0] + 0x28]` → `[x8]` → `x8[index]`
 
 
 ---
+
+
+## ✅ 任务 7 已完成（`ecd1e5b5b20`）：`field_hasher.cc`
+
+**盘点方式本身是重点**：不看记账，直接两边符号表对拍。结果只剩 `FieldHasher` 一个真零。
+
+我们**早就在产这些 hash**（内容与他们逐条相同），缺的是**形状**——而形状恰恰有内容：
+他们的签名 `DuplicateAwareHash(const Field&)` **只收一个 Field 却要去重**，
+所以出现次数不可能是参数，**必须是状态** → 这就是它是对象而不是自由函数的原因。
+
+⚠️ **成员还是函数内静态，从符号判不出来**（静态方法与非静态方法在这里 demangle 相同）。
+选了成员，因为可测；而函数内静态会把计数带到同进程的下一次 dump——**那种 bug 只在第二次 dump 才现形**。
+
+### 🔴 本轮又踩陈旧二进制，且差一步就得出错误结论
+
+负控制（把后缀从「重复」改成「递增」）跑完，`verify_reproduction.sh` 报 **24/24 通过**。
+差点写下「字节 oracle 覆盖不到 field hash」。真相是：那个检查用的是
+**`ProductARM64/gen_snapshot`，而我只重建了 Release**。重建 Product 后立刻变成 **6 failures**。
+✅ **判据**：负控制不红时，先确认**被那个检查实际执行的那个二进制**是新的，
+而不是「我刚才 build 过」——两个配置是两个二进制。
+
 
 # 📖 关键参考文档（别重新推导）
 
