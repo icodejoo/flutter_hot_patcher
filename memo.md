@@ -55,20 +55,30 @@
       ✅ **顺手关掉一个 flag**：`--no_pp_hash` 是**他们自己也不接受的死 flag**
       （help 里有，parser 不收，落到 VM 被拒）→ 忠实复刻 = **写进 help 且不注册**。
       我们的行为**本来就和他们逐字节相同**，只差两行 help。缺口 6/14 → **5/12**。
-- [ ] 任务 19：**反汇编 `SubgraphHasher`，先解出哈希的输入格式** ⬅️ **当前任务**
-      侦察已就位（本轮拿到的地址，`analyze_snapshot` arm64 slice）：
-      | 符号 | 地址 |
-      |---|---|
-      | `SubgraphHasher::SubgraphHasher(InstructionsTableInterface&, char const*, DDTableLinkInfo const*)` | `0x100195c54` |
-      | `SubgraphHasher::Hasher::Hash()` | `0x100195fb8` |
-      | `SubgraphHasher::AccumulateRecursive(unsigned long, int)` | `0x100196694` |
-      | `sha1_transform(SHA1_CTX*, unsigned char const*)` | `0x100195834` |
-      🎁 **哈希算法已确定是 SHA-1**（`sha1_transform` 符号在，且 40 字符 = SHA-1 宽度）。
-      🎁 **oracle 现成**：他们 `.op` 文件里每个 CodeInfo 都带真值，
-      同一函数算出同样 40 字符就是对的。
-      ⚠️ `AccumulateRecursive(uword, int)` 的第二个参数多半是深度 → 先解它的终止条件。
-      ⚠️ **这是多轮工程**（量级同 `object_pool_editor`：4 个函数）。
-      按任务 16 的做法，**每轮先确认还够得到，够不到就转下一项**。
+- [~] 任务 19：**`SubgraphHasher` 侦察** —— 等价关系解出来了，**框架没有** ✅ spike `1a3ee52`
+      `SUBGRAPH_HASHER_RECON.md` + `probe_subgraph_hash.py`（**本轮无代码改动，是纯侦察**）。
+      **已确立**（对他们 1380 个函数逐个实测）：
+      ① `self_hash` **只取决于指令字节**（1378 个不同 blob，无一 blob 对应两个 hash）
+      → 名字/索引/位置都不参与；
+      ② 它是**多对一**（1378 → 1170）所以做了归一化；
+      ③ **被忽略的是「PP 相对加载的位移」和「跳转/调用目标」**
+      （拿同 hash 不同字节的函数对直接读出来的，也正是 `--no_pp_hash` 描述所说）；
+      ④ 只屏蔽这两样：1378 → **1185**，目标 1170，**还差 15 类**；
+      再加 ldp/stp、`add xN,x27,#imm`、`b.cond`、`cbz`、`tbz`、`adr` **一类都没少**
+      → 残差是**另一种机制**，最可能是寄存器偏移型池加载（偏移在 movz/movk 立即数里）；
+      ⑤ 🔴 **摘要不是对字节缓冲区的平铺 SHA-1**：`sha1(raw)` 与 `sha1(归一化)`
+      对 1380 个**全部为 0**（连归一化等于恒等的那些也不中）→ **字节外面还有框架**
+      （长度/分块/种子），它在 `Hasher::Entry` + `Hasher::Hash()` 里。
+      ✅ **方法上值得留的一条：比「划分」，不要比「摘要」。**
+      框架未知 ⇒ 任何候选都算不出摘要；但「这两个函数 hash 相同」与框架无关，
+      照样可观测。①-④ 全靠这个才够得到。
+- [ ] 任务 20：**反汇编 `Hasher::Hash()` @ `0x100195fb8`（1756 字节）** ⬅️ **当前任务**
+      **经验路线已穷尽**（任务 19 实测：所有候选框架给出同一个划分），只剩反汇编。
+      地址与全部已知事实见 `fhp-research/.../SUBGRAPH_HASHER_RECON.md`，**别重新推导**。
+      要解的就一件事：**喂进 SHA-1 的到底是什么**（长度前缀？逐指令？种子？`Entry` 是什么？）。
+      🎁 解出框架后，①-④ 已经把归一化给出来了，`self_hash` 应该当场可验（1380 个逐个对）。
+      ⚠️ 量级同 `object_pool_editor`（那次是 4 个函数 / 多轮）。
+      ⚠️ 每轮先确认还够得到，**够不到就写进挂起池转下一项**（任务 16 的做法）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -131,7 +141,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `63a658c`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `1a3ee52`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
