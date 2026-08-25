@@ -15,8 +15,11 @@
 - [x] 任务 4：`LinkedValue<T>` ✅ `b85ebe6c36a`。不只是重命名 —— 类表现在携带完整 `ClassInfo`，
       步长 `0x70`、偏移 `+0x00/+0x38` 与他们一致；3 个 `static_assert` 钉住布局；负控制换序 → 9 红
 - [~] 任务 5：**已核实为「非缺陷」，不做**（理由见下方任务卡）
-- [ ] 任务 6：把 `ObjectPoolEditor` 接进 `ImageWriter::Write` ⬅️ **当前任务**
-      依赖的 `mapping[]` 已由任务 1 产出 → **阻塞已解除**
+- [~] 任务 6：接进 `ImageWriter::Write` —— **拆成了 6a/6b/6c，6a 已完成**
+  - [x] **6a 补齐前置**：三个池发射器路由到 `PadLoadStore` ✅ `eb17b43924d`。
+        NOP 数 **0 → 4636**（他们 4598）。⚠️**这一条 memo 原本完全没记，是动手才发现的真依赖**
+  - [ ] **6b**：`ShorebirdLinker` 拥有 mapping 表（+0x28 槽）⬅️ **当前任务**
+  - [ ] **6c**：`ImageWriter::Write` 里的 walk 调 `ObjectPoolEditor::Edit`
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -65,7 +68,7 @@ run_vm_tests               137 passed
 7 ran, 0 failed, 0 skipped
 ```
 `--self-test` 模式下 6 个 harness 全部能正确报错。工作树 clean。
-HEAD：`b85ebe6c36a`（dart-sdk） / `9d5fb26`（fhp-research）。
+HEAD：`eb17b43924d`（dart-sdk） / `9d5fb26`（fhp-research）。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -207,18 +210,51 @@ size==1 过滤      ：4 / 4 / 0 / 124
 ✅ **方法论**：任务卡上的「待修项」在动手前要先核实前提。这一条的三项里有两项
 是我自己早先记错，如果照着改会**引入**问题（把一个已知为假的断言升级成 release 断言）。
 
-## 任务 6：接进 `ImageWriter::Write` ⬅️ **当前任务，阻塞已解除**
+## 任务 6：接进 `ImageWriter::Write`
 
-唯一生产调用方是**上游** `dart::ImageWriter::Write`（`image_snapshot.cc`，我们本来就有这个文件）。
-全 `__text` BL 扫描 13 处，其中 10 处在其体内。
+### ✅ 6a 已完成（`eb17b43924d`）：补齐是**没被记下来的真依赖**
 
-**原阻塞**：那个循环要读 old→new 索引映射表，而「该表的所有者未定」。
-**现已解除**：`ComputeObjectPoolMapping` 就是它的生产者，任务 1/3 已把它验证到
-与他们逐行相同。`ObjectPoolEditor::Edit` 的签名已经收 `mapping.data()` + size
-（见 `object_pool_editor_test.cc` 里的 `IdentityMapping`），接口是对得上的。
+memo 原来把任务 6 的依赖只写成「mapping 表所有者未定」。动手才发现**还有第二个**：
+`PadLoadStore` 自 `f426f46f5b0` 落地起就**只有 `AssembleReplacement` 和测试在调**，
+19 个上游发射器一个都没走它 → **我们的 AOT 快照根本没补齐**，
+而编辑器的前提是每个 PP 相对访问占固定 3 条指令的足迹。没有补齐，
+`Edit()` 会拒绝每一个站点，`ImageWriter::Write` 挂上去也无事可做。
 
-🎁 **他们自带 oracle**：`ImageWriter::Write` 在索引未变时会重新汇编并逐字节自校验，
+**动手前先验证前提**（同一程序同一逻辑站点）：
+```
+他们  ldr x4, [x27, #0x48] ; nop ; nop
+我们  ldr x4, [x27, #0x48] ; str x0, [x15, #-0x8]!
+```
+全快照 NOP 计数：他们 4598、我们 **0** → 改动后我们 **4636**。
+
+### 🔴 6a 踩到的架构问题：`LoadWordFromPoolIndex` **JIT 也在用**
+
+无条件补齐 → `IL_IndirectStaticCall_SerializationRoundTrip` 与
+`IsolateReload_ShapeChange_Const_AddSlot` **在 unoptimized 代码里崩溃**。
+原因：`InstructionPattern::Decode*FromPool` 会**反向**解析这些序列
+（`LoadDoubleWordFromPoolIndex` 的注释就写着必须与它同步），补齐破坏了它们的假设。
+
+→ 加了 `FLAG_precompiled_mode` 门控。⚠️**这个门控是我们的，不是他们的**：
+补齐只服务于「编辑器 renumber 而不移动代码」，那只对 AOT 快照有意义；
+而他们的 `gen_snapshot` 是 precompiler-only，**他们的 JIT 构建补不补齐无从观测**。
+门控放在**三个调用点**而不是 `PadLoadStore` 内部，这样测试里刻意构造补齐 fixture
+的直接调用仍然有效。
+
+### 🔑 6b：mapping 表的所有者已定位
+
+recon (c)5 记的是 `[[0x100521xxx + 0x4b0] + 0x28]` → `[x8]` → `x8[index]`，当时判为「未确定」。
+但 `linker.cc` 的注释里记着**他们的 ShorebirdLinker 单例指针就在 `0x1005214b0`** —— 两处是同一个地址。
+→ **mapping 表 = `ShorebirdLinker + 0x28`**，也就是我们 `linker.h` 里标着
+「8-byte gap，无任何已测函数访问」的那个槽。两次解引用（`[x8]` 再 `x8[index]`）
+说明它是个指向「首字段为数组基址」的对象的指针，与 `vector<intptr_t>*` 一致。
+
+### 6c：`ImageWriter::Write` 里的 walk
+
+完整重构见 `OBJECT_POOL_EDITOR_RECON.md:535-590`。`Edit()` 已经实现了整个 walk，
+缺的只是调用点。🎁 **他们自带 oracle**：索引未变时会重新汇编并逐字节自校验，
 打印 `"Expected:\n"` / `"Actual:\n"`（两串在二进制里各恰好 1 次，已验）。
+
+
 
 ---
 
