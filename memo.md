@@ -169,14 +169,26 @@
       一个「不可能命中的判据」和一个「命中了但没发现东西的判据」，报告的字面结果一模一样。
       假设产出「恰好零变化」时，先确认匹配器真的能匹配，再去信这个结果。**
       ⚠️ 另测得：**剩下 310 个错例没有一个能靠「替换单个 entry」修好** → 剩下的全是多指令塌缩。
-- [ ] 任务 27：**继续把 1082 推向 1380** ⬅️ **当前任务**
-      仍缺 `DispatchTableCall`(3) 与 `IndirectStaticCall`(8)，以及其它多指令塌缩形态
-      （`ldp`/`stp` off PP、`add`+`ldr` 的池变体、`movz`/`movk` 寄存器偏移型）。
-      **方法（按有效性排序）**：
-      ① `python3 /tmp/it2.py [n]` 看第 n 小的错例 + 自动暴力搜（单槽/塌2/塌3）；
-      ② 对某一类，**在多个函数上分别解值再看分布**（任务 25 的教训）；
-      ③ **每加一条规则，先确认它真的被匹配到**（本轮教训）——
-      「零变化」优先怀疑匹配器，不要先怀疑假设。
+- [~] 任务 27：**entry 流 1082 → 1185/1380** ✅ spike `673bf7e`
+      | 新增规则 | 命中 |
+      |---|---:|
+      | `DispatchTableCall`：三指令塌缩 `<算 cid>` ; `ldr xN,[x21,xM,lsl#3]` ; `blr xN`，值为**常数 1** | 1183 |
+      | 大位移池访问（`add xN,PP,#imm{,lsl 12}` [; `add`] ; `ldr`/`ldp`）+ 直接 `ldp/stp` off PP | **1185** |
+      ✅ **常数 1 是解出来的不是猜的**：在 20 个函数上分别解，20 个全给「塌 3 条、值 1」。
+      （因为两轮前 `LocalBranch` 是常数、而别处的序号又都是真序号，所以这条必须单独验。）
+      ✅ **大位移那条只值 +2，也去确认了它真的在触发**：全语料只有 **3 个**函数含
+      `add xN,PP,#imm` → +2 就是它的全部。**「小收益」和「匹配器从不命中」从分数上看是一样的。**
+      📊 **规则覆盖已量化**（发现死条款的最便宜手段）：
+      `OffsetFromPayloadStart 1380 / ObjectPool 2294 / ExternalBranch 4997 /
+      LocalBranch 9000 / DispatchTableCall 332 / FieldTable 245 / Raw 49402`
+      🔴 **`IndirectStaticCall`(8) 至今一次都没被发出过** —— 它是最后一个没有规则的 kind。
+- [ ] 任务 28：**解 `IndirectStaticCall`，把 1185 推向 1380** ⬅️ **当前任务**
+      剩 195 个错例，kind 8 零发射 → 它多半就是主因。
+      🎁 **我们自己实现过这条指令**（`IndirectStaticCallInstr`，CLAUDE.md 记的 19 方法持平），
+      **发射形态是已知的**：`ldr x16,[THR,#0x978]`（`indirect_static_call_table_`）
+      → `ldr x16,[x16,#idx*8]` → `blr x16`。**先照这个形状去匹配。**
+      ⚠️ 但**值仍要用分布法解**（别假定是常数 1，也别假定是序号）。
+      ⚠️ 加完先看 `entry_stream` 里 kind 8 的计数是否 > 0，再看分数（任务 26/27 的教训）。
       判据：`./probe_subgraph_hash.py` 的 `reconstructed exactly: N/1380`。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
@@ -240,7 +252,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `ce5adbb`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `673bf7e`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
