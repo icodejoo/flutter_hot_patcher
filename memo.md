@@ -381,17 +381,32 @@
       同时写明 `sha1_`（2/0）**不是**缺口，免得它变成第四条错记账。
       ③ 「11 个 flag 完成」只覆盖 `gen_snapshot`；`analyze_snapshot` 另有 7 个，
       我们 4 个，还差 3 个；`--disassemble` 记为**已回退**而不是已实现。
-- [ ] 任务 40：**给 `CascadeLimiter` 做可行性侦察** ⬅️ **当前任务**
-      它和 `SubgraphHasher` 是仅剩的两个真缺口，且**它可能是先决条件**：
-      任务 30 的结论是「剩下 195 个函数需要模拟 callee walk」，
-      而 `CascadeLimiter` 正是给那个 walk 定界的东西 —— **先解它，walk 才有终止规则**。
-      已知（任务 18 实测）：`dart::CascadeLimiter::Run(unordered_map<long, unordered_set<long>> const&,
-      vector<long> const&, vector<string> const&, long, long long)`，
-      外加 `dart::CascadeLimiterEntry`；introsort 实例在 `0x100192080`（说明它对结果排序）。
-      **签名本身就给了很多**：入参是「图（邻接表）+ 一组种子 + 一组名字 + 两个数值上限」。
-      ⚠️ 按任务 16/30 的做法：**先花少量时间判断够不够得到**，
-      够不到就写进挂起池转下一项，**不要连试三轮**。
-      ⚠️ 它在 `analyze_snapshot` 里（不是 gen_snapshot）——量错产物已经坑过一次。
+- [~] 任务 40：**卡片的前提是错的；顺手量出了 `--dump_blobs` 的契约**（本轮无代码）
+      🔴 **`CascadeLimiter` 不是 `SubgraphHasher` 的先决条件。** 我在任务 39 写卡时
+      推断「它给 walk 定界」，**查证否掉了**：符号表里 `CascadeLimiterEntry`（48 个）
+      与 `Dart_ComputeDDTable`（22 个）聚在一起，而**唯一**给 `CascadeLimiterEntry*`
+      排序的 lambda 属于 `Dart_ComputeDDTable`，不属于 `SubgraphHasher`。
+      → `CascadeLimiter` 服务的是 **`--compute_dd_table`**（一个**他们 help 里都没列**的
+      隐藏 flag，`dd_pipeline.sh` 在用），与 subgraph 哈希的 walk 无关。
+      ✅ **所以「仅剩两个缺口是同一块工作」这句也是错的**——它们是两块独立的工作。
+      🎁 **顺手把 `--dump_blobs` 的契约量出来了**（它是三个缺 flag 里最小的一个）：
+      输出 = **四个 region 按真实长度拼接**，以快照 data 的魔数 `f5f5dcdc` 开头。
+      实测 `base.so`：blob **669622** 字节 = data **302390** + instructions **367232**；
+      而 ELF 的 `.rodata`+`.text` 是 302496+367264 = 669760 —— **差 138 字节是 section 的对齐填充**，
+      即**它用的是 VM 知道的真实长度，不是 ELF section 长度**。
+- [ ] 任务 41：**实现 `--dump_blobs`** ⬅️ **当前任务**
+      契约已量出（见任务 40），**唯一未解的就是那四个长度从哪来**——
+      `Dart_SnapshotAnalyzerInformation` 只带指针不带长度（CLAUDE.md 早就记了这条）。
+      候选（都在手边、按代价排序）：
+      ① instructions 侧：`InstructionsTable` 有 `start_pc_`/`end_pc_`
+      （`start_pc` 私有但 `EntryPointForOffset(0)` 能取到；`end_pc` 同样私有，
+      `InstructionsLengthAt` 的实现里用了它，可照抄取法）；
+      ② data 侧：快照头自带长度（`Snapshot::length()`）；
+      ③ 兜底：ELF section 长度——**但实测证明那是错的**（多 138 字节的对齐填充）。
+      🎁 判据：我们对**我们自己**快照的 blob，长度应等于「四段真实长度之和」，
+      且开头 16 字节应是快照 data 的魔数；再用同样的拆分把它切回四段、与源 region 逐字节比。
+      ⚠️ **不能跨实现逐字节比**（两边快照不同），所以判据是自洽 + 结构，
+      **别为了拿到「与他们逐字节相同」而去比两个不同的程序**。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
