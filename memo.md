@@ -182,14 +182,32 @@
       `OffsetFromPayloadStart 1380 / ObjectPool 2294 / ExternalBranch 4997 /
       LocalBranch 9000 / DispatchTableCall 332 / FieldTable 245 / Raw 49402`
       🔴 **`IndirectStaticCall`(8) 至今一次都没被发出过** —— 它是最后一个没有规则的 kind。
-- [ ] 任务 28：**解 `IndirectStaticCall`，把 1185 推向 1380** ⬅️ **当前任务**
-      剩 195 个错例，kind 8 零发射 → 它多半就是主因。
-      🎁 **我们自己实现过这条指令**（`IndirectStaticCallInstr`，CLAUDE.md 记的 19 方法持平），
-      **发射形态是已知的**：`ldr x16,[THR,#0x978]`（`indirect_static_call_table_`）
-      → `ldr x16,[x16,#idx*8]` → `blr x16`。**先照这个形状去匹配。**
-      ⚠️ 但**值仍要用分布法解**（别假定是常数 1，也别假定是序号）。
-      ⚠️ 加完先看 `entry_stream` 里 kind 8 的计数是否 > 0，再看分数（任务 26/27 的教训）。
-      判据：`./probe_subgraph_hash.py` 的 `reconstructed exactly: N/1380`。
+- [~] 任务 28：**两个否定结果，分数没动**（1185/1380 不变）✅ spike `2d8be05`
+      ① 🔴 **任务卡的前提是错的**：`IndirectStaticCall` 零发射**是正确的，不是缺规则**。
+      它该有的形态（`ldr x16,[THR,#0x978]` → 索引加载 → `blr`）**在本语料里根本不存在**——
+      实测被当作后续加载基址的 THR 偏移只有 `0x70`（203 次，字段表）
+      和 `0x690/0x6b0/0x6b8/0x6c0`（共 8 次）。`base.so` 是**不带 DD pass** 构建的。
+      **查证只花了一次查询。**
+      ② 🔴 **`ObjectPoolLoadIndex` 的「序号」规则在一般情况下是错的。**
+      在 14 个「恰好一处明确池引用」的函数上分别解——**每一个都是该函数的第一处池引用**，
+      所以序号模型全预测 0，而真值是 `49,8,45,18,4,2,67,1,16,2,4,4,16,4`。
+      **排除掉的**：不是池索引（索引 52 在两个函数里给 8 和 4）；
+      不是槽内容（同一个 `_ImmutableList len:5` 给两个答案；三个单字节字符串给 16/16/45）；
+      不是跨 kind 共享计数器（那会给 1，真值 16）。
+      🔴 **这是本模型第三条「赢过所有对手却仍然是错的」规则**（前两条都是 `LocalBranch`）。
+      **而它同时产出 1185 个精确命中 —— 从分数上看这就是「正确」的样子。**
+      ✅ **写进结论：分数只是正确性的下界，永远不是它的证据。**
+      → `ExternalBranchTargetIndex` 与 `FieldTableLoadIndex` 的序号是**同法验证的**，
+      现在应一并视为**未经证明**。
+- [ ] 任务 29：**解出 `ObjectPoolLoadIndex` 的真实取值** ⬅️ **当前任务**
+      这是现在唯一挡着 1185 → 1380 的东西，且它比看上去重要：
+      **它错了这么久还能拿 1185 分**，说明另外两个序号规则也可能同样错。
+      已排除的候选见 `SUBGRAPH_HASHER_RECON.md` 的那张 14 行表（**别重复排除**）。
+      未试的方向：值是否与**函数自身**的某个属性有关（它随函数变、不随槽变）；
+      是否是 pool 条目在**某个分组/子表**里的位置；
+      是否与 `subgraph_hash` 的 walk 有关（`AccumulateRecursive` 会带着状态跨函数）。
+      ⚠️ **方法**：继续用分布法；**不要**再提出公式然后看分数涨没涨（三次教训）。
+      ⚠️ 解出后**回头重验** ext / field 两个序号（它们同样只跟常数比过）。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -252,7 +270,7 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `673bf7e`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `2d8be05`（fhp-research）。
 `analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
