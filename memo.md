@@ -291,20 +291,35 @@
       **是我们的 `analyze_snapshot` 处理「我们自己的 AOT ELF 快照」这件事整体坏掉**。
       ✅ **`--dump_class_table` 正常**（619/529 与他们逐字节相同）——
       因为它只碰类表、不碰任何代码 payload。这也解释了为什么它昨天能一次做对。
-- [ ] 任务 34：**修 `analyze_snapshot` 对我们自己 AOT ELF 快照的处理** ⬅️ **当前任务**
-      诊断已完成（见任务 33），**不要重复插桩**。要回答的就一个问题：
-      **ELF 快照被加载后，指令区真正的基址从哪里取？**
-      线索：payload 最大值 `0x107762844` 落在 `vm_instructions`(`0x107750000`) 区间内，
-      而最小值 `0x102cc1ec8` 在 74MB 之外 —— 说明 payload 来自**不止一个映射**，
-      且 isolate 那块不在 `info.vm_isolate_instructions` 指的地方。
-      候选：`isolate_group->object_store()->instructions_tables()` 自带基址；
-      或上游 `Image`/`ImageReader` 有现成取法。
-      ⚠️ **先看上游默认模式为什么 abort**——它是上游代码，
-      **上游代码在上游快照上不该崩**，所以很可能是我们的构建/加载方式不对，
-      而不是 `CollectAllCodes` 的逻辑。**修那里可能一次修好两条路。**
+- [~] 任务 34：**上游默认模式的崩溃已修好并加了回归检查；`--shorebird` 的 0 函数仍在**
+      ✅ `a86e852f487` + spike `cd15195`。
+      **崩在 `analyze_snapshot_api_impl.cc:355` 的 `UNREACHABLE()`**（上游代码，注释写着
+      "Expected to handle all possibilities"）。插桩测出：**4 个 Code，各 8 字节、owner 为空、
+      既不在 `VM_STUB_CODE_LIST` 也不是 isolate-specific 副本**。
+      现在给它们 Dart 自己的名字 `code.Name()`（= `[unknown stub]`）：
+      工具从 abort 变成 **exit 0、dump 出 1776 个 Code**。
+      ⚠️ **代码里标明这是兜底不是诊断**：为什么我们的快照有这 4 个而他们的看不到，仍未解释
+      —— 他们 dump 里每个 8 字节 Code 都有 owner，所以**他们那条分支根本走不到**，
+      也就意味着**他们会打什么名字不可观测**，这个名字是我们的。
+      ✅ **我们自己的 Shorebird stub 不是原因，这条查过了**（它们是最可疑的对象）：
+      `ResumeOnCPU`/`RunDartOnCPU`/`CallSimulatorFromFfiTrampoline` 等**全在
+      `VM_STUB_CODE_LIST` 里**，会经 `StubCode::ForEachStub` 正常命名。
+      ✅ **检查矩阵的洞已就地补上**：`class_table_dump_check.sh` 本来就会造一个自己的快照，
+      现在顺手用默认模式 dump 一遍，非零退出或空输出即失败。
+      负控制：stash 掉修复重建 → 变红并打印 `exit 134`。
+      🔴 **`--shorebird` 仍是 0 函数**（任务 33 的基址 bug，本轮未动）。
+- [ ] 任务 35：**修 `--shorebird` 的基址** ⬅️ **当前任务**
+      诊断早已完成（任务 33），**不要重复插桩**：
+      `CollectAllCodes` 发现 1608 个 Code，**全部**被 `payload < isolate_instr_base` 滤掉，
+      因为 `info.vm_isolate_instructions` 高于所有 payload。
+      🎁 **本轮新增了一个可用的对照**：默认模式现在能跑通并 dump 出 1776 个 Code，
+      而它用的是**同一个** `info_.vm_isolate_instructions` 算 `offset`。
+      → **先看默认模式 dump 出来的 `offset` 是否合理**（应落在 0..指令区大小内）。
+      如果它也荒谬，那基址对两条路都是错的，**改一处即可修两条**；
+      如果它合理，那问题只在 `CollectAllCodes` 的过滤条件。**这个判别几乎免费。**
       ⚠️ 判据：`--shorebird` 在我们快照上给出 **1380 个函数**（与他们同程序同数），
-      且 `offset`/`size` 能被 `probe_subgraph_hash.py` 用来取出正确的指令字节。
-      ✅ 修好后**必须补一条检查**（任务 32 已证明检查矩阵有这个洞）。
+      且 `offset`/`size` 能被 `probe_subgraph_hash.py` 用来取出正确指令字节。
+      ✅ 修好后把 `--shorebird` 也纳入 `class_table_dump_check.sh` 那条「跑得通」断言。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
