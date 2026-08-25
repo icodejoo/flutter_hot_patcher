@@ -323,20 +323,35 @@
       不管基址怎么修都不会有 app 函数。
       ✅ 这与 CLAUDE.md 早就记下的一致：`--shorebird` 的 `functions` 数组
       对应**序列化器的 code 表**、`index_in_entries` 0..1379（**1380 条**）。
-- [ ] 任务 36：**把 `--shorebird` 改成枚举 `InstructionsTable`** ⬅️ **当前任务**
-      **不要再修基址**（任务 35 已证明它是对的），要换枚举方式。
-      现成的公开接口（`runtime/vm/object.h`，都已存在）：
-      `EntryPointAt(index)` / `PayloadStartAt(index)` / `code_objects()` /
-      `FirstEntryWithCode()` / `EntryPointForOffset(offset)` /
-      **`InstructionsLengthAt(index)`（这是我们自己加的 Shorebird 方法，已实现）**。
-      ⚠️ `start_pc()` 是私有的；要基址用 `EntryPointForOffset(0)`（本轮就是这么取的）。
-      🎁 **判据是硬的**：条数应为 **1380**，与他们同程序同数；
-      且 `offset`/`size` 要能被 `probe_subgraph_hash.py` 用来取出正确的指令字节
-      —— 那个脚本已经能对 1185/1380 个函数复现 `self_hash`，
-      **拿我们自己的 dump 跑一遍就是最强的端到端判据**。
-      ✅ 名字从 `code_objects()`（只覆盖 `FirstEntryWithCode()` 之后的部分）取；
-      其余按他们的样子给 `[unknown stub]` 之类。
-      ✅ 完成后把 `--shorebird` 纳入 `class_table_dump_check.sh` 的「跑得通」断言。
+- [x] 任务 36：**`--shorebird` 修好了：0 → 1589 个函数** ✅ `86dbf623588` + spike `f8c480e`
+      **第一条 entry 是 `offset 128 / size 44`，与他们同程序的 dump 逐字相同。**
+      改的是**枚举方式**不是基址（任务 35 已证明基址一直是对的）：
+      bare-instructions AOT 下 app 函数没有独立 `Code` 对象，
+      所以「遍历堆找 Code」只能找到 VM/stub 代码。现在枚举
+      `InstructionsTable` 里 `first_entry_with_code` 之后的条目。
+      ⚠️ **同一个类里有两套索引约定，踩了才知道**：
+      `EntryPointAt` 收**绝对**条目索引，`InstructionsLengthAt` 收**相对**索引并自己加上偏移。
+      而看起来最顺手的 `PayloadStartAt` **全树只有声明、没有定义**。
+      ⚠️ **`Code::PayloadStart()` 在这里也是错的，我先试的就是它**：
+      bare 模式下 Code 不拥有自己的指令，问出来的 payload 比 image 低约 1.5MB
+      —— **又一次长得像「基址错了」**。地址必须从表里取。
+      ✅ 名字改用 `Code::QualifiedName`（上游 `[Optimized] ` 前缀的出处），
+      **格式与他们一致而不是我拼上去的**。
+      ✅ **1589 vs 他们 1380 是预期的、不是缺陷**：我们的 VM 多带了 stub。
+      检查里因此只要求 >1000 + 首条与他们一致，**不钉死一个有正当理由不同的数**。
+      实测：无负偏移、无坏尺寸、无重叠，前 400 条里 351 条以 `ret/b/br/brk` 结尾。
+- [ ] 任务 37：**让 `--shorebird` 的三个哈希不再是占位符** ⬅️ **当前任务**
+      现在 `self_hash`/`subgraph_hash`/`op_subgraph_hash` **填的是同一个值**
+      （`Sha1HexOf(payload, size)`，源码注释写着 "simplified"），
+      而且 `self_pp`/`subgraph_pp` 之外的数组全是空的。
+      **枚举修好之后，这是 `--shorebird` 离「真的能用」最后的距离。**
+      🎁 **`self_hash` 的算法已解到 1185/1380**（`SUBGRAPH_HASHER_RECON.md` +
+      `probe_subgraph_hash.py` 里的 `entry_stream()`）——**把它从 Python 移到 C++ 即可**，
+      不需要再逆向。
+      ⚠️ 但先想清楚**值不值**：那 1185 是对**他们**快照测的；
+      移植过来后判据要换成「我们的 C++ 与我们的 Python 对同一快照给同一答案」，
+      这只证明移植正确、不证明算法正确。**先在 memo 里写明这一点再动手。**
+      ⚠️ 剩下的 195 需要模拟 walk（任务 30 的结论），**不要在这一轮碰**。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
