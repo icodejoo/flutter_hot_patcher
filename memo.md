@@ -455,16 +455,29 @@
       `self_selectors` / `subgraph_selectors` / `self_field_table` /
       `subgraph_field_table` / `callees` **五个数组硬编码为空**——
       消费者读到的是「这个函数没有」，而不是「我们没算」。
-- [ ] 任务 45：**把任务 43 的规则套用到那六个字段** ⬅️ **当前任务**
-      规则已由任务 43/44 立好：**算不出来就不发，别发一个形状合法的错值。**
-      六个：`subgraph_pp`（复用了 `self_pp`）、`self_selectors`、`subgraph_selectors`、
-      `self_field_table`、`subgraph_field_table`、`callees`（后五个硬编码空数组）。
-      ⚠️ **先查消费者**（任务 43 的做法，那次查出了最坏情况）：
-      `command grep -rn "self_pp\|subgraph_pp\|callees\|self_selectors" tools/ ~/Documents/fhp-research`
-      —— **有人读就是活的错数据，没人读就只是待办**，两种情况的紧迫度不同。
-      ⚠️ `self_pp` 本身是**算出来的**（`GetSelfPPIndices`），先确认它对不对再决定留不留。
-      判据：改完 `verify_all` 全绿；并加一条检查钉住「不发假字段」这条规则
-      （`class_table_dump_check.sh` 里已有 `subgraph_hash` 的先例，照着扩）。
+- [x] 任务 45：**六个字段已删；`self_pp` 补完** ✅ `d0c9511ca67` + spike `831a84f`
+      `--shorebird` 现在只发算得出来的东西：`name`/`offset`/`size`/`index_in_entries`/
+      `self_hash`/`self_pp`。
+      ✅ **先查消费者（任务 43 的做法）**：`tools/linker.py` 只读
+      `name`/`offset`/`size`/`subgraph_hash` → 这六个**不是活的错数据**，只是待办。
+      （与 `subgraph_hash` 那次不同，那次是活的。**同样的形状，紧迫度不同**，值得区分。）
+      🔑 **`self_pp` 才是本轮最有意思的一个：它「正确但不完整」——同一种形状。**
+      它只认 `ldr xN,[PP,#imm12]`，却把结果当成完整清单发出去；
+      用大位移池访问的函数会被少报引用数，**消费者无从分辨**。
+      现在它认全了池发射器实际会产生的形态，并且**复用 `ShorebirdSelfHash` 的解码器**，
+      两边不会各自漂移。
+      ✅ **交叉验证（同一个二进制里两套独立实现）**：`self_pp` 的条目数
+      与哈希模型推出的「不同池序号个数」**对 1589 个函数全部相等**。
+- [ ] 任务 46：**`self_field_table` 其实算得出来——把它加回去** ⬅️ **当前任务**
+      任务 45 把它删了是对的（当时确实没算），但**我们其实已经有那段逻辑**：
+      `ShorebirdSelfHash` 里的字段表识别（`ldr xN,[THR,#off]` + 经 `xN` 的访问，
+      含 `add` 中转与 `ldar/stlr` 形态）已经在跑，而且**它是 1082→1185 那一跳的一部分**。
+      → 照 `self_pp` 的做法：抽出同样的扫描、发 `self_field_table`，
+      **并复用同一批解码器**（任务 45 的教训：两套实现会漂移）。
+      ⚠️ **只发 `self_field_table`，不要碰 `subgraph_field_table`**——后者要 callee walk。
+      ⚠️ 判据同任务 45：与哈希模型的字段表序号个数逐函数比对，
+      **必须 1589/1589 全等**；并把新字段从检查的 leaked 名单里移除。
+      ⚠️ 先确认 `--shorebird` 输出里加回这个键**不会**让 `class_table_dump_check` 误报。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
