@@ -48,15 +48,27 @@
       （私有子系统，我们没有；`ObjectPoolLinkInfo::WriteToStream` **已实现且逐字节验证过**
       → **缺的是生产方不是格式**）；`--dump_blobs` 需要四个 region 的**长度**，
       而 `Dart_SnapshotAnalyzerInformation` 结构里根本没带。
-- [ ] 任务 18：**`subgraph_hasher`：先确认它到底是不是「两边都 0」的口径陷阱** ⬅️ **当前任务**
-      它现在是**唯一挡住 `--dump_object_pool_link_data` 的东西**，
-      而那个 flag 是整条 pipeline 对他们二进制的最后一处硬依赖
-      （`dd_pipeline.sh` 的 `.op` 文件目前只能由**他们的** `analyze_snapshot` 产出）。
-      ⚠️ **memo 符号表里 `SubgraphHasher` 记的是「他们 0 / 我们 0，已知口径陷阱」**——
-      **先把这条查清楚再动手**：0 可能是因为名字猜错，也可能因为它被内联。
-      判据：`op_subgraph_hash` 的值我们**已经能读到**（他们的 `.op` 文件里就是），
-      所以 oracle 是现成的——**给同一个函数算出同样的 40 字符 hash 就是对的**。
-      ⚠️ 先花少量时间确认可行性（任务 16 的做法），**够不到就写进挂起池转下一项**。
+- [~] 任务 18：**`SubgraphHasher` 侦察 + `--no_pp_hash` 关闭** ✅ `7ca20d214ea` + spike `63a658c`
+      🔴 **符号表那条「两边都 0 = 口径陷阱」是错的，已订正**：`SubgraphHasher` 在
+      **`analyze_snapshot`** 里（`dart::snapshot_analyzer::`），我们只量过 `gen_snapshot`。
+      换个二进制量：**他们有、我们 0**，是真实缺口。
+      ✅ **顺手关掉一个 flag**：`--no_pp_hash` 是**他们自己也不接受的死 flag**
+      （help 里有，parser 不收，落到 VM 被拒）→ 忠实复刻 = **写进 help 且不注册**。
+      我们的行为**本来就和他们逐字节相同**，只差两行 help。缺口 6/14 → **5/12**。
+- [ ] 任务 19：**反汇编 `SubgraphHasher`，先解出哈希的输入格式** ⬅️ **当前任务**
+      侦察已就位（本轮拿到的地址，`analyze_snapshot` arm64 slice）：
+      | 符号 | 地址 |
+      |---|---|
+      | `SubgraphHasher::SubgraphHasher(InstructionsTableInterface&, char const*, DDTableLinkInfo const*)` | `0x100195c54` |
+      | `SubgraphHasher::Hasher::Hash()` | `0x100195fb8` |
+      | `SubgraphHasher::AccumulateRecursive(unsigned long, int)` | `0x100196694` |
+      | `sha1_transform(SHA1_CTX*, unsigned char const*)` | `0x100195834` |
+      🎁 **哈希算法已确定是 SHA-1**（`sha1_transform` 符号在，且 40 字符 = SHA-1 宽度）。
+      🎁 **oracle 现成**：他们 `.op` 文件里每个 CodeInfo 都带真值，
+      同一函数算出同样 40 字符就是对的。
+      ⚠️ `AccumulateRecursive(uword, int)` 的第二个参数多半是深度 → 先解它的终止条件。
+      ⚠️ **这是多轮工程**（量级同 `object_pool_editor`：4 个函数）。
+      按任务 16 的做法，**每轮先确认还够得到，够不到就转下一项**。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -119,7 +131,8 @@ run_vm_tests               143 passed
 10 ran, 0 failed, 0 skipped, 0 blocked
 ```
 `--self-test` 模式下 9 个 harness 全部能正确报错（`9 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`fbcefad7224`（dart-sdk） / `f989967`（fhp-research）。
+工作树 clean。HEAD：`7ca20d214ea`（dart-sdk） / `63a658c`（fhp-research）。
+`analyze_snapshot` help 缺口：**5 个 flag / 12 行**（任务 17 是 6/14）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
 ✅ **`op_rewrite_check` 的 BLOCKED 已解除**（任务 13 让补齐回到树上，编辑器重新活了）。
@@ -149,9 +162,14 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 | `DDSlotMapping::` | 2 | 2 | 持平 |
 | `IndirectStaticCall` | 68 | 64 | ⚠️ 差 4，**未查证**（原始行数受 strip 影响，不可直接比）|
 | `groupBy` | 2 | 0 | ⚠️ **不是缺口**：我们的 `GroupBy` 是头文件模板，被内联 |
-| `SubgraphHasher` / `CascadeLimiter` / `ClassTableMapper` | 0 | 0 | ⚠️ 已知口径陷阱，两边 0 读不出结论。**但 `op_subgraph_hash` 这个能力我们确实没有**（任务 17 实测：它挡住了 `--dump_object_pool_link_data`）→ 任务 18 |
+| `SubgraphHasher` / `CascadeLimiter` | 0 | 0 | 🔴 **这一行是错的，2026-08-25 任务 18 实测订正**：它们不在 `gen_snapshot` 里，在 **`analyze_snapshot`** 里（`dart::snapshot_analyzer::` 命名空间）。换个二进制量：**他们 4+ / 我们 0**，是**真实的一侧为 0**，不是口径陷阱 |
+| `ClassTableMapper` | 0 | 0 | ⚠️ 仍是口径陷阱（我们的映射器已实现，只是不叫这个名字） |
 
-→ **除 `IndirectStaticCall` 待查外，不再有「一侧为 0」的私有子系统。**
+🔴 **上面这句「不再有一侧为 0 的私有子系统」是错的**（任务 18 订正）：
+`SubgraphHasher` 就是，只是它住在 `analyze_snapshot` 而我们只量了 `gen_snapshot`。
+✅ **可复用规则：符号表的「两边都 0」在换一个二进制之前不算结论。**
+量之前先问「这个子系统应该出现在哪个产物里」——运行期设施在引擎、
+分析器设施在 `analyze_snapshot`、编译期设施才在 `gen_snapshot`。
 
 ## 🚨 验证纪律（本仓库的血泪，违反必出假绿）
 
@@ -774,6 +792,54 @@ patch[762]='rex'                    ->  base[762]='null'
 
 → 这就是任务 18 的由来：`op_subgraph_hash` 是**整条 pipeline 对他们二进制的最后一处硬依赖**
 （`.op` 文件目前只能由他们的 `analyze_snapshot` 产出）。
+
+## 〜 任务 18（`7ca20d214ea` + spike `63a658c`）：一条记错的符号表，和一个死 flag
+
+### 🔴 订正：`SubgraphHasher` 不是「两边都 0 的口径陷阱」，是真实缺口
+
+符号表里那一行记的是「他们 0 / 我们 0，读不出结论」。**错在量错了二进制。**
+它住在 **`analyze_snapshot`**（`dart::snapshot_analyzer::` 命名空间），
+而我们一直只量 `gen_snapshot`。换一个产物量，立刻出来：
+
+```
+dart::snapshot_analyzer::SubgraphHasher::SubgraphHasher(InstructionsTableInterface&, char const*, DDTableLinkInfo const*)
+dart::snapshot_analyzer::SubgraphHasher::Hasher::Hash()
+dart::snapshot_analyzer::SubgraphHasher::AccumulateRecursive(unsigned long, int)
+sha1_transform(SHA1_CTX*, unsigned char const*)
+dart::CascadeLimiter::Run(unordered_map<long, unordered_set<long>> const&, ...)
+```
+我们这一侧：**0**。
+
+✅ **可复用规则（新）：符号表里的「两边都 0」在换一个二进制之前不算结论。**
+量之前先问「这个子系统本来该出现在哪个产物里」：
+**运行期设施在引擎、分析器设施在 `analyze_snapshot`、编译期设施才在 `gen_snapshot`**。
+（同型旧坑：wrapper 子系统当年也是因为量错产物被记成「最大缺口」。）
+
+### ✅ `--no_pp_hash`：忠实复刻 = 写进 help 且**不**注册
+
+它在他们 help 里，但**他们自己的 parser 不收**——落到 `Dart_SetVMFlags` 被拒：
+
+```
+theirs: Setting VM flags failed: Unrecognized flags: pp_hash
+ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前就已相同
+```
+
+六个 flag 里**五个被他们的 parser 接受，只有这一个不被接受**（逐个实测出来的）。
+→ 我们的行为本来就和他们一致，**只差两行 help**。补上即完成，缺口 6/14 → **5/12**。
+⚠️ 已在代码里写明「**不要通过注册它来"修好"**」，并让检查断言两边拒绝方式相同。
+
+### 🔴 差点用错判据：字符串考古回答不了「有没有注册」
+
+第一反应是 `strings | grep no_pp_hash` → 只有 help 那一行 → 想判「死 flag」。
+**跑了阳性对照才发现这个判据是坏的**：`sdk_version` 明确是注册过的，
+它**同样没有 bare-name 字符串**。
+→ 判据换成**行为测试**（逐个 flag 试，看错误是「Unrecognized flags」还是别的）。
+✅ 这正是 CLAUDE.md 那条「否证一个断言，判据必须可能命中它」的又一次命中。
+
+### 负控制
+
+把 `--no_pp_hash` 注册进我们的 option 表 → 我们能接受、他们仍拒绝 → 检查变红。
+这道负控制守的就是上面那句「不要注册它」。
 
 # 📖 关键参考文档（别重新推导）
 
