@@ -1780,3 +1780,72 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 （提到 `f426f46f5b0`、加权投票聚合器），但**正文没有对应章节**——
 `command grep '加权投票\|votes_\|OP_AGGREGATOR_RECON'` 在正文 0 命中。
 2026-08-25 后半段的两项发现只活在 `MEMORY.md` 索引里。**任务 1 完成时顺手补进正文。**
+
+---
+
+# 🎯 真实剩余面（三分清单）—— 2026-08-26 任务 62 实测重建
+
+> **这份清单取代 `CLAUDE.md` 子系统表作为待办来源。** 那张表是历史与证据来源，
+> 里面的「未做 / 缺口 / 我们为 0」已经四次生成不存在的任务
+> （`WrapCode`、`InBaseSnapshot`/`UnwrapEntryPoint`、`shorebird_base_instructions_table_`、
+> 对象池 link-results 聚合器）。**后续任务只从这份清单里取。**
+>
+> 基线（本轮实测，未改源码，数字不应变化）：`verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked**、
+> `run_vm_tests` **157 passed**、`verify_reproduction.sh` **28 artifacts / 0 failures**。
+> HEAD = `c316526c1cb`（`~/dart-3122/sdk`，分支 `shorebird-3.12.2`）。
+>
+> **每一项都带产生它的那条命令。没有命令的条目不许进这张表。**
+
+## A. 有证据可依（oracle / 反汇编 / DWARF 已在手，可以直接开工）
+
+| # | 条目 | 现状与支撑它的实测命令 |
+|---|---|---|
+| A1 | **`print_dd_resolution_to` 的 `rewritten` / `sentinel_filled` 两列** | 我们发 `rewritten=0`，他们读 **2**。判据：`cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./dd_pipeline.sh` → 他们 `DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel`。**0 是硬编码字面量**：`command grep -n 'rewritten=0' ~/dart-3122/sdk/runtime/vm/shorebird/linker.cc` → `:1159`。⚠️**旧理由「依赖我们没有的 DD IL 子系统」已作废**——该子系统已于 `b13e2a0d54e` 实现（`git merge-base --is-ancestor b13e2a0d54e HEAD` → 0），`dd_pass_check.sh` / `dd_runtime_check.sh` 常设通过。`linker.cc:1153-1155` 那条注释是过期的。→ **是「把计数器接到已存在的改写路径上」，不是缺子系统。** |
+| A2 | **`object_pool_editor` 两处计数分歧用了 `ASSERT` 而非 `RELEASE_ASSERT`** | release 构建里被编译掉 = 软点。判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`；该用例体内是 `EXPECT_EQ`（`ISOLATE_UNIT_TEST_CASE` 下 `EXPECT` 会计入失败，但 `.cc:501` 引用的那条推导仍靠 `ASSERT`）。两处已知分歧：kind-3 index 62 发射器用 2 而计数器说 3；kind-1/2 offset 2²⁴ 发射器用 3 而计数器说 2（**后者是我们自己读错了折叠 ladder**）。→ 收紧断言 + 修计数器。 |
+| A3 | **plurality tie-breaking 零覆盖 / `refreshed` / `dropped-stale` 三条分支未被任何 fixture 走到** | 判据：`./dd_pipeline.sh` 两个 pass 都打印 `0 refreshed, 0 dropped-stale`，且每 slot 恰好一票。→ 需要**自造 fixture**，方法已有先例：`make_op_fixture.py` + `op_aggregator_check.sh` 就是为「他们的 fixture 判别不出来」而造的。 |
+| A4 | **`analyze_snapshot --disassemble`** | 唯一还没做的 `analyze_snapshot` flag。判据：`./analyze_snapshot_help_check.sh` → `--help matches theirs with 1 unimplemented flag(s) removed (12 documented, 3 lines withheld)`。曾实现后**回退**——撞上 VM 自己的同名 flag，原因记在 `~/dart-3122/sdk/runtime/bin/analyze_snapshot.cc:112-123`。→ 证据齐全，缺的是解名字冲突的办法。 |
+
+## B. 无证据（必须先反汇编或先找 oracle）
+
+| # | 条目 | 缺的是哪一段证据 |
+|---|---|---|
+| B1 | **`IndirectStaticCallInstr` 的 `@0xd8`（int32）字段含义** | 已确立**不是** entry kind（那个硬编码 0）。`EmitNativeCode` 反汇编只给出 `@0xc8`=表索引、`@0xc0`=原始 `Function`。→ **缺一个会让 `@0xd8` 取到不同值的输入**；`--compute_dd_table` 与 `--print_dd_resolution_to` 两个 oracle 都不暴露它。 |
+| B2 | **装着稀疏 dispatch table 的快照能否真正执行** | `print_dispatch_table_link_info_to` 已 **byte-identical**（`cd4aeecd189`，6 个 fixture 全对），但**从未验证过装着这张更稀疏的表的快照跑得起来**。→ 缺的是一条端到端装载路径；`verify_reproduction.sh` 只比字节不执行。 |
+| B3 | **`LinkOracle::RunTargetFromBaseOffset` 的正确性** | 它在**他们引擎里是死方法**（DWARF 有声明、无内联实例、无外联符号），我们的实现是对称读法、**未经验证**。→ 缺的是任何一个会调用它的生产路径。`Install()` 同理是我们加的（他们的安装方尚未还原）。判据：`command grep -n 'Install\|RunTargetFromBaseOffset' ~/dart-3122/sdk/runtime/vm/shorebird/shorebird.h` → `:82 :88 :110`。 |
+| B4 | **用我们的 dart-sdk 构建 iOS 引擎** | ⛔ **这是唯一一条会让完成度百分比在真机上大幅缩水的。** 判据：`command ls ~/dart-3122/sdk/xcodebuild/` → 只有 `ProductARM64` `ReleaseARM64`，**没有任何 iOS 产物**。所有跑通的东西（DD 全链路、wrapper、patch 加载入口）都是 host 的 `dart_force_simulator` 构建。人类已报告 iOS 真机随时可测 → **设备不是阻塞，产物才是。需要人类决定是否插入这个任务。** |
+| B5 | **真机 A/B：C6 删掉 safepoint guard 后的安全性** | 依赖 B4。目前**零实测**。 |
+
+## C. 结构上不可关闭（是完成度的*度量*，不是待办）
+
+> 这三类本质上要求「两个 VM 完全一致」。**写进百分比只会让它永远差一截。**
+
+| # | 条目 | 判据 |
+|---|---|---|
+| C1 | **所有编码 Thread 偏移的指令** | 他们的 Shorebird 块在 `Thread` 结构**中部**（`+0x8d8`），我们只能**追加在末尾**（`+0xf18`）——中间插入会被 `CheckOffsets` 在构建期打死，重生成偏移表要 16 个配置、本机磁盘不够。后果：16 个 stub 里只有 `CallClangCodeWithSimulatorArgs` **38/38** 完全一致（它不碰 Thread，**这恰好证明无结构障碍时能做到逐字节相同**），其余残差全是这一类。逐字节命中率见 `WRAPPER_STUBS.md`。 |
+| C2 | **快照版本 hash** | `568671cd` vs `839937dd`（`gen_snapshot`）/ `839937dd…` vs `7150a2e8…`（双向装载）。**跨实现读快照已双向实测不可达**：两边的 `analyze_snapshot` 互读对方快照都报 `Wrong full snapshot version`。→ 任何「直接对比两侧快照内容」的判据都走不通，只能像任务 16 那样从**反汇编**取共同可观测量。**不要再试。** |
+| C3 | **堆遍历顺序 / `field_table` 组内顺序 / dispatch table offset 分配** | `print_field_table_link_info_to` **内容全同**（622 条、多重集合相等），仅同 id 内顺序不同。⚠️ 判别法：看置换有没有结构 + 局部相对序是否保住——`field_table` 已证伪**不是** libc++ 容器 artifact，是堆遍历顺序。 |
+| C4 | **`GetBestMapping` 的不可破平票** | 实测他们 `14/8/0/120`、我们 `14/13/0/115`。我们的顺序由 libc++「空桶则压到链表头」决定，他们的随 key 变化 → 跟的是我们复现不出的桶布局。**匹配它需要两个容器有相同的桶宽历史 = 需要两个 VM 完全一致。** 已试过「把 vote map 改成按值拷贝」（他们 `0x10019ce88` 确实有）→ **数字一字未变**。**三次尝试后停手，不要再试。** |
+
+## D. 本轮查出的记账缺陷（已就地改掉，列此以防复发）
+
+全部实测于 2026-08-26，HEAD `c316526c1cb`：
+
+| 原断言 | 实测结果 |
+|---|---|
+| 「对象池聚合器我们的算法不是他们的算法，只在 fixture 上重合」+「判别实验未做」 | **三处分歧全部已于 `ab58e28152d` 关闭**（`git merge-base --is-ancestor` → 0，落后 HEAD 23 个提交）。`linker.cc:449-534` = 加权投票 + 无 `size()!=1` 过滤 + 黏性 `use_self_pp`。判别 fixture `make_op_fixture.py` + `op_aggregator_check.sh` 早已在 `verify_all.sh` 里 |
+| 「`object_pool_editor` 仍未接进 `ImageWriter::Write`，是真依赖缺失」 | **已接进**，`runtime/vm/image_snapshot.cc:622` 调 `ObjectPoolEditor::Edit(...)`，提交 `66a46515eb5` |
+| 「`InstructionCountForLoadStoreFromOffset` 在 `gen_snapshot` 里 0 个（无生产调用点）」 | **2/2**（`nm -a … \| c++filt \| sort -u \| grep -c`） |
+| 「`Assembler::PadLoadStore` 我们 0 次」 | **2/2** |
+| 「DD 机制我们仍为 0，真实剩余面两项」 | **全部持平**：`IndirectStaticCallInstr::` 方法名集合 diff 两向为空、`DDTableBuilder` 8/8、`DDSlotMapping::` 2/2；IL pass 已实现（`b13e2a0d54e`） |
+| 「16 个私有 stub 我们只声明了其中 2 个」 | **声明了 14 个**（`stub_code_list.h:159-172`）+ 2 个上游被改的（`:84` `:195`）= 16/16，与同格「全部有真 body」一致 |
+| 「mappers / field_hasher 2 / 0 / 未变」 | `FieldHash` **2/6**（`field_hasher.{h,cc}` 于 `ecd1e5b5b20` 落地）；`Mapper` 两边**都是 0** = 第四例口径陷阱 |
+| 「`LinkedValue<T>` 模板（我们没有）」 | **已有**，`linker.h` 7 处 / `linker.cc` 7 处 |
+| 「`LinkOracle` 我们为 0」 | **已实现** `94ee77c3624`；`nm` 他们 0 / 我们 10（它是运行期类，他们的在引擎里不在 `gen_snapshot`） |
+| 「`print_shorebird_info` 的 gen_snapshot 那半被阻塞」/「证据不足以按规则 3 实现聚合器」 | **两半都已完成**，`shorebird_info_check.sh` 在 `verify_all.sh` 里 ok / 0 failure(s) |
+| 「`rewritten` 列真正依赖 DD IL 子系统」 | **事实仍成立（我们 0 / 他们 2）但理由已作废**——子系统已有，0 是 `linker.cc:1159` 的硬编码 → 降级为 A1，一件小活 |
+
+⚠️ **本轮踩到的第 N 例工具假阴性**：`find ~/dart-3122/sdk/xcodebuild -name "analyze_snapshot*"` 与
+`ls` 都报**不存在**，而 `test -f` 报 **EXISTS（4483952 字节）**。若信了前者，会把
+`analyze_snapshot` 的全部符号计数读成「我们 0」——正好是本轮要修的那种假缺口。
+→ **`nm` 出来 0 行时，先确认二进制真的被读到了**（`wc -l` 符号文件，不是只看 `grep -c` 的 0）。
+本项目 `memory/feedback_rtk_diff_unreliable.md` 早有记录：**RTK 包装的 `ls`/`find`/`grep` 会静默说谎，一律加 `command` 前缀。**
