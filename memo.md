@@ -576,16 +576,31 @@
       ✅ **正确结果自洽**：`self_hash` 作为遍历顺序得 6/17，
       而探针里「表自己的发射顺序」这个负控制也得 6 —— 同一个顺序、同一个分数、两次独立测量。
       判据已把发射顺序在 17 个预算上钉住，且**直接比发射出的字符串，不再经过函数表**。
-- [ ] 任务 52：**确立 `Run` 第二个参数 `vector<long>` 装的是什么** ⬅️ **当前任务**
-      这是现在唯一挡在算法前面的东西：排序比较器已解出（按它升序），但**它的内容未知**。
-      ⚠️ **有符号比较**说明可以是负值 → 不太可能是 size 或调用者数（都非负），
-      这本身就是个筛子。已排除的候选（作为遍历顺序实测）：size 升序 6、调用者数升序 7。
-      ① 继续反汇编：找 `Dart_ComputeDDTable` 里**构造**这个 vector 的那段。
-      ② 第四个参数 `long` 与第一个 `unordered_map<long, unordered_set<long>>`
-      的键空间也要一并确立（节点 id 是 `index_in_entries` 还是别的）。
-      ⚠️ 打分一律用成员不用条数（任务 49 的教训）。
-      ⚠️ **否证一个断言前，先确认判据可能命中它**（任务 51 的教训：
-      「全都不匹配」这种结论必须自带阳性对照，否则先怀疑测量而不是结论）。
+- [~] 任务 52：**assert 串路线在这里不通；但挖到两个从未清点的 DD flag** ✅ 研究侧 `67f0287`
+      🔴 **`strings` 里没有 `cascade_limiter.cc`、没有行号、没有条件串** ——
+      破 `Assembler::PadLoadStore` 时白送的那些东西，这个子系统一样都没有。
+      **这个子系统只能靠反汇编或黑盒实测**。已记进文档，别再重跑 `strings`。
+      🎁 **顺带产出**：四个 DD flag `--compute_dd_table` / `--dd_max_bytes` /
+      `--dd_table_data` / `--compute_dd_slot_mapping`，后两个**从未清点过**，
+      且有依赖：`--dd_table_data is required with --compute_dd_slot_mapping`。
+      ⚠️ **四个全部不在 help 里**（他们 help 只列 13 个）→
+      「**被接受的 flag**」与「**被文档化的 flag**」在这个二进制上是两个不同的族群，
+      我们的 help 缺口计数从来没看见过它们。`--no_pp_hash` 是反向的同一现象
+      （在 help 里、parser 不收）。
+- [ ] 任务 53：**用 `--compute_dd_slot_mapping` 给 DD slot 机制做首个一方 oracle** ⬅️ **当前任务**
+      🎁 **这是本轮最值钱的发现，且它绕开了未解的贪心**：该 flag **吃**一张 DD 表
+      （`--dd_table_data`）**吐**出 slot mapping，不需要自己算表。
+      而 `DDSlotMapping::ReadFromStream` / `DDSlotVoters` / `DDSlotResolution`
+      我们**都已实现却从未有过一方参照**（当初只有计数级 oracle）。
+      ① 先拿 `out_dd/base.ddtable` 喂它，看输出格式；
+      ② 与我们的 `--print_dd_resolution_to` 输出对拍。
+      ⚠️ 记账警告：CLAUDE.md 说 `print_dd_resolution_to` 「已完成、8 行 TSV 全同」，
+      但那是**用我们自己的 slot 文件**比的。这个 flag 可能给出**真正独立**的判据。
+      ⚠️ 打分用成员/逐字节，不用条数（任务 49 的教训）。
+
+- [ ] 任务 54：**回到 `Run` 第二个参数 `vector<long>` 装什么**（任务 52 未完成的那一半）
+      ⚠️ 有符号比较说明可为负 → size / 调用者数（都非负）已因此存疑，且实测得 6 和 7 分。
+      ① 反汇编 `Dart_ComputeDDTable` 里**构造**该 vector 的那段。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
