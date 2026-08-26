@@ -847,7 +847,55 @@
       —— 我们把它传下去，**把差异留在明面上而不是照抄一个疑似 bug**；32 位的 `entry_bits` 布局（不可观测）。
       ⚠️ 顺带发现：`memory/project_dart_sdk_fork.md` 在**仓库副本**与 `~/.claude/projects/…` 副本
       **两份已经漂移**，本轮两份都补了任务 60 章节。这正是契约第四条警告的那种漂移。
-- [ ] 任务 61：🔴 **改正对象池 link-results 聚合器 —— 我们现在的算法是「已知错的」** ⬅️ **当前任务**
+- [x] 任务 61：⚠️ **本轮的产出是「任务本身不成立」—— 三处分歧早在 23 个提交之前就已全部关闭**
+      三处分歧全部由 `ab58e28152d`（*"the object pool aggregator, and its weighted votes"*，2026-08-25）
+      关闭；该提交是当前 HEAD `c316526c1cb` 的祖先（`git merge-base --is-ancestor` 实测为真），
+      落后 **23 个提交**。`linker.cc:449-534` 现在就是加权投票 + 无 size==1 过滤 + 黏性 `csel`。
+      ⚠️ 连「判别实验必须自己造」那条也是过期的 —— `make_op_fixture.py` **早已存在**
+      （S2 2×2、CONTEST 2×2 两个 base code 同占池槽 20 造出 base 索引争用、FALLBACK、SG、
+      W1 2×2 / W2 1×5 钉住权重除数），由 `op_aggregator_check.sh` 驱动，**已在 `verify_all.sh` 里**。
+      ⚠️ `OP_AGGREGATOR_RECON.md` 说的「`GetBestMapping` 0 符号、源码 0 引用」也是假的：
+      `nm -a | c++filt | grep -c ObjectPoolMappingsAggregator` **他们 8 / 我们 10**（我们高只因未 strip）。
+      **本轮唯一的真实产出是三个负控制**（oracle：他们的 gen_snapshot 对合成 fixture 出 `8/7/0/121`，
+      我们如实给出 `8/7/0/121`），三条分歧**各自被判别**、都变红、都还原：
+      ① 权重 `1.0/N`→常数 `1.0` ⇒ `8/8/0/120`（`ObjectPoolLinkResults_WeightIsNormalisedByGroupSize`）；
+      ② 加回 `size()!=1` 过滤 ⇒ `2/2/0/126`（`…_AmbiguousGroupsAreVotedOnNotDropped` +2 连带）；
+      ③ 强制无条件 `self_pp` ⇒ `7/6/0/122`（`…_UsesSubgraphIndicesWhenBaseGroupExists`）。
+      三轮负控制的 `ninja` 在 `ReleaseARM64` 与 `ProductARM64` **都** exit 0 —— 任务 60 立的新纪律本轮
+      真的用上了：变红后逐条读了失败信息，确认原因是改坏的那处，不是 `Wrong full snapshot version`。
+      判据：`verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked**、`--self-test` 15 ran / 0 failed /
+      1 skipped、`run_vm_tests` **157 passed** —— 与基线一致，**因为没有代码改动，不变才是对的**。
+      源码树**零改动**，HEAD 仍是 `c316526c1cb`，`linker.cc` 的 md5 前后一致。
+      改的只有研究树：`OP_AGGREGATOR_RECON.md` §3 从「未关闭的分歧」改写为「已于 `ab58e28152d` 关闭」，
+      带逐条负控制证据（提交 `5a2931d`）。
+      🔴 **根因与代价**：`CLAUDE.md` 与 recon 文档都还挂着 `ab58e28152d` 之前的措辞，
+      **且没有日期或提交号可供核对** —— 它生成了一个完全不存在的任务，白烧一轮。
+      **这是本项目第四次同型**（`WrapCode`、`InBaseSnapshot`/`UnwrapEntryPoint`、
+      `shorebird_base_instructions_table_`、本次）。→ 直接催生任务 62。
+- [ ] 任务 62：🔴 **实测重建「还剩什么没做」—— 记账已四次生成假任务，这次把它当缺陷来修** ⬅️ **当前任务**
+      任务 61 整轮白烧，原因不是技术难度，是 `CLAUDE.md` 子系统表里一段过期文字**长得像证据**
+      （有地址、有反汇编偏移、有 🔴 标记），却没有任何可核对的日期/提交号。
+      `CLAUDE.md` 自己写着「**完成度以实测为准，不凭记账**」，而它自身正是最大的那本账。
+      本轮**不写新功能**，做三件事：
+      ① **逐条复核**：`CLAUDE.md` 子系统表 + 符号计数表里所有「未做 / 缺口 / 我们为 0 / 仍是错的 /
+      未验证 / 被阻塞」的断言，每条用当前 HEAD 实测复核（符号计数用 `nm -a | c++filt | sort -u` 双边同口径；
+      「实现了没有」看代码与测试是不是真在跑，不看表里的字）。
+      ② **凡是已作废的就地改掉**，并给**每一条**补上「实测日期 + 提交号」——
+      此后没有这两样的断言一律视为不可引用。已知必改至少两处：对象池聚合器那段
+      「他们的算法与我们的不是同一个」（`ab58e28152d` 已关闭）；「判别实验（他们的 fixture 做不到）：未做」
+      （`make_op_fixture.py` + `op_aggregator_check.sh` 已在 `verify_all.sh` 里）。
+      ③ **产出一份「真实剩余面」清单**写进 memo 末尾，按「有证据可依 / 无证据（需先反汇编）/
+      结构上不可关闭」三分。后续任务从这份清单取，不再从 `CLAUDE.md` 的散文里取。
+      ⚠️ **判据不能是「我读着改完了」**：每条订正必须附上产生它的那条命令与输出摘要
+      （`git merge-base --is-ancestor <sha> HEAD`、`nm … | grep -c`、`ls` 到具体文件、测试名）。
+      ⚠️ **别把「表里写着未做」当未做，反方向同样会翻车** —— `analyze_snapshot --shorebird` 曾被记成
+      「已移植」而实际对我们自己的快照产出 0 个函数。
+      ⚠️ 本轮**允许**改 `~/Documents/flutter_hot_patcher/CLAUDE.md` 与 `memo.md`（这正是任务本体），
+      但仍**只用显式路径提交**，禁止 `add -A`。
+
+  <details><summary>任务 61 原始卡片（前提已被证伪，留档）</summary>
+
+- 任务 61：🔴 **改正对象池 link-results 聚合器 —— 我们现在的算法是「已知错的」**
       这不是新面积，是**还债**：`CLAUDE.md` 已实测记载我们的实现与他们**不是同一个算法，
       只是在当前 fixture 上重合**。三处具体分歧，证据都在 `OP_AGGREGATOR_RECON.md`：
       ① **他们是加权投票**：排序元素类型 `pair<unsigned long,double>`（mangled name 直接给出），
@@ -868,6 +916,8 @@
       ⚠️ 别把「八行报告仍然相同」当通过 —— 那正是当前错算法能骗过的判据。
       ⚠️ 本轮起沿用任务 60 的新纪律：**任何 `runtime/vm/` 下的负控制都必须连 `gen_snapshot` 一起重建**，
       否则会拿到 `Wrong full snapshot version` 这种「对的退出码、错的原因」。
+
+  </details>
 
   <details><summary>任务 60 原始卡片</summary>
 
