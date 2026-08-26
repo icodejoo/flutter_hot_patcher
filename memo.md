@@ -587,18 +587,35 @@
       「**被接受的 flag**」与「**被文档化的 flag**」在这个二进制上是两个不同的族群，
       我们的 help 缺口计数从来没看见过它们。`--no_pp_hash` 是反向的同一现象
       （在 help 里、parser 不收）。
-- [ ] 任务 53：**用 `--compute_dd_slot_mapping` 给 DD slot 机制做首个一方 oracle** ⬅️ **当前任务**
-      🎁 **这是本轮最值钱的发现，且它绕开了未解的贪心**：该 flag **吃**一张 DD 表
-      （`--dd_table_data`）**吐**出 slot mapping，不需要自己算表。
-      而 `DDSlotMapping::ReadFromStream` / `DDSlotVoters` / `DDSlotResolution`
-      我们**都已实现却从未有过一方参照**（当初只有计数级 oracle）。
-      ① 先拿 `out_dd/base.ddtable` 喂它，看输出格式；
-      ② 与我们的 `--print_dd_resolution_to` 输出对拍。
-      ⚠️ 记账警告：CLAUDE.md 说 `print_dd_resolution_to` 「已完成、8 行 TSV 全同」，
-      但那是**用我们自己的 slot 文件**比的。这个 flag 可能给出**真正独立**的判据。
-      ⚠️ 打分用成员/逐字节，不用条数（任务 49 的教训）。
-
-- [ ] 任务 54：**回到 `Run` 第二个参数 `vector<long>` 装什么**（任务 52 未完成的那一半）
+- [~] 任务 53：**流水线全貌已解出；但这个 oracle 暂时驱动不了** ✅ 研究侧 `54384f4`
+      🔑 **`Empty value for option <名>` 能精确枚举两个二进制的 embedder 选项表** ——
+      比 `--help` 便宜得多，而且是**另一个族群**（help 只列 13 个，DD flag 一个都不在里面）。
+      流水线：
+      ```
+      gen_snapshot     --print_dd_function_identity_to=I      (VM flag)
+      analyze_snapshot --compute_dd_table=T --dd_max_bytes=N
+      analyze_snapshot --compute_dd_slot_mapping=M --dd_table_data=T
+                       --dd_caller_links=C [--dd_function_identity=I]
+      gen_snapshot     --dd_slot_mapping=M                    (embedder 选项)
+      ```
+      ✅ **slot mapping 文件头已获一方证据**：他们产出 `55 7e ca dd | 02 00 00 00 | 80`
+      = magic `0xDDCA7E55`、version `2`、varint 0。
+      我们 `dd_voting.h:124-125` **本来就声明的是这两个值**（当初从 gen_snapshot 侧推的），
+      **逐字节相同** —— 这是第一次看到他们自己的生产方发出它。
+      🔴 **但 `dd_caller_links` 在两个二进制里都没有生产方**：
+      它是 `analyze_snapshot` 的输入，却不在 gen_snapshot 的 embedder 选项里、
+      不在它的 `print_*` VM flag 里、也不在 analyze_snapshot 自己的输出里
+      （`out` / `compute_dd_table` / `compute_dd_slot_mapping` / `dump_object_pool_link_data`）。
+      → **它产自两个二进制之外**（他们的闭源 linker 或构建编排）。
+      ⚠️ **所以这个 oracle 现在驱动不了**：flag 能跑，但第二个输入造不出来。
+      要先逆出 `dd_caller_links` 的格式，**这件事比排期时看起来的大**。
+      ⚠️ 它的解析器无保护：喂 ddid 退 138、喂 `/dev/null` 抛 `bad_alloc`。
+      **崩溃不能当格式证据**（datastream 陷阱同型，边界检查是 ASSERT、release 已编译掉）。
+      🎁 顺带：gen_snapshot 的串里有**私有源文件清单** ——
+      `class_table_mapper.cc` / `link_info.cc` / `linker.cc` /
+      `object_pool_editor.cc` / **`object_pool_mapper.cc`**。没有 `cascade_limiter.cc`，
+      与它住在 `analyze_snapshot` 一致。
+- [ ] 任务 54：**回到 `Run` 第二个参数 `vector<long>` 装什么** ⬅️ **当前任务**
       ⚠️ 有符号比较说明可为负 → size / 调用者数（都非负）已因此存疑，且实测得 6 和 7 分。
       ① 反汇编 `Dart_ComputeDDTable` 里**构造**该 vector 的那段。
 
