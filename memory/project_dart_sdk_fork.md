@@ -2729,3 +2729,82 @@ size==1过滤 4 / 4 / 0 / 124
 
 **遗留**：`GetBestMapping` 的平票且**双方都非恒等**时，顺序由 unordered_map 桶布局 + introsort 决定
 （**绝不 `reserve()`**）；当前 fixture 零覆盖。
+
+---
+
+### 🎉 `--dump_object_pool` / `--dump_object_pool_link_data` 已完成（2026-08-26，任务 60）
+
+`analyze_snapshot` 的 flag 面**只剩 `--disassemble`**（它撞 VM 自己的同名 flag）。
+help 检查从「7 documented / 14 lines withheld」变成 **12 / 3**。
+全部地址级证据在 `OBJECT_POOL_DUMP_RECON.md`。
+
+**先证「不是死 flag」再动手**：`strings` 在这里是坏判据（任务 18 的阳性对照），只能行为测试。
+实测他们的二进制：`--dump_object_pool_link_data` 是**带自己路径的 string option**
+（裸名被拒、`=` 空值报 "Empty value"、`=path` 通过，且**不需要 `--out`**），
+`--dump_object_pool` 是 **bool**（`=value` 报 "Non-empty value"）。
+
+**生产方是 `GetObjectPoolLinkInfo(Thread*)`**（`0x10024cb9c`），
+两个 flag 分别经 `Dart_DumpObjectPool`(`0x10024c32c`) 与 `Dart_DumpObjectPoolAsJson`(`0x10024d668`)。
+三部分：
+
+1. **`self_pp_indices` / `subgraph_pp_indices` 就是同一趟 walk 的池引用序列，保序且保留重复。**
+   他们 1380/1380 两条都对；**去重**只有 1250/932，**排序去重**只有 1075/775。
+   448 条列表里真的有重复索引，所以这个比较能证伪而不只是附和。
+2. 🔑 **`pairs` 不是扫代码扫出来的，是对象池 `entry_bits` 里的一个位域。**
+   他们把上游 4 位的 `TypeBits` 缩到 **2 位（bits 2..3）**，在 **bits 0..1** 插了
+   `PairPosition`（0 无 / 1 first / 2 second）。三处独立印证：
+   `ObjectPool::NewFromBuilder` 的 `and #0xc; cmp #4`（gs `0x10015d884`）、
+   JSON dumper 的 `ubfx w8,w8,#2,#2`（as `0x10024e128`）、
+   `AddObject` 拆 `kImmediate128` 时写的字面量 **`0x11` / `0x12`**（gs `0x100255684`/`0x1002556a4`）。
+   标记点：`LoadNativeEntry` 写 **`0x9`**（gs `0x10024e68c`）；
+   `AddObject` 前言（gs `0x1002555f4`-`0x100255620`）把**紧跟在 first-native 之后的任何一条**改成 second
+   ——它**根本不看新条目是什么**，是位置性配对，写成「若新条目是立即数」在所有 fixture 上同分但规则不同；
+   `EmitInstanceCallAOT` 写 `csel(0x65,0x05)` 与 `0x06`（gs `0x10027e23c`/`0x10027e258`）；
+   `GenerateTTSCall`（⚠️ **推断，不是反汇编出来的**——它全内联、零符号，
+   但它是 `(null, string)` 那种形状的唯一生产者，而他们 385 条里有 287 条正是这个形状）。
+   92 + 6 + 287 = **385**，与他们一字不差。
+   ⚠️ 这个位不仅要建，还要**活过反序列化**：`kResetToSwitchableCallMissEntryPoint`
+   那条臂会把整个字节重写掉，而他们的 dump 里那 6 条既是 `(unknown)`（=kImmediate）**又**在 `pairs` 里。
+3. **`entries[].code`** 是他们自己那份 `ObjectPool::DebugPrint`
+   （字符串表里两份：上游那份在 `0x290024`，他们的在 `0x29aae8`），
+   多一条 `<%ld len string> (obj)`、`(raw)` 改叫 `(unknown)`。
+   ⚠️ **阈值用 `Utf8::Length`（`cmp #0xf9`），印出来的数字用 `String::Length()`**
+   （`0x10024e218`：`ldur x8,[x8,#7]; asr x8,x8,#1`）。两者混用会把 2112 印成 2844 ——
+   实测抓到过一次，然后又做成了负控制。
+
+**判据**（`op_dump_check.sh`，已进 `verify_all.sh`）：pp 列表走两段链（模型 ≡ 他们 1380/1380；
+我们的二进制 ≡ 模型 1589/1589），但**第三段是直接对比**——
+`pairs`、池大小、1421 条 entry 描述都描述池本身，两边的池都由同一份 `base.dill` 生成：
+**池大小 1421 = 1421；`pairs` 385 条逐项相同；1421 条 entry 里 1323 条逐字相同**。
+其余 98 条全是**反序列化重写成本进程地址**的槽（92 个 `kResetToBootstrapNative`
++ 6 个 `kResetToSwitchableCallMissEntryPoint`），跨进程本就不可能相同。
+**pairs 的唯一 oracle 就是这一段直接对比**——这棵树里以前没有任何东西记录过配对约束。
+
+**四个负控制，每个都在同轮 `ninja` exit 0 下取得**：pp 列表去重 → 红（1459/1136）；
+不保留反序列化时的 pair 位 → `pairs` 385→**379**；去掉 `GenerateTTSCall` 的标记 → 385→**98**；
+长串印 `Utf8::Length` → entry 相同数 1323→1320。
+⚠️ **新踩到的坑**：改 `runtime/vm/` 下任何文件都会变**快照版本 hash**，
+所以负控制必须把 `gen_snapshot` 一起重建——否则检查是以
+`Wrong full snapshot version` **崩掉**，而不是为了预期的原因变红，
+而从退出码上这两者一模一样。
+
+**顺手订正的两条陈旧记账**（都已实测，不是凭记忆）：
+- 「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」——任务 59 已作废。
+- 「`SubgraphHasher` 他们 12 / 我们 0 是真实缺口」——**是第三例口径陷阱**。
+  那趟 walk 的三个 hash 加两条 pp 列表全部实现且逐项验证（他们 1380 个函数上四项全 1380/1380），
+  只是我们写成自由函数、**没有同名类**。同批 `CascadeLimiter` 已变成 18 vs **31**。
+  → 三例同型之后（`sha1_`、`ClassTableMapper`、`SubgraphHasher`），
+  **符号表对「功能有没有」基本失去判别力**，真判据是逐项对比他们的产物。
+
+**刻意没猜**：`ObjectPoolBuilder::PairEntry`（他们 `ObjectPoolBuilder` 上有这个 vector，
+但 `AddObject`/`NewFromBuilder`/`GetObjectPoolLinkInfo` 一处都不读它，
+而 385 条已被 entry_bits 全部解释，所以它的用途未确立，不发明替代品）；
+他们那个 pair 参数的写法（`AddObject(const Object&,...)` 在他们那边全被内联，只有
+`AddObject(ObjectPoolBuilderEntry)` 有符号）；
+他们 `LoadNativeEntry` 把 `patchable` 形参**完全无视**、硬写 `0x9` 这件事
+——我们照常传参，**把差异留在明处而不是照抄**，因为凭一个常量就复刻一个疑似 bug 划不来。
+
+基线：`verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked**（上轮 15）、
+`verify_reproduction.sh` **28 产物 0 失败**、`run_vm_tests` **157 passed**（上轮 154，新增 3 个
+`ObjectPoolPairPosition_*`；其中一个**断言的是字节**——他们那六个 entry_bits 常量，
+因为一个只和自己自洽的位布局照样能 round-trip）。
