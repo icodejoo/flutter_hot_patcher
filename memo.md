@@ -77,8 +77,13 @@
 - [~] 任务 19：**`SubgraphHasher` 侦察** —— 等价关系解出来了，**框架没有** ✅ spike `1a3ee52`
       `SUBGRAPH_HASHER_RECON.md` + `probe_subgraph_hash.py`（**本轮无代码改动，是纯侦察**）。
       **已确立**（对他们 1380 个函数逐个实测）：
-      ① `self_hash` **只取决于指令字节**（1378 个不同 blob，无一 blob 对应两个 hash）
-      → 名字/索引/位置都不参与；
+      ① ~~`self_hash` **只取决于指令字节**（1378 个不同 blob，无一 blob 对应两个 hash）
+      → 名字/索引/位置都不参与；~~
+      🔴 **2026-08-26 任务 58 推翻了这一条**：序数表是 `SubgraphHasher` 的**成员**
+      （`+0x100` 池、`+0x198` 字段表），**每一层 walk 都要查** ⇒ `self_hash` 可证**不是**
+      「某个函数字节的函数」。原来的观测（1378 blob 无冲突）没错，**结论错了**——
+      在他们那一次运行里序数恰好与字节共变，所以外部观测分辨不出来。
+      **这正是「外部黑箱观测能立性质、不能立机制」的实例。**
       ② 它是**多对一**（1378 → 1170）所以做了归一化；
       ③ **被忽略的是「PP 相对加载的位移」和「跳转/调用目标」**
       （拿同 hash 不同字节的函数对直接读出来的，也正是 `--no_pp_hash` 描述所说）；
@@ -643,20 +648,201 @@
       入度为 0 播种（`0x10024e980`）、`std::deque` 工作表（`sp+0x1b0`）、
       `malloc`+`memcpy` 复制入度数组、`indeg[v]--`，松弛在 `0x10024ea9c`：
       `depth[v] = max(depth[v], depth[u]+1)`。
-      ⚠️ **图有环，而 Kahn 不处理环**：入度永不归零的节点从不出队、**深度保持 0**
-      （callee 图上 1380 个里有 716 个）。**这是他们的真实行为，必须复刻，不能抹平。**
+      ⚠️ **图有环，而 Kahn 不处理环**：入度永不归零的节点从不出队（callee 图上 1380 个里有 716 个）。
+      **这是他们的真实行为，必须复刻，不能抹平。**
+      🔴 **2026-08-26 任务 57 订正：原文「深度保持 0」说得太强**。松弛发生在减入度**之前**、
+      且不看目标的入度，所以这种节点**可以收到深度**，只是永远不往外传
+      （`0→1,1→2,2→1` ⇒ `depth[1]==1`）。是一个失败的单测逼出来的订正，不是读代码读出来的。
       🎉 **按成员打分：callees 方向、升序 = 11/17**（1/2/4/8/16/32/64/**128**/**256**/16384/32768）。
       **128 和 256 是任务 50 那轮 15 个顺序里没有一个拿得到的。**
       其余三种组合：callers 降序 8、callees 降序 6、callers 升序 6。
       🔑 **任务 50 测出的「天花板 8」是猜测的天花板**；打破它的顺序来自反汇编。
-- [ ] 任务 55：**解等深时的 tiebreak**（中段 512–10000 仍差）⬅️ **当前任务**
-      1380 个节点只有 **20 个不同深度** → **平票到处都是**，`std::sort` 不稳定，
-      所以决定顺序的是比较器的第二关键字（或者根本没有、由 introsort 的具体轨迹决定）。
-      ① 回到 `0x100192080` 那组比较器，看 `w[a]==w[b]` 时是否还有第二次比较。
-      ② 若确实只有一个关键字，则顺序由 **libc++ introsort 的实际轨迹**决定 ——
-         那就必须**照抄 introsort**（`__sort3/4/5` + `__insertion_sort_incomplete` + 中位数选轴），
-         不能用 Python 的 `sorted`。**这是一个可证伪的分叉，先判定走哪边。**
-      ⚠️ 打分用成员不用条数。
+- [~] 任务 55：**分叉已判定 = 分支 B（只有一个关键字）；顺带证明「只差平票顺序」** ✅ 研究侧 `bd0f18c`
+      `CASCADE_LIMITER_RECON.md` §10-§12 + `tiebreak_probe.py`（**本轮无源码改动**，`~/dart-3122/sdk` 干净）
+      🔴 **比较器只捕获一样东西**：调用点 `0x10024ec10 str x9,[sp,#0x170]` 是**唯一**一次往比较器对象里写
+      （`x9 = sp+0x88 = &depth`，随后 `add x2,sp,#0x170`）。三个函数
+      （`__introsort`@`0x100192080`、`__sort5`@`0x100192f9c`、`__insertion_sort_incomplete`@`0x1001931a4`）
+      里**全部 64 处**经比较器指针的读都是 `ldr xN,[xComp]`、偏移 0。
+      ✅ **否证前先说清判据覆盖了哪些编码形式**（吃过一次亏，见验证纪律）：
+      `[xC,#imm]` / `[xC,xM{,lsl}]` / pre-post-index / `ldp` / 寄存器施加的 `add xT,xC,…` 五种全查，全无。
+      **「按索引 tiebreak」（不需要捕获）另行否证**：`__sort5` 是完整 9 比较网络，
+      条件直方图 12×`b.ge` + 1 个栈保护 `b.ne`；另两个函数里 17 处 `b.eq/b.ne` 逐条读上下文，
+      全是长度分派 / 迭代器相等 / `cmp w9,#8` 的乱序计数 / 栈保护，**没有一处跟在深度比较之后**。
+      🎉 **本轮真正的收获比分叉判定大**：随机平票顺序 3000 个里 **41 个 17/17 全中**
+      （新中的正是缺的那六个：512/1024/2048/4096/8192/10000，baseline 分别只差 3/1/2/1/2/2 条）。
+      → **代价函数、贪心形状、资格规则、深度关键字全部是对的，缺口就只剩平票顺序这一件**；
+      这**撤回**了 §6 里「算法错了」的读法。
+      ⚠️ **但 17/17 已经不再是判别性判据**：那 41 个顺序两两在平票组内的一致率只有 **0.497**
+      （0.5 = 无关），随机顺序有 **1.4%** 能过。**下一轮不能再用它当判据。**
+      ⚠️ 14 个确定性 tiebreak 全部到不了 17；最好的 `self_hash desc` 到 14，
+      **几乎肯定是巧合** —— 比较器里没有任何一处读字符串。
+- [x] 任务 56：🎉 **introsort 轨迹已逐元素抄对；11/17 → 17/17 全中** ✅ 研究侧 `e3e23fb`
+      `LIBCXX_INTROSORT_RECON.md` + `introsort_model.py` / `libcxx_sort_oracle.cc` /
+      `introsort_check.py` / `introsort_negctl.py` / `introsort_order_check.sh`
+      （**`~/dart-3122/sdk` 无改动**，全在研究侧；`verify_all` 12 → **13 项**）
+      ✅ **判据 (a) 转写保真度 = 精确 oracle**：用真的 libc++ `std::sort` 跑同一个 1380 元素恒等向量
+      + 同一个单关键字比较器，要求模型输出**逐元素相同** → **1380/1380 全中**，
+      且在 libc++ 21 与 23 两套工具链下**都**编译并给出同一置换。
+      ✅ **判据 (b) 成员分 = 17/17**，新中的正是缺的那六个：512/1024/2048/4096/8192/10000，无一失败。
+      🔑 **立 (a) 这条判据是本轮的真正价值，不是那个 17**：对转写做 9 个一行变异，
+      **其中 3 个是真错但仍然 17/17** → **成员分对真实错误也是瞎的**，不只是对随机顺序瞎；
+      而 (a) 对 9 个变异全部变红。**这条撤回了任务 55 里「14 个确定性 tiebreak 全部到不了 17」的说法。**
+      ✅ **LLVM 21 vs 23 的有效性前提已裁决（往好的方向）**：macOS SDK 出的是 libc++ `210106`，
+      它的 `__algorithm/sort.h` 与树内 `230000` 那份**逐字节相同**（md5 `35a0f94a…`），
+      而两边的 `__config` 不同 → 确是两个版本、但排序算法没变。
+      **且判据不靠这个 md5**：oracle 用两套工具链各编一次、要求给出同一置换，是行为结论不是文件结论。
+      ⚠️ **它自己的第一个负控制是恒等变换**（`__limit 24→25` 全绿）→ 插桩量出
+      `len==24` 出现 **0** 次、`len==23` 出现 1 次，改用 `24→23` 才变红。
+      `ninther_threshold 128→127` 同样被证明是 no-op（124..132 内无分区长度），
+      **每轮重测这个证明而不是豁免它**。这正是「变红之前先问这一行语义真的变了吗」。
+      顺带实测（不是假定）：只排 619 个合格节点会得到**不同**的顺序（§12 得证）；
+      两条选轴路径都被走到（17 次 ninther / 12 次 median-of-3）；
+      深度耗尽的堆排序回落**从未到达**，模型在那里**抛异常而不是猜**。
+- [x] 任务 57：🎉 **`--compute_dd_table` 已进源码树**（第一次有真 C++）✅ `32582a15fb4` + 研究侧 `4479bd6`
+      新 `runtime/vm/shorebird/cascade_limiter.{h,cc}` + `cascade_limiter_test.cc`；
+      改 `analyze_snapshot_api_impl.cc` / `bin/analyze_snapshot.cc` / `include/analyze_snapshot_api.h` /
+      `shorebird/link_info.{h,cc}` / `vm_sources.gni`。
+      研究侧 `dd_table_model.py` / `dd_table_probe.py` / `dd_table_check.sh` / `DD_TABLE_LANDING.md`。
+      **`verify_all` 13 → 14 项；`run_vm_tests` 143 → 154 passed**（+11 `CascadeLimiter_*`，
+      `EXPECTED_TESTS` 抬到 154 **且把 `CascadeLimiter` 加进名字过滤器** —— 不加就永远不会被选中）。
+      ✅ **分叉判定 = (A) 直接用 `std::sort`**，而且是**实测**不是靠 md5 推断：
+      在一个**模型从未调过参**的 1589 节点新图上，我们构建的二进制与参照模型在全部 17 个预算上逐字节一致；
+      且该比较在这里**有判别力**（把模型的顺序反过来，11/17 变红）。`introsort_model.py` 降级为测试参照。
+      🔴 **「与他们的产物逐字节相同」做不到，而且是结构性不可能，不是差一点**（两条独立实测）：
+      ① 快照版本墙 —— 我们的 `analyze_snapshot` 读他们的 `base.so` 报
+      `Wrong full snapshot version, expected '7150a2e84c1d…' found '839937ddd313…'`（反向同样被拒）；
+      ② **就算从他们自己的 `base.dill` 出发，我们的 `gen_snapshot` 发 1589 条、他们 1380 条**
+      （1388 `[Optimized]` vs 1179），`(name,size)` 只有 935 对共有，`self_hash` 对上 762/934。
+      **群体不同，DD 表就不可能相同。**
+      → 改成**两段链，每段都逐字节**：参照模型 ≡ **他们的** `--compute_dd_table` 字节（17 个预算全中，
+      也等于随包的 `out_dd/base.ddtable`）；我们的二进制 ≡ 该模型字节（同样 17 个预算）。
+      🔑 **本轮真正的解锁是 callees 图的定义**：它就是**函数体内 `b`/`bl` 的跳转目标**，
+      拿**他们自己的字段**对过 —— **1380/1380 个集合、3629/3629 条边，零多零漏。**
+      🔴 **一条 recon 断言被一个失败的单测订正了**：`CASCADE_LIMITER_RECON.md` §9 的
+      「环上节点保持深度 0」**说得太强**。松弛发生在减入度**之前**、且不看目标的入度，
+      所以这种节点**可以收到深度**，只是永远不往外传（`0→1,1→2,2→1` ⇒ `depth[1]==1`）。
+      单测、两处代码注释、recon 文档都已改成更细的说法。**下面任务 54 的卡片同步订正了。**
+      ⚠️ **负控制两个都是真的且失败在不同预算集**：`Cost` 把节点自己算进去 → 10/17 红；
+      `VisitOrder` 比较器 `<`→`>` → 11/17 红。
+      🔴 **但 2 号控制第一次根本没编译成功**（`ninja` exit 1，尾部 `// NEG CTL` 吞掉了 `);`），
+      检查却照样变红 —— 那是 1 号控制留下的**陈旧二进制**，**数字一模一样**。
+      **只有 ninja 的退出码能区分这两种情况。** 记在 `DD_TABLE_LANDING.md` §4。
+      ⚠️ 两处刻意偏差已写在 `cascade_limiter.h` 里没藏：他们的 `Run()` 没有资格参数
+      （我们用空 hash 编码它）；`Dart_ComputeDDTable` 七个参数里有四个归因不出来。
+- [~] 任务 58：🎉 **`subgraph_hash` 已解出并进树（1380/1380 逐字节）；`op_subgraph_hash` 缺口已命名**
+      ✅ `da614c52006`（只改 `runtime/vm/analyze_snapshot_api_impl.cc`）+ 研究侧 `279a83a`
+      （`SUBGRAPH_WALK_RECON.md` / `subgraph_hash_model.py` / `subgraph_hash_probe.py` /
+      `subgraph_hash_check.sh`；`verify_all` 14 → **15 项**）
+      🔑 **三个 Hasher 的身份不用推断，他们的 ctor 直接写出来了**（`0x100195c54`，SSO 字面量）：
+      `"subgraph"`@`this+0x28`（vector `+0x40`）、`"object_pool"`@`+0x60`（`+0x78`）、`"self"`@`+0x98`（`+0xb0`）。
+      `Hasher = {string; vector<Entry>; bool}`，`sizeof 0x38`。
+      ✅ **walk 的界是 per-root 的 `vector<bool>`**（`this+0x00`，按 instructions-table 索引，
+      `ldr x8,[x26]`/`tst`/`b.ne`@`0x100196890`）。**没有深度上限** —— `depth`(w21) 只门控 `"self"`
+      （每个 `+0xb0` 的 push 都在 `cbnz w21` 之后）与日志缩进。
+      单一自调@`0x100196928` 带 `add w2,w21,#1` ⇒ 递归发生在调用点、按指令顺序，callee 被就地插入流中。
+      `Entry{1,offset}` 的 push **在 visited 测试之前**。
+      ✅ **九种 kind 的路由是穷举出来的**（全部 22 个 `push_back` 站点 + 每一处 `orr xD,xK,xV,lsl #32`）：
+      `"subgraph"` 每个字拿 `(7,word)`、**不收 kind 2/3/4/5/6**，且保留折叠形式的每一个字；
+      `0x100197448`/`0x1001974ec` 那两处写**是 pop 不是 push**（`mvn x9,x9` ⇒ `end += (1-n)*8`），
+      而且只作用在 `"object_pool"`/`"self"` 上。
+      `CodeName` = `Utils::StringHash(Code::Name())`，由 ctor 只往 `+0x78` 推一次。
+      🔴 **它推翻了任务 19 的①**：序数表是**成员**（`+0x100` 池、`+0x198` 字段表），**每一层都要查** ⇒
+      **`self_hash` 可证不是「某个函数字节的函数」**。`+0x128`（外部目标）在 depth-0 分支里。
+      值是**插入序数**，因为 `ldr x3,[x26,#0x140]` 读的就是这张表自己的 `size()`。
+      🔴 **「比划分不比摘要」这条方法在这里是空的，而且探针自己断言了原因**：
+      他们的 `subgraph_hash` 在 1380 个函数上取 **1380 个不同值** ⇒ 真值划分是离散的，
+      **任何单射候选都「复现」了每一个等价类**。改用摘要相等做判据：
+      模型复现他们 **1380/1380**；我们构建的二进制与独立的 ELF 驱动模型一致 **1589/1589**。
+      → **`subgraph_hash` 现在是真的发出来了，不再是 `self_hash` 的副本。**
+      ⚠️ **`op_subgraph_hash` 仍然缺席**（路由已解，实测 **842/1380**，卡在分类器）。
+      ⚠️ **`self_hash` 实测 1185 → 1208/1380**（把序数表改成 walk-global 之后）——**这个修法本轮没落地**，
+      留给下一轮。
+      ⚠️ **刻意没猜的四件**：`Instr::ImmLogical()` 那条臂；`movz/movk` 的寄存器偏移型池加载
+      （已定位 `0x100197550`-`0x100197598`，走 `LoadStoreFromSingle`，**只描述未实现**）；
+      经 `x16` 的池加载臂（已定位未实现）；`DDTableLinkInfo*` 的作用仍未知。
+      ⚠️ **负控制两个都带 ninja exit 0**（上一轮那个陷阱的修法生效了）：
+      Offset entry 挪到 visited 测试之后 → 红 `959/1589`；不在 root 之间重置 visited → 红 `397/1589`；
+      两个都还原、diff 与控制前副本相同、之间重建过并绿过。
+      ⚠️ **第三个负控制（删掉 visited 集合）被 exit 137 杀掉** —— callee 图有环，
+      那是**不终止的算法，不是变红的检查**。已记在 recon 文档。
+      ⚠️ **`class_table_dump_check.sh` 本轮真红了两次，两次都是真的**：先是它把 `subgraph_hash`
+      守成「必须缺席」；改完之后我的替代断言又要求**单射**，而**正确实现恰恰不满足单射**
+      （名字不进这个 hash ⇒ 字节相同的叶子必然碰撞）。
+- [x] 任务 59：🎉 **两个缺口都归零：`op_subgraph_hash` 842 → 1380/1380，`self_hash` 1185 → 1380/1380**
+      ✅ `ee99498bfb1` + 研究侧 `19344f2`（`SUBGRAPH_CLASSIFIER_RECON.md` / `hasher_model.py` /
+      `SUBGRAPH_WALK_RECON.md` / `class_table_dump_check.sh` / `subgraph_hash_probe.py`）
+      **`op_subgraph_hash` 第一次真正发出来了**（此前是 `self_hash` 的假数据），`self_hash` 改成 walk-global。
+      判据是**摘要相等**、两段链：模型 ≡ 他们的 1380，我们的二进制 ≡ 模型（我们的 1589）。
+      **不是空判据**：探针断言了真值划分大小——`self_hash` 1170 类 / 1380（有信息），
+      `op_subgraph_hash` 1380/1380（离散 ⇒ 划分分数**本来就会是空的**，所以才改用摘要）。
+      解出来的（全部来自 `analyze_snapshot_arm64` 反汇编）：
+      · `movz`/`movk` 寄存器偏移型池加载 —— `0x100196d4c` `ubfx w10,w8,#29,#2; cmp #3`，
+        要求 movk `hw==1`、pc-8 处有同 `Rd` 的 `movz`，偏移 `= movz.imm16 | movk.imm16<<16`，走 `LoadStoreFromSingle`（3 字）
+      · 经 `x16` 的池加载 —— 三条 ldp 臂，闸门 `(w&0xFB400000)==0xA9400000`（只 64 位 LDP，排除 `stp`），
+        前缀 `add x16,Xn,#imm` 由 `(prev&0x9F00001F)==0x91000010` 匹配。命中 6/6
+      · `Instr::ImmLogical()` 两处调用点（`0x100196ed0` dispatch 头、`0x100197100` field-table 头）
+      · `LoadStoreFromSingle`（`0x100195774`）数值那半是 `(offset-16)/8` **截断**（`csel mi`，不是 `asr`）
+      🔑 **真正把分数补齐的三条都不在卡片上**：池/field 序数**数引用不数去重索引**
+      （`0x100196c28` 无条件 push，随后 `try_emplace(idx, size-1)`）；field 闸门是
+      `(w&0x0A3FFBE0)==0x08003B40` ⇒ THR+0x70/0x78；**分类器是往回看并 pop 的**
+      （`0x10019744c` `mvn`）然后跳过 `3-n`；dispatch 头是 3/4/5 字。
+      判据实测：`ninja` Release+Product 均 exit 0（本轮重建过）；`verify_all.sh` exit 0
+      **15 ran / 0 failed / 0 skipped / 0 blocked**；`verify_reproduction.sh` **28 产物 0 失败**；
+      `run_vm_tests` **154 passed**；`subgraph_hash_check.sh --self-test` exit 0（14 ok，含 3 个模型扰动变红）。
+      负控制（每条都在同一轮 `ninja` exit 0 下取得）：池序数改成去重计数 → 红（self 1440、op 1167）；
+      field 闸门放宽成任意 `ldr [THR,#x]` → 红（1465 / 670）；关掉往回 pop → 红（1586 / 1572）。
+      ⚠️ **第四条负控制是绿的，且没有被放过**：关掉 `movz`/`movk` 池臂 → 全绿，插桩实测该臂
+      在两份语料上**触发 0 次** —— 它是**已证明的 no-op**，按他们的形状实现但当前无覆盖，记在 recon §7。
+      ⚠️ 同型的零覆盖还有 `Instr::ImmLogical()`（两份语料都 0）。
+      ⚠️ 刻意没猜：`DDTableLinkInfo*`（`this+0x20`）的作用；
+      发布的 `subgraph_pp`/`subgraph_field_table`/`self_selectors`/`subgraph_selectors` 是否去重
+      —— 它们仍然不在 dump 里；固定跳过 `3-n` 与「消费 NOP」在两份语料上**不可判别**。
+      ⚠️ 顺手翻正了一道陈旧护栏：`class_table_dump_check.sh` 还断言 `op_subgraph_hash` **必须缺席**，
+      并驱动着已被取代的 byte-local `probe_subgraph_hash.py`，两处都已修。
+- [ ] 任务 60：**`--dump_object_pool` / `--dump_object_pool_link_data` —— 阻塞刚被任务 59 解除** ⬅️ **当前任务**
+      任务 17 把这两个 flag 记为「依赖缺失」，缺的就是 `op_subgraph_hash` 的生产方，**现在它有了**。
+      `ObjectPoolLinkInfo::WriteToStream` 已实现且**逐字节验证过**（`26b5e5ed6c7`，`op_link_info_check.sh`）
+      → 缺的一直是生产方不是格式。
+      ⚠️ 判据必须是**解码→重编码→比字节**，不能只是「解析到 EOF」（少读+少写会互相抵消，任务已栽过）。
+      ⚠️ 落笔前先确认这两个 flag 在他们的 `analyze_snapshot` 里**注册过**——
+      任务 18 的 `--no_pp_hash` 就是「文档里有、他们拒绝接受」的死 flag，
+      而 `strings | grep <flag>` **是坏判据**（`sdk_version` 阳性对照同样没有 bare-name 串），
+      只能用行为测试（看错误是不是 `Unrecognized flags`）。
+      顺手要还的账（就在本文件末尾）：`memory/project_dart_sdk_fork.md` 正文缺 2026-08-25 后半段；
+      `CLAUDE.md` 里「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」
+      与「`SubgraphHasher` 他们 12 / 我们 0」两条已被任务 59 作废，需订正。
+
+  <details><summary>任务 59 原始卡片（缺口描述，已全部关闭）</summary>
+
+      两件都是任务 58 量出来的具体缺口，不是新方向：
+      ① **`op_subgraph_hash` 842/1380**，路由已解、卡在**分类器**。差的就是任务 58 刻意没实现的那几条臂：
+      `movz/movk` 寄存器偏移型池加载（`0x100197550`-`0x100197598`，走 `LoadStoreFromSingle`）、
+      经 `x16` 的池加载臂、`Instr::ImmLogical()` 那条臂。**照他们的形状实现，别猜编号。**
+      ② **`self_hash` 1185 → 1208/1380 的修法已经量出来了但没落地**：序数表要 walk-global 不是 per-function。
+      → 落地它，并解释剩下的 172 个。
+      ⚠️ 判据：**`subgraph_hash` 那条「比划分」在这里同样可能是空的** —— 先查真值划分是不是离散的
+      （任务 58 的探针有这个断言，复用它），是离散就直接用摘要相等。
+      ⚠️ `DDTableLinkInfo*` 的作用仍未知，别顺手编一个。
+      🔑 **它的依赖刚刚被任务 57 解除**：`CascadeLimiter` 给 `SubgraphHasher` 的 walk 定界，
+      而 `cascade_limiter.{h,cc}` 现在在树里了（`32582a15fb4`）。这两件本来就是同一块工作。
+      符号实测（任务 18/38，在 **`analyze_snapshot`** 里量的，不是 `gen_snapshot`）：
+      `SubgraphHasher` **他们 12 / 我们 0**、`CascadeLimiter` 他们 18 / 我们 0（后者现已落地）。
+      已有的地基（别重做）：任务 20 解出 SHA-1 框架
+      `self_hash = SHA1(对每个 Entry: le32(e.first) ‖ le32(e.second))`、`sizeof(Entry)==8`、标准 IV 无自定义种子；
+      任务 21 从他们字符串表拿到十个 entry kind 名字（`CodeName`/`RawInstructionBits`/
+      `OffsetFromPayloadStart`/`ObjectPoolLoadIndex`/`DispatchTableCall`/`IndirectStaticCall`/
+      `FieldTableLoadIndex`/`ExternalBranchTargetIndex`/`LocalBranch`/`Unknown`），**编号刻意没猜**；
+      任务 37 把 `self_hash` 真算法进树。
+      → 缺的是**把 walk 从单函数扩到 subgraph**，产出 `subgraph_hash` / `op_subgraph_hash`。
+      ⚠️ **现状是错的且必须明说**：`analyze_snapshot --shorebird` 里 `subgraph_hash` 与
+      `op_subgraph_hash` **目前就是 `self_hash`**，是已知的错数据（CLAUDE.md 有记）。
+      解锁面：任务 17 记的 `--dump_object_pool` / `--dump_object_pool_link_data` 都卡在 `op_subgraph_hash`
+      （`ObjectPoolLinkInfo::WriteToStream` 已实现且逐字节验证过 → **缺的是生产方不是格式**）。
+      ⚠️ 判据要用任务 19 那条方法论：**比「划分」不比「摘要」** ——
+      「这两个函数 hash 相同」与框架无关、照样可观测，①-④ 全靠它才够得到。
+      ⚠️ 别再用成员分那类非判别判据（任务 56：9 变异 3 假绿）。
+
+  </details>
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -665,8 +851,13 @@
   `Wrong full snapshot version`（`839937dd…` vs `7150a2e8…`）。
   → **任何「把两边的快照内容直接对比」的判据都走不通**，
   只能像任务 16 那样从**反汇编**取共同可观测量。**不要再试。**
-- **真机 A/B 验证**（非 Bug，是**结构性不可自动化**）：需物理 iOS 设备 + 签名 + 部署，
-  无人值守做不到。CLAUDE.md 里「真机零实测」这条只能由人类关闭。**不要反复尝试。**
+- **真机 A/B 验证**（2026-08-26 **部分解除**）：人类报告 **iOS 真机已连上、随时可测**，
+  所以「没有设备」这条前提消失了。**但阻塞并没有消失，只是换了位置**：
+  我们这边**还没有任何 iOS 产物**——所有跑通的东西（DD 全链路、wrapper、patch 加载入口）
+  都是 host 的 `dart_force_simulator` 构建，C1-C7 不在任何产物里。
+  → **真正缺的是「用我们的 dart-sdk 构建 iOS 引擎」这一步**，不是设备。
+  在那之前，真机上能测的只有已经 PASS 过的 Route-B 产品线（Shorebird 预编译引擎 + 我们的 `.vmcode`），
+  那条**不检验主任务**。**下一步要由人类决定：是插入 iOS 引擎构建任务，还是先复验 Route-B 回归。**
 - **`GetBestMapping` 的不可破平票**（非 Bug，是**结构性不可达**）：已实测他们 `14/8/0/120`、
   我们 `14/13/0/115`。我们的顺序由 libc++ 的「空桶则压到链表头」决定（实测恒为「后插入者在前」），
   他们的随 key 变化 → 跟的是我们复现不出的桶布局。**匹配它需要两个容器有相同的桶宽历史，
@@ -717,12 +908,17 @@ op_real_mapping_check.sh   0 failure(s)
 analyze_snapshot_help_check.sh 0 failure(s)
 class_table_dump_check.sh  0 failure(s)
 dd_selection_check.sh      all checks passed
-run_vm_tests               143 passed
-12 ran, 0 failed, 0 skipped, 0 blocked
+introsort_order_check.sh   EXACT MATCH (1380/1380), 17/17
+dd_table_check.sh          exit 0（--self-test: 11 of 17 budgets went red）
+subgraph_hash_check.sh     1380/1380 theirs, 1589/1589 ours
+run_vm_tests               154 passed
+15 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 11 个 harness 全部能正确报错（`11 ran, 0 failed, 1 skipped`）。
-⚠️ 上一版这里记的是 11 项 / 10 个 harness，任务 48 加了 `dd_selection_check.sh`。
-**数字变了要能说出为什么** —— 这次的原因是新增检查，不是新写了代码。
+⚠️ 上一版记的是 14 项。**15 项是任务 58 加了 `subgraph_hash_check.sh`；`run_vm_tests` 停在 154
+是因为任务 58 没加单测**（它改的是 `analyze_snapshot_api_impl.cc`，判据走 `subgraph_hash_check.sh`）。
+**数字变了要能说出为什么，数字没变也要能说出为什么。**
+⚠️ 任务 58 中途有一次 `verify_all` 用的是**陈旧的 Product 二进制**，重建后才重跑 ——
+Product 那半不在默认 ninja 目标里，`analyze_snapshot` 只在 ReleaseARM64 里建。
 工作树 clean。HEAD：`8766b1f9e7b`（dart-sdk，任务 46；上一版记的 `734abc41d10` 已过期）
 / fhp-research 见本轮提交。
 `analyze_snapshot` help 缺口：**4 个 flag**（任务 17 是 6、任务 18 是 5）。
