@@ -872,7 +872,53 @@
       **且没有日期或提交号可供核对** —— 它生成了一个完全不存在的任务，白烧一轮。
       **这是本项目第四次同型**（`WrapCode`、`InBaseSnapshot`/`UnwrapEntryPoint`、
       `shorebird_base_instructions_table_`、本次）。→ 直接催生任务 62。
-- [ ] 任务 62：🔴 **实测重建「还剩什么没做」—— 记账已四次生成假任务，这次把它当缺陷来修** ⬅️ **当前任务**
+- [x] 任务 62：🎉 **记账缺陷已修 —— 11 条断言被实测推翻，其中 5 条是「记成未做、其实早做完」**
+      逐条复核 `CLAUDE.md` 的子系统表与符号计数表，**11 条断言作废**，每条都附了产生订正的那条命令：
+      · 对象池聚合器「不是同一个算法」→ 三处分歧全关（`ab58e28152d` 是 HEAD 祖先，退出码 0）
+      · 「判别实验未做」→ `make_op_fixture.py`(10.6K) + `op_aggregator_check.sh`(5.3K) 早在 `verify_all.sh` 里
+      · **「`object_pool_editor` 仍未接进 `ImageWriter::Write`，是真依赖缺失」→ 已接进**
+        （`image_snapshot.cc:622` 有 `ObjectPoolEditor::Edit`，提交 `66a46515eb5`）
+      · 「`InstructionCountForLoadStoreFromOffset` 在 gen_snapshot 里 0 个」→ **2/2**
+      · 「`Assembler::PadLoadStore` 我们 0 次」→ **2/2**
+      · 「DD 机制我们仍为 0」→ 全部持平（方法名集合 diff 两向为空；IL pass `b13e2a0d54e` 是祖先）
+      · 「16 个 stub 我们只声明了 2 个」→ **声明了 16 个**（`stub_code_list.h:159-172` 连续 14 条 + :84 + :195）
+      · 「mappers / field_hasher 2/0」→ `FieldHash` **2/6**；`Mapper` 两边都 0 = **第四例口径陷阱**
+      · 「`LinkedValue<T>` 我们没有」→ 有（`linker.{h,cc}` 各 7 处）
+      · 「`LinkOracle` 我们为 0」→ 已实现 `94ee77c3624`（他们 0 / 我们 10，运行期类）
+      · 「`print_shorebird_info` 的 gen_snapshot 半被阻塞」+「证据不足以实现聚合器」→ **两半都完成**
+      仍然成立但**理由已作废**的一条：`rewritten` 列我们 0 / 他们 2 —— 事实对，
+      但我们的 0 是 `linker.cc:1159` **硬编码的字面量**，不是缺 DD 子系统 → 已降级进 A 类。
+      仍确认成立：`--disassemble` 是唯一未做的 analyze_snapshot flag；真机 A/B **零实测**
+      （`xcodebuild/` 下只有 `ProductARM64`/`ReleaseARM64`，无任何 iOS 产物）；挂起池三条全准确。
+      **「真实剩余面」三分清单已写进本文件末尾**：A 有证据可依 4 项 / B 无证据 5 项 / C 结构上不可关闭 4 项。
+      判据：`verify_all.sh` 16 ran / 0 failed / 0 skipped / 0 blocked、`run_vm_tests` **157 passed**、
+      `verify_reproduction.sh` 28 artifacts / 0 failures —— 本轮未改源码，**不变才是对的**。
+      改动：`CLAUDE.md`(+36/-8)、`memo.md`(+69)，提交 `3cbcaf9`（仅显式路径，未推送）。
+      ⚠️ **本轮自己差点栽进要修的那个坑**：`find` 与 `ls` 都报 `analyze_snapshot` 不存在，
+      而 `test -f` 报存在（4483952 字节）。信了前者，`nm` 会给 0 行，
+      于是 `SubgraphHasher`/`CascadeLimiter` 全被读成「我们 0」的假缺口 —— 正是这轮要消灭的那类错。
+      → 已把「`nm` 出 0 行时先 `wc -l` 确认二进制真被读到」写进清单末尾。
+      🔴 **遗留的投毒源**：`~/.claude/projects/…/memory/MEMORY.md`（普通文件，**不是**仓库内软链）
+      仍带同一条已作废的聚合器断言，会在未来轮次重新投毒。本轮边界未授权改它 → 并进任务 63。
+- [ ] 任务 63：**A1 —— `rewritten` / `sentinel_filled` 两列的硬编码字面量** ⬅️ **当前任务**
+      从任务 62 产出的 A 类清单取第一项。**它不是缺子系统，是一行假数据**：
+      `linker.cc:1159` 把 `rewritten` 硬编码成字面量，所以 `print_dd_resolution_to` 报 0 而他们报 2。
+      任务 62 已把这条从「依赖 DD IL 子系统」降级 —— DD 全链路早已跑通（1043 函数 / 1622 处间接调用点）。
+      要做的是找到真正的计数源并接上，让两 pass 的报告与他们**逐字节相同**。
+      oracle：`./dd_pipeline.sh`（他们那侧打印 `2 rewritten`）。
+      ⚠️ **顺手先清掉投毒源**（本轮**明确授权**）：
+      `~/.claude/projects/-Users-Cruz-Documents-flutter-hot-patcher/memory/MEMORY.md`
+      与仓库内 `memory/` 副本里那条已作废的「🔴 对象池 link-results 我们的算法不是他们的算法」，
+      按任务 62 的实测结论改掉，并补上「实测日期 + 提交号」。
+      ⚠️ 两份 memory 副本**已经漂移**（`project_dart_sdk_fork.md`、`feedback_false_green_traps.md` 都是），
+      改的时候两份都要改，**不要自作主张做软链或删除任何一份** —— 那是不可逆操作，要停下来问人。
+      ⚠️ 判据必须有负控制，且**任何 `runtime/vm/` 下的负控制都要连 `gen_snapshot` 一起重建**，
+      变红后**读失败信息本身**确认原因就是改坏的那处，不是 `Wrong full snapshot version`。
+      ⚠️ 别把「报告行数对上」当通过 —— 判据是与他们的产物**逐字节比对**。
+
+  <details><summary>任务 62 原始卡片</summary>
+
+- 任务 62：🔴 **实测重建「还剩什么没做」—— 记账已四次生成假任务，这次把它当缺陷来修**
       任务 61 整轮白烧，原因不是技术难度，是 `CLAUDE.md` 子系统表里一段过期文字**长得像证据**
       （有地址、有反汇编偏移、有 🔴 标记），却没有任何可核对的日期/提交号。
       `CLAUDE.md` 自己写着「**完成度以实测为准，不凭记账**」，而它自身正是最大的那本账。
@@ -892,6 +938,8 @@
       「已移植」而实际对我们自己的快照产出 0 个函数。
       ⚠️ 本轮**允许**改 `~/Documents/flutter_hot_patcher/CLAUDE.md` 与 `memo.md`（这正是任务本体），
       但仍**只用显式路径提交**，禁止 `add -A`。
+
+  </details>
 
   <details><summary>任务 61 原始卡片（前提已被证伪，留档）</summary>
 
