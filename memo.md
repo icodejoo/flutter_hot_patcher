@@ -799,7 +799,79 @@
       —— 它们仍然不在 dump 里；固定跳过 `3-n` 与「消费 NOP」在两份语料上**不可判别**。
       ⚠️ 顺手翻正了一道陈旧护栏：`class_table_dump_check.sh` 还断言 `op_subgraph_hash` **必须缺席**，
       并驱动着已被取代的 byte-local `probe_subgraph_hash.py`，两处都已修。
-- [ ] 任务 60：**`--dump_object_pool` / `--dump_object_pool_link_data` —— 阻塞刚被任务 59 解除** ⬅️ **当前任务**
+- [x] 任务 60：🎉 **两个 flag 都落地；`pairs` 的来源被彻底推翻重解**
+      ✅ 源码 `c316526c1cb` + 研究侧 `a33c117`（`OBJECT_POOL_DUMP_RECON.md` / `op_dump_check.sh` /
+      `op_dump_probe.py`）+ 状态侧 `1cea929`、`ffb254c`
+      **两个 flag 都是真注册的**（行为测试，不是 `strings`）：`--dump_object_pool_link_data` 是
+      **STRING 选项、自带路径**（裸名被拒、`=` 空报 "Empty value"、`=path` 接受、**不需要 `--out`**）；
+      `--dump_object_pool` 是 **BOOL**（`=value` 报 "Non-empty value"）。都不是 `--no_pp_hash` 那种死 flag。
+      入口：`Dart_DumpObjectPool`@`0x10024c32c`、`GetObjectPoolLinkInfo`@`0x10024cb9c`（共享生产方）、
+      `Dart_DumpObjectPoolAsJson`@`0x10024d668`。（顺带：他们的类表 dump 叫 `Dart_DumpClassTable`，
+      我们叫 `Dart_DumpClassTableAsJson` —— 已知命名偏差。）
+      🔑 **`pairs` 不是代码扫描，这一条推翻了此前的整个方向**：`GetObjectPoolLinkInfo` 的第一个循环
+      （`0x10024cc2c`-`0x10024cc40`，`and w9,#3; cmp w9,#1`）读的是**对象池的 `entry_bits`**。
+      Shorebird 把上游 4 位的 `TypeBits` **压到 2 位并移到 bit 2**，在 **bit 0..1 塞了 2 位 `PairPosition`**
+      （0 无 / 1 第一 / 2 第二）。布局由**三处独立证据**钉死：`NewFromBuilder` 的 `and #0xc; cmp #4`
+      （gs `0x10015d884`）、JSON dumper 的 `ubfx w8,w8,#2,#2`（as `0x10024e128`）、
+      `AddObject` 对 `kImmediate128` 拆分写的字面量 `0x11`/`0x12`（gs `0x100255684`/`0x1002556a4`）。
+      三个打标点：`LoadNativeEntry` 写字面量 `0x9`（gs `0x10024e68c`）；`AddObject` 的序言
+      （gs `0x1002555f4`-`0x100255620`）把**紧接在已标记 native 之后加入的那一项**标成 second
+      —— **是位置性的，它从不检查新项的内容**；`EmitInstanceCallAOT` 写 `csel(0x65,0x05)` 再写 `0x06`
+      （gs `0x10027e23c`/`0x10027e258`）；`GenerateTTSCall`（**推断**，完全内联、零符号）。
+      **92 + 6 + 287 = 他们的 385，分毫不差。**
+      这个标记**必须活过反序列化**：`kResetToSwitchableCallMissEntryPoint` 那条臂会重写整个字节，
+      而他们的 dump 里那 6 项既显示为 `(unknown)`（kImmediate）**又仍在 `pairs` 里**。
+      `entries[].code` 是他们自己那份 `ObjectPool::DebugPrint`（串块在 `0x29aae8`，上游在 `0x290024`）：
+      多了 `<%ld len string> (obj)`，`"(raw)"` 改名 `"(unknown)"`。
+      ⚠️ **截断判据用 `Utf8::Length >= 0xf9`，但打印出来的数是 `String::Length()`**
+      （`0x10024e218` `ldur x8,[x8,#7]; asr x8,x8,#1`）——混用会把 2112 打成 2844。`offset = index*8+16`。
+      判据实测：`ninja` Release/Product 均 exit 0（末轮复跑报 `no work to do`，产物 mtime 确实推进）；
+      `verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked**（15→16）；
+      `run_vm_tests` **157 passed**（154→157，`EXPECTED_TESTS` 同步抬到 157 且实选 157）；
+      `verify_reproduction.sh` 28 产物 0 失败（不变，本改动不碰 ct/dt/ft/ddid）。
+      结果：我们的池 **1421 = 他们 1421**；我们的 `pairs` **385 = 他们 385，逐索引相同**；
+      1421 条 entry 描述里 **1323 条逐字节相同**（另 98 条是反序列化重置槽，装的是进程内地址：
+      92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`）；
+      我们的 `.op` 217349 字节，**解码→重编码逐字节相同**。
+      四条负控制**全部变红且都在同一轮 `ninja` exit 0 下取得**，事后全部还原
+      （`grep -c "NEG CTL"` 三个文件均为 0）：去重 pp 列表 → 红（1459/1136）；
+      不再让 pair 标记活过 switchable-call 重置 → 红（385→379）；去掉 `GenerateTTSCall` 的标记 → 红（385→98）；
+      长串改打 `Utf8::Length` → 红（1323→1320，且点名了确切的三个串）。**没有一条控制是绿的。**
+      🔴 **本轮挖出一个新的假红陷阱，值得单独记**：**改动 `runtime/vm/` 下任何文件都会改变快照版本 hash。**
+      负控制若没有同时重建 `gen_snapshot`，会死在 `Wrong full snapshot version` 上
+      —— **退出码和「因预期原因变红」完全一样**。控制 2 第一次就是这样「红」的，重建后才重新计数。
+      刻意没猜：`ObjectPoolBuilder::PairEntry`（他们的 builder 带一个 `std::vector<PairEntry>`，
+      但 `AddObject`/`NewFromBuilder`/`GetObjectPoolLinkInfo` **没有一处读它**，且仅 `entry_bits`
+      就已解释全部 385）；他们给 pair 参数的拼写（`AddObject(const Object&,...)` 内联进了每个调用方）；
+      他们的 `LoadNativeEntry` **忽略自己的 `patchable` 参数**（硬编码 `0x9`，`w2` 从不读取）
+      —— 我们把它传下去，**把差异留在明面上而不是照抄一个疑似 bug**；32 位的 `entry_bits` 布局（不可观测）。
+      ⚠️ 顺带发现：`memory/project_dart_sdk_fork.md` 在**仓库副本**与 `~/.claude/projects/…` 副本
+      **两份已经漂移**，本轮两份都补了任务 60 章节。这正是契约第四条警告的那种漂移。
+- [ ] 任务 61：🔴 **改正对象池 link-results 聚合器 —— 我们现在的算法是「已知错的」** ⬅️ **当前任务**
+      这不是新面积，是**还债**：`CLAUDE.md` 已实测记载我们的实现与他们**不是同一个算法，
+      只是在当前 fixture 上重合**。三处具体分歧，证据都在 `OP_AGGREGATOR_RECON.md`：
+      ① **他们是加权投票**：排序元素类型 `pair<unsigned long,double>`（mangled name 直接给出），
+      `fmov d8,#1.0`@`0x10019c0e8` / `fdiv d9,d8,d0`@`0x10019c858` /
+      `ldr,fadd,str d0,[x0,#0x18]`@`0x10019ca50-58` ⇒ `votes_[a][b] += 1.0/N`。
+      ② **他们没有「组恰好 1 个成员才配对」这道过滤** —— 全函数**零个 `cmp #0x60`**（=`sizeof(CodeInfo)`），
+      而我们 `linker.cc:376-378` 正是靠它。
+      ③ **`self_pp`(+0x30) 与 `subgraph_pp`(+0x48) 之间是 `csel` 条件选择**
+      （`mov w8,#0x30; mov w9,#0x48; csel x8,x8,x9,ne`@`0x10019c818-20`，闸门 `[sp,#0x5c]` 的 `tst #0x1`），
+      条件已由穷举解出：**base 侧该 `op_subgraph_hash` 分组为空 ⇒ flag=1 ⇒ 用 `self_pp`；
+      分组还在 ⇒ 用 `subgraph_pp`**，且**按外层组黏住**。我们 `linker.cc:379-381` **无条件用 `self_pp`**。
+      🔑 **任务 60 刚把这件事的前提坐实了**：`self_pp_indices` / `subgraph_pp_indices` 的语义已实测确定
+      —— 它们是**同一趟 subgraph walk 的池引用，按顺序且带重复**（他们 base.so 上各 1380/1380；
+      去重只有 1250/932，排序去重 1075/775；**1380 条里有 448 条确实重复了索引**，所以这个断言是可证伪的）。
+      ⚠️ **判别实验必须自己造**：他们的 fixture 做不到 —— `base.ct` 与 `patch.ct` **逐字节相同**，
+      且 `self_pp`/`subgraph_pp`/两者并集在它上面**都给 1121**，三个假设**判别不出**。
+      要造一个**含 2 成员组、且 base 索引有争用**的合成 `ObjectPoolLinkInfo`。
+      ⚠️ 别把「八行报告仍然相同」当通过 —— 那正是当前错算法能骗过的判据。
+      ⚠️ 本轮起沿用任务 60 的新纪律：**任何 `runtime/vm/` 下的负控制都必须连 `gen_snapshot` 一起重建**，
+      否则会拿到 `Wrong full snapshot version` 这种「对的退出码、错的原因」。
+
+  <details><summary>任务 60 原始卡片</summary>
+
+- 任务 60：**`--dump_object_pool` / `--dump_object_pool_link_data` —— 阻塞刚被任务 59 解除**
       任务 17 把这两个 flag 记为「依赖缺失」，缺的就是 `op_subgraph_hash` 的生产方，**现在它有了**。
       `ObjectPoolLinkInfo::WriteToStream` 已实现且**逐字节验证过**（`26b5e5ed6c7`，`op_link_info_check.sh`）
       → 缺的一直是生产方不是格式。
@@ -811,6 +883,8 @@
       顺手要还的账（就在本文件末尾）：`memory/project_dart_sdk_fork.md` 正文缺 2026-08-25 后半段；
       `CLAUDE.md` 里「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」
       与「`SubgraphHasher` 他们 12 / 我们 0」两条已被任务 59 作废，需订正。
+
+  </details>
 
   <details><summary>任务 59 原始卡片（缺口描述，已全部关闭）</summary>
 
