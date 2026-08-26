@@ -4,6 +4,7 @@ tools/broute/keys/
 
 # Python
 tools/.venv/
+**/.venv/
 __pycache__/
 *.pyc
 
@@ -16,6 +17,50 @@ __pycache__/
 *.aot
 *.dill
 *.blob
+
+# 逆向产物与构建输出 —— origin 是公开仓库，Shorebird 的二进制与反编译产物一律不入库。
+# 原则：挡产物、放行源码与文档（.md/.py/.sh/.dart/.cc/.h 照常跟踪）。
+# spikes/ 在此规则前是 5.6G 未跟踪，一次 `git add -A` 即会把它们推上公开 origin。
+
+# 生成的知识图谱（graphify 可随时重建）
+/graphify-out/
+
+# 预编译引擎产物。注意 engine/patches/ 是我们的移植成果，必须保留，勿加 /engine/
+/engine/ios_release/
+
+# 构建输出目录
+**/build/
+**/.dart_tool/
+**/DerivedData/
+**/Pods/
+**/xcodebuild/
+
+# 二进制、静态库与快照汇编（本仓库的 *.S 全是 gen_snapshot 产物，非手写汇编）
+*.a
+*.o
+*.so
+*.dylib
+*.S
+*.ipa
+*.app/
+*.framework/
+*.dSYM/
+
+# 他们的二进制，以及一切从中提取出来的东西。
+# ⚠️ 上面「挡产物、放行源码后缀」的原则在这里失效：反编译出来的 .c 和 DWARF 转储的 .txt
+#    长得就是源码，只能按目录挡。fixtures/ 与 scripts/ 是我们自己的输入与工具，故意保留。
+spikes/shorebird_linkinfo_oracle/bin/
+spikes/shorebird_linkinfo_oracle/decompiled/
+spikes/shorebird_linkinfo_oracle/out/
+spikes/shorebird_linkinfo_oracle/out_dd/
+spikes/shorebird_linkinfo_oracle/out_ours/
+
+# 二进制切片与快照备份（*.S.bak2 这类后缀会绕过上面的 *.S）
+*.arm64
+*.x64
+*.bin
+*.bak
+*.bak[0-9]
 
 .DS_Store
 .claude
