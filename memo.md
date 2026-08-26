@@ -494,17 +494,40 @@
       （对他们 777/950），**不被那个大工程阻塞**。
       ⚠️ 仍未知：**67 条是怎么从 1380 个函数里选出来的**（`CascadeLimiter` 应该就是选择器），
       以及 `size` 的确切含义与 `--dd_max_bytes` 的反向关系（README 记了现象未记机制）。
-- [ ] 任务 48：**解「67 条是怎么选出来的」** ⬅️ **当前任务**
-      这是 `--compute_dd_table` 唯一剩下的未知（格式已解、键已确认可算）。
-      🎁 **oracle 极强**：他们的 `base.ddtable` 就是真值，**可逐字节对**；
-      而且 README 记了一组现象可以当判据：
-      `--dd_max_bytes` 16→619 条、64→561、256→438、1024→244，**默认只有 67**
-      —— **条数随上限增大而减少**，这个反向关系本身就是机制的强约束。
-      ⚠️ **先别急着反汇编 `CascadeLimiter::Run`**：先用**已有数据**做一轮统计——
-      把 67 条的 `self_hash` 拿回 `--shorebird` 输出里查出对应函数，
-      看它们在 size / 调用数 / 名字上有没有共同点。**分布法在这个会话里赢过公式法三次。**
-      ⚠️ `CascadeLimiter::Run` 的签名已知（任务 18/40），真要反汇编时它在
-      `analyze_snapshot` 里、`0x100192080` 附近有 introsort 实例。
+- [~] 任务 48：**资格集已解出且逐字节对上；预算那半未解，但砍掉了一整族答案**
+      ✅ `CASCADE_LIMITER_RECON.md` + `dd_selection_check.sh`（`verify_all` 现 **12 项**）
+      🔑 **`--dd_max_bytes` 在 32 以下饱和**：预算 1/2/4/8/16 产出**逐字节相同**的
+      619 条表 → 那就是**没有预算压力时的资格集**（不是「一个大样本」，这点是判据成立的前提）。
+      🎉 **资格规则已解出，多重集零分歧（619 预测 / 619 实际）**：
+      `有 ≥1 个调用者 AND（[Optimized] 或 allocation stub）`。
+      1380 = 1179 optimized（有调用者的 532）+ 87 allocation stub（全有调用者）
+      + 110 type-test stub（**有 61 个有调用者也不算**）+ 4 owner 为 null。**532+87=619**。
+      🔑 **这与 `print_dd_function_identity_to` 是同一个族群谓词**（两边独立推出）：
+      负控制里「去掉『有调用者』」正好给 **1266 = 87+1179**，就是那个 dump 的行数。
+      🔴 **「条数随上限增大而减少」被误读成阈值规则了——整族出局**：
+      上一轮探针在找 `cost(f) > budget` 的度量（最佳候选 `callers_sub` 三个预算零违例）。
+      **任何**这种形式的规则都给出**嵌套**集合，而他们的表**不嵌套**
+      （10 处：128 比 64 多 1、512 比 256 多 12、2048 比 1024 多 17…）。
+      → `CascadeLimiter` 是**迭代/贪心**，不是阈值。
+      ⚠️ **这条在三个空间各测一遍才敢信**：先用哈希展开成函数（碰撞可能造假），
+      再用 `(hash,size)` 对，再用裸哈希 —— 十处违例完全一致。
+      🔑 **方向也钉住了：看的是调用者一侧，不是 size、不是 callees。**
+      选中的 68 个 vs 未选的 551 个：`#callers` 均值 **8.8 vs 1.7**（中位 4 vs 1），
+      而 `#callees`（3.7 vs 3.4）与 `size`（334 vs 259）两组**分不开**——
+      **尽管这个 flag 是按「字节」计的，size 并不是区分依据。**
+      上行级联模型（callers 闭包、在 DD 节点处截断）高端贴合预算
+      （16384→16264、32768→32376），中段超出（10000→10728）；
+      **下行模型（subgraph 那趟）不是不准，是任何预算都超 4–60 倍。**
+      ⚠️ 发射顺序**刻意留空**：前 200 条对升序索引有 9920/19900 个逆序对（基本打乱），
+      与本仓库已解过的 libc++ 容器迭代序同型，**但没验证，所以不写进结论**。
+- [ ] 任务 49：**重建那个贪心** ⬅️ **当前任务**
+      形状：反复找**上行级联**超预算的函数，在某处切一刀，直到全部装下。
+      自由参数只有两个：**遍历顺序**与**切点选择**。
+      🎁 **oracle 是 17 个预算、每个都逐字节**；而且**错的贪心会先在「条数」上露馅**，
+      不用等到成员集合，失败得很快。
+      ⚠️ **先做贪心再反汇编**（本轮统计法又赢了一次）。真要反汇编时
+      `CascadeLimiter::Run` 在 `analyze_snapshot` 的 `~0x100192080`，
+      附近的 introsort 实例**多半就是贪心的优先级顺序**，也正是上面那个自由参数。
 
 ## ⏳ 挂起池（连续失败 3 次的顽固 Bug）
 
@@ -564,11 +587,15 @@ op_rewrite_check.sh        0 failure(s)
 op_real_mapping_check.sh   0 failure(s)
 analyze_snapshot_help_check.sh 0 failure(s)
 class_table_dump_check.sh  0 failure(s)
+dd_selection_check.sh      all checks passed
 run_vm_tests               143 passed
-11 ran, 0 failed, 0 skipped, 0 blocked
+12 ran, 0 failed, 0 skipped, 0 blocked
 ```
-`--self-test` 模式下 10 个 harness 全部能正确报错（`10 ran, 0 failed, 1 skipped`）。
-工作树 clean。HEAD：`734abc41d10`（dart-sdk） / `7e81769`（fhp-research）。
+`--self-test` 模式下 11 个 harness 全部能正确报错（`11 ran, 0 failed, 1 skipped`）。
+⚠️ 上一版这里记的是 11 项 / 10 个 harness，任务 48 加了 `dd_selection_check.sh`。
+**数字变了要能说出为什么** —— 这次的原因是新增检查，不是新写了代码。
+工作树 clean。HEAD：`8766b1f9e7b`（dart-sdk，任务 46；上一版记的 `734abc41d10` 已过期）
+/ fhp-research 见本轮提交。
 `analyze_snapshot` help 缺口：**4 个 flag**（任务 17 是 6、任务 18 是 5）。
 ⚠️ `verify_reproduction` 从 24 涨到 28 是因为任务 14 的 `insert.*` 进了 `out_dd`，
 不是新写了什么 —— **数字变了要能说出为什么**。
