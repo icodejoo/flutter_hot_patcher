@@ -47,8 +47,29 @@ LOG=$STATE/rounds.log
 # hook and tools/loop/hooks/deny-destructive.sh, neither of which existed when
 # acceptEdits was chosen, plus the snapshot taken below.
 PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
-ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-3000}
+
+# Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
+# clear the slowest of them by a wide margin or it becomes the thing that breaks
+# the loop. 3000s used to be the default and would have guillotined task 64.
+ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-7200}
 BACKOFF=${FHP_LOOP_BACKOFF:-3600}
+
+# THE SINGLE LINE THAT MAKES UNATTENDED ROUNDS WORK AT ALL.
+#
+# claude -p does wait for background subagents, but only 600s, then terminates
+# them: "Background tasks still running after 600s; terminating." No round here
+# has ever finished in ten minutes, so every one of them was being killed at the
+# ten minute mark -- while exiting 0 and logging a clean round end, with the
+# half-done work stranded in the tree.
+#
+# 0 means wait indefinitely, which is safe precisely because it is not actually
+# indefinite: ROUND_TIMEOUT above still caps the round.
+#
+# Fixing this in the prompt does not work, and that was tried first. The round
+# dispatched in the background anyway and explained itself: "I am in an
+# interactive session, so I can receive the notification." The model cannot tell
+# which mode it is running in, so this has to be arranged around it.
+export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
 
