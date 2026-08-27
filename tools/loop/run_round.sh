@@ -47,6 +47,7 @@ LOG=$STATE/rounds.log
 # hook and tools/loop/hooks/deny-destructive.sh, neither of which existed when
 # acceptEdits was chosen, plus the snapshot taken below.
 PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
+MODEL=${FHP_LOOP_MODEL:-}
 
 # Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
 # clear the slowest of them by a wide margin or it becomes the thing that breaks
@@ -173,10 +174,15 @@ say "round start (permission-mode=$PERMISSION_MODE)"
   || say "WARNING: snapshot failed -- a bad round would not be undoable"
 
 out=$(mktemp "$STATE/round.XXXXXX")
+LIVE=$STATE/live.log
+rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
 (
-  cd "$REPO" || exit 1
-  "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE"
-) >"$out" 2>&1 &
+  (
+    cd "$REPO" || exit 1
+    "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
+  ) 2>&1
+  echo $? >"$rc_tmp"
+) | tee -a "$LIVE" >"$out" &
 pid=$!
 
 # Portable timeout: macOS has no timeout(1). A hung round must not hold the
@@ -184,7 +190,9 @@ pid=$!
 ( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && kill -TERM $pid 2>/dev/null ) &
 watchdog=$!
 
-wait $pid; rc=$?
+wait $pid
+rc=$(cat "$rc_tmp" 2>/dev/null || echo 1)
+rm -f "$rc_tmp"
 kill "$watchdog" 2>/dev/null
 
 if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then

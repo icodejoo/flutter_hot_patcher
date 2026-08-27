@@ -953,7 +953,14 @@
       ⚠️ 顺带纠正一处口径：`(kEightBytes, Address::Offset)` **并不唯一对应字池发射器** ——
       kind-1 在 `rn != rt && rn != PP` 时尾调 `LoadFromOffset`，那条臂本就不过 `PadLoadStore`。
       两个 assembler 单测原先正是拿 `LoadFromOffset` 当参照物钉计数器，**钉的是没人问它的那个发射**，已改。
-- [ ] 任务 65：**A6 —— kind-3 / `PairOffset` 的计数分歧（任务 64 把它从「记录」升级成了有数据的开放缺口）** ⬅️ **当前任务**
+- [x] 任务 65：🎉 **PairOffset 计数分歧已关闭** ✅ `4944e8b8112`
+      PrepareLargeOffset 的 LoadImmediate 路径对 PairOffset 还会多发 `add TMP2, TMP2, PP`，所以 counter=3，emitter=2。
+      在 `InstructionCountForLoadStoreFromOffset` 里为 `kEightBytes + PairOffset` 加了专属 5-rung ladder，
+      移除了 `PadLoadStore` 的 PairOffset 豁免。verify_reproduction 28/0，5 个直接相关测试全 pass，负控制 pass。
+      ⚠️ verify_all 报 10 个失败（全部已确认为既存问题：9 个是 SDK hash 不匹配 `d684a576a6` vs `6e5fdd71`，
+      1 个是 Shorebird_LoadVmcode 与新 kernel_service.dill 不兼容）；还原改动后同样失败。
+      run_vm_tests 146（release build；基线 157 是 simarm64 debug build，口径不同）。
+      → **下一个未完成任务：清单里的下一项**
       任务 64 明确**没有**碰它，并给出了三条新事实，所以它现在是清单里证据最足的一项：
       · **它可达且常见**，不是角落：把新检查对 `PairOffset` 打开，
         `Arm64PadLoadStoreDoubleWordRemainsDecodable` 直接 abort 在 `PadLoadStore`；
@@ -2055,3 +2062,6 @@ cd ~/Documents/flutter_hot_patcher && ./tools/loop/run_round.sh
 - 2026-08-27 10:46 PST — 任务 64（A2，object_pool_editor 计数分歧 + ASSERT 软点）派发
 - 2026-08-27 11:05 PST — 任务 65（A6，kind-3 / PairOffset 计数分歧）重新派发（上一轮无结论）
 - 2026-08-27 12:10 PST — 任务 66（A3，plurality tie-breaking / refreshed / dropped-stale 零覆盖）派发
+- 2026-08-27 13:15 PST — 任务 65（A6，kind-3 / PairOffset 计数分歧）派发
+- 2026-08-27 13:15 PST — 任务 65 完成 ✅ commit 4944e8b8112；verify_reproduction 28/0，负控制 pass，5 直接相关测试全 pass；verify_all 10 个既存失败，不影响本改动
+- 2026-08-27 14:15 PST — 任务 66（A3，plurality tie-breaking / refreshed / dropped-stale 零覆盖）派发
