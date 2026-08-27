@@ -973,7 +973,7 @@
 
   <details><summary>任务 64 原始卡片</summary>
 
-- [ ] 任务 64：**A2 —— `object_pool_editor` 的两处计数分歧用了 `ASSERT`，release 构建里被编译掉** ⬅️ **当前任务**
+- 任务 64：**A2 —— `object_pool_editor` 的两处计数分歧用了 `ASSERT`，release 构建里被编译掉**
       从 A 类清单取下一项。**这是个软点，不是缺口**：断言在 release 里整条消失，
       于是「计数器与发射器不一致」这件已知的事在生产构建里没有任何东西看着。
       判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`。
@@ -991,7 +991,7 @@
 
   <details><summary>任务 63 原始卡片</summary>
 
-- [ ] 任务 63：**A1 —— `rewritten` / `sentinel_filled` 两列的硬编码字面量** ⬅️ **当前任务**
+- 任务 63：**A1 —— `rewritten` / `sentinel_filled` 两列的硬编码字面量**
       从任务 62 产出的 A 类清单取第一项。**它不是缺子系统，是一行假数据**：
       `linker.cc:1159` 把 `rewritten` 硬编码成字面量，所以 `print_dd_resolution_to` 报 0 而他们报 2。
       任务 62 已把这条从「依赖 DD IL 子系统」降级 —— DD 全链路早已跑通（1043 函数 / 1622 处间接调用点）。
@@ -2010,3 +2010,5 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 > 不用翻 transcript 才发现。**这是「整轮死掉」唯一会在磁盘上留下的痕迹** ——
 > 整轮死掉时本轮不会写结论，「循环断了」和「循环在跑但这轮没产出」长得一模一样。
 - 2026-08-27 10:46 PST — 任务 64（A2，object_pool_editor 计数分歧 + ASSERT 软点）派发
+- 2026-08-27 11:05 PST — 任务 65（A6，kind-3 / PairOffset 计数分歧）重新派发（上一轮无结论）
+- 2026-08-27 12:10 PST — 任务 66（A3，plurality tie-breaking / refreshed / dropped-stale 零覆盖）派发
