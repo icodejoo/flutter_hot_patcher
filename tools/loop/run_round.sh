@@ -91,6 +91,24 @@ done
 # identical on disk -- which is exactly what cost us an evening.
 say "round start (permission-mode=$PERMISSION_MODE)"
 
+# ---- undo point ------------------------------------------------------------
+# .claude/hooks/deny-destructive.sh refuses the destructive commands it knows.
+# It cannot refuse the ones it does not, and matching on a command string is not
+# a boundary -- a split literal walks straight past it. So the second layer is
+# built not to depend on recognising anything.
+#
+# git already covers the source, and reflog survives most of what a confused
+# round could do to it. Nothing covers ~7.5GB of xcodebuild output: it lives in
+# no repo and costs hours to regenerate. An APFS snapshot is copy-on-write,
+# needs no root, and costs nothing until something diverges -- so take one every
+# round and stop thinking about it.
+#
+# Stated because it matters: local snapshots are purgeable, and deleted(8)
+# reclaims them under disk pressure. This is a fast undo, not a backup.
+/usr/bin/tmutil localsnapshot >/dev/null 2>&1 \
+  && say "snapshot ok" \
+  || say "WARNING: snapshot failed -- a bad round would not be undoable"
+
 out=$(mktemp "$STATE/round.XXXXXX")
 (
   cd "$REPO" || exit 1
