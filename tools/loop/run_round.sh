@@ -43,11 +43,37 @@ PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它�
 mkdir -p "$STATE"
 say() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
 
+# Same as say(), but collapses a repeat of the previous line -- unless that line
+# has gone stale, in which case it is written again to move the clock forward.
+#
+# The interval is short on purpose (see ralph.sh): the lock, not the clock,
+# paces the loop, so a tick during a running round is the normal case rather
+# than an error. Logging every one would bury the lines that mean something
+# under a wall of "already running".
+#
+# But plain deduplication breaks the property the log exists for. A round takes
+# ~20 minutes, during which the state never changes, so the last line's
+# timestamp would sit 20 minutes in the past -- indistinguishable from a clock
+# that died. "The log stopped growing" has to mean one thing, so a repeated
+# state still gets a fresh line every REFRESH seconds. Read: a last line older
+# than REFRESH plus one interval means the clock is gone, whatever it says.
+REFRESH=${FHP_LOOP_LOG_REFRESH:-300}
+say_once() {
+  if [ -f "$LOG" ]; then
+    last=$(tail -1 "$LOG" 2>/dev/null)
+    if [ "$(printf '%s' "$last" | cut -c22-)" = "$*" ]; then
+      last_ts=$(date -j -f '%Y-%m-%d %H:%M:%S' "$(printf '%s' "$last" | cut -c1-19)" +%s 2>/dev/null || echo 0)
+      [ $(( $(date +%s) - last_ts )) -lt "$REFRESH" ] && return 0
+    fi
+  fi
+  say "$*"
+}
+
 # ---- kill switch -----------------------------------------------------------
 # `touch .loop/PAUSE` stops the loop without unloading the job. Nothing else
 # in this script can override it.
 if [ -e "$PAUSE" ]; then
-  say "skip: PAUSE present"
+  say_once "skip: PAUSE present"
   exit 1
 fi
 
@@ -57,18 +83,22 @@ if [ -f "$BLOCKED" ]; then
   until_ts=$(cat "$BLOCKED" 2>/dev/null || echo 0)
   now=$(date +%s)
   if [ "$now" -lt "$until_ts" ]; then
-    say "skip: backing off until $(date -r "$until_ts" '+%H:%M:%S')"
+    say_once "skip: backing off until $(date -r "$until_ts" '+%H:%M:%S')"
     exit 1
   fi
   rm -f "$BLOCKED"
 fi
 
 # ---- single instance -------------------------------------------------------
-# A round can outlive the 30-minute interval. Two rounds in the same worktrees
-# would trample each other's builds. shlock clears the lock if the recorded pid
-# is gone, so a killed round does not wedge the loop forever.
+# THE LOCK IS THE PACING MECHANISM, NOT THE INTERVAL. A round takes ~20 minutes
+# (task 63 measured 1313s) while the clock ticks every couple of minutes, so
+# most ticks land here and exit. That is the design: the next round starts
+# shortly after the previous one ends, instead of idling out the remainder of a
+# fixed window. Two rounds in the same worktrees would trample each other's
+# builds, and this is what prevents it. shlock clears the lock if the recorded
+# pid is gone, so a killed round does not wedge the loop forever.
 if ! /usr/bin/shlock -f "$LOCK" -p $$; then
-  say "skip: round already running (pid $(cat "$LOCK" 2>/dev/null))"
+  say_once "skip: round already running (pid $(cat "$LOCK" 2>/dev/null))"
   exit 1
 fi
 trap 'rm -f "$LOCK"' EXIT
@@ -80,7 +110,7 @@ trap 'rm -f "$LOCK"' EXIT
 # by design; only modified tracked files mean someone was interrupted.
 for tree in "$SDK" "$RESEARCH"; do
   if ! git -C "$tree" diff --quiet 2>/dev/null; then
-    say "refuse: $tree has uncommitted changes to tracked files -- resolve by hand"
+    say_once "refuse: $tree has uncommitted changes to tracked files -- resolve by hand"
     exit 1
   fi
 done

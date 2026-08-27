@@ -26,7 +26,18 @@
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-INTERVAL=${FHP_LOOP_INTERVAL:-1800}
+
+# Short on purpose. This is NOT "how often a round runs" -- run_round.sh holds a
+# lock for the whole round, so a tick during one exits immediately and costs a
+# fork. What the interval actually sets is how long the machine sits idle after
+# a round ends before the next one starts.
+#
+# The first draft inherited 1800 from /loop, where the delay really was the
+# cadence because there was no lock. Carried over here it meant a 22-minute
+# round (task 63: 1313s) was followed by 8 minutes of doing nothing. With the
+# lock doing the pacing, a short interval is strictly better and cannot cause
+# overlap.
+INTERVAL=${FHP_LOOP_INTERVAL:-120}
 
 # Rounds run unattended, so they cannot stop to ask for approval -- there is
 # nobody to ask. What makes that defensible is not this variable but the
