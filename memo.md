@@ -927,6 +927,52 @@
       投毒源已清：`memory/MEMORY.md` 两份副本 + `project_dart_sdk_fork.md` 里那条已作废的聚合器断言，
       均已按实测结论改写并补上「2026-08-26 + `ab58e28152d`」。仓库侧提交 `0ab306a`。
       **两份副本仍是各自独立的普通文件**，未做软链、未合并、未删除任何一份。
+- [x] 任务 64：🎉 **A2 关闭，且 `RELEASE_ASSERT` 一打开就暴露出一个「不变式本来就不可能成立」的真 bug**
+      前提成立（起点判据 `object_pool_editor_test.cc:369` 在，两处分歧都在，两条检查确实是 `ASSERT`）。
+      提交 `6e5fdd71fe2`（4 文件，`~/dart-3122/sdk`，未推送）。做了三件事，**第三件是被前两件逼出来的**：
+      ① `InstructionCountForLoadStoreFromOffset` 对 `kEightBytes + Address::Offset` 改走字池 ladder（1/2/3），
+        不再测量 `PrepareLargeOffset`；2²⁴ 处计数器从 2 变 3，与发射器一致（这就是我们自己读错折叠 ladder 的那处）。
+      ② `PadLoadStore` 两条检查升为 `RELEASE_ASSERT`。
+      ③ 🔑 **`PadLoadStore` 加重入保护**——打开检查才发现：`AssembleReplacement` 在三个池发射器外包一层，
+        而这三个在 `FLAG_precompiled_mode` 下又各自包一层，**gen_snapshot 里每个被改写的访问都跑了两层嵌套**，
+        外层量到的是**已经补过 NOP 的** 3 条。字节一直是对的（补齐幂等），**但那条不变式根本无法成立**。
+        外层包装**不能删**：闸门关着时（所有单测、非 AOT 用法）内层不跑，外层是唯一补齐的人。
+      判据：`verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked, exit 0**（摘要行后无 `FAILED:`）、
+      `run_vm_tests` **157 passed**、`verify_reproduction.sh` **28 artifacts / 0 failures**。
+      ⚠️ 中途**真的红过**：第一版无条件 `RELEASE_ASSERT` → `16 ran, 3 failed` / `153 passed, 4 failed`，
+      `op_rewrite_check.sh` 与 `op_real_mapping_check.sh` 报 "gen_snapshot produced no rewritten.so" ——
+      **嵌套问题就是被这个红挖出来的**，不是读代码读出来的。
+      负控制**三个**，每个 `ninja` 都 exit 0 并打了 `PATCH_OK`：
+      · NC-1 counter 末级 `3`→`2`：`Arm64PadLoadStore` **exit 134**（`assembler_arm64.cc:1228` 那条 assert），
+        另两个测试 exit 255；**未受影响的 `Arm64PadLoadStoreRemainsDecodable` 仍 exit 0**（不是全盘变红）。
+      · NC-2（**判据二的直接证明**）：保留 NC-1 的破坏，把 `RELEASE_ASSERT` 改回 `ASSERT` 重建 Release
+        → **exit 0，静默通过**。同一个 bug，`ASSERT` 形式在 release 里根本不存在 —— **升级本身就是新增的检查**。
+      · NC-3（product 端到端）：counter 首级 `1`→`2`，**ProductARM64** gen_snapshot 编译真实 dill → **exit 134**。
+        **出货的 product 二进制里这条检查是活的。**
+      三个均已还原（`cmp` 逐字节相同、`grep -c NEGCTL` 退出码 1、两个构建重建后再次全绿）。
+      ⚠️ 顺带纠正一处口径：`(kEightBytes, Address::Offset)` **并不唯一对应字池发射器** ——
+      kind-1 在 `rn != rt && rn != PP` 时尾调 `LoadFromOffset`，那条臂本就不过 `PadLoadStore`。
+      两个 assembler 单测原先正是拿 `LoadFromOffset` 当参照物钉计数器，**钉的是没人问它的那个发射**，已改。
+- [ ] 任务 65：**A6 —— kind-3 / `PairOffset` 的计数分歧（任务 64 把它从「记录」升级成了有数据的开放缺口）** ⬅️ **当前任务**
+      任务 64 明确**没有**碰它，并给出了三条新事实，所以它现在是清单里证据最足的一项：
+      · **它可达且常见**，不是角落：把新检查对 `PairOffset` 打开，
+        `Arm64PadLoadStoreDoubleWordRemainsDecodable` 直接 abort 在 `PadLoadStore`；
+        调用方是 `flow_graph_compiler_arm64.cc:481/517/582`，**每个 AOT instance call 都发这个**。
+        分歧区间 offset 512..4095（index 62 起）——**今天真实快照里就有被 editor 拒绝的站点**。
+      · **缺的证据是「他们的计数器跟哪条 ladder」**。发射器 `LoadDoubleWordFromPoolIndex` 是**上游代码，本 fork 没动过**，
+        所以「我们的发射器发 2」对他们的计数器**零信息量**；recon 那条折叠 ladder 是从 **`Address::Offset`** 路径读出来的，
+        **不覆盖 `PairOffset`**。按规则 3，凭这些改就是自由发挥。
+      · **oracle 已点名**：他们 `ImageWriter::Write` 的逐字节自校验，打印 `Expected:\n` / `Actual:\n`
+        （两个串在他们的二进制里各恰好 1 次，已验过）。任务 64 没做这一步，这轮做。
+      当前状态是**诚实划线**而非掩盖：`RELEASE_ASSERT` 对 `PairOffset` 做了显式排除，
+      排除理由、abort 的实测、缺哪段证据，都写在 `PadLoadStore` 与该测试的注释里。**先读那两处注释再动手。**
+      ⚠️ 判据必须有负控制，且**任何 `runtime/vm/` 下的负控制都要连 `gen_snapshot` 一起重建**，
+      **「变红」只有在同一轮 `ninja` 返回 0 时才算证据**（要打显式 `PATCH_OK`，且打在 `ninja` 之后）。
+      ⚠️ **`diff` 一律用 `command cmp`** —— RTK 包装的 `diff` 实测会对真实差异报「Files are identical」。
+      基线：`verify_all.sh` 16/0/0/0、`run_vm_tests` **157**、`verify_reproduction.sh` **28 / 0**。
+
+  <details><summary>任务 64 原始卡片</summary>
+
 - [ ] 任务 64：**A2 —— `object_pool_editor` 的两处计数分歧用了 `ASSERT`，release 构建里被编译掉** ⬅️ **当前任务**
       从 A 类清单取下一项。**这是个软点，不是缺口**：断言在 release 里整条消失，
       于是「计数器与发射器不一致」这件已知的事在生产构建里没有任何东西看着。
@@ -940,6 +986,8 @@
       ⚠️ 判据必须有负控制，且**任何 `runtime/vm/` 下的负控制都要连 `gen_snapshot` 一起重建**，
       变红后**读失败信息本身**确认原因就是改坏的那处，不是 `Wrong full snapshot version`。
       ⚠️ **`diff` 一律用 `command cmp`** —— 任务 63 实测 RTK 包装的 `diff` 会对真实差异报「Files are identical」。
+
+  </details>
 
   <details><summary>任务 63 原始卡片</summary>
 
@@ -1905,9 +1953,10 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 | # | 条目 | 现状与支撑它的实测命令 |
 |---|---|---|
 | ~~A1~~ | ✅ **已关闭（2026-08-27 任务 63，`afa1f9c73cc`）** —— ~~**`print_dd_resolution_to` 的 `rewritten` / `sentinel_filled` 两列**~~ | 我们发 `rewritten=0`，他们读 **2**。判据：`cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./dd_pipeline.sh` → 他们 `DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel`。**0 是硬编码字面量**：`command grep -n 'rewritten=0' ~/dart-3122/sdk/runtime/vm/shorebird/linker.cc` → `:1159`。⚠️**旧理由「依赖我们没有的 DD IL 子系统」已作废**——该子系统已于 `b13e2a0d54e` 实现（`git merge-base --is-ancestor b13e2a0d54e HEAD` → 0），`dd_pass_check.sh` / `dd_runtime_check.sh` 常设通过。`linker.cc:1153-1155` 那条注释是过期的。→ **是「把计数器接到已存在的改写路径上」，不是缺子系统。** |
-| A2 | **`object_pool_editor` 两处计数分歧用了 `ASSERT` 而非 `RELEASE_ASSERT`** | release 构建里被编译掉 = 软点。判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`；该用例体内是 `EXPECT_EQ`（`ISOLATE_UNIT_TEST_CASE` 下 `EXPECT` 会计入失败，但 `.cc:501` 引用的那条推导仍靠 `ASSERT`）。两处已知分歧：kind-3 index 62 发射器用 2 而计数器说 3；kind-1/2 offset 2²⁴ 发射器用 3 而计数器说 2（**后者是我们自己读错了折叠 ladder**）。→ 收紧断言 + 修计数器。 |
+| ~~A2~~ | ✅ **已关闭（2026-08-27 任务 64，`6e5fdd71fe2`）** —— ~~**两处计数分歧用了 `ASSERT` 而非 `RELEASE_ASSERT`**~~ | release 构建里被编译掉 = 软点。判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`；该用例体内是 `EXPECT_EQ`（`ISOLATE_UNIT_TEST_CASE` 下 `EXPECT` 会计入失败，但 `.cc:501` 引用的那条推导仍靠 `ASSERT`）。两处已知分歧：kind-3 index 62 发射器用 2 而计数器说 3；kind-1/2 offset 2²⁴ 发射器用 3 而计数器说 2（**后者是我们自己读错了折叠 ladder**）。→ 收紧断言 + 修计数器。 |
 | A3 | **plurality tie-breaking 零覆盖 / `refreshed` / `dropped-stale` 三条分支未被任何 fixture 走到** | 判据：`./dd_pipeline.sh` 两个 pass 都打印 `0 refreshed, 0 dropped-stale`，且每 slot 恰好一票。→ 需要**自造 fixture**，方法已有先例：`make_op_fixture.py` + `op_aggregator_check.sh` 就是为「他们的 fixture 判别不出来」而造的。 |
 | A4 | **`analyze_snapshot --disassemble`** | 唯一还没做的 `analyze_snapshot` flag。判据：`./analyze_snapshot_help_check.sh` → `--help matches theirs with 1 unimplemented flag(s) removed (12 documented, 3 lines withheld)`。曾实现后**回退**——撞上 VM 自己的同名 flag，原因记在 `~/dart-3122/sdk/runtime/bin/analyze_snapshot.cc:112-123`。→ 证据齐全，缺的是解名字冲突的办法。 |
+| A6 | **kind-3 / `PairOffset` 的计数分歧（任务 64 升级为有数据的开放缺口）** | **可达且常见**：把 `RELEASE_ASSERT` 对 `PairOffset` 打开，`Arm64PadLoadStoreDoubleWordRemainsDecodable` 直接 abort 在 `PadLoadStore`；调用方 `flow_graph_compiler_arm64.cc:481/517/582`，**每个 AOT instance call 都发**；分歧区间 offset 512..4095（index 62 起），**真实快照里就有被 editor 拒绝的站点**。缺的证据：**他们的计数器跟哪条 ladder** —— 发射器 `LoadDoubleWordFromPoolIndex` 是**上游代码本 fork 未改**，「我们发 2」对他们零信息量；recon 的折叠 ladder 出自 `Address::Offset` 路径，**不覆盖 `PairOffset`**。oracle 已点名：他们 `ImageWriter::Write` 的逐字节自校验（`Expected:\n`/`Actual:\n`，各恰好 1 次）。当前是**诚实划线**：`RELEASE_ASSERT` 显式排除 `PairOffset`，理由与实测写在 `PadLoadStore` 及该测试的注释里。 |
 | A5 | **他们的 DD IL pass 由 resolution 驱动，不是由 `DDSlotMapping` 驱动 —— 我们两条路径都留着** | 2026-08-27 任务 63 的计划外发现。两次跑**他们的** `gen_snapshot` 数三指令间接序列：voters-only（无 `DDSlotMapping` 段）→ **3 个改写点**；mapping-only（一行，kernel_offset 54623 → slot 0）→ **0 个改写点**，而同样的字节**我们发射 73 个点**（`dd_pass_check.sh` 的 StringBuffer.write 用例）。旁证：他们 DWARF 里 `DDSlotResolution::owner_to_slot_`（+0x28）在任务 63 之前**我们树里没有任何消费者**，而它正是 resolution 驱动的 pass 所需的反查表。任务 63 已加上 resolution 路径并**保留** kernel_offset 路径（优先查后者），所以生产配置行为不变。→ **剩下的是「能不能删掉 kernel_offset 路径」**，而建表仍按 kernel_offset 键，删它需要自己的证据，不能靠这一次观测推。 |
 
 ## B. 无证据（必须先反汇编或先找 oracle）
@@ -1954,3 +2003,10 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 `analyze_snapshot` 的全部符号计数读成「我们 0」——正好是本轮要修的那种假缺口。
 → **`nm` 出来 0 行时，先确认二进制真的被读到了**（`wc -l` 符号文件，不是只看 `grep -c` 的 0）。
 本项目 `memory/feedback_rtk_diff_unreliable.md` 早有记录：**RTK 包装的 `ls`/`find`/`grep` 会静默说谎，一律加 `command` 前缀。**
+
+## ⏱️ 轮次心跳（契约第六条）
+
+> **在派子代理【之前】写。** 最后一行时间与当前时间相差远超一个轮次间隔 = 循环已停摆，
+> 不用翻 transcript 才发现。**这是「整轮死掉」唯一会在磁盘上留下的痕迹** ——
+> 整轮死掉时本轮不会写结论，「循环断了」和「循环在跑但这轮没产出」长得一模一样。
+- 2026-08-27 10:46 PST — 任务 64（A2，object_pool_editor 计数分歧 + ASSERT 软点）派发
