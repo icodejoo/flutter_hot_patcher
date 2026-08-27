@@ -75,6 +75,8 @@ export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
 
 mkdir -p "$STATE"
+LIVE=$STATE/live.log
+touch "$LIVE"
 say() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
 
 # Same as say(), but collapses a repeat of the previous line -- unless that line
