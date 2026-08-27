@@ -174,5 +174,23 @@ if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then
 fi
 
 say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
-rm -f "$out"
+
+# Keep the last round's output. The first rehearsal round ended rc=0 having
+# quietly orphaned its subagent, and the only reason that was diagnosable at all
+# is that the session transcript survived somewhere else -- this file had
+# already been deleted. rc=0 is not a description of what happened.
+mv -f "$out" "$STATE/last_round.out" 2>/dev/null
+
+# A round must not end with work stranded in the tree. If it does, every later
+# round refuses at the resume guard and the loop deadlocks silently -- which is
+# exactly how the orphaned-subagent bug presented: a healthy-looking log, no
+# error anywhere, and nothing moving again afterwards.
+#
+# This does not clean up; half-finished work is evidence and may be a partly
+# applied negative control. It makes the condition loud at the moment it is
+# created, instead of leaving the next round to fail with somebody else's mess.
+for tree in "$SDK" "$RESEARCH"; do
+  git -C "$tree" diff --quiet 2>/dev/null \
+    || say "WARNING: round left $tree dirty -- the next round will refuse until this is resolved"
+done
 exit 0
