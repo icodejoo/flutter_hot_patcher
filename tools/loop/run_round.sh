@@ -31,10 +31,22 @@ BLOCKED=$STATE/blocked_until
 LOG=$STATE/rounds.log
 
 # One of: acceptEdits auto bypassPermissions default dontAsk plan
-# NOTE: acceptEdits only auto-approves file edits. A round that needs to run
-# ninja, git or the verify scripts will stall waiting for a Bash approval that
-# nobody is there to give. Decide this deliberately before enabling the job.
-PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-acceptEdits}
+#
+# This default USED to be acceptEdits, chosen so that a misconfigured job would
+# stall rather than run wild. It stalls all right -- acceptEdits auto-approves
+# file edits and nothing else, so the first ninja or git in a round waits
+# forever for an approval nobody is there to give.
+#
+# The reason it changed is not that stalling got safer. It is that the default
+# only applied when this script was run by hand, while ralph.sh exported
+# bypassPermissions -- so the run used to check the setup was not the setup.
+# A rehearsal in a configuration you never ship tells you nothing, and this one
+# was caught only because the first manual round logged the mode it was using.
+#
+# What makes bypassPermissions defensible is not this line. It is the pre-push
+# hook and tools/loop/hooks/deny-destructive.sh, neither of which existed when
+# acceptEdits was chosen, plus the snapshot taken below.
+PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
 ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-3000}
 BACKOFF=${FHP_LOOP_BACKOFF:-3600}
 
