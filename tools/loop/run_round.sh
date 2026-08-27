@@ -182,10 +182,11 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
   (
     cd "$REPO" || exit 1
     # script -q fakes a TTY so claude flushes output line-by-line instead of
-    # block-buffering; tr strips the  that PTY line discipline inserts.
+    # block-buffering; tr strips the 
+ that PTY line discipline inserts.
     script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
     echo $? >"$rc_tmp"
-  ) 2>&1 | tr -d '\r'
+  ) 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g'
 ) | tee -a "$LIVE" >"$out" &
 pid=$!
 
