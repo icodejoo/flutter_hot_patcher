@@ -900,6 +900,49 @@
       → 已把「`nm` 出 0 行时先 `wc -l` 确认二进制真被读到」写进清单末尾。
       🔴 **遗留的投毒源**：`~/.claude/projects/…/memory/MEMORY.md`（普通文件，**不是**仓库内软链）
       仍带同一条已作废的聚合器断言，会在未来轮次重新投毒。本轮边界未授权改它 → 并进任务 63。
+- [x] 任务 63：🎉 **`rewritten` / `sentinel_filled` 已接上真计数器；顺带发现 IL pass 的闸门写反了**
+      A1 关闭。前提未被证伪 —— `rewritten=0` / `rewritten_null=0` 确实是 `linker.cc:1159` 的硬编码字面量，
+      而 `sentinel_filled` 是 `slots.size() - retained`，**一个恰好在该 fixture 上正确的代理量，不是真计数**。
+      改动：`~/dart-3122/sdk` 提交 `afa1f9c73cc`（3 文件 +117/-14）——
+      `linker.h` 声明 `NoteDDSlotRewritten` / `DDSlotWasRewritten` / `ResetDDSlotRewrites`
+      （**静态方法**：`sizeof(ShorebirdLinker)==0x88` 有 static_assert，我们自己的记账放不进对象里）；
+      `linker.cc` 存储 + 四个计数器真实计算，并删掉「which needs the DD IL subsystem we do not have」那条过期注释；
+      `aot_call_specializer.cc` 在改写点计数 + 新增 resolution 驱动的 slot 查找。
+      判据①**逐字节**：`cmp out_dd/dd_resolution.tsv <ours>` → **exit 0**，`rewritten=2`、slot 3/4 各为 1，
+      与他们的 `DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel` 全同；
+      我们发射的间接调用点也落在同样的 slot 上（4,4,3），只差 Thread 位移 `0xf78` vs `0x978`（C1，结构性）。
+      判据②**不倒退**：`verify_all.sh` **16 ran / 0 failed / 0 skipped / 0 blocked, exit 0**、
+      `run_vm_tests` **157 passed**、`verify_reproduction.sh` **28 artifacts / 0 failures**。
+      判据③**负控制**：把 `NoteDDSlotRewritten(slot)` 改成 `if (slot == 12345678) …`，
+      同一轮 `ninja` **exit 0**（打了 `PATCH_OK`）后变红，且原因正是改坏的那处（`rewritten=0`、slot 3/4 归零，其余全同）；已还原。
+      ⚠️ **RTK 包装的 `diff` 对这次负控制报了「✅ Files are identical」—— 假阴性**，
+      `command cmp` 立刻给出 `differ: char 66, line 2`。又一次印证「RTK 包装不可信，一律加 `command` 前缀」。
+      🔑 **计划外发现（已升级为 A5）**：找「真正的改写路径」时发现**旧代码的闸门写反了**。
+      两次跑**他们的** gen_snapshot 数三指令间接序列：voters-only（无 DDSlotMapping 段）→ **3 个改写点**；
+      mapping-only（一行，kernel_offset 54623 → slot 0）→ **0 个改写点**，而同样的字节**我们发射 73 个点**。
+      → 驱动他们 IL pass 的是 **resolution，不是 DDSlotMapping**；旁证是他们 DWARF 里的
+      `DDSlotResolution::owner_to_slot_`（+0x28）在我们树里此前**没有任何消费者**，而它正是反查表。
+      本轮**保留** kernel_offset 路径并优先查它（生产配置行为不变、`dd_pass_check.sh` 仍绿），
+      删掉它是另一件需要自己证据的事，已写进源码注释与 commit message，**没有静默修掉**。
+      投毒源已清：`memory/MEMORY.md` 两份副本 + `project_dart_sdk_fork.md` 里那条已作废的聚合器断言，
+      均已按实测结论改写并补上「2026-08-26 + `ab58e28152d`」。仓库侧提交 `0ab306a`。
+      **两份副本仍是各自独立的普通文件**，未做软链、未合并、未删除任何一份。
+- [ ] 任务 64：**A2 —— `object_pool_editor` 的两处计数分歧用了 `ASSERT`，release 构建里被编译掉** ⬅️ **当前任务**
+      从 A 类清单取下一项。**这是个软点，不是缺口**：断言在 release 里整条消失，
+      于是「计数器与发射器不一致」这件已知的事在生产构建里没有任何东西看着。
+      判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`。
+      两处已知分歧：kind-3 index 62 发射器用 2 而计数器说 3；kind-1/2 offset 2²⁴ 发射器用 3 而计数器说 2 ——
+      **后者是我们自己读错了折叠 ladder**（recon 里在 2²⁴ 之后读成 3），属真 bug，要修计数器而不是改断言迁就它。
+      要做的两件事：① 修 kind-1/2 在 2²⁴ 之后的计数；② 把两条断言收紧成 release 也在的形式。
+      ⚠️ 前者是**行为改动**，`verify_reproduction.sh` 的 28 个产物最容易被它弄坏 —— 必须跑完再报。
+      ⚠️ kind-3 index 62 那处**先别改**：它是发射器与计数器谁对还没定论的一处，
+      改之前要有自己的证据（他们的 `ImageWriter::Write` 自带逐字节自校验，打印 `Expected:` / `Actual:`，那是可用的 oracle）。
+      ⚠️ 判据必须有负控制，且**任何 `runtime/vm/` 下的负控制都要连 `gen_snapshot` 一起重建**，
+      变红后**读失败信息本身**确认原因就是改坏的那处，不是 `Wrong full snapshot version`。
+      ⚠️ **`diff` 一律用 `command cmp`** —— 任务 63 实测 RTK 包装的 `diff` 会对真实差异报「Files are identical」。
+
+  <details><summary>任务 63 原始卡片</summary>
+
 - [ ] 任务 63：**A1 —— `rewritten` / `sentinel_filled` 两列的硬编码字面量** ⬅️ **当前任务**
       从任务 62 产出的 A 类清单取第一项。**它不是缺子系统，是一行假数据**：
       `linker.cc:1159` 把 `rewritten` 硬编码成字面量，所以 `print_dd_resolution_to` 报 0 而他们报 2。
@@ -925,6 +968,9 @@
       → 任务 63 **一件都没做**：`rewritten` 列仍是 `linker.cc:1159` 的硬编码字面量；
       两份 memory 副本里那条已作废的聚合器断言**仍在，仍会在下次投毒**。
       → 恢复额度后从本卡片原样重跑即可，前提条件没有任何变化。
+
+  </details>
+
 
   <details><summary>任务 62 原始卡片</summary>
 
@@ -1858,10 +1904,11 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 
 | # | 条目 | 现状与支撑它的实测命令 |
 |---|---|---|
-| A1 | **`print_dd_resolution_to` 的 `rewritten` / `sentinel_filled` 两列** | 我们发 `rewritten=0`，他们读 **2**。判据：`cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./dd_pipeline.sh` → 他们 `DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel`。**0 是硬编码字面量**：`command grep -n 'rewritten=0' ~/dart-3122/sdk/runtime/vm/shorebird/linker.cc` → `:1159`。⚠️**旧理由「依赖我们没有的 DD IL 子系统」已作废**——该子系统已于 `b13e2a0d54e` 实现（`git merge-base --is-ancestor b13e2a0d54e HEAD` → 0），`dd_pass_check.sh` / `dd_runtime_check.sh` 常设通过。`linker.cc:1153-1155` 那条注释是过期的。→ **是「把计数器接到已存在的改写路径上」，不是缺子系统。** |
+| ~~A1~~ | ✅ **已关闭（2026-08-27 任务 63，`afa1f9c73cc`）** —— ~~**`print_dd_resolution_to` 的 `rewritten` / `sentinel_filled` 两列**~~ | 我们发 `rewritten=0`，他们读 **2**。判据：`cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./dd_pipeline.sh` → 他们 `DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel`。**0 是硬编码字面量**：`command grep -n 'rewritten=0' ~/dart-3122/sdk/runtime/vm/shorebird/linker.cc` → `:1159`。⚠️**旧理由「依赖我们没有的 DD IL 子系统」已作废**——该子系统已于 `b13e2a0d54e` 实现（`git merge-base --is-ancestor b13e2a0d54e HEAD` → 0），`dd_pass_check.sh` / `dd_runtime_check.sh` 常设通过。`linker.cc:1153-1155` 那条注释是过期的。→ **是「把计数器接到已存在的改写路径上」，不是缺子系统。** |
 | A2 | **`object_pool_editor` 两处计数分歧用了 `ASSERT` 而非 `RELEASE_ASSERT`** | release 构建里被编译掉 = 软点。判据：`command grep -n 'CountFollowsPrepareLargeOffset' ~/dart-3122/sdk/runtime/vm/shorebird/object_pool_editor_test.cc` → `:369`；该用例体内是 `EXPECT_EQ`（`ISOLATE_UNIT_TEST_CASE` 下 `EXPECT` 会计入失败，但 `.cc:501` 引用的那条推导仍靠 `ASSERT`）。两处已知分歧：kind-3 index 62 发射器用 2 而计数器说 3；kind-1/2 offset 2²⁴ 发射器用 3 而计数器说 2（**后者是我们自己读错了折叠 ladder**）。→ 收紧断言 + 修计数器。 |
 | A3 | **plurality tie-breaking 零覆盖 / `refreshed` / `dropped-stale` 三条分支未被任何 fixture 走到** | 判据：`./dd_pipeline.sh` 两个 pass 都打印 `0 refreshed, 0 dropped-stale`，且每 slot 恰好一票。→ 需要**自造 fixture**，方法已有先例：`make_op_fixture.py` + `op_aggregator_check.sh` 就是为「他们的 fixture 判别不出来」而造的。 |
 | A4 | **`analyze_snapshot --disassemble`** | 唯一还没做的 `analyze_snapshot` flag。判据：`./analyze_snapshot_help_check.sh` → `--help matches theirs with 1 unimplemented flag(s) removed (12 documented, 3 lines withheld)`。曾实现后**回退**——撞上 VM 自己的同名 flag，原因记在 `~/dart-3122/sdk/runtime/bin/analyze_snapshot.cc:112-123`。→ 证据齐全，缺的是解名字冲突的办法。 |
+| A5 | **他们的 DD IL pass 由 resolution 驱动，不是由 `DDSlotMapping` 驱动 —— 我们两条路径都留着** | 2026-08-27 任务 63 的计划外发现。两次跑**他们的** `gen_snapshot` 数三指令间接序列：voters-only（无 `DDSlotMapping` 段）→ **3 个改写点**；mapping-only（一行，kernel_offset 54623 → slot 0）→ **0 个改写点**，而同样的字节**我们发射 73 个点**（`dd_pass_check.sh` 的 StringBuffer.write 用例）。旁证：他们 DWARF 里 `DDSlotResolution::owner_to_slot_`（+0x28）在任务 63 之前**我们树里没有任何消费者**，而它正是 resolution 驱动的 pass 所需的反查表。任务 63 已加上 resolution 路径并**保留** kernel_offset 路径（优先查后者），所以生产配置行为不变。→ **剩下的是「能不能删掉 kernel_offset 路径」**，而建表仍按 kernel_offset 键，删它需要自己的证据，不能靠这一次观测推。 |
 
 ## B. 无证据（必须先反汇编或先找 oracle）
 
