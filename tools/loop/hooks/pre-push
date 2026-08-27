@@ -1,0 +1,22 @@
+#!/bin/bash
+# Refuses every push that does not carry an explicit human intent.
+#
+# The unattended loop runs `claude -p --permission-mode bypassPermissions`, so
+# the contract's "ask a human before anything outward or irreversible" is, at
+# that moment, only prose in a prompt. Pushing is the one action in this project
+# that is both outward and effectively irreversible: all three worktrees share a
+# PUBLIC origin, and anything that lands there is cached and indexed whether or
+# not it is deleted afterwards. Their binaries and decompiled products must
+# never reach it.
+#
+# So the rule stops being a rule the model is asked to follow and becomes one it
+# cannot break: the loop's environment has no FHP_ALLOW_PUSH, and nothing in the
+# round script sets it.
+#
+# To push by hand:  FHP_ALLOW_PUSH=1 git push ...
+if [ "${FHP_ALLOW_PUSH:-}" != "1" ]; then
+  echo "pre-push: refused -- origin is public and this may be the unattended loop." >&2
+  echo "          Re-run as: FHP_ALLOW_PUSH=1 git push $*" >&2
+  exit 1
+fi
+exit 0
