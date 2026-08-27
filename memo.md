@@ -2004,6 +2004,49 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 → **`nm` 出来 0 行时，先确认二进制真的被读到了**（`wc -l` 符号文件，不是只看 `grep -c` 的 0）。
 本项目 `memory/feedback_rtk_diff_unreliable.md` 早有记录：**RTK 包装的 `ls`/`find`/`grep` 会静默说谎，一律加 `command` 前缀。**
 
+## 🔴 恢复运行前必读：三个 stash 里有未完成的在制品（2026-08-27）
+
+`git status` 是干净的，**但那不代表没有半成品** —— 有三份被 stash 起来了。
+它们来自 `ralph.sh` 的四轮彩排：每一轮都派了子代理去干活，然后**轮次自己**
+被腰斩（原因见 `docs/LOOP_CONTRACT.md` 末尾「四轮彩排」），留下没人认领的改动。
+我按可逆方式收进 stash，**没有销毁任何东西，也没有读过它们的内容**。
+
+```
+stash@{0}  task66-wip-round4-killed   dd_voting_test.cc / linker.{h,cc}   +251
+stash@{1}  task65-wip-round3          object_pool_editor{,_test}.cc       +67/-55
+stash@{2}  task65-wip-from-orphaned-subagent  assembler_arm64.cc / …_test.cc  +64/-60
+```
+
+⚠️ **不要直接 `stash pop` 接着干。** 每一份都是被杀的子代理留下的，
+**完整性未知**：可能缺最后一步，也可能含没还原的负控制（`grep -c NEGCTL` 当时是 0，
+但那只覆盖了当时那一份）。当作**线索**看，不要当作进度。
+按契约，正确做法是从卡片原样重做，做完再和 stash 对一眼有没有漏掉的洞察。
+
+⚠️ 任务 65 **一件都没做**：kind-3 / `PairOffset` 的计数器没动，
+`RELEASE_ASSERT` 对 `PairOffset` 的显式排除还在（那是任务 64 有意留的诚实划线，不是漏掉）。
+
+## 🔧 无人值守循环已具备（2026-08-27，未最终验证）
+
+`/loop` 是自举链，某一轮整轮死掉就永久断（08-26 空转 14h53m）。已改为外部时钟：
+
+| 文件 | 作用 |
+|---|---|
+| `tools/loop/ralph.sh` | 外层 `while` 时钟。**间隔 120 秒不是节奏** —— 锁才是节奏，间隔只决定「上一轮结束后多快接上」 |
+| `tools/loop/run_round.sh` | 跑一轮就退。守卫：PAUSE 开关 / 单实例锁 / 额度退避 / 脏树拒绝 / 心跳先于派发 / 每轮 APFS 快照 / 结束时脏树告警 |
+| `tools/loop/hooks/pre-push` | **origin 是公开仓**，无 `FHP_ALLOW_PUSH=1` 一律拒绝。已装进三个树的公共 `.git/hooks` |
+| `tools/loop/hooks/deny-destructive.sh` | 拒绝递归强删、丢弃未提交工作的 git、root、全局配置写入、裸盘操作。**实测在 `bypassPermissions` 下照样触发** |
+| `tools/loop/hooks/verify-deny.sh` | 27 条双向用例。**ALLOW 那一半才是重点** —— 拦下 `ninja` 的钩子会让每轮都卡住却看着健康 |
+
+⚠️ **这不是沙箱**：模式匹配输给拆开写的字面量（实测绕过过）。所以第二层是每轮快照，
+**不依赖认出任何东西**。⚠️ 但 local snapshot 可被 `deleted(8)` 回收 —— 快速撤销，不是备份。
+
+⚠️ **还差最后一步验证**，且**只能在真实终端里做**（我的会话对后台任务有时长上限，
+第 4 轮就是死在这个上面，与脚本无关）：
+```
+cd ~/Documents/flutter_hot_patcher && ./tools/loop/run_round.sh
+```
+判据：日志出现 `round end`，且**没有** `WARNING: round left ... dirty`。两样都对再开 `ralph.sh`。
+
 ## ⏱️ 轮次心跳（契约第六条）
 
 > **在派子代理【之前】写。** 最后一行时间与当前时间相差远超一个轮次间隔 = 循环已停摆，
