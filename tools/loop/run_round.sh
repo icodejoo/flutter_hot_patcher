@@ -142,14 +142,38 @@ trap 'rm -f "$LOCK"' EXIT
 # ---- resume guard ----------------------------------------------------------
 # A subagent killed mid-flight can leave a half-applied negative control behind.
 # Starting the next round on top of that produces a red nobody can explain, so
-# refuse instead. Untracked files are ignored -- the state repo is full of them
-# by design; only modified tracked files mean someone was interrupted.
+# refuse instead.  After AUTO_STASH_AFTER consecutive refuses we auto-stash so
+# the loop does not block indefinitely while nobody is watching.
+AUTO_STASH_AFTER=${FHP_LOOP_AUTO_STASH_AFTER:-3}
+REFUSE_COUNT_FILE=$STATE/refuse_count
+
+dirty_tree=
 for tree in "$SDK" "$RESEARCH"; do
   if ! git -C "$tree" diff --quiet 2>/dev/null; then
-    say_once "refuse: $tree has uncommitted changes to tracked files -- resolve by hand"
-    exit 1
+    dirty_tree=$tree
+    break
   fi
 done
+
+if [ -n "$dirty_tree" ]; then
+  count=$(cat "$REFUSE_COUNT_FILE" 2>/dev/null || echo 0)
+  count=$(( count + 1 ))
+  printf '%s' "$count" >"$REFUSE_COUNT_FILE"
+
+  if [ "$count" -ge "$AUTO_STASH_AFTER" ]; then
+    label="auto-stash-round-$(date +%Y%m%dT%H%M%S)"
+    git -C "$dirty_tree" stash push -u -m "$label" 2>&1 | while IFS= read -r line; do say "auto-stash: $line"; done
+    printf '0' >"$REFUSE_COUNT_FILE"
+    say "WARNING: auto-stashed $dirty_tree after $count refuses ($label) -- run: git -C $dirty_tree stash pop"
+    osascript -e "display notification \"ralph: auto-stashed $dirty_tree after $count refuses\" with title \"flutter_hot_patcher\"" 2>/dev/null || true
+  else
+    say_once "refuse ($count/$AUTO_STASH_AFTER): $dirty_tree has uncommitted changes -- auto-stash in $(( AUTO_STASH_AFTER - count )) more"
+    exit 1
+  fi
+fi
+
+# Reset consecutive-refuse counter now that we passed the dirty-tree guard.
+printf '0' >"$REFUSE_COUNT_FILE" 2>/dev/null || true
 
 # ---- heartbeat -------------------------------------------------------------
 # Written before dispatch, so a round that dies whole still leaves a trace.
