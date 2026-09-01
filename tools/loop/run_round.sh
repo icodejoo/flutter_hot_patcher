@@ -228,6 +228,30 @@ say "round start (permission-mode=$PERMISSION_MODE)"
 #
 # Stated because it matters: local snapshots are purgeable, and deleted(8)
 # reclaims them under disk pressure. This is a fast undo, not a backup.
+# Keep only the most recent few. One snapshot per round is cheap at first and
+# then is not: six rounds on 2026-09-01 held ~10 GB, which is most of the
+# distance between "plenty of disk" and the floor above. Pruning here rather
+# than letting the OS purge under pressure is the same trade the floor makes --
+# do it deliberately while there is room, instead of haphazardly when there is
+# not, because purge and the floor compete for exactly the same shortage.
+#
+# Only TimeMachine round snapshots are touched; com.apple.os.update-* belong to
+# the system and are left alone. Nothing unique lives in these: the source trees
+# are in git and the engine checkout is re-syncable. What they buy is a fast
+# undo for the build outputs, and two rounds' worth of that is enough.
+SNAPSHOT_KEEP=${FHP_LOOP_SNAPSHOT_KEEP:-3}
+#
+# awk, not `head -n -N`: the negative count is a GNU extension and BSD head
+# exits "illegal line count", which would leave $prune empty and make this a
+# silent no-op -- the failure would look exactly like "nothing to prune".
+prune=$(/usr/bin/tmutil listlocalsnapshots / 2>/dev/null \
+        | sed -n 's/^com\.apple\.TimeMachine\.\(.*\)\.local$/\1/p' \
+        | sort | awk -v k="$SNAPSHOT_KEEP" '{a[NR]=$0} END{for(i=1;i<=NR-k;i++) print a[i]}')
+for s in $prune; do
+  /usr/bin/tmutil deletelocalsnapshots "$s" >/dev/null 2>&1 \
+    && say "pruned snapshot $s"
+done
+
 /usr/bin/tmutil localsnapshot >/dev/null 2>&1 \
   && say "snapshot ok" \
   || say "WARNING: snapshot failed -- a bad round would not be undoable"
