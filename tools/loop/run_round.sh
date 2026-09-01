@@ -118,6 +118,26 @@ if [ ! -x "$CLAUDE" ]; then
   exit 1
 fi
 
+# ---- disk floor -------------------------------------------------------------
+# Rounds now run unattended through the B4 line, which downloads and builds: the
+# iOS engine sync already took 15 GB and a ninja build will take more. Filling
+# the volume is the one outcome here that is genuinely painful to undo -- it
+# takes down everything else on the machine, not just this loop, and the APFS
+# snapshots taken below are purgeable precisely when space runs short, so the
+# undo mechanism evaporates at the moment it would be needed.
+#
+# This is deliberately a refusal to START, not a limit on a running round. A
+# round already in flight is left alone; the loop simply stops taking new work
+# until a human frees space. That keeps the check honest -- it cannot half-kill
+# a build and leave the tree in a state nobody can explain.
+DISK_FLOOR_GB=${FHP_LOOP_DISK_FLOOR_GB:-15}
+free_gb=$(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -n "$free_gb" ] && [ "$free_gb" -lt "$DISK_FLOOR_GB" ]; then
+  say "refuse: only ${free_gb} GB free, floor is ${DISK_FLOOR_GB} GB -- free space or raise FHP_LOOP_DISK_FLOOR_GB"
+  osascript -e "display notification \"ralph: stopped, only ${free_gb} GB free\" with title \"flutter_hot_patcher\"" 2>/dev/null || true
+  exit 1
+fi
+
 # ---- kill switch -----------------------------------------------------------
 # `touch .loop/PAUSE` stops the loop without unloading the job. Nothing else
 # in this script can override it.
