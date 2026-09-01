@@ -22,7 +22,11 @@ set -uo pipefail
 REPO=/Users/Cruz/Documents/flutter_hot_patcher
 SDK=/Users/Cruz/dart-3122/sdk
 RESEARCH=/Users/Cruz/Documents/fhp-research
-CLAUDE=/opt/homebrew/bin/claude
+# Resolved, not hardcoded. It used to be /opt/homebrew/bin/claude, which stopped
+# existing when the CLI moved to the native installer (~/.local/bin/claude) --
+# and the failure shape is bad: script(1) still runs, the round logs a clean
+# "round end rc=1" with no output, and nothing says the binary was missing.
+CLAUDE=${FHP_LOOP_CLAUDE:-$(command -v claude || true)}
 
 STATE=$REPO/.loop
 LOCK=$STATE/round.lock
@@ -104,6 +108,15 @@ say_once() {
   fi
   say "$*"
 }
+
+# ---- the binary actually exists --------------------------------------------
+# Checked here rather than at the assignment above so the refusal lands in the
+# log like every other refusal. A missing binary otherwise reads as "round end
+# rc=1, 0 lines of output", which is indistinguishable from a round that ran.
+if [ ! -x "$CLAUDE" ]; then
+  say "refuse: no claude binary found (set FHP_LOOP_CLAUDE)"
+  exit 1
+fi
 
 # ---- kill switch -----------------------------------------------------------
 # `touch .loop/PAUSE` stops the loop without unloading the job. Nothing else
