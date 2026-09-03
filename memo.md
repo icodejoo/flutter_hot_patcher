@@ -3145,3 +3145,29 @@ cd ~/Documents/flutter_hot_patcher && ./tools/loop/run_round.sh
   `Shorebird_ReadLinkHeader` 三处插 `fprintf(stderr,…)+fflush`，跑一轮拿到
   `patch 1 failed to launch` 的真实原因。**不要靠猜** —— 本轮已有两次「以为想明白了、
   修完仍失败」的先例（页对齐、`entry_count`），两次都是修对了但不是那个原因。
+
+- 2026-09-03 PST — ✅ **起循环前的检查已做完并落成文档，两个 harness 拦不住的口子已写进 `B7-patch-launch` 卡片。**
+
+  **检查结果（逐项实测，不是记账）**：设备 `Jp's iPhone / iPhone 13 (iPhone14,5)` 显示 **`connected`**；
+  SDK 树 `shorebird-3.12.2` @ `11dcd2b4c9c` clean 零 stash；FHP 树 `v1` 已跟踪文件全 clean；
+  研究树 `route-a-research` @ `f8cc894` clean；引擎插桩已还原（`grep -c FHPMARK` = 0）；
+  磁盘 **76 GB**（地板 15 GB）。**`.loop/PAUSE` 仍在，刻意没删** —— 删它等于恢复无人值守，是人的决定。
+
+  **`B7-patch-launch` 卡片补了三样它原先没有的**（原卡片只说了「要做什么」，没说「要拒绝什么」）：
+  ① **硬前置**：手机必须插着解锁，判据是 `devicectl list devices` 显示 `connected`；
+  **设备不在就没有这张卡可做的事**，如实报告并停，不许用模拟器冒充、不许漂移去做别的；
+  ② **禁止批量下载**（与 B5-swap 同一条，这里重申因为 harness 真的拦不住）；
+  ③ **插桩必须还原并重编验证 md5** —— 这条是新立的：2026-09-03 实测这条构建链是确定性的
+  （还原后 `e519155399b7cc17de7d90661312a585` 原样重现），所以**「md5 变了」就等于「没还原干净」**，
+  第一次有了一个可机械检查的判据，不再依赖「我记得改回去了」。
+
+  **`docs/DEVICE_VERIFICATION.md` 加了 §6**（199 → 256 行）：把上面这些连同两个观测盲区
+  （`--console` 看不见 `FML_LOG`、`run_vm_tests` 只吃一个测试名）和「起循环前的检查」表格一起收进去。
+  这样下一轮不必读 3000 行 memo 就能知道前置条件。
+
+  ⚠️ 三条重申（都是本项目实际栽过的）：**B 表卡片与 memo 末行必须同时指向同一项**
+  （曾有一轮读末行、按已被推翻的结论空转 85 分钟）；**能安全掐一轮的判据是「cpu 时间极低 + 三棵树干净」**，
+  不是「跑得太久」（B7 每轮本来就要 5 分钟引擎重编 + 装机）；**`/loop <间隔>` 实测不建 cron**，
+  自举链一轮死掉就永久断且不报错（曾空过 14h53m）→ 起了之后要隔一阵看 `.loop/rounds.log` 的时间戳。
+
+  **现状：一切就绪，只差删 `.loop/PAUSE`。** 下一项 = `B7-patch-launch`。
