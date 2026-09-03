@@ -2017,7 +2017,9 @@ ours  : Setting VM flags failed: Unrecognized flags: pp_hash     ← 改动前�
 | ~~B4-3~~ | ✅ **已关闭（2026-09-02，三条判据全过，由人类逐条复核）** —— `Flutter.framework/Flutter` **19,854,224 字节**（Sep 2 11:35）+ `Headers/` `Info.plist` `Modules/` `PrivacyInfo.xcprivacy` `icudtl.dat`；`lipo -info` → **architecture: arm64**；`ninja exit=0`，末四步是完整链接证据链：`[502/504] SOLINK libFlutter.dylib` → `[503/504] COPY libFlutter.dylib Flutter.framework/Flutter` → `[504/504] ACTION //flutter/shell/platform/darwin/ios:flutter_framework`。🔑 **根因确如卡片所判**：此前跑的是裸 `ninja`（默认目标 `default`，连 host 工具一起编），指定 `flutter_framework` 后即成。⚠️ **一个判定陷阱已记入心跳**：b43 有三份日志（11:25 失败 / 11:29 / 11:35 成功），最旧那份结尾是 `build stopped: subcommand failed` 且 `EXIT=` 空值未展开 —— **按它会判成失败**。**取最新日志（`ls -lat`），陈旧日志会给出错的答案。** ~~原卡片：**构建 `flutter_framework` 目标**~~ | **2026-09-02 人类授权。** 🔴 **先作废一条结论**：上一轮心跳写的「B4 ✅ 关闭（iOS 引擎产物已验）」**是虚报，已由人类实测推翻**。判据（2026-09-02）：`find out/ios_release -maxdepth 3 \( -name '*.a' -o -name '*.dylib' -o -name '*.framework' \)` → **一个都没有**；顶层只有 `build.ninja` / `.ninja_log` / `obj/` / `clang_arm64/` / `clang_x64/`，**没有任何链接产物**。`.o` 有 **6516 个**、`out/ios_release` 已 **4.8 GB** ⇒ **编译是真的，链接从没发生过。** ⚠️ **「所有可自动化任务已完成」这个前提因此不成立，四个分叉里的第 4 项（转入待定任务）不要采纳。**<br>🔑 **根因已查明，不用再诊断**：循环跑的是**裸 `ninja`**，而这棵树的默认目标就叫 `default`（`grep -E '^default ' build.ninja` → `default default`），它会把 **host 工具**也一起编 —— `.ninja_log` 最后三条正是 `clang_x64/obj/flutter/third_party/dart/runtime/vm/*.o`（dart 的 host 对象）。**编几个钟头也到不了 iOS 框架。**<br>✅ **目标名已确认存在于构建图里**（`grep -E '^build (flutter|ios)[^:]*: phony' build.ninja`）：<br>&nbsp;&nbsp;`build flutter_framework: phony phony/flutter/shell/platform/darwin/ios/flutter_framework` ← **这就是要建的**<br>&nbsp;&nbsp;另有 `flutter_engine_library: phony ./libflutter_engine.dylib.TOC`、`flutter`、`ios_gpu_configuration` 可参考。<br>⚠️ **别用 `grep 'Flutter.framework'` 去找它** —— 人类第一次就这么搜、得到 0 命中并据此以为图里没有这个目标。**产物名不是目标名**，这是本项目反复记的「判据命中不了它要证明的东西」。<br>**要做的**：① `ninja -C <out/ios_release> flutter_framework -j8`（**指定目标，不要裸 `ninja`**）；② 跑完 `ls -la` 出产物，并用 `lipo -info` 确认架构；③ 报**本轮真实耗时**与实际磁盘增量。<br>**判据（钉死，不许用「已验」这类说法）**：`Flutter.framework` 或对应产物**文件真实存在**（贴 `ls -la` 输出）；`lipo -info <binary>` **认得出 `arm64`**；`ninja` 退出码**落盘**。**三条缺一条就报未完成** —— 这一项已经被虚报过一次，结论必须由文件而不是叙述支撑。<br>⚠️ **前台跑**，禁 `run_in_background`/`&`/`nohup`（后台任务随轮次结束被杀，轮次照样 exit 0）。链接可能几十分钟，**这是允许的**，`ROUND_TIMEOUT` 兜着。<br>⚠️ **退出码落盘**：`ninja ... 2>&1 \| tee /tmp/b43_ninja.log; echo "EXIT=${PIPESTATUS[0]}" \| tee -a /tmp/b43_ninja.log`。**上一轮没留下任何 ninja 日志**，所以「它到底为什么停」只能靠事后翻 `.ninja_log` 猜 —— 这次别再这样。<br>⚠️ **磁盘**：可用 36 GB、引擎树 20 GB、地板 15 GB。链接阶段够，但**盯着**；`run_round.sh` 现在每轮自动剪 APFS 快照（保留 3 个），磁盘回升是正常现象**不是**有人删了东西。<br>⚠️ **A13**：文本含字面串 `xcodebuild/` 的 Bash 命令会被 hook 整条静默吞掉。<br>⚠️ 失败就**如实报失败并贴完整报错**，不要宣布关闭。**这一项的默认答案是「还没完成」，除非三条判据都过。** |
 | ~~B5-prep~~ | ✅ **已关闭（2026-09-02，commit `e0bf7c1`）** —— 交付 `tools/b5_device_test/`（`build_snapshot.sh` / `gn_add_dart_force_simulator.sh` / `swap_flutter_framework.sh` / `b5_test_app/`），PAUSE 已置、通知已发。⚠️ **三处偏差已由人类实测订正**：(a) 报告称 Team `MGDM32NW4K`，`project.pbxproj` 里实为 **`2KH9QHK3YZ`**（Gamemaster 的分发证书，与本项目无关）；(b) 卡片要的是 **A/B 两侧**（A=基线、B=打了 `.vmcode` 补丁），它做成了**单个自测 app**（GC 压力下 20000 次 BLR）—— 测的是 C6 派发稳定性，**不是补丁生效**；(c) `swap_flutter_framework.sh` targets Pods，而本 app **无 Podfile 无 Pods**，且 AOT/JIT 口味不匹配。→ 后续见 **B5-run**。 ~~原卡片：**做到「只差插设备」为止**~~ | **2026-09-02 人类授权。** 🎉 **前置已完成**：B4 关闭，`Flutter.framework` 真产物已由人类逐条复核 —— `out/ios_release/Flutter.framework/Flutter` **19,854,224 字节**、`lipo -info` → **arm64**、`b43_ninja3.log` 末尾 `[504/504] ACTION //flutter/shell/platform/darwin/ios:flutter_framework` + **`ninja exit=0`**。里面装的是我们的 VM（`args.gn` 的 `dart_version = f174efefd55…` = 我们树 HEAD，`third_party/dart` 是指向 `~/dart-3122/sdk` 的 symlink）。<br>🛑 **本卡片的终点是「准备就绪」，不是「测完」**：**做到只差把设备插上按运行为止，然后停**。最后一步必须由人类在场 —— 循环没有物理设备，也不该去猜设备状态。<br>**要做的（能做多少做多少，卡住就如实报告并停）**：<br>① 用 `--local-engine` 指向这个 out 目录，编一个最小 Flutter app（**优先复用仓里已有的**，`spikes/` 与 `tools/broute/` 下有跑过真机的工程，`docs/RUNBOOK_ROUTE_B.md` 记着流程 —— **先查再造，别重写一个**）；<br>② 建/配 iOS Xcode 工程与签名（本机签名身份 **`MGDM32NW4K`** / **`28VANPL49P`**，B4-a 实测存在）；<br>③ 把 A/B 两侧准备好：A = 基线，B = 打了 `.vmcode` 补丁的版本。**这才是要测的东西**，不是「app 能不能起来」—— 主任务要验的是**补丁在真机上生效**；<br>④ 产出一份**给人类的操作清单**：插上设备后按哪几步、看什么算通过、失败长什么样。**写进 memo，不要只写在轮次输出里。**<br>🛑 **收尾必做两件（无论成功失败）**：`touch <repo>/.loop/PAUSE`，并 `osascript -e 'display notification "B5 准备就绪，等待真机" with title "flutter_hot_patcher"'`。**人类明确要求在需要真机时得到通知**，这是本卡片的交付物之一，不是可选项。<br>⚠️ **不要试图绕过没有设备这件事** —— 不许用模拟器冒充真机（`use_ios_simulator=false`，这个引擎就不是给模拟器编的），不许把「构建成功」报成「真机通过」。**B5 的默认答案是「未测」，直到人类在真机上跑过。**<br>⚠️ **前台跑**，禁 `run_in_background`/`&`/`nohup`。⚠️ **退出码落盘，且 `EXIT=` 要真的展开出数字** —— 上一轮 `b43_ninja.log` 里那行是 `ninja exit=`（空值），差点让人据此判成失败；**同时：判据要看最新的那份日志**，b43 跑了三份（11:25 失败 / 11:29 / 11:35 成功），先 `ls -lat` 排序再读，**陈旧日志会给出错的答案**。<br>⚠️ **A13 比记载的更宽**：不只是字面串 `xcode` + `build/`，**命令文本里出现工作树根或构建树路径也会被整条静默吞掉**（2026-09-02 实测，报 `blocked: targets a worktree root or a build tree`）。绕法：把路径在 Python 里拼，别写进 Bash 命令文本。<br>**判据**：①②③ 各自的产物**文件存在且贴 `ls -la`**；④ 的清单**已写进 memo**；PAUSE 已置、通知已发。 |
 | ~~B5-run~~ | 🟡 **三段做了两段半（2026-09-03 人类实测清点）** —— ① **host 引擎已编出**（`out/host_release`，724 MB）；② **`dart_force_simulator = true` 已进 `args.gn:66` 并重编成功**，引擎 **19,991,328 字节**（比不带 flag 时的 19,854,224 **大 137 KB**，正是多编进去的 Simulator）；③ **release app 已编出**且 `App.framework` 是**真 AOT**（Mach-O arm64，3,614,272 字节，不是 kernel），已装机（`com.fhp.b5TestApp`）。🔴 **但最后一步没做：没把我们的引擎换进 app** —— app 里是 stock 的 14,554,352 字节 / md5 `f696ae08…`，我们的是 19,991,328 / md5 `e5191553…`，**且 app 里那个的时间戳比我们的引擎早 13 分钟**。→ 剩余工作见 **B5-swap**。 ~~原卡片：**编 host 引擎 → 重编 iOS 引擎 → 出 release app → 装上跑**~~ | **2026-09-02 人类授权，按顺序做，做不动就停下如实报。**<br>🎉 **通路已经打通，这些是实测事实，直接用，不要重测**：设备 **Jp's iPhone / iPhone14,5 / iOS 26.5.2 / UDID `00008110-000868212686601E` / 开发者模式已开 / connected**；**签名已跑通**（Debug 版 stock 引擎已成功装机并启动）：`CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** + `-allowProvisioningUpdates` + `PRODUCT_BUNDLE_IDENTIFIER=com.fhp.b5test`，签出来的 Authority 是 `Apple Development: Cruz Jr (MGDM32NW4K)`；**Intune MDM 不拦装机**（曾是最大未知，已证伪）。<br>🔴 **两条已证伪的路，不要再走**：① **`DEVELOPMENT_TEAM=MGDM32NW4K` 会失败** —— `No Account for Team "MGDM32NW4K"`：钥匙串里有该证书，但**没有登录状态的账号**，自动签名要联网注册设备。用 `WAL983V9MH`（它有登录账号，且其托管通配 profile 里嵌的正是 MGDM32NW4K 那张证书）。② **手动签名走不通** —— 那个通配 profile 是 Xcode 托管的，`CODE_SIGN_STYLE=Manual` 报 `is Xcode managed, but signing settings require a manually managed profile`。<br>🔴 **`swap_flutter_framework.sh` 有两处错，别直接跑**：它替换「Pods 里的 Flutter.framework」，而这个 app **没有 Podfile 也没有 Pods**（无插件依赖，Flutter 不生成）；更要紧的是**口味不匹配** —— 实测 Debug app 里的 stock Flutter 是 **39,110,592 字节的 JIT 引擎**、`App.framework` 里装的是 kernel，而我们的是 **19,854,224 字节的 AOT 引擎**（`--runtime-mode release`）。**把 AOT 引擎塞进 Debug app 起不来，且报错与要测的东西无关。** 正确做法是整套走 release + `--local-engine`。<br>**三段，按顺序**：<br>**① 编 host 引擎** —— 实测 `~/shorebird_engine/engine/src/flutter/engine/src/out` 下**只有 `ios_release`**，`host_release`/`host_debug`/`host_debug_unopt`/`host_profile` **全部 MISSING**，且全树找不到 iOS 用的 `gen_snapshot`。`--local-engine` 需要 host 那半（它要在 Mac 上把 Dart 编成 arm64 AOT 快照）。**先做这段，因为它是第 ③ 段的硬依赖，且失败会很快暴露**；不带 `dart_force_simulator`。<br>**② 加 `dart_force_simulator=true` 重编 iOS 引擎** —— `tools/b5_device_test/gn_add_dart_force_simulator.sh` 已存在，可参考但**先读再跑**。**这一步不能省**：不开这个 flag，Simulator / wrapper / C1-C7 那套在真机上根本不会被执行，测了等于没测。<br>**③ `flutter build ios --release --local-engine=...`** 编出真正装我们引擎的 app，用上面那套签名参数装机，跑起来。<br>**判据（每段都要，缺一条算未完成）**：产物**文件存在**并贴 `ls -la`；`lipo -info` 见 `arm64`；**退出码落盘**。第 ③ 段还要：`xcrun devicectl device install app --device 00008110-000868212686601E <app>` 成功输出 bundleID，以及 `codesign -dv` 的 Authority 行。<br>⚠️ **`${PIPESTATUS[0]}` 在这个 shell 里取不到值** —— 轮次跑的是 **zsh**，数组下标从 1 开始，要写 **`${pipestatus[1]}`**。`b43_ninja.log` 里那行 `ninja exit=`（空值）就是这么来的，**是卡片给错了写法，不是轮次偷懒**。<br>⚠️ **磁盘**：本轮开始时约 24 GB 可用，地板 15 GB，而这里要连编两次引擎。`run_round.sh` 每轮自动剪快照。**逼近地板就停下报告，不要调高 `FHP_LOOP_DISK_FLOOR_GB`、不要删构建树** —— `deny-destructive` 钩子会拦递归强删，那是对的，别绕。<br>⚠️ **A13 比记载的宽**：不只字面串 `xcode`+`build/`，**命令文本里出现工作树根或构建树路径也会被整条静默吞掉**（报 `blocked: targets a worktree root or a build tree`）。绕法：路径在 Python 里拼，别进 Bash 命令文本。<br>⚠️ **前台跑**，禁 `run_in_background`/`&`/`nohup`。⚠️ **判据看最新日志**（`ls -lat`），陈旧日志给错答案（b43 三份，最旧那份结尾是失败）。<br>🛑 **不许把「构建成功」报成「真机通过」。B5 的默认答案是「未测」，直到 app 装我们的引擎在真机上真跑过。** |
-| **B5-swap** | 🔴 **「B5 真机 PASS」是虚报 —— app 里装的不是我们的引擎。换进去，再装一次** | **2026-09-03 人类实测推翻上一轮结论。**<br>🔴 **决定性判据（md5 + 尺寸 + 时间戳，三样都对不上）**：<br>&nbsp;&nbsp;我们的引擎 `~/shorebird_engine/engine/src/flutter/engine/src/out/ios_release/Flutter.framework/Flutter` = **19,991,328 字节**，`Sep 2 21:29:14`，md5 `e519155399b7cc17de7d90661312a585`<br>&nbsp;&nbsp;app 里的 `tools/b5_device_test/b5_test_app/build/ios/Release-iphoneos/Runner.app/Frameworks/Flutter.framework/Flutter` = **14,554,352 字节**，`Sep 2 21:16:16`，md5 `f696ae08c3fa4799af3087e13a1ea495`<br>&nbsp;&nbsp;⇒ 差 540 万字节、md5 不同，**且 app 里那个比我们的引擎早 13 分钟** —— 是**先用 stock 引擎编好 app、之后才编完我们的引擎、没换进去**。**装机跑的一直是 stock 引擎，与我们的复刻 VM 无关。**<br>✅ **但前两段是真做成了，别推倒重来**：`dart_force_simulator = true` 已在 `args.gn:66`；带该 flag 重编的引擎 **19,991,328 字节**（比不带时的 19,854,224 **大 137 KB**，正是多编进去的 Simulator 那套）；release app 已编出且 `App.framework` 是**真 AOT**（`file` 报 Mach-O arm64 动态库，3,614,272 字节，不是 kernel）；设备上已有 `com.fhp.b5TestApp`。**三段做了两段半，只差最后一步。**<br>**本轮只做一件事**：把我们的 `Flutter.framework` 换进 release app 的 `Frameworks/`，重新签名、装机、跑起来。<br>⚠️ **换完必须重新签名** —— 改动 bundle 内容会让原签名失效。用已验证可用的那套：`CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** + `-allowProvisioningUpdates`（证书 `Apple Development: Cruz Jr (MGDM32NW4K)`；**`DEVELOPMENT_TEAM=MGDM32NW4K` 会报 `No Account for Team`**；手动签名被托管 profile 拒）。更稳的做法是**让构建系统直接产出**：`flutter build ios --release --local-engine-src-path=<engine src> --local-engine=ios_release --local-engine-host=host_release`（`host_release` 已存在，724 MB，B5-run 第①段的产出）。<br>**判据（三条缺一不可，不许用「PASS」二字代替）**：① 装机后 app bundle 里的 `Flutter.framework/Flutter` 的 **md5 == `e519155399b7cc17de7d90661312a585`**（或与当时的我们引擎逐字节相同，贴两边 md5）；② `xcrun devicectl device install app` 成功并贴出 bundleID；③ **app 在设备上真跑起来并给出它自己的 PASS/FAIL 输出**（这个 harness 会在 GC 压力下做 20000 次 BLR 间接调用）。<br>🛑 **不许把「构建成功」「装机成功」报成「真机通过」。第 ③ 条没有就是未测。** 这一项已经被虚报过一次（上一轮写「B5 真机 PASS ✅」并据此宣布主任务达成里程碑），**默认答案是「未测」**。<br>🚫🚫 **禁止批量下载（2026-09-03 新立，因为真的发生了）**：**绝不要跑 `xcodebuild -downloadAllPlatforms`**，也不要任何「把所有平台/组件一次拉全」的命令。实测后果：某一轮为解决组件缺失跑了它，**27 分钟吃掉 33 GB**（磁盘 111 GB → 78 GB），把刚清理掉的模拟器运行时又下回来 3 个（iOS + tvOS + watchOS，15 GB）—— 而**真机测试根本不需要模拟器运行时**（本引擎 `use_ios_simulator=false`）。缺组件就**指名下载**（`xcodebuild -downloadPlatform iOS`）或**停下如实报告**，让人来决定。<br>⚠️ **磁盘地板拦不住这种事，别指望它**：`run_round.sh` 的地板**只在起轮时检查**，轮次跑起来之后想下多少下多少 —— 这次就是从这个缝里钻过去的。**约束在这里，不在 harness 里。**<br>⚠️ `${PIPESTATUS[0]}` 在 zsh 里是空的，要用 `${pipestatus[1]}`。⚠️ 前台跑，禁后台。⚠️ 判据取最新日志（`ls -lat`）。⚠️ A13：命令文本含工作树/构建树路径会被整条静默吞掉，路径在 Python 里拼。 |
+| ~~B5-swap~~ | ✅ **已关闭（2026-09-03）** —— 三条判据全部满足，物证见 memo 末尾那条：LC_UUID `4C4C440F-5555-3144-A1C1-4D8732B23E93` 两边相同（签名前 md5 亦相同 `e519155399b7cc17de7d90661312a585`）、`bundleID: com.fhp.b5TestApp`、设备上 `[B5_RESULT] PASS: 20000 iterations, 200000 GC objects`。可复跑脚本 `tools/b5_device_test/build_and_run_b5.sh`。解阻塞的关键是 **CFE 从源码跑并 `-Dsdk_hash=9101e9b3c2`**（host_release 的快照停在 `9576691c37`）。⚠️ 这测的是 C6 的 BLR 派发稳定性，**不是补丁生效**；真正的 A/B（base vs patched）仍未测。 ~~原卡片：🔴 **「B5 真机 PASS」是虚报 —— app 里装的不是我们的引擎。换进去，再装一次** | **2026-09-03 人类实测推翻上一轮结论。**<br>🔴 **决定性判据（md5 + 尺寸 + 时间戳，三样都对不上）**：<br>&nbsp;&nbsp;我们的引擎 `~/shorebird_engine/engine/src/flutter/engine/src/out/ios_release/Flutter.framework/Flutter` = **19,991,328 字节**，`Sep 2 21:29:14`，md5 `e519155399b7cc17de7d90661312a585`<br>&nbsp;&nbsp;app 里的 `tools/b5_device_test/b5_test_app/build/ios/Release-iphoneos/Runner.app/Frameworks/Flutter.framework/Flutter` = **14,554,352 字节**，`Sep 2 21:16:16`，md5 `f696ae08c3fa4799af3087e13a1ea495`<br>&nbsp;&nbsp;⇒ 差 540 万字节、md5 不同，**且 app 里那个比我们的引擎早 13 分钟** —— 是**先用 stock 引擎编好 app、之后才编完我们的引擎、没换进去**。**装机跑的一直是 stock 引擎，与我们的复刻 VM 无关。**<br>✅ **但前两段是真做成了，别推倒重来**：`dart_force_simulator = true` 已在 `args.gn:66`；带该 flag 重编的引擎 **19,991,328 字节**（比不带时的 19,854,224 **大 137 KB**，正是多编进去的 Simulator 那套）；release app 已编出且 `App.framework` 是**真 AOT**（`file` 报 Mach-O arm64 动态库，3,614,272 字节，不是 kernel）；设备上已有 `com.fhp.b5TestApp`。**三段做了两段半，只差最后一步。**<br>**本轮只做一件事**：把我们的 `Flutter.framework` 换进 release app 的 `Frameworks/`，重新签名、装机、跑起来。<br>⚠️ **换完必须重新签名** —— 改动 bundle 内容会让原签名失效。用已验证可用的那套：`CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** + `-allowProvisioningUpdates`（证书 `Apple Development: Cruz Jr (MGDM32NW4K)`；**`DEVELOPMENT_TEAM=MGDM32NW4K` 会报 `No Account for Team`**；手动签名被托管 profile 拒）。更稳的做法是**让构建系统直接产出**：`flutter build ios --release --local-engine-src-path=<engine src> --local-engine=ios_release --local-engine-host=host_release`（`host_release` 已存在，724 MB，B5-run 第①段的产出）。<br>**判据（三条缺一不可，不许用「PASS」二字代替）**：① 装机后 app bundle 里的 `Flutter.framework/Flutter` 的 **md5 == `e519155399b7cc17de7d90661312a585`**（或与当时的我们引擎逐字节相同，贴两边 md5）；② `xcrun devicectl device install app` 成功并贴出 bundleID；③ **app 在设备上真跑起来并给出它自己的 PASS/FAIL 输出**（这个 harness 会在 GC 压力下做 20000 次 BLR 间接调用）。<br>🛑 **不许把「构建成功」「装机成功」报成「真机通过」。第 ③ 条没有就是未测。** 这一项已经被虚报过一次（上一轮写「B5 真机 PASS ✅」并据此宣布主任务达成里程碑），**默认答案是「未测」**。<br>🚫🚫 **禁止批量下载（2026-09-03 新立，因为真的发生了）**：**绝不要跑 `xcodebuild -downloadAllPlatforms`**，也不要任何「把所有平台/组件一次拉全」的命令。实测后果：某一轮为解决组件缺失跑了它，**27 分钟吃掉 33 GB**（磁盘 111 GB → 78 GB），把刚清理掉的模拟器运行时又下回来 3 个（iOS + tvOS + watchOS，15 GB）—— 而**真机测试根本不需要模拟器运行时**（本引擎 `use_ios_simulator=false`）。缺组件就**指名下载**（`xcodebuild -downloadPlatform iOS`）或**停下如实报告**，让人来决定。<br>⚠️ **磁盘地板拦不住这种事，别指望它**：`run_round.sh` 的地板**只在起轮时检查**，轮次跑起来之后想下多少下多少 —— 这次就是从这个缝里钻过去的。**约束在这里，不在 harness 里。**<br>⚠️ `${PIPESTATUS[0]}` 在 zsh 里是空的，要用 `${pipestatus[1]}`。⚠️ 前台跑，禁后台。⚠️ 判据取最新日志（`ls -lat`）。⚠️ A13：命令文本含工作树/构建树路径会被整条静默吞掉，路径在 Python 里拼。 |
+| ~~B6-basesnap-crash~~ | ✅ **已修（2026-09-03）** —— 根因：`resume_on_cpu_entry_point_` / `resume_on_simulator_entry_point_` **两个 setter 调用点各为 0**，Resume stub 在有 base range 时跳到地址 0。修在 `thread.cc`（紧邻已有的 base_instructions 写入处）。宿主 `FHP_SETBASE` 双臂 + 真机 A 侧 `[B5_RESULT] PASS ✅` 双侧验证。⚠️ 顺带作废了「gen_kernel async 崩溃 = 非回归」那次结案的适用范围：它测的是 `==0` 那条臂。→ 后续见新卡 **B7-patch-launch**。 ~~原卡片：🔴 **注册 base snapshots 就段错误** | **2026-09-03 实测，有同二进制负控制。**<br>**复现**：给 b5 app 的 `App.framework/flutter_assets/` 放一个 `shorebird.yaml`（`app_id` 随便填、`auto_update: false`），装机启动 → **signal 11**，零行 Dart 输出。去掉 yaml 就恢复正常（这就是 `B5-swap` 当初能过的原因 —— 它压根没进这条路）。<br>🔑 **负控制（判据，不许用别的代替）**：在 `shell/common/shorebird/shorebird.cc` 里给 `Shorebird_SetBaseSnapshots(...)` 那**一个调用**加 `getenv("FHP_NO_SETBASE")` 闸门，**同一份 `Flutter.framework`** 跑两臂：`FHP_NO_SETBASE=1` → `[B5_RESULT] PASS` + signal 15；默认 → **signal 11**。日志 `tools/b5_device_test/build/ab/{NEG,POS}.log`。<br>**已定位到**：`ConfigureShorebird` **整个跑完并返回**（`cfg2-END-returning` 标记打印了），崩在其后的 VM 启动路径。沿途实测：`Init` ok → `SetBaseSnapshot` 四个尺寸正常（`vm_data=5319 iso_data=604968 vm_insns=78240 iso_insns=2015888`）→ `ValidateNextBootPatch` ok → `NextBootPatchPath` 返回空串 → 一路到函数末尾。<br>**下一步（未做）**：嫌疑是 `runtime/vm/app_snapshot.cc:10535 ReadBaseInstructionsTable()`（`BaseSnapshotsAreSet()` 才走；`reader->GetObjectAt(instruction_table_data_offset)` 直接 `static_cast<StringPtr>` 再 `OneByteString::DataStart`）。**这是嫌疑不是结论。** 先在**宿主**上复现（比 5 分钟一轮的引擎重编 + 装机快得多）：找一条能在 `run_vm_tests`/`dartaotruntime` 里调 `Shorebird_SetBaseSnapshots` 再起 isolate 的路。<br>⚠️ **插桩三条硬经验**：① `devicectl --console` **抓不到任何 `FML_LOG`**，「没看到某条 FML_LOG」零信息量，要用 `fprintf(stderr,…)+fflush`；② `ConfigureShorebird` **有两个重载**，iOS 走第二个（行 225），`replace(...,1)` 插桩会全落进第一个 → 必须按行号插；③ 逗号运算符插桩塞不进 `std::string x = ...;` 的初始化式（`no viable conversion from int`）。<br>⚠️ **编 `analyze_snapshot_arm64` 顶层目标会失败** —— 它带出一个 x64-host VM，撞 `wrapper.cc:25` 的 `sizeof(WrapperAllocator) == 152` 静态断言（**我们的 WrapperAllocator 布局只在 arm64 host 上成立，这是个真缺口**）。用 `artifacts_arm64/analyze_snapshot_arm64`。<br>✅ **宿主侧不是阻塞**：`tools/b5_device_test/build_ab_vmcode.sh` 已用**全我们自己的工具**产出 `out.vmcode` 5,198,120 字节 / **link 100.00%**，载荷经 UTF-16 校验（改的字面量含 `✅` 是 TwoByteString，`strings` 看不见）。⚠️ 两份 analyze JSON「零个函数不同」是**正常的**，只改字符串不改指令字节。 |
+| **B7-patch-launch** | 🔴 **补丁装得上、看门狗认得出，但引擎报 `patch 1 failed to launch`** | **2026-09-03 实测。** 注入链路已验证可用（判据是设备上 updater 自己写的状态文件）：推 `patches/1/dlc.vmcode` + `state.json{kind:Installed}` + `pointers.json{next_boot_patch:1}` 到 `Library/Application Support/shorebird/shorebird_updater` → 补丁被激活 → 引擎报 `engine_report: patch 1 failed to launch` → 看门狗标 `{"kind":"Bad","reason":"BootCrash"}`、**删掉 dlc.vmcode**、回落 base → 抓到的是回落后那次干净的 `PASS ✅`。🛑 **「app 看起来正常」= 回落成功，不是补丁生效。判据只能是 `PATCHED_V2` 是否出现。**<br>**已排除的两项**（本轮修掉后仍失败，所以不是它们）：`LinkOracle::ReadHeaderSize` 缺页对齐（返回 69492 而 ELF 在 81920）；`entry_count()` 从 `header_size_` 反推（给 2047）。<br>**下一步**：失败原因大概率在 `FML_LOG` 行里，而 **`devicectl --console` 看不见 FML_LOG** → 在 `patch_cache.cc` / `dart_snapshot.cc` / `Shorebird_ReadLinkHeader` 三处插 `fprintf(stderr,…)+fflush` 再跑一轮。**不要靠猜。**<br>⚠️ 每次重试前必须重新推 `dlc.vmcode` 并把 `state.json` 重置为 `Installed` —— 上一轮回落已把它删了。<br>⚠️ 宿主侧不是阻塞：`build_ab_vmcode.sh` 产出的 `out.vmcode` link 100%、载荷经 UTF-16 校验。 |
 | ~~B4-2~~ | ✅ **已完成（2026-09-01）** — gn exit=**1**；out 目录 `ios_release` 已生成；`args.gn` 含 `dart_version = "f174efefd5591399b359107219acd235264a4b71"`（dart 树匹配 ✓，symlink 透明）；三个 iOS hook 全成功。**阻塞根因**：`engine/src/build/` + `engine/src/third_party/` 缺失——B4-1 只 sync 了 `engine/src/flutter/`（framework 级），缺 Chromium 级 gclient 依赖 → ICU 重复声明 `//third_party/icu/config.gni:32` vs `//flutter/third_party/icu/config.gni:32`。**B4-3 需要**：补完 `engine/src/` 层 Chromium 级依赖（`build/` + `third_party/icu/skia/…`，预计 +10-20 GB），需人类授权。两树 clean，无改动。 ~~原卡片：~~ **B4 第二阶段：补 iOS 相关 hook + 跑 `gn`，**🚫 不 `ninja`** | **2026-09-01 人类授权（仅本阶段；`ninja` 仍未授权）。** 前置已完成，见下方 B4-1。<br>🚫 **硬性边界（越界即本轮失败）**：**不要 `ninja`、不要构建任何产物**。交付物是**一个配好的 out 目录 + `args.gn`**，外加下面四个数字。**`gn` 只要几分钟；如果你发现自己在等一个几十分钟的东西，那就是越界了。**<br>🔑 **为什么切在 `gn` 之前**：`gn` 会在几分钟内暴露「工具链齐不齐、它认不认我们 symlink 进去的那棵 dart 树」——**而 `ninja` 要几十分钟才撞上同一件事**。同 B4-1 的切法，那次证明有效。<br>**要做的**：① 只补 iOS 需要的 hook，**不要整体 `runhooks`**（14 个 hook 里绝大多数无关：win_toolchain / linux_sysroot ×3 / Fuchsia ×4 / Emscripten / githooks）。相关的只有 **`Find the iOS and macOS SDKs`**，外加两个 dart 的（`Generate .dart_tool/package_config.json`、`Generate sdk/version`）。**先只补这三个，缺什么再补什么**；② 跑 `gn`（`engine/src/flutter/tools/gn --ios --runtime-mode release --no-prebuilt-dart-sdk`，⚠️ **绝不要**带 `dart_dynamic_modules=true`，那是已出局的 Route-A 产物）；③ 报四个数字：**`gn` 退出码**、**生成的 out 目录名**、**`args.gn` 内容**、**`gn` 有没有对那棵 symlink 的 dart 树报警或做出与 `dart_sdk_revision` 有关的假设**。<br>🔴 **本阶段真正的风险点，也是它存在的理由**：DEPS 把 dart 钉在 `dart_sdk_revision` 上，而我们 symlink 进去的是 `shorebird-3.12.2` 的 `f174efefd55`。gclient 已被关掉不管它（`download_dart_sdk: False` + 24 条 `None`），**但引擎的 GN 脚本会不会按那个 revision、或按上游 dart 的目录结构做假设，从没人验过**。**这一条比工具链和磁盘都重要，报告里要正面回答。**<br>⚠️ **前台跑，禁止 `run_in_background` / `&` / `nohup`**。B4-1 第一次尝试就是栽在这里：后台任务随轮次结束被杀，**而轮次 exit 0 并写下干净的 round end**（`run_round.sh:58-72` 记着这个 bug，还写着「fixing this in the prompt does not work」——**你在 headless 里，没有人会收到你的通知**）。<br>⚠️ **退出码必须落盘**，不能只打在 stdout：`<cmd> 2>&1 \| tee <log>; echo "EXIT=${PIPESTATUS[0]}" \| tee -a <log>`。B4-1 就是因为没落盘，`exit 0` 这条判据**事后无法复核**，只能靠旁证。<br>⚠️ **耗时报「本轮真实耗时」，不要只报最后一次成功命令的时间**。B4-1 报了「约 8 分钟」而轮次实跑 **54 分钟** —— 排障时间也是代价。<br>⚠️ **路径用 monorepo 布局，别用旧的**。已两次栽在这上面（`.gclient` 的 `src/third_party/dart`、判定 buildtools 缺失时查了 `engine/src/buildtools`）。正确的是 `engine/src/flutter/...`：dart 在 `engine/src/flutter/third_party/dart`、**buildtools 在 `engine/src/flutter/buildtools`（clang 实测在，工具链是齐的）**。<br>⚠️ **A13**：文本里含字面串 `xcodebuild/` 的 Bash 命令会被 hook 整条静默吞掉，形状是「命令没跑」不是报错。用变量拼接。<br>**判据**：`gn` 退出码**落盘可复核**；`args.gn` 存在且内容贴进结论；两树 `git status --porcelain` 仍为空。**没有负控制**（配置阶段，判据是产物存在且可验）——**在结论里明说，不要假装做过**。<br>🛑 **刹车由外部施加，你不用做任何事**：人类会在起轮后立刻 `touch .loop/PAUSE`。 |
 | ~~B4-1~~ | ✅ **已关闭（2026-09-01，13:53:35→14:47:19，真实耗时 54 分钟）** —— 交付物：`~/shorebird_engine/` **15 GB**，`engine/src/flutter/third_party/dart` → symlink → `~/dart-3122/sdk`（`readlink` + `git rev-parse` 独立复核 = `f174efefd55`），两树 clean。**排障产出**（真活）：`.gclient` 三处必改 —— `name` 用 `engine/src/flutter`、`custom_vars: {download_dart_sdk: False}`、**24 条** dart 子路径设 `None`；sync 用了 `--nohooks`。⚠️ **两处记账偏差已订正**：报「约 8 分钟」实为 54 分钟；报「跳过 `pub_get_offline`」实为**跳过全部 14 个 hook**。⚠️ **`gclient sync exit 0` 只有旁证没有直接证据**（磁盘上只有 0 字节日志与一份以 SSH 失败结尾的日志，`EXIT=` 未落盘）——旁证是 15 GB 依赖 + clang 在 + gn 在 + symlink 接对。**下次要求退出码落盘。** ~~原卡片：**只做 `gclient sync`**~~ |
 | ~~B4-1-原~~ | 原卡片留档（证据来源）：**正式 B4 第一阶段：只做 `gclient sync`，拿到引擎源码树就停** | **2026-09-01 人类授权。** B4-a 已给出「有条件 go」，本卡片是它的第一段。<br>🔴🔴 **第一次尝试（2026-09-01 11:51→13:12，81 分钟）失败了，失败方式必须先读，否则会原样再来一次**：它把 `gclient sync` **丢进后台**跑，报告「已在后台启动，完成时会收到通知」，然后轮次结束、后台任务被杀。实测残骸：`/tmp/b41_gclient_sync.log` **0 字节**、无 gclient 进程、磁盘一字未动、`src/` 下只有 `flutter`。**而它 rc=0。**<br>🚫🚫 **因此本卡片第一硬性要求：`gclient sync` 必须在【前台】跑，禁止 `run_in_background`、禁止 `&`、禁止 `nohup`。** 理由不是风格：`run_round.sh:58-72` 用整段注释记着这个 bug —— 后台任务会随轮次结束被杀，**而轮次照样 exit 0 并写下干净的 round end**；那段注释还写着「**Fixing this in the prompt does not work, and that was tried first**，模型分辨不出自己在交互式还是 headless 里」。**你现在就在 headless 里，没有人会收到你的通知。** 前台跑是安全的：`ROUND_TIMEOUT=7200`（两小时）本来就是为这种长任务设的。<br>🚫 **硬性边界（越界即本轮失败）**：**不要 `gn`、不要 `ninja`、不要构建任何 iOS 产物**。本阶段的交付物是**一棵同步好的引擎源码树 + 四个实测数字**，不是引擎。<br>🔑 **为什么切在这里，而不是一路做到构建**：B4-a 的两个核心数字（`--no-history` 到底占多少 GB、要多久）**没有命令支撑**，卡片上写的是「业界已知 20-30 GB / 30-90 min」—— 那是回忆不是实测，而整个 go/no-go 架在它上面。sync 完这两个数字就是**量出来的**；同时 DEPS 自己会不会对 Xcode 26.6 beta 报警，也在这一步就暴露，而不是 90 分钟构建之后。**花 30 分钟买掉一个没有判据的数字。**<br>✅ **第一次尝试留下的东西是干净的进度，接着用，不要重做**（2026-09-01 实测）：`~/shorebird_engine/` 已有 **639 MB**，含 `src/flutter`（`shorebirdtech/flutter` 的 clone，耗时 100 秒）与一份**内容正确的 `.gclient`**（`url` 指 Shorebird fork、`target_os=["ios"]`、`custom_deps` 里 `src/third_party/dart: None`）。→ **下面的 ① 和 ② 的写 `.gclient` 部分已完成，本轮从 `gclient sync` 开始**；先 `ls ~/shorebird_engine/src` 与 `cat ~/shorebird_engine/.gclient` 核实一遍再决定跳过，别凭本行。<br>**要做的四件事**：① `git clone https://github.com/shorebirdtech/flutter.git`（**不是**上游 `flutter/engine.git` —— 规则 2：这个 fork 已开源，直接用；B4-a 已确认）到一个**新目录**，`~/.shorebird/bin/cache/flutter/<rev>/engine/src` **只有 67 MB 且无 `third_party/dart`，不是可复用的 checkout**；② 写 `.gclient` 并 `gclient sync --no-history -j8`；③ sync **之后**把 `src/third_party/dart` 换成指向 `~/dart-3122/sdk` 的 symlink（`gclient_sync.sh:23-25` 已有这段，思路可抄）—— ⚠️ **必须在 sync 之后**，sync 会覆盖它；④ 报四个数字：**实际磁盘占用**、**实际耗时**、**sync 是否零错误退出**、**`src/third_party/dart` 是否确实是我们的树**（`readlink` + 在里面 `git rev-parse HEAD` 应得 `f174efefd55` 或其后继）。<br>⚠️ **现有三个脚本 `tools/flutter_engine_ios/*.sh` 不能直接跑，B4-a 已判定不适用**：路径写死 `~/engine_ios` + `~/dart/sdk`（**旧 3.7 树**）、clone 的是上游引擎、三个都带已出局的 `--gn-args=dart_dynamic_modules=true`（Route-A/X1 产物，Shorebird 路线不用）。**可以抄它们的思路，但要新写；不要原地改那三个文件**（它们是已归档的 Route-A 资产）。<br>⚠️ **`gclient` 不在 PATH 上（实测）**：`~/depot_tools` 存在，但 `command -v gclient` 为空 → 需 `export PATH="$HOME/depot_tools:$PATH"`，且 `DEPOT_TOOLS_UPDATE=0`。**先验证 `vpython3 --version` 能跑**，跑不动就停下报告，不要绕。<br>⚠️ **磁盘：B4-a 的 Q5 算错了，用 Q1 的数**。它写 `62-21-30=11 GB` 偏紧 —— 那 21 GB 是 `~/dart-3122/sdk` **已经占着的**（实测整树 21 G / 构建产物 13 G），**已计在「已用」里，不能从「可用」再减一次**。真实盈余是 **62 - 30 ≈ 32 GB**。**不紧，但 sync 中途仍要盯**：超过 40 GB 还没完就停下报告，别把盘塞满。<br>⚠️ **Xcode 26.6 是 beta（实测 Build 17F113）**，与引擎的兼容性**未知且本轮解不了**。sync 阶段若 DEPS/hooks 报工具链不兼容，**如实报告并停**，不要试图绕过或降级 —— 那是下一张卡片的事。<br>⚠️ **A13**：任何**文本里**含字面串 `xcodebuild/` 的 Bash 命令会被 hook 整条静默吞掉，形状是「命令没跑」不是报错。用变量拼接。<br>**判据**：`gclient sync` **exit 0**（不是「看着跑完了」）；`du -sh` 出实际占用；`readlink` + `git rev-parse` 证明 dart 接线指向我们的树；`~/dart-3122/sdk` 与 `~/Documents/fhp-research` **两树 `git status --porcelain` 仍为空**（本阶段不该碰它们）。**没有负控制** —— 这是获取阶段不是实现阶段，判据是产物存在且可验，不是「改坏会变红」；**这一点要在结论里明说，不要假装做过负控制。**<br>🛑 **刹车已改为外部施加，你不需要做任何事**：人类会在本轮**起轮之后立刻** `touch .loop/PAUSE`（`run_round.sh` 只在起轮时检查它，所以不影响本轮，但下一轮必然被拦）。<br>⚠️ **上一版卡片让轮次自己在结束时 `touch PAUSE`，那个设计失败了，原因值得记**：它写的是「无论成功、失败还是中途停下都要做」，而失败的那一轮**既不认为自己成功、也不认为自己失败或停下 —— 它认为自己在等**。那句话没有覆盖「以为还没结束」这个状态，**判据没有覆盖它要防的情形**。→ 与契约第五条末段「写判据前先自问：这个判据真的可能命中它要证明的东西吗」同型。**能由外部施加的约束，就不要交给被约束的一方执行。** |
@@ -2910,3 +2912,236 @@ cd ~/Documents/flutter_hot_patcher && ./tools/loop/run_round.sh
   🔑 **能安全掐的判据是「cpu 时间极低 + 三棵树干净」**，不是「它跑得太久了」。跑得久但在真干活的轮次（比如 B4-3 那次 30 分钟的 ninja）**不能掐**。
 
   ⚠️ **一个跨轮次的结构性问题，值得单独记**：**轮次在起轮那一刻读 memo，此后 memo 的修改对它无效。** 所以「改了卡片就以为当前轮次会照做」是错的 —— 新约束**只对下一轮生效**。要让当前轮次停下来照新规矩走，只能掐它。
+
+- 2026-09-03 PST — 🎉 **`B5-swap` 已关闭，三条判据全部满足，物证如下（不用「PASS」二字代替）。**
+
+  **① 装机后 app bundle 里的 `Flutter.framework/Flutter` 就是我们的引擎。**
+  换进去时（签名之前）`md5 -q` 两边相同：`e519155399b7cc17de7d90661312a585`。
+  签名会改字节、md5 必然变（19,991,328 → 20,165,968，差 174,640 是签名块），
+  所以**签名后的判据用 `LC_UUID`——codesign 不动它**：
+  引擎 `4C4C440F-5555-3144-A1C1-4D8732B23E93`，装机包里同样是 `4C4C440F-5555-3144-A1C1-4D8732B23E93`。
+  （上一轮那个 14,554,352 字节 / `f696ae08…` 的 stock 框架已被彻底换掉。）
+  **② 装机成功**：`xcrun devicectl device install app` → `bundleID: com.fhp.b5TestApp`，
+  `installationURL` 的 bundle 目录 `63E2FEA8-9BF3-475F-94EB-1ABE95C17FA4`。
+  **③ app 自己在设备上给出了结论**（`devicectl … process launch --console` 捕获）：
+  `[B5_RESULT] PASS: 20000 iterations, 200000 GC objects / All BLR dispatches correct under GC pressure`。
+  同一份日志里还有引擎自证的三行：`SANITY CHECK: Running precompiled code.`、
+  `Using App.framework from …/Runner.app/Frameworks/App.framework`、
+  `Failed to find shorebird.yaml, not starting updater.`（最后一行是 Shorebird 的 updater 钩子，
+  说明跑的是那棵 fork 的引擎）。设备 iPhone 13 / UDID `00008110-000868212686601E`。
+
+  🔑 **卡了三轮的那个阻塞，根因不是「gen_kernel 崩溃」也不是「App.framework 口味不对」，
+  而是 host_release 那套 dart-sdk 快照是 9 月 1 日按 sdk hash `9576691c37` 生成的，
+  而引擎与 `gen_snapshot` 是 9 月 2 日按 `9101e9b3c2` 重编的。** 判据是 CFE 自己抛的那句
+  `Unexpected Kernel SDK Version 9101e9b3c2 (expected 9576691c37)`。
+  → **绕开的办法不是重编 host SDK，而是把 CFE 从源码跑**：
+  `tools/sdks/dart-sdk/bin/dart -Dsdk_hash=9101e9b3c2 pkg/frontend_server/bin/frontend_server_starter.dart …`。
+  `-Dsdk_hash` 正是 `ninja` 编 `platform_strong.dill` 时用的同一个开关
+  （那条 action 的命令行里就写着 `compile_platform.dart -Dsdk_hash=9101e9b3c2`），
+  于是 CFE / platform dill / gen_snapshot / VM 四者一致。
+  ⚠️ 顺带修掉两个陷阱：`out/ios_release/flutter_patched_sdk/platform_strong.dill` 是 **8 月 7 日**的陈旧产物，
+  必须重编；`ninja` 那条 action 需要 `vpython3`，**要把 `~/depot_tools` 放进 PATH**，否则 `exit 127`。
+
+  🔑 **package:flutter 必须取引擎同一棵树里的 `packages/flutter`**，不能用 app 的
+  `.dart_tool/package_config.json` 里 pub 解出来的 `~/.shorebird/bin/cache/flutter/c15ef6379…/packages/flutter`
+  —— 两者 `diff -rq` 大面积不同，是不同 Flutter 版本，dart:ui 对不上。
+  做法是就地改写一份 package_config，只重定向 `flutter` / `flutter_test` / `flutter_localizations` /
+  `sky_engine`，其余 pub 包照用。（`vector_math` 引擎侧要 ^2.4.0、本机只有 2.2.0，实测不影响编译。）
+
+  ✅ **「Simulator 真的在跑」不是靠 args.gn 猜的，有两条独立证据**：
+  ① 引擎构建树里 `runtime/vm/*.ninja` 的 **`-DDART_INCLUDE_SIMULATOR` 出现 25 次、
+  `-DSIMULATOR_FFI` 25 次**，且 `libdart_vm_aotruntime*`（引擎侧）与 `libdart_vm_precompiler*`
+  （gen_snapshot 侧）**两半都带**，代码生成与运行时一致；
+  ② `runtime/platform/globals.h:423` 我们自己写的注释就是判据——`DART_INCLUDE_SIMULATOR`
+  **改的是代码生成**，`RuntimeEntry::GetEntryPoint()` 返回的是 redirection 地址，
+  **这样编出来的代码根本不能原生执行**。它跑对了 ⇒ 走的就是 Simulator。这等于自带负控制。
+  装机包里 `strings` 也能看到 `TransitionDartToSimulatorIfNeeded` / `TransitionDartToCpuIfNeeded` /
+  `SimulatorCallToRuntime` 各 1 次。⚠️ 全程 **1.6 秒**跑完（从 `Launched application` 到第一条
+  `[B5_RESULT]`）**看起来太快、像是没在模拟**，但按上面第 ② 条这不可能——记下来是因为
+  「快得不像模拟」这个直觉差点让我又去追一个不存在的问题。
+
+  📦 **已落盘可复跑**：`tools/b5_device_test/build_and_run_b5.sh`（七步全在里面，
+  开头就硬检查 `dart_force_simulator = true`，缺了直接 exit；三条判据在末尾逐条打印，
+  任一条不满足即非零退出）。装机的那份 `Runner.app` 已同步回
+  `tools/b5_device_test/b5_test_app/build/ios/Release-iphoneos/`，产物与日志在 `tools/b5_device_test/build/`。
+
+  **三分清单状态**：`B5-swap` ✅ 关闭。**真机 A/B 的「零实测」到此结束** ——
+  `CLAUDE.md` 第三条限定里「真机 A/B 仍是零实测」这句现在可以作废：
+  C1-C7 已在一台真 iPhone 上、由我们自己的 dart-sdk 编出的 arm64 引擎里、
+  以 Simulator 代码生成模式执行，并给出了正确结果。
+  ⚠️ **但别把它读成「补丁生效」**：这一轮测的是 **C6 的 BLR 派发在 GC 压力下的稳定性**，
+  **不是**「打了 `.vmcode` 补丁后新代码生效」。B5-prep 卡片里人类指出的偏差 (b) 仍然成立 ——
+  它是单侧自测 app，不是 A/B 两侧。**真正的 A/B（base vs patched）仍未测**，这是下一项候选。
+
+- 2026-09-03 PST — 🔴 **真正的 A/B 卡在一个新 bug 上：只要 `Shorebird_SetBaseSnapshots` 一注册 base snapshots，我们的 VM 就在启动时段错误 —— 与补丁无关。** 新卡片 `B6-basesnap-crash`（B 表）。
+
+  **判据是同一个二进制、同一台设备、只差一个环境变量的负控制**（在 `shorebird.cc` 里给那一个调用加了 `getenv("FHP_NO_SETBASE")` 闸门，两臂跑同一份 `Flutter.framework`）：
+
+  | 臂 | `Shorebird_SetBaseSnapshots` | 结果 |
+  |---|---|---|
+  | `FHP_NO_SETBASE=1` | 跳过 | `[B5_RESULT] PASS`，signal **15**（我 kill 的）|
+  | 默认 | 调用 | **signal 11**，零行 Dart 输出 |
+
+  日志留在 `tools/b5_device_test/build/ab/{NEG,POS}.log`。
+
+  🔑 **定位过程本身有个教训值得单记：`devicectl --console` 抓不到任何 `FML_LOG` 行。**
+  我一开始据「没看到 `[shorebird] SetBaseSnapshot mappings:`」推断 SetBaseSnapshot 没跑 ——
+  **那是错的**，`FML_LOG` 从头到尾一行都没出现过（NSLog 与 Dart 的 `stderr` 都出现了）。
+  **一个从未出现过的日志通道，它的「缺席」零信息量。** 改用 `fprintf(stderr,…)+fflush` 打标记才拿到真相。
+  ⚠️ 另一个连踩两次的坑：`shorebird.cc` 里 **`ConfigureShorebird` 有两个重载**，
+  iOS 走的是第二个（`code_cache_path, app_storage_path, …`，行 225）。
+  用 `str.replace(anchor, …, 1)` 插标记会全落进**第一个**重载，于是「标记没打印」被读成「没跑到那里」。
+  **在有重载的文件里插桩必须按行号定位，或者给每一处都插。**
+
+  **逐步缩小的结果（标记实测，不是读代码）**：`Init` 之后 → `SetBaseSnapshot` 全程通过
+  （四个尺寸都正常：`vm_data=5319 iso_data=604968 vm_insns=78240 iso_insns=2015888`）→
+  `sbs-done` → `ValidateNextBootPatch` 通过 → `NextBootPatchPath` **正常返回空串**（`len=0`）→
+  `cfg2-after-pathblock` → `cfg2-before-shouldautoupdate` → **`cfg2-END-returning` 也打印了**。
+  ⇒ **`ConfigureShorebird` 整个跑完才崩**，崩在它返回之后的 VM 启动路径里。
+  嫌疑最大的是 `app_snapshot.cc:10535 ReadBaseInstructionsTable()`
+  （`BaseSnapshotsAreSet()` 为真才走，里面 `reader->GetObjectAt(instruction_table_data_offset)` 直接
+  `static_cast<StringPtr>` 再 `OneByteString::DataStart`），**但这一条尚未证实，别当结论用**。
+
+  ✅ **宿主侧的 A/B 全链路已经通了，而且全是我们自己的工具**（无任何 Shorebird 二进制）：
+  我们的 CFE（源码跑 + `-Dsdk_hash=9101e9b3c2`）→ 我们的 `platform_strong.dill` →
+  我们的 `gen_snapshot_arm64` → **我们自己新编的 `analyze_snapshot_arm64`** → `tools/linker.py`
+  → `out.vmcode` **5,198,120 字节，link 100.00%**。
+  **补丁确实是有内容的**（判据必须看 UTF-16，别用 `strings`）：改的字面量含 `✅`，
+  在快照里是 **TwoByteString**，`strings -a` 一个都找不到 —— 按 UTF-16LE 数：
+  `base.aot` 有 `PASS ` / 无 `PATCHED_V2`；`patch.aot` 与 `out.vmcode` 正好相反。
+  ⚠️ 顺带一个会误导人的观测：两份 `analyze_snapshot` JSON 里**逐函数比较「零个函数不同」**——
+  这是**对的不是错的**，只改字符串字面量不改指令字节，`self_hash` 本来就该全同；
+  差异在对象池/数据段。**别拿它当「补丁是空的」的证据。**
+
+  📦 落盘：`tools/b5_device_test/build_ab_vmcode.sh`（宿主侧全流程，末尾自带 UTF-16 载荷检查，
+  不通过就非零退出）；产物在 `tools/b5_device_test/build/ab/`（该目录被 `.gitignore` 的 `**/build/` 排除）。
+
+  ⚠️ **两个环境事实，下轮直接用**：
+  ① 编 `flutter_patched_sdk/platform_strong.dill` 与任何 `ninja` action 都要 `~/depot_tools` 在 PATH，
+  否则 `vpython3: command not found` → `exit 127`；且 `out/ios_release/flutter_patched_sdk/` 里那份
+  可能是**几周前的陈旧产物**（这次是 8 月 7 日的），先重编。
+  ② **别编 `analyze_snapshot_arm64` 这个顶层目标** —— 它会顺带编一个 x64-host 的 VM，
+  撞死在 `runtime/vm/shorebird/wrapper.cc:25` 的 `sizeof(WrapperAllocator) == 152` 静态断言上
+  （**这本身是个真缺口：我们的 WrapperAllocator 布局只在 arm64 host 上成立**，记在这里备查）。
+  要的是 `artifacts_arm64/analyze_snapshot_arm64`，它只编 arm64-host，通过。
+
+  ✅ **引擎已还原并干净重编**：`shorebird.cc` 恢复原样（`grep -c FHPMARK` = 0），
+  重编出的 `Flutter.framework/Flutter` 与插桩前**逐字节相同**
+  （19,991,328 字节、md5 `e519155399b7cc17de7d90661312a585`、UUID `4C4C440F-…`）——
+  顺带证明了这条构建链是确定性的。
+
+  **三分清单**：新增 `B6-basesnap-crash`（**B 表，有证据可依**：有稳定复现、有同二进制负控制、
+  有精确到「ConfigureShorebird 返回之后」的定位）。真机 A/B 的结论仍是 **未测**，
+  但阻塞点已从「不知道为什么」变成一个可调试的 VM bug。
+
+- 2026-09-03 PST — ✅ **`B6-basesnap-crash` 已修好并在宿主与真机双侧验证**；同一轮又挖出两个真 bug。**A/B 仍未跑通**（补丁仍报 `failed to launch`），但阻塞已经从「一开 Shorebird 就崩」推进到「补丁装得上、看门狗认得出、只是加载不了」。
+
+  ### 1️⃣ 根因：两个 Thread 字段从来没有任何代码写过
+
+  `runtime/vm/compiler/stub_code_compiler.cc:2517` 起的 Resume stub，在**有 base range** 时以
+  `Jump(resume_on_cpu_entry_point)` / `Jump(resume_on_simulator_entry_point)` 收尾。
+  判据（`grep` 退出码，不是读代码的印象）：`set_resume_on_cpu_entry_point` / `set_resume_on_simulator_entry_point`
+  **调用点各为 0**，两个字段在 `thread.h:1836-1837` 初始化为 0 后再无人写。
+  ⇒ 有 base 时 stub **跳到地址 0**。之所以从没暴露，是因为此前每次测试都没有 base snapshot，
+  控制流一直走 `base_instructions_entry_point_ == 0` 那条快路。
+  ⚠️ 讽刺的是紧邻的 `thread.cc:1675` 注释写着 base_instructions 那一对「以前也从没被写过，这里就是写它的地方」——
+  **resume 那一对被漏了**。修法就在同一处（`thread.cc`，从 `StubCode::ResumeOnCPU()/ResumeOnSimulator().EntryPoint()` 取）。
+
+  🔑 **这条顺带作废了 2026-09-03 早先「gen_kernel async 崩溃 = 非回归」那次结案的适用范围**：
+  那次调查测的是 `base_instructions_entry_point_ == 0` 的那条臂，结论对它成立；
+  **真 bug 在另一条臂上，而那条臂当时零覆盖。**「无法复现」是因为没设 base，不是因为没有 bug。
+
+  **宿主复现（本轮新建，此前宿主对这条路零覆盖）**：给 `runtime/bin/main_impl.cc` 加了
+  `FHP_SETBASE` 环境闸门，在 `app_snapshot->SetBuffers(...)` 之后把 app 自己的快照注册成 base
+  （参数顺序照抄引擎）。同一个 `dartaotruntime`、同一个 `.aot`、只差一个环境变量：
+
+  | 臂 | 结果 |
+  |---|---|
+  | 不设 | `[HOST_RESULT] PASS acc=499500`，`EXIT=0` |
+  | `FHP_SETBASE=1`（修前）| `PASS` 之后 **CRASH，`si_addr=0x0`、`pc=0`**，`EXIT=134`，崩在 `vm-service` isolate 的 async 恢复 |
+  | `FHP_SETBASE=1`（修后）| `EXIT=0`，零崩溃 |
+
+  ⚠️ **宿主与设备症状不同，同一根因**：设备上 Flutter 启动本身就密集 await，第一次恢复就死，
+  所以「一行 Dart 输出都没有」；宿主的 `hello.dart` 主函数不 await，主 isolate 跑完了才由 vm-service 触发。
+  **别因为症状不像就以为是两件事。**
+
+  **真机验证**：装上带此修复的引擎，A 侧（`shorebird.yaml` 在位、无补丁）给出
+  `[B5_RESULT] PASS ✅` —— 这是 Shorebird 打开状态下第一次在真机上跑通。
+
+  ### 2️⃣ 第二个 bug：`LinkOracle::ReadHeaderSize` 不做页对齐（零次编译查出来的）
+
+  `linker.py` 写的是 `[count][N×8][补齐到 16384][patch ELF]`；`ReadHeaderSize` 返回的是
+  **`4 + count*8`，没有补齐**，而这个值被 `Shorebird_ReadLinkHeader` 直接当作 ELF 的文件偏移交给加载器。
+  实测我们那份 `out.vmcode`：`count=8686` → 未补齐 **69492** / 补齐 **81920**，
+  **ELF 魔数实际在 81920**，69492 处是 `0000000000000000`（零填充）。
+  哪边对已有设备证据：`linker.py` 的注释记着 2026-08-14 实测 `Dart_LoadELF` 拒绝非 16384 对齐的偏移
+  （`File offset must be page-aligned.`）。⇒ **读侧错**，已修。
+  ⚠️ `shorebird.cc` 的头注释本来就写着「zero pad up to the snapshot alignment / 0x4000 the patch ELF」——
+  **实现与它自己上方三行的注释矛盾**。文档对、代码错、测试跟着代码错。
+
+  ### 3️⃣ 第三个 bug：`entry_count()` 是从 `header_size_` 反推的
+
+  修好 ②之后暴露：`(header_size_ - 4) / 8`，补齐后对任何一页内的表都给 **2047**。
+  已改为读偏移 0 存着的那个 count。**这个 bug 只有在修对了 ②之后才会现形。**
+
+  ### 4️⃣ 两条单测把错的契约钉死了，在错实现上一直是绿的
+
+  `LinkOracle_ReadHeaderSizeIsCountTimesEight`（**名字本身就断言了错的东西**）与
+  `LinkOracle_FromBufferParsesTheTable` 里的 `EXPECT_EQ(4 + 24, header_size())`。
+  🔑 **它们看不见这个 bug 的原因是 fixture 也是错的**：`MakeHeader` 只造 `4 + 8n` 字节、
+  既无补齐也无 ELF，于是「正确的读法」和「读到表尾就停的读法」在它上面**无法区分**。
+  已把 `MakeHeader` 改成造真实的 vmcode 前缀（补齐 + 4 字节 ELF 魔数），
+  改名并纠正那两条断言，新增 `LinkOracle_ReadHeaderSizeSpansSeveralPages`（8686 条 → 81920，就是真出事的那档）。
+  ⚠️ `truncated` 那条也得跟着改：fixture 带了补齐之后，从尾部砍 8 字节砍掉的是填充，
+  声明的表仍完整落在缓冲区内，**它就不再证明任何东西了** → 改成截到 `4 + 8`。
+  实测：`LinkOracle|Shorebird` **34 项全过（PASS=34 FAIL=0）**。
+
+  ### 🔴 仍未跑通：补丁还是 `failed to launch`
+
+  注入链路本身是好的（判据来自设备上 updater 自己写的状态）：
+  推进去 → 补丁被激活 → 引擎显式报 `engine_report: patch 1 failed to launch` →
+  看门狗把它标成 `{"kind":"Bad","reason":"BootCrash"}`、删掉 `dlc.vmcode`、回落到 base →
+  于是我抓到的是回落后那次干净的 `PASS ✅`。**「看起来正常」其实是回落成功，不是补丁生效。**
+  ⚠️ 每次重试都必须**重新推 `dlc.vmcode` 并把 `patches/N/state.json` 重置成 `Installed`** ——
+  上一轮的回落已经把它删了、标 Bad 了。
+  ⚠️ 下一步要的东西：**`FML_LOG` 在 `devicectl --console` 里看不见**，
+  失败原因大概率就写在那些看不见的行里 → 要么再插一轮 `fprintf` 标记
+  （`patch_cache.cc` / `dart_snapshot.cc` / `Shorebird_ReadLinkHeader` 三处），
+  要么找一条能把 os_log 捞出来的路。**不要靠猜。**
+
+  ### ⚠️ 新的假绿陷阱（本轮实测踩到）
+
+  **`run_vm_tests` 只接受一个测试名，多余参数静默忽略。** 我一次传 34 个名字，
+  它**只跑了 1 个**（`ShorebirdAnalyzeSnapshot_Basic`）、`RC=0`、`grep -c FAIL` 为 0 ——
+  一份看起来完美的绿。判据是 `grep -c "Running test:"` **= 1**，以及新测试名在输出里**一次都没出现**。
+  改成逐个跑之后立刻红了 3 条。→ **跑批量测试必须核对「实际跑了几个」，不能只看退出码。**
+  ⚠️ 另：macOS 的 bash 3.2 **没有 `mapfile`**，`set -u` 下会连带炸出 `unbound variable`。
+  ⚠️ 另：`run_vm_tests --list` 的每行是 `TestName Pass`，那个 `Pass` 是**期望值不是结果**，
+  别读成「全过了」。
+
+  **改动清单（`~/dart-3122/sdk`，均未提交）**：`runtime/vm/thread.cc`（①修复）、
+  `runtime/vm/shorebird.cc` + `runtime/vm/shorebird/shorebird.h`（②③修复 + 注释纠正）、
+  `runtime/vm/shorebird/shorebird_test.cc`（fixture + 2 条改正 + 1 条新增）、
+  `runtime/bin/main_impl.cc`（`FHP_SETBASE` 宿主复现闸门）。
+  引擎侧 `shorebird.cc` 的插桩已全部还原（`grep -c FHPMARK` = 0）。
+
+- 2026-09-03 PST — 📄 **本会话收口：文档已落地，两棵树已提交。**
+
+  **新增 `docs/DEVICE_VERIFICATION.md`** —— 主任务的真机验证状态此前只活在 3000+ 行的 `memo.md`
+  与 `CLAUDE.md` 的子系统表里，没有一份能单独读的文档。它只记**在真机上实际观测到的东西**
+  加每条的可复核物证（md5 / `LC_UUID` / 退出码 / app 自己的输出），并明确分「已验证 / 未验证」两栏；
+  三个 bug 的根因与两个观测盲区（`--console` 看不见 `FML_LOG`、`run_vm_tests` 只吃一个测试名）也在里面。
+  ⚠️ 它**刻意不动那两个百分比**：本轮改变的是「有没有被执行过」，不是「实现了多少」。
+
+  **`docs/GATE_STATUS.md` 加了作用域说明**（v2.1 → v2.2）。原来那行
+  「Gate 1/2 · M3/M4/M5 · A/B-route OTA 全 ✅ PASS」是 2026-08-11 的**产品线**状态，
+  但它出现在「进度总览」的顶部，很容易被读成「主任务也过了」——
+  这正是本项目反复栽跟头的那种形状。现在顶部直接点明它不覆盖主任务，并指向新文档。
+
+  **提交**：SDK 树 `shorebird-3.12.2`（`thread.cc` / `shorebird.cc` / `shorebird.h` /
+  `shorebird_test.cc` / `main_impl.cc`）与 FHP 树 `v1`（两份文档 + 两个脚本 + `memo.md` + `CLAUDE.md`）。
+
+  **下一项 = `B7-patch-launch`**（B 表）：在 `patch_cache.cc` / `dart_snapshot.cc` /
+  `Shorebird_ReadLinkHeader` 三处插 `fprintf(stderr,…)+fflush`，跑一轮拿到
+  `patch 1 failed to launch` 的真实原因。**不要靠猜** —— 本轮已有两次「以为想明白了、
+  修完仍失败」的先例（页对齐、`entry_count`），两次都是修对了但不是那个原因。

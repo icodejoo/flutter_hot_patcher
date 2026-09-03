@@ -36,7 +36,7 @@
 | `Dart_ShorebirdLoadVmcode` | B2 已移植 |
 | `analyze_snapshot --shorebird` | 🔴 **「B4 已移植」曾是一句空账**（2026-08-25 实测订正）：它在树里、`--help` 里没有、而且**对我们自己的快照产出 0 个函数**——因为它遍历堆找 `Code`，而 bare-instructions AOT 下 app 函数根本没有独立 `Code` 对象。同一个二进制在上游默认模式下还会 **abort**（4 个无名 stub 撞 `UNREACHABLE`）。**现已真正可用**：改为枚举 `InstructionsTable`，我们的快照给出 **1589 个函数**，首条 `offset 128/size 44` 与他们逐字相同；`self_hash` 换成复刻算法后，与**他们的**哈希按 name+size 配对命中 **777/950**。🟢 **2026-08-26 订正：「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」这条已作废**——任务 59（`ee99498bfb1`）把 callee walk 做出来了，三个 hash 在**他们自己的 1380 个函数上 1380/1380 摘要相同**，判据是两段链（模型 ≡ 他们的 1380；我们的二进制 ≡ 模型，1589/1589），`subgraph_hash_check.sh` 常设 |
 | **`--dump_object_pool` / `--dump_object_pool_link_data`** | **已完成**（2026-08-26，任务 60）。两个 flag **都真注册过**（行为实测，不是 `strings`）：前者是 bool 走 `--out`，后者是**带自己路径的 string option**，不需要 `--out`。生产方 `GetObjectPoolLinkInfo`（他们 `0x10024cb9c`）三部分全部解出：① `self_pp_indices`/`subgraph_pp_indices` 就是同一趟 walk 的**池引用序列，保序且保留重复**（他们 1380/1380；去重只有 1250/932）；② `pairs` **不是扫代码扫出来的，是对象池 `entry_bits` 里的一个位域**——🔑 他们把上游 4 位的 `TypeBits` 缩到 2 位（bits 2..3），在 **bits 0..1** 插了一个 `PairPosition`（0 无 / 1 first / 2 second），三处独立印证（`NewFromBuilder` 的 `and #0xc; cmp #4`、JSON dumper 的 `ubfx #2,#2`、`AddObject` 拆 `kImmediate128` 时写的字面量 `0x11`/`0x12`）；标记点：`LoadNativeEntry` 写 `0x9`、`AddObject` 前言把**紧跟在 first-native 后面的任何一条**改成 second、`EmitInstanceCallAOT` 写 `0x05`/`0x65` 与 `0x06`、`GenerateTTSCall`（**推断，它全内联没有符号**）；92+6+287 = 他们的 **385**；③ `entries[].code` 是他们自己那份 `ObjectPool::DebugPrint`，多一条 `<%ld len string>`、`(raw)` 改叫 `(unknown)`。⚠️ **长串的阈值用 `Utf8::Length`、印出来的数字用 `String::Length()`**，两者混用会把 2112 印成 2844。实测：我们的 `pairs` 与他们**逐项相同（385/385）**、池大小同为 1421、1421 条 entry 里 **1323 条逐字相同**，其余 98 条全是**反序列化重写成本进程地址**的槽（92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`），跨进程本就不可能相同。`op_dump_check.sh` 常设，`OBJECT_POOL_DUMP_RECON.md` 有全部地址级证据 |
-| 真机 A/B：验证 C6 删掉 safepoint guard 后的安全性 | 未做，目前零实测 |
+| 真机 A/B：验证 C6 删掉 safepoint guard 后的安全性 | **单侧已实测（2026-09-03，`B5-swap`）**：iPhone 13 上装着由我们的 dart-sdk 编出的 arm64 引擎（LC_UUID `4C4C440F-5555-3144-A1C1-4D8732B23E93` 与构建树逐条对上）、以 `DART_INCLUDE_SIMULATOR` 代码生成模式运行，app 自报 `[B5_RESULT] PASS: 20000 iterations, 200000 GC objects`。可复跑：`tools/b5_device_test/build_and_run_b5.sh`。⚠️ **A/B 两侧（base vs patched）仍未测**，阻塞已定位：`B6-basesnap-crash` —— 只要 `Shorebird_SetBaseSnapshots` 注册 base snapshots，VM 就在启动时 signal 11，**与补丁无关**，有同二进制负控制（`FHP_NO_SETBASE=1` 跑通 / 默认崩）。宿主侧补丁链路已通：`tools/b5_device_test/build_ab_vmcode.sh` 用全自研工具产出 `out.vmcode`，link 100% |
 
 ### 🔴 引用本表之前必读：断言的保鲜期规则（2026-08-26 立，任务 62）
 
@@ -135,7 +135,7 @@ reproduced」）：两边 `nm -a | c++filt` 数各私有子系统的标志符号
      签名可用组合是 `CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** +
      `-allowProvisioningUpdates`（证书是 `Apple Development: Cruz Jr (MGDM32NW4K)`）；
      **Intune MDM 不拦装机**（曾是最大未知，已证伪）。
-   ⚠️ **仍然成立的（不要读成 B5 过了）**：**真机 A/B 仍是零实测**。
+   ✅ **2026-09-03 更新：「真机零实测」已作废** —— `B5-swap` 关闭，C1-C7 已在真机上执行并给出正确结果（三条物证见 `memo.md` 末尾）。⚠️ **仍然成立的**：**A/B 两侧对比（base vs patched）仍是零实测**，下面这三段路当时的描述已被走通，留作历史。
    已装机跑通的那个 app 用的是 **stock Flutter 3.38.10 的 JIT 引擎**，与我们的复刻 VM 无关。
    要真测，还差三段：编 host 引擎（`gen_snapshot` 在那半）、加 `dart_force_simulator=true`
    重编 iOS 引擎（不开这个 flag，Simulator/wrapper/C1-C7 在真机上根本不会被执行）、
@@ -156,6 +156,8 @@ reproduced」）：两边 `nm -a | c++filt` 数各私有子系统的标志符号
 上游已自行放宽 `analyze_snapshot` 的平台限制。
 
 详见 `spikes/shorebird_linkinfo_oracle/README.md`。
+
+**真机验证状态另见 `docs/DEVICE_VERIFICATION.md`**（2026-09-03 起）。那份文档只记在真机上实际观测到的东西 + 每条的可复核物证，并明确分「已验证 / 未验证」两栏。⚠️ 它不改本节的两个百分比：它回答的是「有没有被执行过」，不是「实现了多少」。
 
 **待定（与主任务无关，完成主任务后再议）**
 

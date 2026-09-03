@@ -12,6 +12,7 @@
 //     See: tools/b5_device_test/gn_add_dart_force_simulator.sh
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 // Function types that force BLR (indirect register) dispatch in the simulator
@@ -75,9 +76,16 @@ class B5TestApp extends StatefulWidget {
 }
 
 class _B5TestAppState extends State<B5TestApp> {
-  String _status = 'Tap RUN to start B5 test';
-  Color _color = Colors.grey;
-  bool _running = false;
+  String _status = 'Starting B5 test…';
+  Color _color = Colors.blue;
+  bool _running = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-start: no button tap needed for automated testing
+    Future.microtask(_runTest);
+  }
 
   Future<void> _runTest() async {
     setState(() {
@@ -87,6 +95,25 @@ class _B5TestAppState extends State<B5TestApp> {
     });
 
     final (bool pass, String msg) = await runB5Test();
+
+    // Write to stderr so devicectl --console captures it (print() goes to os_log on iOS)
+    stderr.writeln('[B5_RESULT] ${pass ? "PASS" : "FAIL"}: $msg');
+
+    // Also write to os_log for completeness
+    // ignore: avoid_print
+    print('[B5_RESULT] ${pass ? "PASS" : "FAIL"}: $msg');
+
+    // Write result file to Documents for devicectl copy retrieval
+    try {
+      // On iOS sandbox, HOME is the container root; Documents is a subdir
+      final home = Platform.environment['HOME'] ?? '/var/mobile';
+      final resultPath = '$home/Documents/b5_result.txt';
+      await File(resultPath).writeAsString(
+          '[B5_RESULT] ${pass ? "PASS" : "FAIL"}: $msg\n');
+      stderr.writeln('[B5_RESULT_FILE] written to $resultPath');
+    } catch (e) {
+      stderr.writeln('[B5_RESULT_FILE_ERROR] $e');
+    }
 
     setState(() {
       _status = msg;
