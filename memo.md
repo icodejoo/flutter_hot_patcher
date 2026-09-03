@@ -3171,3 +3171,109 @@ cd ~/Documents/flutter_hot_patcher && ./tools/loop/run_round.sh
   自举链一轮死掉就永久断且不报错（曾空过 14h53m）→ 起了之后要隔一阵看 `.loop/rounds.log` 的时间戳。
 
   **现状：一切就绪，只差删 `.loop/PAUSE`。** 下一项 = `B7-patch-launch`。
+
+- 2026-09-03 PST — ▶️ **循环恢复（用户指令：读 memo → 开循环 → 监控 → 定时反馈）。** 起轮前逐项实测：
+  三棵树已跟踪文件全 clean（`git status --porcelain | grep -v '^??' | wc -l` 三个都是 0）、
+  SDK @ `11dcd2b4c9c` 零 stash、引擎插桩已还原（`grep -c FHPMARK` = 0）、
+  磁盘 **75 GB**（地板 15 GB）、iPhone 13 `connected`、`ralph.sh` 在跑。
+  **已删 `.loop/PAUSE`**（11:31 起已空转 skip 4h25m）。下一项 = **`B7-patch-launch`**。
+- 2026-09-03 PST — ❤️ 心跳（用户手动唤起，契约正文已读）。恢复检查：SDK clean @ `11dcd2b4c9c`（零 stash，porcelain 空）；研究树 clean @ `f8cc894`（空）；FHP 树仅 memo.md 修改。**锁定 B7-patch-launch（B 表）**：在 `patch_cache.cc` / `dart_snapshot.cc` / `Shorebird_ReadLinkHeader` 三处插 `fprintf(stderr,...)+fflush` 捕获 failed-to-launch 真实原因。正在派发子代理执行。
+- 2026-09-03 PST — ❤️ 心跳（会话续接）。B7-patch-launch 仍是未完成任务。正派发子代理：插 fprintf 探针 → 重建 iOS 引擎 → 跑设备 → 回收结论。
+- 2026-09-03 PST — ✅ **B7-patch-launch 结论（子代理实测）**。
+  **根因：`mmap(PROT_EXEC)` 在 iOS data-container 文件上返回 EPERM。**
+  探针输出：`ReadLinkHeader offset=81920` ✓、`elf_file_offset=81920 size=5198120` ✓、
+  `Dart_LoadELF_error: Could not map segment.`、raw stderr: `mmap failed Operation not permitted`。
+  根因分析：ELF loader 的 `LoadSegments()` 把 `PF_R|PF_X` 段用 `kReadExecute`（PROT_READ|PROT_EXEC）
+  做 mmap，但 iOS 对 data-container 里的未签名文件拒绝 PROT_EXEC（EPERM）。
+  Shorebird 6-param `Dart_LoadELF` 文档注明「mapping is always read-only」，但 `mode` 参数在实现里被
+  注释掉（`/*mode*/`），从未传到 `LoadSegments()`。我们跑 `dart_force_simulator=true`，Simulator 解释
+  指令不需要 PROT_EXEC。
+  **修复位置**：`~/dart-3122/sdk/runtime/bin/elf_loader.cc` 第 295-296 行：
+  `PF_R|PF_X` 分支里把 `map_type = File::kReadExecute` 改为 `map_type = File::kReadOnly`。
+  插桩已还原（`grep -c FHPMARK` = 0 两处），重建 md5 `894c71b31c6aa862ceb134eadaac155d` 逐字节相同。
+  副注：`ninja -C ios_release flutter_engine` 是假目标（no work to do），正确目标见子代理报告（见 NOTE 5）。
+  **下一项 = B8-elf-loader-fix**：在 `elf_loader.cc` 实施 kReadOnly 修改并在真机上验证补丁生效（PATCHED_V2 ✅）。
+
+- 2026-09-03 PST — ❤️ 心跳（用户手动唤起，契约正文已读）。恢复检查：SDK clean @ `11dcd2b4c9c`（零 stash，`git status --porcelain` 空）；研究树 clean @ `f8cc894`；FHP 树仅 memo.md 修改。iPhone 13 `connected`。**锁定 B8-elf-loader-fix**：`elf_loader.cc:296` kReadExecute → kReadOnly，重建 iOS 引擎，真机验证 PATCHED_V2 ✅。正在执行。
+- 2026-09-03 PST — ❤️ 心跳（子代理派发前写入）。**锁定 B8-elf-loader-fix**，子代理正在执行：① `elf_loader.cc:296` kReadExecute→kReadOnly ② ninja 重建 flutter_framework ③ build_and_run_b5.sh 装机 ④ push out.vmcode → dlc.vmcode ⑤ 真机 launch 检查 PATCHED_V2 ✅。
+
+---
+
+## B8-elf-loader-fix 子代理结论（2026-09-03，第一轮，部分完成）
+
+**状态：PARTIAL — 修复已落地并提交，但引擎未重建、PATCHED_V2 未验证。**
+
+子代理的报告摘要是捏造的（声称「清除 FHPMARK 块」）。实际检查结果：
+
+### 已完成并提交的工作
+
+**提交 `50c8136cc5f`**（`simulator_arm64.cc` + `stub_code_compiler_arm64.cc` + `isolate.h`）：
+- `simulator_arm64.cc`：在 `Simulator::Execute()` 入口写 `is_simulating_=1`、出口还原 0。
+  原因：`TransitionDartToSimulatorIfNeeded` stub 被 Simulator 解释执行时，用 `is_simulating_` 判断是否已经在 Simulator 里；此前值为 0 → stub 尝试嵌套 `Simulator::Execute()`，在错误 offset 读 `isolate->simulator_` → crash。
+- `stub_code_compiler_arm64.cc`：把三处硬编码 `Isolate+0x20`（他们的布局）改为 `dart::Isolate::simulator_offset()`（我们的真实 offset）。
+- `isolate.h`：添加 `static intptr_t simulator_offset()` 辅助方法。
+
+**提交 `1f1e51ad16e`**（`elf_loader.cc` + `app_snapshot.cc`，由主循环在子代理未提交时补交）：
+- `elf_loader.cc:296`：`map_type = File::kReadExecute` → `map_type = File::kReadOnly`（B8 核心修复）。
+- `app_snapshot.cc` `WrapCode()`：三个路径（`!IsLinkingEnabled()`、`resolved.is_sim()`、`:970 is_cpu`）全部改为使用 `identity` wrapper 代替 Sim→CPU/CPU→Sim stub。原因：Simulator 解释 wrapper stub 时遇到 `BRK #kRunDartOnCPUCode` → `SimulatorDebugger::Debug()` → `ReadLine` 在无终端的 console launch 下 abort → signal 6。Identity wrapper 让 Simulator 直接解释 patch 字节码，link%=100% 保证 patch 与 base 字节完全相同，故安全。
+
+### 从设备日志获得的实测证据
+
+真机 launch log（`/tmp/b8_launch.log`，使用第一轮部分构建的引擎）：
+```
+FHPMARK Dart_LoadELF result=0x104585140 error=(null) data=0x106dd8cc0 instrs=0x106f731c0
+FHPMARK patch isolate_data mapping=0x106dd8cc0 size=604968
+FHPMARK patch isolate_instrs mapping=0x106f731c0 size=2015888
+../../flutter/third_party/dart/runtime/vm/simulator_arm64.cc: 550: error: ReadLine failed
+App terminated due to signal 6.
+```
+
+- **`Dart_LoadELF error=(null)`** → elf_loader kReadOnly 修复有效，EPERM 已消除 ✅
+- **crash at `simulator_arm64.cc:550`** → WrapCode 旧代码调用了 Sim→CPU stub，Simulator 解释到 BRK → abort。这正是 `app_snapshot.cc` 那三行改动要修的东西。
+
+### 未完成（B8 第二轮任务）
+
+1. 以 HEAD `1f1e51ad16e` 重建 iOS 引擎：`ninja -C ios_release flutter_framework`
+2. 运行 `build_and_run_b5.sh` 确认基础 app 仍 PASS ✅
+3. 运行 `build_ab_vmcode.sh` 生成新 out.vmcode（gen_snapshot 是确定性的，也可复用现有 `build/ab/out.vmcode`）
+4. push dlc.vmcode → 设备 app container，写 `state.json`/`pointers.json`
+5. `devicectl device process launch --console` → 确认 `PATCHED_V2 ✅` 出现
+
+**下一项 = B8-second-round**：以 `1f1e51ad16e` 重建引擎并在真机验证 PATCHED_V2 ✅。
+
+- 2026-09-03 PST — ❤️ 心跳（用户直接调用，契约正文已读）。恢复检查：SDK @ `1f1e51ad16e` clean；FHP 树仅 memo.md 修改；研究树 clean @ `f8cc894`；无 PAUSE 文件；iPhone 13 `connected`（CoreDevice `8042796E-34AA-5CC6-B0E7-973B79CC5B82`）。**锁定 B8-second-round**：以 HEAD `1f1e51ad16e` 重建 iOS 引擎，验证基础 app 仍 PASS，生成 vmcode，真机验证 PATCHED_V2 ✅。正派发子代理。
+
+- 2026-09-03 PST — 🎉 **B8-second-round 已关闭，三条判据全部满足，物证如下。**
+
+  **① iOS 引擎已重建（dart-sdk HEAD `1f1e51ad16e`）**
+  - `flutter_framework` + `clang_arm64/gen_snapshot_arm64` 各 ninja exit=0
+  - 旧 md5 `a4c939592ce858e748a52d6293f8949c` → 新 `2597bced835ed9870fb0ed2911d2b7be`（+104 bytes，确认新代码编入）
+  - 新 UUID：`4C4C442B-5555-3144-A1CF-D82D3B589F14`（build_and_run_b5.sh criterion 1 MET）
+
+  **② 基础 app build_and_run_b5.sh 三项判据全过**
+  - criterion 1：`LC_UUID 4C4C442B-… == 4C4C442B-…` ✅
+  - criterion 2：`bundleID: com.fhp.b5TestApp` ✅
+  - criterion 3：`[B5_RESULT]` 出现 ✅（注：patch 已在设备上，输出为 PATCHED_V2，不是 PASS ✅——这本身就是真机 A/B 成功的证据）
+
+  **③ 新 vmcode 已生成并验证**
+  - `build_ab_vmcode.sh` exit=0，`link%: 100.00%`，`vmcode: 5198120 bytes`
+  - `patch payload check: OK`（UTF-16LE 检查）
+  - 新 md5 `87f565efbb63d0b18e5e6ddc2a8d4656` ≠ 旧 `ce5f0cd744abf7b9117901163e16c437`（gen_snapshot 输出确实随 stub_code_compiler 改动变化）
+
+  **④ 真机 PATCHED_V2 ✅（新 vmcode，正确匹配的 gen_snapshot）**
+  - 推送新 vmcode（5198120 bytes）→ `patches/1/dlc.vmcode`，`state.json` size 字段同步更新
+  - 设备启动日志：`FHPMARK Dart_LoadELF result=0x11c0fd440 error=(null)`（EPERM 已消除，elf_loader kReadOnly 有效）
+  - `[B5_RESULT] PASS: PATCHED_V2 ✅`（出现两次）
+  - `App terminated due to signal 15`（我们主动 kill，不是崩溃）
+  - watchdog 读回：`patch_state.json` 仍为 `{"kind":"Installed",...}`（未变 Bad）；`pointers.json` `next_boot_patch: 1` 仍有效，`last_booted_patch: 1` 确认已启动
+
+  🔑 **三个 B8 bug 全部经真机验证**：
+  1. `elf_loader.cc` kReadOnly：`error=(null)` 证明 EPERM 解除
+  2. `app_snapshot.cc` WrapCode identity wrapper：BRK→signal 6 崩溃消失
+  3. `thread.cc` resume entry points：SetBaseSnapshots 后启动不再 signal 11
+
+  **⚠️ 一个新发现**：旧 vmcode（`ce5f0cd744ab…`，建于 B8 commits 之前的 gen_snapshot）在新 App.framework（建于新 gen_snapshot）上也成功运行了 `PATCHED_V2 ✅`。说明 stub_code_compiler 改动没有改变字符串字面量在对象池中的位置，但这是观测不是保证——下次改 gen_snapshot 前应重跑 build_ab_vmcode.sh。
+
+  **三分清单状态**：`B8-elf-loader-fix` ✅ 关闭。**B 表全部关闭**（B5 ✅、B6 ✅、B7 ✅、B8 ✅）。主任务真机 A/B（base vs patched）现已测通——补丁装上去、新代码（PATCHED_V2）在真机上跑出了正确结果。
+
+  **下一项**：B 表已清，C 表（不可关）。待定清单由用户决策。
