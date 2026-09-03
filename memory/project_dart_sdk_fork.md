@@ -2808,3 +2808,13 @@ help 检查从「7 documented / 14 lines withheld」变成 **12 / 3**。
 `verify_reproduction.sh` **28 产物 0 失败**、`run_vm_tests` **157 passed**（上轮 154，新增 3 个
 `ObjectPoolPairPosition_*`；其中一个**断言的是字节**——他们那六个 entry_bits 常量，
 因为一个只和自己自洽的位布局照样能 round-trip）。
+
+## 2026-09-02：B4 关闭 —— 用我们的 dart-sdk 编出了 iOS 引擎
+
+`Flutter.framework/Flutter` **19,854,224 字节**、`lipo -info` = **arm64**、`ninja exit=0`，末步 `[504/504] ACTION //flutter/shell/platform/darwin/ios:flutter_framework`。`args.gn` 的 `dart_version = f174efefd55…` 就是我们树 HEAD，`third_party/dart` 是指向 `~/dart-3122/sdk` 的 symlink⇒ **C1-C7 第一次装进了真实 arm64 产物**，`CLAUDE.md` 第三条限定的前半已据此作废。
+
+**踩平的坑（都花了整轮）**：`.gclient` 要 `name=engine/src/flutter` + `custom_vars:{download_dart_sdk:False}` + 24 条 dart 子路径设 `None`（他们的 dart-sdk 是**私有仓**，DEPS 走 SSH，直接 sync 必 `Host key verification failed`）；`gn` 的 ICU `Duplicate build argument declaration` **不是缺 Chromium 依赖**（曾据此差点白下 20 GB），是**路径别名** —— 一个自己造的 symlink 让 `//third_party/icu` 出现在 primary source tree，压过 secondary_source，而 GN **按路径去重不按 inode**；`ninja` 要**指定 `flutter_framework` 目标**，裸 `ninja` 的默认目标 `default` 会连 host 工具一起编、永远到不了框架。
+
+**真机（2026-09-02）**：设备 iPhone 13 / iOS 26.5.2 / UDID `00008110-000868212686601E`。签名可用组合 = `CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** + `-allowProvisioningUpdates`（证书 `Apple Development: Cruz Jr (MGDM32NW4K)`）；**Intune MDM 不拦装机**（曾是最大未知，证伪）。⚠️ `DEVELOPMENT_TEAM=MGDM32NW4K` 会报 `No Account for Team`（有证书无登录账号）；手动签名被 Xcode 托管 profile 拒。
+
+🔴 **B5 仍是「未测」**：装机跑通的那个 app 用的是 **stock Flutter 3.38.10 的 JIT 引擎**，与我们的 VM 无关。⚠️ **AOT/JIT 口味不可混** —— Debug app 装 kernel + JIT 引擎（stock 39 MB），我们的是 AOT（19.8 MB），互换起不来且报错离题。要真测还差三段：编 **host 引擎**（iOS 用的 `gen_snapshot` 在那半，实测 `out/` 下一度**只有 `ios_release`**）、加 **`dart_force_simulator=true`** 重编 iOS 引擎（不开这个 flag，Simulator/wrapper/C1-C7 在真机上根本不会被执行）、`--local-engine` 出 release app。**完成度未重测，36–42% / 80–85% 原样保留。**

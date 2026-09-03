@@ -125,8 +125,23 @@ reproduced」）：两边 `nm -a | c++filt` 数各私有子系统的标志符号
    ⚠️ **每一条的判据都是「改坏看变红」，不是「跑通了」**：把 wrapper 存的目标改坏 4 字节 → 全部段错误；
    把 polymorphic 偏移换成 monomorphic → 五个用例全红。**只有正向结果时，「跑对了」与「这段代码被绕过了」
    是分不开的。**
-   ⚠️ **仍然成立的**：**真机 A/B 零实测**；上面全部是 host 的 `dart_force_simulator` 构建，不是 iOS 真机；
-   C1-C7 仍不在任何产物里。这仍是唯一一条会让百分比在真机上大幅缩水的。
+   🟡 **2026-09-02 部分翻转，两半要分开读**（实测，非记账）：
+   · **「C1-C7 不在任何产物里」已作废** —— 用我们的 dart-sdk 编出了 iOS 引擎：
+     `Flutter.framework/Flutter` **19,854,224 字节**、`lipo -info` = **arm64**、
+     `ninja exit=0` 且末步是 `[504/504] ACTION //flutter/shell/platform/darwin/ios:flutter_framework`；
+     `args.gn` 的 `dart_version = f174efefd55…` 就是我们树的 HEAD，`third_party/dart` 是指向
+     `~/dart-3122/sdk` 的 symlink。**C1-C7 现在在一个真实的 arm64 产物里。**
+   · **真机通路也已打通**：设备 iPhone 13 / iOS 26.5.2 / UDID `00008110-000868212686601E`，
+     签名可用组合是 `CODE_SIGN_STYLE=Automatic` + **`DEVELOPMENT_TEAM=WAL983V9MH`** +
+     `-allowProvisioningUpdates`（证书是 `Apple Development: Cruz Jr (MGDM32NW4K)`）；
+     **Intune MDM 不拦装机**（曾是最大未知，已证伪）。
+   ⚠️ **仍然成立的（不要读成 B5 过了）**：**真机 A/B 仍是零实测**。
+   已装机跑通的那个 app 用的是 **stock Flutter 3.38.10 的 JIT 引擎**，与我们的复刻 VM 无关。
+   要真测，还差三段：编 host 引擎（`gen_snapshot` 在那半）、加 `dart_force_simulator=true`
+   重编 iOS 引擎（不开这个 flag，Simulator/wrapper/C1-C7 在真机上根本不会被执行）、
+   `--local-engine` 出 release app。⚠️ **AOT/JIT 口味不可混**：Debug app 装的是 kernel + JIT 引擎（39 MB），
+   我们的是 AOT（19.8 MB），互换起不来且报错与要测的东西无关。
+   → **这仍是唯一一条会让百分比在真机上大幅缩水的**，只是阻塞点从「没有产物」移到了「没有验证」。
 ⚠️ **不要把这次上调读成「进展加速」**：三阶段映射一行未动（仍无证据可依，`gen_snapshot` 无 dSYM）。
 **DD core 做掉的是小的那一半**：`FinalizeIndirectStaticCallTable`（8 符号）已持平，
 但 `IndirectStaticCallInstr`（42 符号）仍为 0，且那个把 static call 改写成 indirect 的 IL pass
