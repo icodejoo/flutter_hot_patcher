@@ -927,6 +927,32 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       是否还有第三部分。三个输入各做一遍。
       **判据**：461（及 prog/base_dd 的对应值）被分解成带名字的分量，加总吻合。
 
+- [ ] **F12：12 条 `structural` 里至少 3 条站不住（人工持有，已带实测证据）**
+      G-e 要求「structural 必须给出是哪个结构的哪个偏移」。我按这条去查 `dump_blobs` 三格，
+      它的 note 写的是「blob contents depend on snapshot version hash」——
+      **这正是 E2 被撤回的那种非解释**（版本 hash 是症状，不是成因）。
+      **实测（2026-09-04 21:5x，读 `out_pm/as.hello.{ours,theirs}.dump_blobs` 的头部）**：
+      blob 头里带的是**快照 features 串**，两侧 11 个 token **只差 2 个**：
+      | | ours | theirs |
+      |---|---|---|
+      | 构建模式 | **`release`** | **`product`** |
+      | 目标平台 | **`macos`** | **`ios`** |
+      | 其余 9 个 | 全同（含 `dedup_instructions`——F7 生效的独立旁证，它以前是 `no-dedup_instructions`）|
+      🔴 **所以这两条都不是「结构」，是构建目标，而且都可能可关**：
+      ① `release` vs `product` 是 F6 那个不对称的**同一条根**——我们用 Release
+      `analyze_snapshot` 是因为它拒绝 product 快照；**但他们的 analyze_snapshot 就读 product**，
+      说明造一个 Product 版 `analyze_snapshot` 也许就能对齐。**没验过，所以是待办不是结论。**
+      ② `macos` vs `ios` 是目标平台，他们用的是 iOS 版 `gen_snapshot`。
+      ⚠️ **不要过度解读**：两侧字节数 ours 494073 / theirs 669622，**差 175 KB，
+      这两个 token 远不足以解释**。所以本卡的结论只有一条：**「structural」这个判定没有依据**，
+      对应格应回到 `unknown`，而不是「已查明成因」。
+      **同一形态的嫌疑**：`disassemble` 三格写的是「addresses and version hash differ」，
+      同样是复述症状；`print_field_table_link_*` 六格写「heap traversal order」，
+      **那个至少指了容器，但没指哪个容器**。
+      **判据**：12 条各自要么给出合规 locus（`Name+0xHEX`，或具名容器/具名构建身份），
+      要么改回 `unknown`。**说不出来就必须改回去，这就是 G-e 的全部意义。**
+      **负控制**：`phase_gate.sh` 的四个控制已跑过（填合规 locus → 欠账降；填复述症状 → 不降）。
+
 - 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
   `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
   F5 那轮把 `print_dd_resolution_to` 从硬编码的 `gap`（连 `bytes_id="no"` 都是写死的）
