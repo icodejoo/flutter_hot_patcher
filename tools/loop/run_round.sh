@@ -358,6 +358,39 @@ fi
 
 say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
 
+# ---- finisher --------------------------------------------------------------
+# Two rounds in a row (F2, F3) committed the SDK side, announced the task
+# closed, and ended with the research tree still dirty. That is not a turn
+# limit -- both rounds thought they were done. It costs a refuse on the next
+# tick and, three refuses in, an auto-stash of work nobody knows is gone.
+#
+# So give the round exactly one bounded chance to finish what it left. This
+# does not start new work, and it is allowed to revert rather than commit:
+# a leftover half-applied negative control must not be committed just because
+# something is dirty.
+FINISHER=${FHP_LOOP_FINISHER:-1}
+if [ "$FINISHER" -eq 1 ]; then
+  finisher_tree=
+  for tree in "$SDK" "$RESEARCH"; do
+    if ! git -C "$tree" diff --quiet 2>/dev/null; then finisher_tree=$tree; break; fi
+  done
+  if [ -n "$finisher_tree" ]; then
+    say "finisher: $finisher_tree left dirty -- one bounded pass to commit or revert"
+    FIN_PROMPT="上一轮结束时把 $finisher_tree 留成了 dirty。请只做这一件事，不要开新任务：\
+看 git -C $finisher_tree diff。若它是本轮已完成并已验证的工作，跑相关检查后提交它；\
+若它是残留的负控制或改了一半的编辑，还原它。两者都做完后报告你选了哪一条以及为什么。"
+    (
+      cd "$REPO" || exit 1
+      script -q /dev/null "$CLAUDE" -p "$FIN_PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
+    ) 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g' | tee -a "$LIVE" >>"$out"
+    if git -C "$finisher_tree" diff --quiet 2>/dev/null; then
+      say "finisher: $finisher_tree is clean"
+    else
+      say "WARNING: finisher ran and $finisher_tree is still dirty -- next round will refuse"
+    fi
+  fi
+fi
+
 if [ "$(fingerprint)" = "$idle_before" ]; then
   idle=$(( $(cat "$IDLE_COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   printf '%s' "$idle" >"$IDLE_COUNT_FILE"
