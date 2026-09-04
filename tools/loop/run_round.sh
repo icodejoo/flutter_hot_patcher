@@ -208,11 +208,38 @@ fi
 # Reset consecutive-refuse counter now that we passed the dirty-tree guard.
 printf '0' >"$REFUSE_COUNT_FILE" 2>/dev/null || true
 
+# ---- idle detection --------------------------------------------------------
+# A round that finds nothing to do still exits 0 and still logs "round end",
+# so on disk it is indistinguishable from a round that did work. That is how
+# 2026-09-04 spent 9.5 hours and ~190 rounds spinning with nobody alerted --
+# and idle rounds are not free: measured from the transcript usage fields,
+# one costs ~1.6M cache-read tokens.
+#
+# The predicate deliberately does NOT look at rc, output length, or anything
+# the round says about itself. Both idle and working rounds exit 0, and an
+# idle round happily prints 19-34 lines of checklist audit. It looks only for
+# a TRACE: a new commit in any tree, or a memo line that is not a heartbeat.
+# Heartbeats are excluded because the contract requires one every round by
+# design -- counting them would make every round look productive.
+IDLE_LIMIT=${FHP_LOOP_IDLE_LIMIT:-3}
+IDLE_COUNT_FILE=$STATE/idle_count
+
+fingerprint() {
+  for t in "$SDK" "$RESEARCH" "$REPO"; do
+    git -C "$t" rev-parse HEAD 2>/dev/null || echo none
+  done
+  # non-blank AND non-heartbeat. Counting blank lines made every heartbeat
+  # look productive, which would have kept this guard from ever firing --
+  # the negative control caught that; cases 1 and 3 were both green.
+  grep -v '❤' "$REPO/memo.md" 2>/dev/null | grep -c '[^[:space:]]' || echo 0
+}
+
 # ---- heartbeat -------------------------------------------------------------
 # Written before dispatch, so a round that dies whole still leaves a trace.
 # Without this, "the chain broke" and "it ran but produced nothing" look
 # identical on disk -- which is exactly what cost us an evening.
 say "round start (permission-mode=$PERMISSION_MODE)"
+idle_before=$(fingerprint)
 
 # ---- undo point ------------------------------------------------------------
 # .claude/hooks/deny-destructive.sh refuses the destructive commands it knows.
@@ -288,6 +315,19 @@ if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then
 fi
 
 say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
+
+if [ "$(fingerprint)" = "$idle_before" ]; then
+  idle=$(( $(cat "$IDLE_COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$idle" >"$IDLE_COUNT_FILE"
+  say "round left no trace ($idle/$IDLE_LIMIT: no new commit in any tree, no non-heartbeat memo line)"
+  if [ "$idle" -ge "$IDLE_LIMIT" ]; then
+    touch "$PAUSE"
+    say "PAUSED automatically after $IDLE_LIMIT rounds with nothing to show -- the task list is probably empty"
+    osascript -e "display notification \"连续 $IDLE_LIMIT 轮无产出，循环已自动暂停\" with title \"FHP loop\"" 2>/dev/null || true
+  fi
+else
+  printf '0' >"$IDLE_COUNT_FILE"
+fi
 
 # Keep the last round's output. The first rehearsal round ended rc=0 having
 # quietly orphaned its subagent, and the only reason that was diagnosable at all
