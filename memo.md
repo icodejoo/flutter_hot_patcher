@@ -483,7 +483,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 负控制三向已验。→ **今后 `verify_all` 若打印 `BLOCKED: binaries older than HEAD`，
 先重建再跑，不要用 `SKIP_STALENESS_GUARD=1` 绕过。**
 
-- [ ] **D3：更新 stub 期望值以匹配 `11dcd2b4c9c` 之后的 Thread 布局**（⬅️ 当前任务）
+✅ **D3：更新 stub 期望值以匹配 `11dcd2b4c9c` 之后的 Thread 布局**（`eadefa30021` SDK / `64cfdaa` fhp-research）
       **现象**：`run_vm_tests` 4 项红 + `verify_reproduction.sh`（14 stubs / 3 failure、28 artifacts / 1 failure）：
       `StubCode_Shorebird{CpuToSimBody,CallSimFromFfi,ResumeOnSimulator,RunDartOnCPU}MatchesTheirBytes`
       🔴 **我原先写在这里的归因是错的，已由 D3 那轮订正（`eadefa30021`）**：
@@ -570,9 +570,8 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 1. **符号持平会高估。** 「有同名符号」不等于「行为正确」——真判据是逐项对比他们的产物，
    而那部分已验证的有：`print_shorebird_info` 八行逐行相同、`dd_function_identity` 逐字节相同、
    `ObjectPoolLinkInfo` 两份产物逐字节重现、`subgraph_hash` 1380/1380、`op_dump` pairs 385/385。
-2. **当前树没站在自己的绿基线上**：`verify_all` **17 ran / 2 failed**，两项红是 D3
-   （Thread 位移，C 表结构性）。
-3. **结构上到不了 100%**：所有编码 Thread 偏移的指令永远不会逐字节相同。
+2. **当前树站在绿基线上**：`verify_all` **19 ran / 0 failed**（D3 于 2026-09-04 修复，`eadefa30021`）。
+3. **结构上到不了 100%**：所有编码 Thread 或 Isolate 偏移的指令永远不会逐字节相同（布局结构性差异）。
 
 **可复核命令**：`nm -a <bin> | c++filt | sort -u`；他们的须先 `lipo -thin arm64`，
 且**必须用 `ios-release/gen_snapshot_arm64`**。
@@ -588,3 +587,17 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   （实测 13:14 建 / 13:18 提交），装上后每次提交完都会拦死自己。
   ⚠️ 过滤串改了两次才对：`ninja -n` 除 `no work to do` 外还打印 `Entering directory`，
   漏掉它会让干净的树报「1 步待建」。负控制双向已验（干净放行 / `touch object.h` → 737 步 BLOCKED，已重建还原）。
+
+- 2026-09-04 PST — ✅ **D 表全部关闭（D1/D2/D3），基线回到 `verify_all.sh` 19 ran / 0 failed。**
+  **这是今天第一个完全可信的绿**：四个二进制经 `ninja -n` 判定为当前、**保鲜守卫放行**、
+  19/19 全部执行且全过、`run_vm_tests` 151/151。**独立复跑核验过，不是采信轮次自报。**
+
+  🔴 **我在 D3 卡片里的归因是错的，且我写了「已查明，别再重查」——那句话尤其糟糕，
+  是用一个未经验证的推论去阻止后续验证。** 幸好那一轮没听。
+  正确归因：**`Isolate` 布局 / `50c8136cc5f`**，不是 Thread / `11dcd2b4c9c`。
+  ⚠️ **错误形态（今天第三次同型）**：`git log -- thread.h thread.cc` 最近一条确是 `11dcd2b4c9c`，
+  **观测为真、推论未验**——我甚至已解码出 `LDR X10,[X10,#0x220]`，手里就有「这条指令读哪个结构」
+  的决定性证据，却因文档通篇讲 Thread 而默认它是 Thread。
+  另两次：① 断言 `elf_loader` 无条件改动会弄坏宿主 AOT（实测证伪，真因是 **macOS 允许执行只读页**）；
+  ② 质疑 D1 轮「pre-existing」的说法（查证后是我错）。
+  **→ 三次都不是没证据，是有证据没去看。**
