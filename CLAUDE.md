@@ -12,10 +12,19 @@
 
 **为什么换了个说法**：「复刻 dart-sdk」没有完成判据，所以「完成了吗」这个问题一直只能用估计回答
 （2026-09-04 实测：**65–80%**，上一版 36–42% 已过期 11 天、80 个提交）。
-我们已识别的任务全部关闭（A 表 18/18、B 表、D 表，`verify_all` 19/0，真机 `PATCHED_V2 ✅`），
+A 表 18/18、B 表、D 表全部关闭，`verify_all` **20/0**，真机 `PATCHED_V2 ✅`，
 但**清单空了不等于活干完了** —— 剩下的 20–35% 主体是**未知的未知**：
 符号表已被本项目自己判定失去判别力（四例「一侧为 0 却不是缺口」），
 而「逐项对比他们的产物」这个真判据**只覆盖了我们已经想到要去比的那些**。
+
+🔴 **E 表曾以「0 个 gap」关闭，该结论已于 2026-09-04 撤回**（`16eaab7` / `3644c77`）。
+审计出 **6 个缺口**（memo.md 的 **F 表**，F1–F6，各带判据与负控制），
+其中两个是**对拍工具自己的缺陷**造成的盲区，比缺口本身更值得记住：
+① `parity_matrix.sh` 曾把 `shorebird` 三格的判定**硬编码**成 `structural`，**连 diff 都不看**
+⇒ 那三格在原理上不可能报出缺口，**下面判据第 2 条在它们身上是空洞满足的**；
+② E2 的 13 条人工分类**写在了被生成器覆盖的 TSV 里**，重跑一次即全部消失且退出码正常。
+→ **两条都已修**（判定改为按键集合实比对，缺口补上后自动翻回；分类搬进脚本）。
+→ **教训：看一个检查「是否可能失败」，而不只看它「是否通过」；人工结论不能存在生成产物里。**
 
 **所以本阶段的任务是把「还差多少」变成可核对的数字，而不是继续估计：**
 
@@ -30,6 +39,15 @@
 2. 每一处不一致都有分类与依据；「结构性」这个结论**必须给出是哪个结构的哪个偏移**
    （2026-09-04 教训：我把 `Isolate` 位移误判成 `Thread`，手里已有解码证据却没去看）
 3. 存在负控制：故意改坏一处输出，对拍必须报出它
+
+**当前状态（2026-09-04 实测，此前被报成「三条全满足」而实际不是）**：
+矩阵 `59 cells, 0 unrun, 3 blocked`，分类 **gap 6 / structural 12 / na 31 / unknown 10**。
+- 判据 1 ✅ 满足（3 blocked 显式标注，未静默省略）
+- 判据 2 🔴 **未满足**：**10 格仍是 `unknown`**，全部挡在 **F6**（code_infos 的 +209）后面。
+  已推进到具名位置——`[Stub]` 两侧**恰好相等 = 201**，整个 +209 只在 `[Optimized]`
+  即 Function-owned 条目（1388 vs 1179）——但**成因未确立，所以不许写成 structural**。
+- 判据 3 ✅ 满足（矩阵格数负控制 + `shorebird` 格的键集合负控制均已验）
+→ **这一阶段没有结束。** 待办以 memo.md 的 F 表为准，**不是**本文件。
 
 **不需要真机。** 判据全在宿主上：`gen_snapshot`/`analyze_snapshot` 的输出对比。
 真机只在验证「已复刻的东西真能跑」时才需要，那件事已做过一次（B5–B8），且设备通路已脚本化。
@@ -60,7 +78,7 @@
 | **patch 加载链路**（新，2026-08-24） | 三个 C 入口已实现（`Shorebird_ReadLinkHeader`/`SetBaseSnapshots`/`UsingLinking`，`b283033b4df`）。🔑 **调用方是开源的**——引擎源码就在本机且 revision 匹配（`patch_cache.cc:39`、`shell/.../shorebird.cc:93`），这部分**不需要逆向**（规则 2）。⚠️**2026-08-25 实测订正：`shorebird_base_instructions_table_` 已建出**（`60cec3c40c2`，字段在 `app_snapshot.cc:1029`、接线在 :9336、`:9637` 打 no/yes），成功路径已进常设回归（`efa07a3774e`）|
 | Simulator / SimToCpu / SimBridge | 已移植到 3.12.2，`.o` 也确实生成了；`nm gen_snapshot` 为 0。⚠️**2026-08-24 订正：一半是找错了二进制**——wrapper/allocator 是**运行期**设施，本来就不该出现在 `gen_snapshot` 里；它在引擎里，`Flutter.framework` 有 `WrapperAllocator::AllocateMetadata()` @0x7d0728，被 `Deserializer::WrapperForRunTarget(LinkOracle::RunTarget)` 的两个 lambda 各调一次（反汇编实测只有这 2 处）。所以「接调用点」是**运行期**的事，且要先有 `LinkOracle`。**2026-08-24：已接上**（`1f836a400a6`），两个 allocator 挂在 `IsolateGroup` 上（他们的名字：`shorebird_cpu_to_sim_wrappers_`@0x8d0 / `shorebird_sim_to_cpu_wrappers_`@0x8d8） |
 | `Dart_ShorebirdLoadVmcode` | B2 已移植 |
-| `analyze_snapshot --shorebird` | 🔴 **「B4 已移植」曾是一句空账**（2026-08-25 实测订正）：它在树里、`--help` 里没有、而且**对我们自己的快照产出 0 个函数**——因为它遍历堆找 `Code`，而 bare-instructions AOT 下 app 函数根本没有独立 `Code` 对象。同一个二进制在上游默认模式下还会 **abort**（4 个无名 stub 撞 `UNREACHABLE`）。**现已真正可用**：改为枚举 `InstructionsTable`，我们的快照给出 **1589 个函数**，首条 `offset 128/size 44` 与他们逐字相同；`self_hash` 换成复刻算法后，与**他们的**哈希按 name+size 配对命中 **777/950**。🟢 **2026-08-26 订正：「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」这条已作废**——任务 59（`ee99498bfb1`）把 callee walk 做出来了，三个 hash 在**他们自己的 1380 个函数上 1380/1380 摘要相同**，判据是两段链（模型 ≡ 他们的 1380；我们的二进制 ≡ 模型，1589/1589），`subgraph_hash_check.sh` 常设 |
+| `analyze_snapshot --shorebird` | 🔴 **「B4 已移植」曾是一句空账**（2026-08-25 实测订正）：它在树里、`--help` 里没有、而且**对我们自己的快照产出 0 个函数**——因为它遍历堆找 `Code`，而 bare-instructions AOT 下 app 函数根本没有独立 `Code` 对象。同一个二进制在上游默认模式下还会 **abort**（4 个无名 stub 撞 `UNREACHABLE`）。**现已真正可用**：改为枚举 `InstructionsTable`，我们的快照给出 **1589 个函数**，首条 `offset 128/size 44` 与他们逐字相同；`self_hash` 换成复刻算法后，与**他们的**哈希按 name+size 配对命中 **777/950**。🟢 **2026-08-26 订正：「`subgraph_hash`/`op_subgraph_hash` 仍是 `self_hash`、仍然是错的」这条已作废**——任务 59（`ee99498bfb1`）把 callee walk 做出来了，三个 hash 在**他们自己的 1380 个函数上 1380/1380 摘要相同**，判据是两段链（模型 ≡ 他们的 1380；我们的二进制 ≡ 模型，1589/1589），`subgraph_hash_check.sh` 常设。🔴 **2026-09-04 审计新增缺口（此前整行漏记）**：他们每个 function 对象 **14 个键，我们只有 10**（全量 1589/1380 取并集实测）。缺 `subgraph_pp` / `subgraph_field_table` / `self_selectors` / `subgraph_selectors`，在他们那边分别有 21375 / 2816 / 332 / 3561 个元素。其中 `subgraph_pp` **数据已经算出来了**（`analyze_snapshot_api_impl.cc:2060`，已发进 `--dump_object_pool_link_data`）**只是没发进这里**，是纯发射缺口；`self_selectors`/`subgraph_selectors` 则**真没算**（该文件里 `selector` 只出现 1 次）。→ memo.md 的 **F1/F2/F3**。另有名字渲染两处分歧（mixin application 全名他们 101 / 我们 0；`[unknown stub]` 我们多加 `[Stub] ` 前缀 4/4）→ **F4** |
 | **`--dump_object_pool` / `--dump_object_pool_link_data`** | **已完成**（2026-08-26，任务 60）。两个 flag **都真注册过**（行为实测，不是 `strings`）：前者是 bool 走 `--out`，后者是**带自己路径的 string option**，不需要 `--out`。生产方 `GetObjectPoolLinkInfo`（他们 `0x10024cb9c`）三部分全部解出：① `self_pp_indices`/`subgraph_pp_indices` 就是同一趟 walk 的**池引用序列，保序且保留重复**（他们 1380/1380；去重只有 1250/932）；② `pairs` **不是扫代码扫出来的，是对象池 `entry_bits` 里的一个位域**——🔑 他们把上游 4 位的 `TypeBits` 缩到 2 位（bits 2..3），在 **bits 0..1** 插了一个 `PairPosition`（0 无 / 1 first / 2 second），三处独立印证（`NewFromBuilder` 的 `and #0xc; cmp #4`、JSON dumper 的 `ubfx #2,#2`、`AddObject` 拆 `kImmediate128` 时写的字面量 `0x11`/`0x12`）；标记点：`LoadNativeEntry` 写 `0x9`、`AddObject` 前言把**紧跟在 first-native 后面的任何一条**改成 second、`EmitInstanceCallAOT` 写 `0x05`/`0x65` 与 `0x06`、`GenerateTTSCall`（**推断，它全内联没有符号**）；92+6+287 = 他们的 **385**；③ `entries[].code` 是他们自己那份 `ObjectPool::DebugPrint`，多一条 `<%ld len string>`、`(raw)` 改叫 `(unknown)`。⚠️ **长串的阈值用 `Utf8::Length`、印出来的数字用 `String::Length()`**，两者混用会把 2112 印成 2844。实测：我们的 `pairs` 与他们**逐项相同（385/385）**、池大小同为 1421、1421 条 entry 里 **1323 条逐字相同**，其余 98 条全是**反序列化重写成本进程地址**的槽（92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`），跨进程本就不可能相同。`op_dump_check.sh` 常设，`OBJECT_POOL_DUMP_RECON.md` 有全部地址级证据 |
 | 真机 A/B：验证 C6 删掉 safepoint guard 后的安全性 | **单侧已实测（2026-09-03，`B5-swap`）**：iPhone 13 上装着由我们的 dart-sdk 编出的 arm64 引擎（LC_UUID `4C4C440F-5555-3144-A1C1-4D8732B23E93` 与构建树逐条对上）、以 `DART_INCLUDE_SIMULATOR` 代码生成模式运行，app 自报 `[B5_RESULT] PASS: 20000 iterations, 200000 GC objects`。可复跑：`tools/b5_device_test/build_and_run_b5.sh`。⚠️ **A/B 两侧（base vs patched）仍未测**，阻塞已定位：`B6-basesnap-crash` —— 只要 `Shorebird_SetBaseSnapshots` 注册 base snapshots，VM 就在启动时 signal 11，**与补丁无关**，有同二进制负控制（`FHP_NO_SETBASE=1` 跑通 / 默认崩）。宿主侧补丁链路已通：`tools/b5_device_test/build_ab_vmcode.sh` 用全自研工具产出 `out.vmcode`，link 100% |
 
@@ -130,7 +148,7 @@ reproduced」）：两边 `nm -a | c++filt` 数各私有子系统的标志符号
 并对一个已知会编译的块做同样的阳性对照。
 
 私有子系统 **5/12** 有实质存在，其中 **2 个基本完成**（`linker.cc` 标志符号持平；stub 生成器 16/16 输出已逐字对比）、11 个 **gen_snapshot** flag 完成 **10.5** 个（`print_shorebird_info` 的引擎半已实现，只剩 gen_snapshot 半等三阶段映射；⚠️ **2026-08-25 订正：这个「11 个」只覆盖 `gen_snapshot`**——`analyze_snapshot` 那一组另有 7 个，**2026-08-26 已实现 7 个里的 7 个减 1**：`--shorebird`/`--out`/`--dump_class_table`/`--dump_blobs`/`--dump_object_pool`/`--dump_object_pool_link_data`，加上「文档化但按他们的样子刻意不注册」的 `--no_pp_hash`；**只剩 `--disassemble`**，它曾实现后**回退**——撞上 VM 自己的同名 flag。`analyze_snapshot_help_check.sh` 现在是 **12 documented / 3 lines withheld**，上一轮是 7/14）、**16 个私有 stub 全部有真 body**（14 个是他们新增的；2 个是上游 stub——`ResumeInterpreter` 开箱即中 12/13，`Resume` 被 Shorebird 加了 18 条）。逐字节命中率：CallClangCode **38/38**、两个 Safepoint 各 72/73、RunDartOnCPU 80/87、CPU→Sim 60/68、ResumeOnSimulator 56/66、Resume 40/48、CallSimFromFfi 29/31、CallToRuntime 32/39、三个 Native 各 27/34、CallNativeThroughSafepoint 30/42、ResumeInterpreter 12/13、ResumeOnCPU 1/4、Sim→CPU 6/7。**所有不一致都只是 Thread 位移字段**——他们的 Shorebird 块在结构中部、我们只能追加，属结构性差异，不可关闭。
-→ **实现约 36–42%**（2026-08-24 一轮内的多项落地；⚠️**这次上调的主要不是新面积，而是「原本就存在的东西现在接上了、并且真的在跑」**——DD 全链路、wrapper 子系统、patch 加载入口。三阶段映射与 base instructions 一行未动）（2026-08-24 两次重测：先是 `DDTableBuilder`/`DDSlotMapping::` 持平，再是 `IndirectStaticCallInstr::` 19/19 集合相同。**DD core 能被符号看见的部分现已全部持平**。⚠️ 旧注「不代表机制能跑、零符号的 IL pass 量不到、没有任何测试构造过这个类」**已全部作废**：IL pass 已实现（`b13e2a0d54e`，方法见 `reference_differential_flag_oracle`），该类有 5 个单测真正构造并执行它，**整条链路已端到端跑通**——1043 函数 / 1622 处间接调用点，输出完全正确）；逆向/oracle 约 **80–85%**。
+→ 🔴 **以下 36–42% / 80–85% 已过期，以本文件开头的 2026-09-04 重测为准：实现 65–80%、逆向约 90%。**（保留原文以存真，**不要引用这两个数**。）原文：实现约 36–42%（2026-08-24 一轮内的多项落地；⚠️**这次上调的主要不是新面积，而是「原本就存在的东西现在接上了、并且真的在跑」**——DD 全链路、wrapper 子系统、patch 加载入口。三阶段映射与 base instructions 一行未动）（2026-08-24 两次重测：先是 `DDTableBuilder`/`DDSlotMapping::` 持平，再是 `IndirectStaticCallInstr::` 19/19 集合相同。**DD core 能被符号看见的部分现已全部持平**。⚠️ 旧注「不代表机制能跑、零符号的 IL pass 量不到、没有任何测试构造过这个类」**已全部作废**：IL pass 已实现（`b13e2a0d54e`，方法见 `reference_differential_flag_oracle`），该类有 5 个单测真正构造并执行它，**整条链路已端到端跑通**——1043 函数 / 1622 处间接调用点，输出完全正确）；逆向/oracle 约 **80–85%**。
 
 **读这个百分比之前，三条限定（缺一条就会读错）**
 
