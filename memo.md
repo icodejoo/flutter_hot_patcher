@@ -611,29 +611,23 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 **目标不是修缺口，是先把缺口数清楚。** 完成判据见 `CLAUDE.md`（覆盖矩阵 + 分类有依据 + 负控制）。
 **不需要真机。**
 
-- [ ] **E1：建覆盖矩阵，并让「没跑到」无法被静默省略**（⬅️ 当前任务）
-      **做什么**：枚举他们 `gen_snapshot` 与 `analyze_snapshot` 的全部 flag
-      （gen_snapshot 8 个私有 FLAG_ + 上游可用者；analyze_snapshot 那组见
-      `analyze_snapshot_help_check.sh`），× 至少 3 组输入
-      （现有 fixture：`out_dd/base.dill`、`out_disas/prog.dart`、`make_op_fixture.py` 的合成输入）。
-      产出 `spikes/shorebird_linkinfo_oracle/parity_matrix.tsv`：
-      每行 = `flag \t input \t ran(yes/no) \t bytes_identical(yes/no/na) \t class(structural/gap/unknown) \t note`
-      🛑 **硬要求**：**未跑到的格子必须显式写 `ran=no`，脚本必须打印「N cells, M unrun」并在 M>0 时非零退出。**
-      理由：本项目栽过——没被选中执行的测试连 SKIPPED 都不打印，靠名字正则选测试对
-      「装在上游文件里的私有改动」天生盲（`Arm64InstructionCountForLoadStoreFromOffset`
-      写了一天从没被跑过）。**声明数与执行数必须相等且都打印出来。**
-      ⚠️ **他们的产物只有 `ios-release/gen_snapshot_arm64` 带私有符号**（32373 唯一符号）；
-      其余 20+ 变体 `ShorebirdLinker` 全为 0。**选错产物整张表变噪音**（2026-09-04 实测栽过）。
-      **判据**：① 矩阵文件存在且 `unrun=0`；② 负控制——把某个 flag 从枚举里删掉，
-      脚本必须报 cell 数下降而不是静默通过。
+- [x] **E1：建覆盖矩阵，并让「没跑到」无法被静默省略**
+      **产出**：`spikes/shorebird_linkinfo_oracle/parity_matrix.sh` + `parity_matrix.tsv`
+      **结果**：`59 cells, 0 unrun, 3 blocked`（3 blocked = `compute_dd_slot_mapping × 3`，
+      需闭源 `--dd_caller_links`）；`verify_all.sh` **20 ran / 0 failed**（EXPECTED_CHECKS=20）。
+      **负控制通过**：删一个 GS_FILE_FLAGS 条目 → `FAIL: expected 59 cells, declared 56`，exit 1。
+      **2026-09-04 实测**，提交待本条写完后入库（研究树）。
 
-- [ ] **E2：对 E1 找出的每处不一致做分类**
+- [ ] **E2：对 E1 找出的每处不一致做分类**（⬅️ 当前任务）
       「结构性」这个结论**必须指名是哪个结构的哪个偏移**，不许只写「Thread 位移」。
       2026-09-04 教训：我把 `Isolate+0x20` 误判成 Thread，**手里已有 `LDR X10,[X10,#0x220]`
       的解码证据却没去看**——观测为真、推论未验。
       **判据**：每条「结构性」都能给出「他们 X+0xA / 我们 X+0xB」的具体数值。
 
 - [ ] **E3：把真缺口编号成可派发的任务卡**，每张带判据与负控制，接回循环
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E1 派发前写入）。恢复：SDK @ `eadefa30021`；研究树 clean；FHP clean；引擎树 diff==probefree.diff（rc=0）；无 PAUSE 文件。**下一项 = E1（建覆盖矩阵）→ 派发子代理。**
+- 2026-09-04 PST — ❤️ **心跳**（续会话，E1 已完成，E2 写入前记录）。SDK @ `eadefa30021`；研究树有 parity_matrix.sh/tsv 未提交；FHP memo 已更新。**E1 完成：`59 cells, 0 unrun, 3 blocked`，verify_all 20/0，负控制通过。下一项 = E2（对不一致做分类）。**
 
 - 2026-09-04 PST — ▶️ **循环恢复做 E1（新主任务：系统性产物对拍）。**
   ✅ **空转守卫首次真实触发并生效**：`round left no trace (3/3: no new commit in any tree,
