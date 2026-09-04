@@ -3626,3 +3626,6 @@ App terminated due to signal 6.
   ⚠️ 本次检查里我自己踩了一个：`grep -c 'iPhone 13.*connected'` 给 **0**，
   但 `devicectl` 的输出里 **`connected` 在 `iPhone 13` 之前** → **正则顺序写反＝假阴性**，
   与「判据能否命中它要证明的东西」是同一条。改用 `grep -c "connected.*iPhone 13"` 得 1。
+
+- 2026-09-04 PST — ❤️ **心跳**。派发 D1（`elf_loader` 走 `mode` 参数）给子代理。
+  基线：`verify_all.sh` 19/0，`run_vm_tests` 151/151，`verify_reproduction.sh` 28/0。
