@@ -224,6 +224,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 - ⏱️ **旧心跳已剪除**（2026-09-04）：本文件曾有 **149 条**心跳、占 84KB。心跳的用途只有一个——**最新那条的时间戳与当前时间相差远超一个轮次间隔 = 循环已停摆**，旧的零信息量。全部保留在 `docs/memo_archive_20260904.md`。**下次它们再堆起来时，同样只留最近 3 条。**
 - 2026-09-04 UTC（claude-sonnet-4-6，本轮）❤️ 心跳（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：三棵树 clean（porcelain 0 行）；无 PAUSE 文件。**循环在人类决策节点——主任务已达成（真机 A/B PATCHED_V2 ✅），三分清单全部关闭（A 表 18/18 ✅、B 表 B5–B8 全 ✅、C 表不可关）。契约§七：外向/不可逆操作必须停下来问人，无可自动派发的下一项；呈报 CLAUDE.md 待定清单等待选择。**- 2026-09-04 UTC（claude-sonnet-4-6，本轮）❤️ 心跳（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，派发前写入）。恢复检查：SDK clean @ `1f1e51ad16e`（porcelain 0 行）；研究树 clean @ `f8cc894`（porcelain 0 行）；FHP 树仅 memo.md 修改 + 未跟踪文件；无 PAUSE 文件。**循环在人类决策节点——主任务已达成（真机 A/B PATCHED_V2 ✅），三分清单全部关闭（A 表 18/18 ✅、B 表 B5–B8 全 ✅、C 表不可关）。根据契约§七停下来，向用户呈报 CLAUDE.md 待定清单等待选择下一方向。**
 - 2026-09-04 UTC（claude-sonnet-4-6，本轮）❤️ 心跳（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `1f1e51ad16e`（porcelain 0 行）；研究树 clean @ `f8cc894`（porcelain 0 行）；FHP 树仅 memo.md 修改；无 PAUSE 文件。**循环在人类决策节点——主任务已达成（真机 A/B PATCHED_V2 ✅），三分清单全部关闭（A 表 18/18 ✅、B 表 B5–B8 全 ✅、C 表不可关）。根据契约§七停下来，向用户呈报 CLAUDE.md 待定清单等待选择下一方向。**
+- 2026-09-04 13:xx UTC（claude-sonnet-4-6，本轮）❤️ 心跳（F5 subagent 完成：研究树 commit `f34f725`，parity_matrix `gap→identical`，verify_all 22/0，F5 `[x]`，下一项 F6 人类持有，停下呈报）。恢复检查：SDK 0 行；研究树 @ `f34f725`；FHP 仅 memo.md；无 PAUSE。
 - 2026-09-04 01:31 UTC（claude-sonnet-4-6，本轮）❤️ 心跳（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `1f1e51ad16e`（porcelain 0 行）；研究树 clean @ `f8cc894`（0 行）；FHP 树仅 memo.md 修改；无 PAUSE 文件。**循环在人类决策节点——主任务已达成（真机 A/B PATCHED_V2 ✅），三分清单全部关闭（A 表 18/18 ✅、B5–B8 ✅、C 表结构性不可关）。根据契约§七停下来，向用户呈报 CLAUDE.md 待定清单等待选择下一方向。**
 
 - 2026-09-04 PST — ⏸️ **循环已停（`.loop/PAUSE`），主任务里程碑达成后的人类决策节点。**
@@ -793,7 +794,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **判据**：含 `&` 的名字数两侧相等且逐条相同；`[unknown stub]` 前缀两侧相同。
       **负控制**：故意对某一类少加前缀 → 计数必须变红。
 
-- [ ] **F5：`print_dd_resolution_to` 的 `rewritten` 列（矩阵里 3 行 `class=gap`，E3 漏掉的那 3 行）**
+- [x] **F5：`print_dd_resolution_to` 的 `rewritten` 列（矩阵里 3 行 `class=gap`，E3 漏掉的那 3 行）**
       我们发 **0**、他们读 **2**。CLAUDE.md 已查明这是**有证据可依的小活**：
       那个 0 来自 `linker.cc:1159` 的**硬编码字面量**，且旧理由「缺 DD IL 子系统」已作废
       （子系统于 `b13e2a0d54e` 实现，`dd_pass_check.sh`/`dd_runtime_check.sh` 常设通过）。
@@ -880,6 +881,36 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **负控制**：把 `--dedup_instructions` 去掉重跑一次，那几格必须变回 unknown ——
       **这一条是本项唯一能证明「修的是真病」的东西**，不做等于没修。
 
+- 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
+  `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
+  F5 那轮把 `print_dd_resolution_to` 从硬编码的 `gap`（连 `bytes_id="no"` 都是写死的）
+  改成实测——**方向对**——但 `--print_dd_resolution_to` 在矩阵这种调用下（没有 voters 文件）
+  **两侧都不写任何东西**，于是 `cmp_files` 拿到两个不存在的文件，答 `yes`，三格全绿。
+  它自己的 commit message 就写着「identical (**empty**) output」。
+  **修法**（`87b3c59`）：`cmp_files` 增加第三个返回值 `vacuous`，三个调用点全部显式处理；
+  只有「emptiness 本身就是结论」的 `dead` 关系可以放行，**且改成断言而非假设**
+  （死 flag 哪天开始有输出，它会自己翻成 unknown）。
+  `print_dd_resolution_to` 改为**带证据的人工判定 `na`**：字节路径在结构上看不见它，
+  真 oracle 是 `dd_pipeline.sh`——他们 `8 slots, 7 retained, 2 rewritten`，
+  我们 `table_size=8 retained=7 rewritten=2`，**今天实跑，两侧一致**。
+  🔴 **比这个缺陷更该记的是 F5 卡片本身**：它援引 `linker.cc:1159` 的硬编码字面量，
+  而那个字面量在 **`afa1f9c73cc`（2026-08-27）** 就没了，**离立卡整整 8 天、27 个提交**。
+  CLAUDE.md 的「断言的保鲜期规则」立于 2026-08-26，要求任何「未做/缺口」断言必须带
+  实测日期与提交号——**F 表自己违反了它**。→ 立卡也要过保鲜期检查，不只是引用旧表时。
+
+- 2026-09-04 PST — ✅ **F7 关闭：对拍两侧现在同模式构建。**
+  `parity_matrix.sh` 造 `as.*.ours.so` 那步加了 `--dedup_instructions`（`2b5a408`）。
+  | 输入 | 修前 ours/theirs | 修后 |
+  |---|---|---|
+  | hello | 1589 / 1380 | **1384 / 1380** |
+  | prog | 3526 / 3216 | **3221 / 3216** |
+  | base_dd | 1589 / 1380 | **1384 / 1380** |
+  **负控制两个方向都跑了**：把 flag 从脚本里删掉重跑，三对全部回到 1589 / 3526。
+  ⚠️ **第一次做这个负控制没打响，原因值得记**：我手工重建了 `.so`（实测确认是 1589），
+  可矩阵**每次运行都重建快照**——`REUSE` 在 `parity_matrix.sh:45` 被**硬编码成 0**，
+  env 里给 `REUSE=1` 根本不生效。→ **负控制必须改脚本，改产物会被下一次运行抹掉。**
+  残差现在是 hello/base_dd **+4**、prog **+5**，成因未确立，note 如实这么写，不叫 structural。
+
 - 2026-09-04 PST — 🔴 **第四个仪器缺陷：审计删掉的那句硬编码判定，在 fallback 分支里原样又有一份。**
   `parity_matrix.sh` 的 `shorebird` 格顶上写着「**Do NOT hardcode a verdict here**」，
   下面 `else` 分支却是 `class="structural"` + 一句带两个冻结字面量（1589 / 1380）的 note。
@@ -925,6 +956,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   ⚠️ 上面那几条心跳里的「E 表全部关闭（0 gap）」**是历史记录，保留存真，结论已由本条取代**。
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F1 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未跟踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc 待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F1）。**下一项 = F1（`--shorebird` 发出 `subgraph_pp`）→ 派发子代理。**
+- 2026-09-04 12:31 UTC（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F5 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树仅未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康）；无 PAUSE 文件。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列接真计数）→ 派发子代理。**
 
 - 2026-09-04 PST — 📄 **文档已跟上审计结论（四处，全部是「被本轮否证的旧断言」而非新内容）。**
 
@@ -973,9 +1005,9 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 |---|---|---|
 | G-a | `unrun == 0` | ✅ 0 |
 | G-b | `blocked` 每条写明被什么挡住 | ✅ 3（闭源 `--dd_caller_links`）|
-| G-c | `unknown == 0` | 🔴 **13**（2026-09-04 20:10 重跑；F6 关掉 shorebird 三格的假 structural，反而让 unknown 从 10 升到 13——**数字变大是仪器变诚实**）|
-| G-d | `gap == 0`（关闭→`na`，或证明→`structural`）| 🔴 **3**（F1/F2/F3 已关；剩 `print_dd_resolution_to` 三格 = F5）|
-| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | 🔴 未施行；`phase_gate.sh` 已起草（scratchpad），落地排在 F7 之后 |
+| G-c | `unknown == 0` | 🔴 **13**（F6/F7 之后仍是 13：shorebird 三格的假 structural 被拆开、`dump_class_table/prog` 新增。**剩下的活就是这 13 格**）|
+| G-d | `gap == 0`（关闭→`na`，或证明→`structural`）| ✅ **0**（F1–F5 全关；`print_dd_resolution_to` 三格改为带证据的 `na`，oracle 是 `dd_pipeline.sh`）|
+| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | 🔴 未施行，**欠账 12 条**；`phase_gate.sh` 四个负控制已过，F7 已完成，下一步就是落地它 |
 | G-f | `verify_all` 全绿且保鲜守卫放行 | ✅ **21/0**（2026-09-04 19:5x 我独立复跑，非轮次自报） |
 | G-g | 每条判定有可复跑的负控制 | 部分 |
 
@@ -1020,3 +1052,5 @@ FHP 树（memo/docs）不在守卫里，随便写。
   **Fix 1**（mixin 全名）：`kUserVisibleName` → `kScrubbedName`，mixin application 类前缀从「最后一个 mixin 名」变为完整 `&` 链；all 101 theirs 名字都在 ours 里（ours 125 > theirs 101 是 F7 去重差异，structural）。
   **Fix 2**（`[unknown stub]` 前缀）：`[Stub] [unknown stub]` 降到 0（was 4），改为裸 `[unknown stub]`。
   **两个负控制均通过**：Fix 1 回退 → 101 个 mixin 名消失变红；Fix 2 回退 → 4 个 `[Stub] [unknown stub]` 变红。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列）。**
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F5 派发前写入）。恢复检查：SDK clean @ `b502748c187`（F4 后的 SDK HEAD，F4 改动在 `bd86cb31e94`）；研究树 clean；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` 检查——F5 标 `- [ ]`，F6/F7 人工持有。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列接真计数）→ 派发子代理。**
