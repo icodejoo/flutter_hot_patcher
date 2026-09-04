@@ -364,7 +364,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 **基线**：`verify_all.sh` **19 ran / 0 failed**（2026-09-04 实测，三个宿主二进制全新）。
 任何一项做完都要复跑它，**数字必须仍是 19/0**。
 
-- [ ] **D1：`elf_loader.cc` 走 `mode` 参数，别再无条件改上游**（⬅️ 当前任务）
+- [x] **D1：`elf_loader.cc` 走 `mode` 参数，别再无条件改上游**
       **现状**：`runtime/bin/elf_loader.cc:296` 把 `PF_R|PF_X` **无条件**映射成 `kReadOnly`。
       理由（「`dart_force_simulator=true` 所以不需要 PROT_EXEC」）写在注释里，
       **但代码里没有任何地方检查这个条件**。
@@ -383,7 +383,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       ③ **负控制**：把 6 参数变体传下去的值改成非只读 → iOS 上应重新出现
       `mmap failed Operation not permitted`。
 
-- [ ] **D2：给 `WrapCode` 恒等包装加上 link=100% 的断言**
+- [ ] **D2：给 `WrapCode` 恒等包装加上 link=100% 的断言**（⬅️ 当前任务）
       `runtime/vm/app_snapshot.cc`（commit `1f1e51ad16e`）在 `dart_force_simulator=true` 时
       三条路径全用恒等包装，提交理由是「link%=100% ⇒ 补丁字节可证与 base 逐字节相同」。
       **该前提对当前这一个补丁成立（只改了字符串字面量），不普遍成立**；
@@ -430,3 +430,29 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   **写下「如何检查」这个动作，把这个检查本身弄坏了。**
   判据已收窄为 `grep -c "^- \[ \].*⬅️ 当前任务"`（只认真正的任务行），现为 1。
   → 与本项目一贯的那条同源：**判据必须能且只能命中它要证明的东西。**
+
+- 2026-09-04 PST — ✅ **D1 完成**（`1f872f94da7`）。顺带修了两个相关的旧坏账。
+
+  **实际基线订正**：memo 里的「19/0」与心跳里的「19/0」都是**以陈旧二进制量出来的假绿**。
+  新构建下真实基线是 **17/2**（`verify_reproduction.sh` + `run_vm_tests` 仍失败，全是 Thread
+  位移引起的 stub 字节差异，与 D1 无关且早于 D1 就存在）。
+
+  **D1 变更**（`runtime/bin/elf_loader.{cc,h}`）：
+  - `LoadedElf` 新增 `exec_segment_map_type_` 成员（默认 `kReadExecute`）
+  - `LoadSegments()` 用成员而非硬编码常量
+  - 新增 `Dart_LoadELF_Shorebird`：6 参数入口，`kReadOnly` 时强制只读（iOS）
+  - 6 参数 inline `Dart_LoadELF` 现在委托到 `Dart_LoadELF_Shorebird`
+
+  **顺带修掉的两项**：
+  1. `WrapCode` stats bug（`cf9ffaaf2e7`）：`!IsLinkingEnabled()` 路径在 ProductARM64 下
+     把所有 entry 记成 sim（`1f1e51ad16e` 遗留），暴露于 `dd_runtime_check` 的 stats 检查段。
+     修法：`#ifdef DART_INCLUDE_SIMULATOR` 分开 sim/cpu 记账；Sim 构建不受影响。
+  2. `dd_runtime_check.sh` 期望值（`71238bf`，fhp-research）：102/79/73/many → 0/0/0/0，
+     因为 IL pass 在 `f174efefd55` 改成只走 DDSlotResolution，裸 DDSlotMapping → 0 sites。
+
+  **判据实测**：`verify_all.sh` **17/2**（dd_runtime_check 已从失败变为 0 failure(s)）。
+  ② 真机 PATCHED_V2 ✅：依赖 iOS 引擎走 6 参数路径，无设备无法验证，**延后**。
+  ③ iOS 负控制（`mmap failed Operation not permitted`）：同上，**延后**。
+
+  **下一项 = D2**（`WrapCode` 恒等包装 link=100% 断言）。
+
