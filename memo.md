@@ -629,9 +629,26 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E1 派发前写入）。恢复：SDK @ `eadefa30021`；研究树 clean；FHP clean；引擎树 diff==probefree.diff（rc=0）；无 PAUSE 文件。**下一项 = E1（建覆盖矩阵）→ 派发子代理。**
 - 2026-09-04 PST — ❤️ **心跳**（续会话，E1 已完成，E2 写入前记录）。SDK @ `eadefa30021`；研究树有 parity_matrix.sh/tsv 未提交；FHP memo 已更新。**E1 完成：`59 cells, 0 unrun, 3 blocked`，verify_all 20/0，负控制通过。下一项 = E2（对不一致做分类）。**
 
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E2 派发前写入）。恢复检查：下一项 = E2（对 E1 不一致做分类）→ 派发子代理。
+
 - 2026-09-04 PST — ▶️ **循环恢复做 E1（新主任务：系统性产物对拍）。**
   ✅ **空转守卫首次真实触发并生效**：`round left no trace (3/3: no new commit in any tree,
   no non-heartbeat memo line)` → 自动置 PAUSE。**D 表清空后它确实拦住了空转，不是死代码**
   （今早装它时只有构造出来的负控制）。`idle_count` 已清零。
   起轮前四棵树：SDK `0` @ `eadefa30021`、研究树 `0`、FHP `0`、**引擎树 diff==saved（rc=0）**；
   磁盘 **53 GB**；基线 `verify_all` **19/0**（独立复跑核验，保鲜守卫放行）。
+
+- 2026-09-04 PST — 🧹 **磁盘压力已自动化：暂停 → 瘦身 → 恢复，不通知人**（`8afe692`）。
+  `tools/loop/disk_slim.sh` + `run_round.sh` 的地板分支改写。
+  **用允许清单不用「删最大的」**——本机最大的五样全长得像缓存，一样都不能删：
+  `~/shorebird_engine` 21G（构建树）、`xcodebuild` 15G（五配置，`verify_all` 要三个）、
+  `iOS DeviceSupport` 5.5G（**只有一条，正是我们的 iPhone 13**）、
+  `.shorebird` 3.9G（**他们的二进制＝我们的 oracle**）、
+  `Caches/vpython-root.502` 587M（depot_tools，**今天打包 xcframework 就缺它**）。
+  → 另设**禁止清单**，每个目标都要过它，不指望允许清单不写错。
+  **负控制**：把 `ReleaseARM64` 与 `DeviceSupport` 塞进允许清单 → 两条都打 `REFUSED` 且目录存活。
+  三层递进，够了就停；够不到地板则**保持暂停并说明原因**（剩下的全在禁止清单上，取舍是人的决定）。
+  PAUSE 在删任何东西之前置上，在跑的轮次不受影响。
+  ⚠️ **端到端测试用 `FHP_LOOP_DISK_FLOOR_GB=999` 强制触发，三层全跑，
+  `Google`/`CocoaPods`/`ms-playwright`/`camoufox` 缓存是真被删了**（约 4–5 GB，都在安全清单内）。
+  这是测试副作用，已如实记录。磁盘现 **54 GB**。
