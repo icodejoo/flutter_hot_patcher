@@ -601,3 +601,36 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   另两次：① 断言 `elf_loader` 无条件改动会弄坏宿主 AOT（实测证伪，真因是 **macOS 允许执行只读页**）；
   ② 质疑 D1 轮「pre-existing」的说法（查证后是我错）。
   **→ 三次都不是没证据，是有证据没去看。**
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约再执行下一项」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `b502748c187`（porcelain 0 行）；研究树仅 3 个未追踪陈旧目录；FHP 仅未追踪文件；引擎树 diff == `engine_tree_current_probefree.diff`（rc=0，健康＝脏得正确）；无 PAUSE 文件。**D 表全部关闭（D1/D2/D3 ✅），`verify_all.sh` 19/0，完成度重测完成（65–80%）。无未完成的 `- [ ]` 任务——循环在人类决策节点，根据契约§七停下来向用户呈报。**
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**循环在人类决策节点，根据契约§七停下来向用户呈报。**
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `b502748c187`；研究树仅未追踪文件；FHP 仅 memo.md 修改；引擎树 diff == probefree.diff（rc=0）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**循环在人类决策节点，根据契约§七停下来向用户呈报。**
+
+## 📋 E 表：系统性产物对拍（2026-09-04 起的主任务，见 CLAUDE.md 规则 0 新增节）
+
+**目标不是修缺口，是先把缺口数清楚。** 完成判据见 `CLAUDE.md`（覆盖矩阵 + 分类有依据 + 负控制）。
+**不需要真机。**
+
+- [ ] **E1：建覆盖矩阵，并让「没跑到」无法被静默省略**（⬅️ 当前任务）
+      **做什么**：枚举他们 `gen_snapshot` 与 `analyze_snapshot` 的全部 flag
+      （gen_snapshot 8 个私有 FLAG_ + 上游可用者；analyze_snapshot 那组见
+      `analyze_snapshot_help_check.sh`），× 至少 3 组输入
+      （现有 fixture：`out_dd/base.dill`、`out_disas/prog.dart`、`make_op_fixture.py` 的合成输入）。
+      产出 `spikes/shorebird_linkinfo_oracle/parity_matrix.tsv`：
+      每行 = `flag \t input \t ran(yes/no) \t bytes_identical(yes/no/na) \t class(structural/gap/unknown) \t note`
+      🛑 **硬要求**：**未跑到的格子必须显式写 `ran=no`，脚本必须打印「N cells, M unrun」并在 M>0 时非零退出。**
+      理由：本项目栽过——没被选中执行的测试连 SKIPPED 都不打印，靠名字正则选测试对
+      「装在上游文件里的私有改动」天生盲（`Arm64InstructionCountForLoadStoreFromOffset`
+      写了一天从没被跑过）。**声明数与执行数必须相等且都打印出来。**
+      ⚠️ **他们的产物只有 `ios-release/gen_snapshot_arm64` 带私有符号**（32373 唯一符号）；
+      其余 20+ 变体 `ShorebirdLinker` 全为 0。**选错产物整张表变噪音**（2026-09-04 实测栽过）。
+      **判据**：① 矩阵文件存在且 `unrun=0`；② 负控制——把某个 flag 从枚举里删掉，
+      脚本必须报 cell 数下降而不是静默通过。
+
+- [ ] **E2：对 E1 找出的每处不一致做分类**
+      「结构性」这个结论**必须指名是哪个结构的哪个偏移**，不许只写「Thread 位移」。
+      2026-09-04 教训：我把 `Isolate+0x20` 误判成 Thread，**手里已有 `LDR X10,[X10,#0x220]`
+      的解码证据却没去看**——观测为真、推论未验。
+      **判据**：每条「结构性」都能给出「他们 X+0xA / 我们 X+0xB」的具体数值。
+
+- [ ] **E3：把真缺口编号成可派发的任务卡**，每张带判据与负控制，接回循环
