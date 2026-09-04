@@ -1,0 +1,131 @@
+diff --git a/engine/src/flutter/lib/ui/dart_runtime_hooks.cc b/engine/src/flutter/lib/ui/dart_runtime_hooks.cc
+index cf57976c..1c9fcda6 100644
+--- a/engine/src/flutter/lib/ui/dart_runtime_hooks.cc
++++ b/engine/src/flutter/lib/ui/dart_runtime_hooks.cc
+@@ -9,6 +9,7 @@
+ #include <cstring>
+ #include <iostream>
+ #include <sstream>
++#include <unistd.h>  // write(2) for stderr forwarding
+ 
+ #include "flutter/common/settings.h"
+ #include "flutter/fml/build_config.h"
+@@ -141,6 +142,11 @@ void DartRuntimeHooks::Logger_PrintString(const std::string& message) {
+   const auto& tag = UIDartState::Current()->logger_prefix();
+   UIDartState::Current()->LogMessage(tag, message);
+ 
++  // Also write to stderr so devicectl --console captures Dart print() output.
++  // On iOS, LogMessage goes to os_log which is NOT captured by devicectl.
++  write(STDERR_FILENO, message.c_str(), message.size());
++  write(STDERR_FILENO, "\n", 1);
++
+   if (dart::bin::ShouldCaptureStdout()) {
+     std::stringstream stream;
+     if (!tag.empty()) {
+diff --git a/engine/src/flutter/runtime/dart_snapshot.cc b/engine/src/flutter/runtime/dart_snapshot.cc
+index 912ac0b0..b0bf07d2 100644
+--- a/engine/src/flutter/runtime/dart_snapshot.cc
++++ b/engine/src/flutter/runtime/dart_snapshot.cc
+@@ -21,10 +21,10 @@
+ 
+ namespace flutter {
+ 
+-const char* DartSnapshot::kVMDataSymbol = "kDartSnapshotData";
+-const char* DartSnapshot::kVMInstructionsSymbol = "kDartSnapshotText";
+-const char* DartSnapshot::kIsolateDataSymbol = "kDartSnapshotData";
+-const char* DartSnapshot::kIsolateInstructionsSymbol = "kDartSnapshotText";
++const char* DartSnapshot::kVMDataSymbol = "kDartVmSnapshotData";
++const char* DartSnapshot::kVMInstructionsSymbol = "kDartVmSnapshotInstructions";
++const char* DartSnapshot::kIsolateDataSymbol = "kDartIsolateSnapshotData";
++const char* DartSnapshot::kIsolateInstructionsSymbol = "kDartIsolateSnapshotInstructions";
+ 
+ // On Windows and Android (in debug mode) the engine finds the Dart snapshot
+ // data through symbols that are statically linked into the executable.
+@@ -161,8 +161,12 @@ static std::shared_ptr<const fml::Mapping> ResolveIsolateData(
+   // Try loading from a Shorebird patch first.
+   if (auto mapping = TryLoadFromPatch(settings.application_library_paths,
+                                       PatchSymbol::kIsolateData)) {
++    fprintf(stderr, "FHPMARK patch isolate_data mapping=%p size=%zu\n",
++            mapping->GetMapping(), mapping->GetSize());
++    fflush(stderr);
+     return mapping;
+   }
++  fprintf(stderr, "FHPMARK no patch isolate_data found\n"); fflush(stderr);
+ #endif  // SHOREBIRD_USE_INTERPRETER
+   return SearchMapping(
+       settings.isolate_snapshot_data,       // embedder_mapping_callback
+@@ -187,8 +191,12 @@ static std::shared_ptr<const fml::Mapping> ResolveIsolateInstructions(
+   // Try loading from a Shorebird patch first.
+   if (auto mapping = TryLoadFromPatch(settings.application_library_paths,
+                                       PatchSymbol::kIsolateInstructions)) {
++    fprintf(stderr, "FHPMARK patch isolate_instrs mapping=%p size=%zu\n",
++            mapping->GetMapping(), mapping->GetSize());
++    fflush(stderr);
+     return mapping;
+   }
++  fprintf(stderr, "FHPMARK no patch isolate_instrs found\n"); fflush(stderr);
+ #endif  // SHOREBIRD_USE_INTERPRETER
+   return SearchMapping(
+       settings.isolate_snapshot_instr,           // embedder_mapping_callback
+diff --git a/engine/src/flutter/runtime/dart_vm.cc b/engine/src/flutter/runtime/dart_vm.cc
+index 95459142..06c945e0 100644
+--- a/engine/src/flutter/runtime/dart_vm.cc
++++ b/engine/src/flutter/runtime/dart_vm.cc
+@@ -445,6 +445,9 @@ DartVM::DartVM(const std::shared_ptr<const DartVMData>& vm_data,
+     TRACE_EVENT0("flutter", "Dart_Initialize");
+     Dart_InitializeParams params = {};
+     params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
++    params.vm_snapshot_data = vm_data_->GetVMSnapshot().GetDataMapping();
++    params.vm_snapshot_instructions =
++        vm_data_->GetVMSnapshot().GetInstructionsMapping();
+     params.create_group = reinterpret_cast<decltype(params.create_group)>(
+         DartIsolate::DartIsolateGroupCreateCallback);
+     params.initialize_isolate =
+diff --git a/engine/src/flutter/runtime/dart_vm_initializer.cc b/engine/src/flutter/runtime/dart_vm_initializer.cc
+index f47198f5..a9450676 100644
+--- a/engine/src/flutter/runtime/dart_vm_initializer.cc
++++ b/engine/src/flutter/runtime/dart_vm_initializer.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "flutter/fml/logging.h"
+ #include "flutter/fml/trace_event.h"
++#include <unistd.h>   // write(2)
+ #include "flutter/lib/ui/ui_dart_state.h"
+ #include "flutter/lib/ui/window/platform_configuration.h"
+ #include "third_party/tonic/converter/dart_converter.h"
+@@ -85,6 +86,11 @@ void DartVMInitializer::Initialize(Dart_InitializeParams* params,
+ 
+   char* error = Dart_Initialize(params);
+   if (error) {
++    // Write directly to stderr so devicectl --console captures it.
++    const char kPrefix[] = "\n[DART_INIT_ERROR] ";
++    write(STDERR_FILENO, kPrefix, sizeof(kPrefix) - 1);
++    write(STDERR_FILENO, error, strlen(error));
++    write(STDERR_FILENO, "\n", 1);
+     FML_LOG(FATAL) << "Error while initializing the Dart VM: " << error;
+     ::free(error);
+   } else {
+diff --git a/engine/src/flutter/runtime/shorebird/patch_cache.cc b/engine/src/flutter/runtime/shorebird/patch_cache.cc
+index c669c01a..38c2be06 100644
+--- a/engine/src/flutter/runtime/shorebird/patch_cache.cc
++++ b/engine/src/flutter/runtime/shorebird/patch_cache.cc
+@@ -28,6 +28,8 @@ std::shared_ptr<PatchCacheEntry> PatchCacheEntry::Create(
+ 
+   int elf_file_offset = Shorebird_ReadLinkHeader(elf_mapping->GetMapping(),
+                                                  elf_mapping->GetSize());
++  fprintf(stderr, "FHPMARK ReadLinkHeader offset=%d\n", elf_file_offset);
++  fflush(stderr);
+ 
+   const char* error = nullptr;
+   // One data blob and one text blob. The VM isolate folded into the isolate
+@@ -40,6 +42,10 @@ std::shared_ptr<PatchCacheEntry> PatchCacheEntry::Create(
+       Dart_LoadELF(path.c_str(), elf_file_offset, &error, &isolate_data,
+                    &isolate_instrs, dart::bin::kReadOnly);
+ 
++  fprintf(stderr, "FHPMARK Dart_LoadELF result=%p error=%s data=%p instrs=%p\n",
++          (void*)elf, error ? error : "(null)", (void*)isolate_data, (void*)isolate_instrs);
++  fflush(stderr);
++
+   if (elf == nullptr) {
+     FML_LOG(ERROR) << "Failed to load patch at " << path << " error: " << error;
+     return nullptr;
