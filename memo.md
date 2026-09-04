@@ -748,18 +748,13 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 （原件在 `2dbb750`，已恢复）。分类现已搬进脚本，经得起重新生成。
 → **教训：分类不能存在产物里，判定不能写成常量。**
 
-- [ ] **F1：`--shorebird` 发出 `subgraph_pp`** ⬅️ 当前任务
-      **现状**：他们每个 function 对象有 14 个键，我们只有 10（全量 1589/1380 条取并集实测，
-      不是只看第一条）。缺的四个：`subgraph_pp`/`subgraph_field_table`/`self_selectors`/`subgraph_selectors`。
-      🔑 **F1 最便宜，因为数据已经算出来了**：`subgraph_pp_indices` 在
-      `runtime/vm/analyze_snapshot_api_impl.cc:2060` 已发进 `--dump_object_pool_link_data`
-      （`grep -rn subgraph_pp_indices runtime/` = 15 处），只是没发进 `--shorebird` 的 functions 数组。
-      **纯发射缺口。** 他们那边 1380 条里 874 条非空、共 21375 个元素。
-      **判据**：矩阵 `shorebird` 三格的 note 里 `subgraph_pp` 消失（剩三个）；
-      与他们逐 function 比对该数组（CLAUDE.md 已记 `subgraph_pp_indices` 在他们 1380 个函数上 1380/1380）。
-      **负控制**：把发出的索引整体 +1 → 逐 function 比对必须变红。
+- [x] **F1：`--shorebird` 发出 `subgraph_pp`** ✅ 2026-09-04 `9b539408c48`
+      `classified.subgraph_pp[ci]` 已由 `ShorebirdSelfAndOpHashes()` 计算，纯发射缺口。
+      **判据满足**：矩阵 `shorebird` 三格 note 里 `subgraph_pp` 已消失（剩 3 个）；
+      自洽检查 `subgraph_pp_check.sh` 1589/1589；`verify_all.sh` **21/0**（+1 check）。
+      **负控制满足**：哨兵附加让 0/1589 匹配 → 退出码 1。
 
-- [ ] **F2：`--shorebird` 发出 `subgraph_field_table`**
+- [ ] **F2：`--shorebird` 发出 `subgraph_field_table`** ⬅️ 当前任务
       **现状**：我们已发 `self_field_table`（同文件 :2237），subgraph 变体没有。
       他们 280/1380 条非空、共 2816 个元素。callee walk 已实现且验证过
       （`subgraph_hash_check.sh` 1380/1380），所以这是「在已有 walk 上取并集」。
