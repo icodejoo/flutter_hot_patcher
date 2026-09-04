@@ -133,8 +133,21 @@ fi
 DISK_FLOOR_GB=${FHP_LOOP_DISK_FLOOR_GB:-15}
 free_gb=$(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}')
 if [ -n "$free_gb" ] && [ "$free_gb" -lt "$DISK_FLOOR_GB" ]; then
-  say "refuse: only ${free_gb} GB free, floor is ${DISK_FLOOR_GB} GB -- free space or raise FHP_LOOP_DISK_FLOOR_GB"
-  osascript -e "display notification \"ralph: stopped, only ${free_gb} GB free\" with title \"flutter_hot_patcher\"" 2>/dev/null || true
+  # Pause, slim, resume -- without waking anyone. PAUSE first so no round can
+  # start while directories are being removed; the round in flight, if any, is
+  # left alone exactly as before.
+  say "refuse: only ${free_gb} GB free, floor is ${DISK_FLOOR_GB} GB -- slimming"
+  touch "$PAUSE"
+  if "$(dirname "$0")/disk_slim.sh" "$LOG"; then
+    rm -f "$PAUSE"
+    say "disk_slim recovered to $(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}') GB -- PAUSE lifted"
+  else
+    # Left paused on purpose. Everything still large is on disk_slim's denylist
+    # (build trees, their oracle binaries, the one DeviceSupport entry that is
+    # our test device), so continuing would just fail the same way next tick.
+    say "disk_slim could not reach the floor -- staying paused, a human has to choose what goes"
+    osascript -e "display notification \"ralph paused: disk still below floor after slimming\" with title \"flutter_hot_patcher\"" 2>/dev/null || true
+  fi
   exit 1
 fi
 
