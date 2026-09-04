@@ -3541,3 +3541,40 @@ App terminated due to signal 6.
   （`out/` vs `out_dd/`、`base.so` vs `out_disas/prog.so`）。
   → **本会话第三次同型错误：判据跑在错的输入上，退出码完全正常。
     「路径从记忆里填」是这一族的共同病根。**
+
+- 2026-09-04 PST — ✅ **里程碑已在干净产物上复现**（探针清零），并修掉沿途四个各自独立的问题。
+
+  **真机结果**：`[B5_RESULT] PASS: PATCHED_V2 ✅`，engine 与 installed 的 `LC_UUID`
+  同为 `4C4C44D5-5555-3144-A12F-3535AE13BF66`。产物 md5 `2597bced83…` → **`03a8062739…`**，
+  `strings | grep -c FHPMARK` **6 → 0**，`ninja` 真 exit 0。
+
+  🔑 **这次的判据是自带负控制的**：`b5_test_app/lib/main.dart` 在 git 里**未修改**，
+  基线文案是 `'PASS ✅\n$iterations iterations, …'`，**不含 `PATCHED_V2`**
+  ⇒ 该串只可能来自补丁。补丁没加载（B7 那种回落）时打出的会是 `20000 iterations`。
+  ⚠️ **不要用 `strings app.dill | grep -c PATCHED_V2`**：含 `✅` 的字面量是 UTF-16
+  TwoByteString，`strings` 看不见 → 它给 0 是**假阴性**，我差点照它下结论。
+
+  **沿途四个问题（没有一个能从读代码得出）**：
+  1. 检查一直查 `~/.shorebird/` 缓存，**真正在建的是 `~/shorebird_engine/`** → 契约已加第四棵树（`53ca016`）
+  2. **`grep -c FHPMARK` 这个谓词本身不够**：33 行里只有 6 行带标记，
+     另外两类（观测通路、真功能改动）**跑对树也抓不到** → 判据改为 `git status --porcelain`
+  3. 那 33 行**从没进过版本控制**，树一清里程碑就不可复现 → 已抢救入库（`b2f0335`）
+  4. `ninja` 首次 `[code=127] vpython3: command not found` 卡在打包 xcframework，
+     留下**现行陷阱**：`Flutter.xcframework` 里仍是带探针的旧二进制，而同目录
+     `Flutter.framework` 已更新 → `PATH=~/depot_tools:$PATH` 重打包，两份现已同 md5
+
+  **清理原则（重要，不是全部还原）**：只清 A 类 `fprintf FHPMARK`；
+  **B 类**（`dart_runtime_hooks.cc` 把 `print()` 转发到 stderr —— iOS 上 `LogMessage` 走
+  os_log、`devicectl` 抓不到，**还原它判据本身就消失**）与
+  **C 类**（`dart_snapshot.cc` 四个 ELF 符号名、`dart_vm.cc` 的 `params.vm_snapshot_*`）
+  **逐条按名字确认存活**，不靠行数。当前树 4 文件 / +19 −4，已存
+  `engine/patches/engine_tree_current_probefree.diff`。
+
+  ⚠️ **我自己本会话踩的两个「退出码正常但事情没发生」**：
+  `${PIPESTATUS[0]}` 在该 shell 未展开 → `ninja` 的失败被报成 exit 0；
+  **cwd 跨命令复位** → 相对路径调用脚本静默什么都没干（与 2026-09-02 记的
+  「`cd` 后 `test -e .loop/PAUSE` 恒为假」同源）→ **调脚本一律用绝对路径。**
+
+  **改动文件**：`engine/patches/{b8_milestone_engine_tree.diff,engine_tree_current_probefree.diff,README_b8_milestone.md}`、
+  `docs/LOOP_CONTRACT.md`（第八节三棵树→四棵）、`memo.md`。
+  提交：`b2f0335` / `53ca016` / `9227e7f`。**引擎树与 SDK 树均无源码回退。**
