@@ -3616,3 +3616,13 @@ App terminated due to signal 6.
 🛑 **开工前必读**：`docs/LOOP_CONTRACT.md` 第八节现在是**四棵树**，
 且**第四棵（引擎构建树）的健康判据与前三棵相反——它应该是脏的，不许清理**。
 判据是 `diff <(git -C ~/shorebird_engine/engine/src/flutter diff -- engine/src/flutter/) engine/patches/engine_tree_current_probefree.diff` 为 0。
+
+- 2026-09-04 PST — ▶️ **循环恢复（用户指令）。起轮前四棵树逐项实测**：
+  SDK `0` dirty @ `1f1e51ad16e`、fhp-research `0`、flutter_hot_patcher `0`、
+  **引擎树 `diff == engine_tree_current_probefree.diff`（rc=0，这棵的健康＝脏得正确）**；
+  SDK stash `1`（09-03 那次 auto-stash，内容已被 `1f1e51ad16e` 吸收，冗余）；
+  iPhone 13 `connected`；磁盘 **56 GB**（地板 15）；`grep -c "⬅️ 当前任务"` = **1**（无多真相）。
+  **下一项 = D1（`elf_loader` 走 `mode` 参数）。**
+  ⚠️ 本次检查里我自己踩了一个：`grep -c 'iPhone 13.*connected'` 给 **0**，
+  但 `devicectl` 的输出里 **`connected` 在 `iPhone 13` 之前** → **正则顺序写反＝假阴性**，
+  与「判据能否命中它要证明的东西」是同一条。改用 `grep -c "connected.*iPhone 13"` 得 1。
