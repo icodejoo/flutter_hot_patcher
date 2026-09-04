@@ -760,15 +760,16 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **判据满足**：`verify_all` 21/0；parity matrix `shorebird` 三格 missing 集为空；
       全走 286/1380 非空，限 depth0 仅 126/1380 → **负控制满足**（restriction-makes-it-fail）。
 
-- [ ] **F3：`self_selectors` / `subgraph_selectors`（真没算）** ⬅️ 当前任务
+- [x] **F3：`self_selectors` / `subgraph_selectors`（真没算）** ✅ `ba6a494b320`
       **现状**：`grep -nEc 'Selector|selector' runtime/vm/analyze_snapshot_api_impl.cc` = **1**
       ⇒ 与 F1/F2 不同，这两个是**没有计算**，不是没发。
       他们 159/430 条非空、共 332/3561 个元素，值形如 `[0, 0, 4864]`。
       🔑 **不必从零反推**：`print_dispatch_table_link_info_to` 已**逐字节相同**，
       且 DWARF 给过 `SelectorRowInfo` 类型（CLAUDE.md 有记录）⇒ selector 数据在树里已有来源。
       **判据**：逐 function 与他们相同。**负控制**：漏掉 subgraph 的传递闭包 → `subgraph_selectors` 变红而 `self_selectors` 不变。
+      ✅ **完成**：`DecodeDispatchCall` 加 `selector_offset` 参数（Case 4 ARM64 立即数精确提取，其余回落 0）；`ShorebirdClassifiedStep::value` 存 selector_offset；`ShorebirdClassifiedHashes` 加两字段；DFS walk 的 kDispatch case 收集 self/subgraph_selectors；JSON 发射替换 DELIBERATELY ABSENT 注释。`verify_all` **21/0**，parity matrix missing 集为空，负控制通过（subgraph 退化为 depth0-only → class_table_dump_check.sh 报 subgraph total 157 < self total 204）。SDK `ba6a494b320`。
 
-- [ ] **F4：函数名渲染的两处分歧**
+- [ ] **F4：函数名渲染的两处分歧** ⬅️ 当前任务
       ✅ **已确认不受 F6 的去重仪器缺陷影响**（2026-09-04 19:2x 实测，不是推理）：
       在打开 `--dedup_instructions` 重建的产物上重量一遍，三个数字全不变——
       `&` 名 **他们 101 / 我们 0**、`[Stub] ` 前缀 **197 / 201**、`[unknown stub]` **4 / 4**。
@@ -872,6 +873,18 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **负控制**：把 `--dedup_instructions` 去掉重跑一次，那几格必须变回 unknown ——
       **这一条是本项唯一能证明「修的是真病」的东西**，不做等于没修。
 
+- 2026-09-04 PST — 🔴 **第四个仪器缺陷：审计删掉的那句硬编码判定，在 fallback 分支里原样又有一份。**
+  `parity_matrix.sh` 的 `shorebird` 格顶上写着「**Do NOT hardcode a verdict here**」，
+  下面 `else` 分支却是 `class="structural"` + 一句带两个冻结字面量（1589 / 1380）的 note。
+  F3 把四个字段补齐、键集合相等之后，三格就顺着这条 fallback 落进了 **structural**——
+  而那个计数正是 F6 证明属于**对拍工具自己**的构建模式差异。
+  **判据不是我说的，是数字自己露的**：把计数改成实测之后，`prog` 报的是 **3526 / 3216**；
+  旧 note 对三个输入都写 1589/1380，**其中两个是错的**。
+  已修（研究树 `698dc2a`）：两侧计数实测、判定改 `unknown`、note 指向 F7。
+  矩阵随之 gap 3 / na 31 / structural 12 / unknown 13。
+  **教训比缺陷本身重要：删掉一处硬编码判定时，要问「同一个函数里还有没有第二条出口」。**
+  审计当时只改了 early-return 那条，fallback 那条活了下来，并且在 11 天后被 F3 走到。
+
 - 2026-09-04 PST — 🔴 **E 表的「0 个 gap」已撤回。审计出 6 个缺口，其中 2 个是 E 表自己的仪器缺陷造成的盲区。**
 
   **为什么去审计**：规则 0 的完成判据第 2 条要求「『结构性』必须给出是哪个结构的哪个偏移」，
@@ -953,10 +966,10 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 |---|---|---|
 | G-a | `unrun == 0` | ✅ 0 |
 | G-b | `blocked` 每条写明被什么挡住 | ✅ 3（闭源 `--dd_caller_links`）|
-| G-c | `unknown == 0` | 🔴 **10**（全挡在 F6）|
-| G-d | `gap == 0`（关闭→`na`，或证明→`structural`）| 🔴 **6**（F1–F5 + F6 的产物）|
-| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | 🔴 未施行 |
-| G-f | `verify_all` 全绿且保鲜守卫放行 | ✅ 20/0 |
+| G-c | `unknown == 0` | 🔴 **13**（2026-09-04 20:10 重跑；F6 关掉 shorebird 三格的假 structural，反而让 unknown 从 10 升到 13——**数字变大是仪器变诚实**）|
+| G-d | `gap == 0`（关闭→`na`，或证明→`structural`）| 🔴 **3**（F1/F2/F3 已关；剩 `print_dd_resolution_to` 三格 = F5）|
+| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | 🔴 未施行；`phase_gate.sh` 已起草（scratchpad），落地排在 F7 之后 |
+| G-f | `verify_all` 全绿且保鲜守卫放行 | ✅ **21/0**（2026-09-04 19:5x 我独立复跑，非轮次自报） |
 | G-g | 每条判定有可复跑的负控制 | 部分 |
 
 **G-e 是这一节的核心。** 规则 0 判据第 2 条本来就要求「『结构性』必须给出是哪个结构的
@@ -991,3 +1004,7 @@ FHP 树（memo/docs）不在守卫里，随便写。
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F2 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F2）。**下一项 = F2（`--shorebird` 发出 `subgraph_field_table`）→ 派发子代理。**
 
 - 2026-09-04 PST — ✅ **F2 完成**（SDK `eed8ee6c7b4`，子代理执行）。`verify_all` **21/0**，parity matrix `shorebird` missing 集为空，负控制通过（depth0 限制使 286→126、矩阵变红）。**下一项 = F3（`self_selectors` / `subgraph_selectors`）。**
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F3 派发前写入）。恢复检查：SDK clean @ `b502748c187`（porcelain 0 行）；研究树 clean（仅未追踪）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F3）。**下一项 = F3（`self_selectors` / `subgraph_selectors`，真没算）→ 派发子代理。**
+
+- 2026-09-04 PST — ✅ **F3 完成**（SDK `ba6a494b320`，子代理执行）。`verify_all` **21/0**，parity matrix `shorebird` missing 集为空，负控制通过（subgraph 退化为 depth0-only → class_table_dump_check.sh 报 subgraph total < self total）。**下一项 = F4（函数名渲染两处分歧）。**
