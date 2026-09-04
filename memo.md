@@ -769,7 +769,14 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **判据**：逐 function 与他们相同。**负控制**：漏掉 subgraph 的传递闭包 → `subgraph_selectors` 变红而 `self_selectors` 不变。
       ✅ **完成**：`DecodeDispatchCall` 加 `selector_offset` 参数（Case 4 ARM64 立即数精确提取，其余回落 0）；`ShorebirdClassifiedStep::value` 存 selector_offset；`ShorebirdClassifiedHashes` 加两字段；DFS walk 的 kDispatch case 收集 self/subgraph_selectors；JSON 发射替换 DELIBERATELY ABSENT 注释。`verify_all` **21/0**，parity matrix missing 集为空，负控制通过（subgraph 退化为 depth0-only → class_table_dump_check.sh 报 subgraph total 157 < self total 204）。SDK `ba6a494b320`。
 
-- [ ] **F4：函数名渲染的两处分歧** ⬅️ 当前任务
+- [x] **F4：函数名渲染的两处分歧** ✅ 2026-09-04 SDK `bd86cb31e94` / fhp-research `d43b0fb`
+      ✅ **本轮那句「多出来的 24 个是 F7 去重差异」已由我实测坐实，不再是断言**
+      （2026-09-04 20:3x，人工侧）：用 F4 之后的 `gen_snapshot`/`analyze_snapshot`
+      加 `--dedup_instructions` 重建 `hello`，得 total 1384、**`&` 名 101 / 101**，
+      而且**两侧名字集合逐条相同**（ours-only 0、theirs-only 0，不只是计数相等）；
+      `[Stub] ` 前缀 **197 / 197**、裸 `[unknown stub]` **4 / 4**。
+      ⚠️ 措辞订正：那 24 个**不是「结构性」**——它是 F6 查明的**对拍工具构建模式缺陷**，
+      F7 修完就消失。structural 的门槛是能说出哪个结构的哪个偏移，这里说不出，也不需要说。
       ✅ **已确认不受 F6 的去重仪器缺陷影响**（2026-09-04 19:2x 实测，不是推理）：
       在打开 `--dedup_instructions` 重建的产物上重量一遍，三个数字全不变——
       `&` 名 **他们 101 / 我们 0**、`[Stub] ` 前缀 **197 / 201**、`[unknown stub]` **4 / 4**。
@@ -1008,3 +1015,8 @@ FHP 树（memo/docs）不在守卫里，随便写。
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F3 派发前写入）。恢复检查：SDK clean @ `b502748c187`（porcelain 0 行）；研究树 clean（仅未追踪）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F3）。**下一项 = F3（`self_selectors` / `subgraph_selectors`，真没算）→ 派发子代理。**
 
 - 2026-09-04 PST — ✅ **F3 完成**（SDK `ba6a494b320`，子代理执行）。`verify_all` **21/0**，parity matrix `shorebird` missing 集为空，负控制通过（subgraph 退化为 depth0-only → class_table_dump_check.sh 报 subgraph total < self total）。**下一项 = F4（函数名渲染两处分歧）。**
+
+- 2026-09-04 PST — ✅ **F4 完成**（SDK `bd86cb31e94` / fhp-research `d43b0fb`）。`verify_all.sh` **22 ran / 0 failed**（EXPECTED_CHECKS 21→22，新增 `f4_name_rendering_check.sh`）。
+  **Fix 1**（mixin 全名）：`kUserVisibleName` → `kScrubbedName`，mixin application 类前缀从「最后一个 mixin 名」变为完整 `&` 链；all 101 theirs 名字都在 ours 里（ours 125 > theirs 101 是 F7 去重差异，structural）。
+  **Fix 2**（`[unknown stub]` 前缀）：`[Stub] [unknown stub]` 降到 0（was 4），改为裸 `[unknown stub]`。
+  **两个负控制均通过**：Fix 1 回退 → 101 个 mixin 名消失变红；Fix 2 回退 → 4 个 `[Stub] [unknown stub]` 变红。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列）。**
