@@ -130,7 +130,24 @@ fi
 # round already in flight is left alone; the loop simply stops taking new work
 # until a human frees space. That keeps the check honest -- it cannot half-kill
 # a build and leave the tree in a state nobody can explain.
-DISK_FLOOR_GB=${FHP_LOOP_DISK_FLOOR_GB:-15}
+# 15 -> 25 on 2026-09-04. 15 was chosen when hitting the floor meant a dead
+# stop until a human noticed, so it was set low to avoid nagging. Two things
+# changed that:
+#
+#   · By its own stated reasoning 15 was too low: the number came from the iOS
+#     engine sync costing 15 GB, which means a round starting at 15.1 GB free
+#     and then doing that sync fills the volume -- the exact outcome the floor
+#     exists to prevent. The floor refuses a START; it cannot stop a round that
+#     already began from eating everything.
+#   · Hitting it now runs disk_slim and continues, so triggering early is cheap.
+#     A threshold that costs a cache re-download should fire well before one
+#     that costs the machine.
+#
+# 25 survives the largest single operation we have measured (~15 GB) with 10 GB
+# to spare. Do not raise it much further: the reclaimable caches total only
+# 5-8 GB and do not regrow quickly, so a floor that slimming cannot clear would
+# leave the loop paused forever with plenty of real space free.
+DISK_FLOOR_GB=${FHP_LOOP_DISK_FLOOR_GB:-25}
 free_gb=$(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}')
 if [ -n "$free_gb" ] && [ "$free_gb" -lt "$DISK_FLOOR_GB" ]; then
   # Pause, slim, resume -- without waking anyone. PAUSE first so no round can
