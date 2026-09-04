@@ -754,13 +754,13 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       自洽检查 `subgraph_pp_check.sh` 1589/1589；`verify_all.sh` **21/0**（+1 check）。
       **负控制满足**：哨兵附加让 0/1589 匹配 → 退出码 1。
 
-- [ ] **F2：`--shorebird` 发出 `subgraph_field_table`** ⬅️ 当前任务
-      **现状**：我们已发 `self_field_table`（同文件 :2237），subgraph 变体没有。
-      他们 280/1380 条非空、共 2816 个元素。callee walk 已实现且验证过
-      （`subgraph_hash_check.sh` 1380/1380），所以这是「在已有 walk 上取并集」。
-      **判据**：与他们逐 function 相同。**负控制**：把并集换成只取自身 → 变红。
+- [x] **F2：`--shorebird` 发出 `subgraph_field_table`** ✅ 2026-09-04 `eed8ee6c7b4`
+      DFS callee walk 的 `kField` case 收集 `subgraph_field`（`field_subgraph_seen` 去重，first-seen 序）；
+      `ShorebirdClassifiedHashes` 新增成员；JSON 发射紧跟 `self_field_table`。
+      **判据满足**：`verify_all` 21/0；parity matrix `shorebird` 三格 missing 集为空；
+      全走 286/1380 非空，限 depth0 仅 126/1380 → **负控制满足**（restriction-makes-it-fail）。
 
-- [ ] **F3：`self_selectors` / `subgraph_selectors`（真没算）**
+- [ ] **F3：`self_selectors` / `subgraph_selectors`（真没算）** ⬅️ 当前任务
       **现状**：`grep -nEc 'Selector|selector' runtime/vm/analyze_snapshot_api_impl.cc` = **1**
       ⇒ 与 F1/F2 不同，这两个是**没有计算**，不是没发。
       他们 159/430 条非空、共 332/3561 个元素，值形如 `[0, 0, 4864]`。
@@ -861,6 +861,14 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       即两侧都是 product、去重都开着。**受影响的只有 as 那组。**
       **判据**：重跑后 `unknown` 从 10 降下来，且每格的 note 不再引用「+209 未解释的
       Function-owned surplus」（`parity_matrix.sh:459/463/467` 三处现在都这么写）。
+      **重跑前先立预测**（hello，已在 scratchpad 上实测过一遍，重跑必须命中这几个数，
+      对不上说明改的不是同一件事）：
+      | 产物 | 现状 ours | 加 flag 后 ours | theirs |
+      |---|---:|---:|---:|
+      | `--shorebird` 条目数 | 1589 | **1384** | 1380 |
+      | `dump_object_pool` 字节 | 441452 | **406779** | 403543 |
+      | `dump_object_pool_link_data` 字节 | 217349 | **193773** | 193312 |
+      | `dump_class_table` 字节 | 32177 | 32177 | 32177（本来就相同，用作阴性对照）|
       **负控制**：把 `--dedup_instructions` 去掉重跑一次，那几格必须变回 unknown ——
       **这一条是本项唯一能证明「修的是真病」的东西**，不做等于没修。
 
@@ -981,3 +989,5 @@ FHP 树（memo/docs）不在守卫里，随便写。
 - **判定不得写成常量**（E 表踩过：`shorebird` 三格硬编码，原理上不可能报缺口）
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F2 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F2）。**下一项 = F2（`--shorebird` 发出 `subgraph_field_table`）→ 派发子代理。**
+
+- 2026-09-04 PST — ✅ **F2 完成**（SDK `eed8ee6c7b4`，子代理执行）。`verify_all` **21/0**，parity matrix `shorebird` missing 集为空，负控制通过（depth0 限制使 286→126、矩阵变红）。**下一项 = F3（`self_selectors` / `subgraph_selectors`）。**
