@@ -238,6 +238,18 @@ fi
 # Reset consecutive-refuse counter now that we passed the dirty-tree guard.
 printf '0' >"$REFUSE_COUNT_FILE" 2>/dev/null || true
 
+# ---- stash debt ------------------------------------------------------------
+# The guard above can swallow real work: 2026-09-03's auto-stash held the iOS
+# PROT_EXEC fix and sat un-popped for a day because the WARNING scrolled past.
+# A stash nobody pops is indistinguishable from work nobody did, so re-report
+# it every round -- loudly, not via say_once -- until someone pops or drops it.
+for tree in "$SDK" "$RESEARCH"; do
+  debt=$(git -C "$tree" stash list 2>/dev/null | grep -c 'auto-stash-round-' || true)
+  if [ "${debt:-0}" -gt 0 ]; then
+    say "STASH DEBT: $tree holds $debt un-popped auto-stash(es) -- git -C $tree stash list"
+  fi
+done
+
 # ---- idle detection --------------------------------------------------------
 # A round that finds nothing to do still exits 0 and still logs "round end",
 # so on disk it is indistinguishable from a round that did work. That is how
