@@ -383,7 +383,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       ③ **负控制**：把 6 参数变体传下去的值改成非只读 → iOS 上应重新出现
       `mmap failed Operation not permitted`。
 
-- [ ] **D2：给 `WrapCode` 恒等包装加上 link=100% 的断言**（⬅️ 当前任务）
+- [x] **D2：给 `WrapCode` 恒等包装加上 link=100% 的断言**
       `runtime/vm/app_snapshot.cc`（commit `1f1e51ad16e`）在 `dart_force_simulator=true` 时
       三条路径全用恒等包装，提交理由是「link%=100% ⇒ 补丁字节可证与 base 逐字节相同」。
       **该前提对当前这一个补丁成立（只改了字符串字面量），不普遍成立**；
@@ -456,3 +456,110 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
   **下一项 = D2**（`WrapCode` 恒等包装 link=100% 断言）。
 
+- 2026-09-04 PST — ❤️ **心跳**。派发 D2（`WrapCode` 恒等包装加 link=100% 断言）给子代理。基线：`verify_all.sh` 17/2。
+- 2026-09-04 PST — ✅ **D2 完成**（`b502748c187`）。`verify_all.sh` **19 ran / 2 failed**（与 D1 完成时基线一致）。
+
+  **变更**（`runtime/vm/app_snapshot.cc`）：在 `WrapCode` 的 `is_cpu()` Simulator 路径，`return EntryPoints(...)` 之前加 `#if DART_INCLUDE_SIMULATOR` / `RELEASE_ASSERT(memcmp(payload_start, base_entry, length) == 0)`。验证「patch 字节 == base 字节」的假设而不只靠注释。
+
+  **负控制发现（重要）**：`RELEASE_ASSERT(false)` 在所有 verify_all 检查中**均未触发**——该断言路径要求 `IsLinkingEnabled()` 为 true（需 LinkOracle + base instructions table），而所有 host-side 测试都不提供 base snapshot，所以路径不可达。**Host-side 负控制不存在**；设备级负控制才能触发（需 link<100% 的补丁，而 linker accept threshold 正常情况下阻止此类补丁被接受）。这是结构性限制，不是实现错误。
+
+  **D 表已全部完成**（D1 + D2）。下一步见 CLAUDE.md 待定清单——需人类决定。
+
+
+## 🔧 D 表修订（2026-09-04，本块取代上文第 364 行的基线声明）
+
+🔴 **基线更正：不是 `19 ran / 0 failed`，真实基线是 `17 ran / 2 failed`。**
+上文那句「三个宿主二进制全新」漏了第四个——**`run_vm_tests` 没重建**，
+它的 `151 passed` 来自 09-03 之前的旧二进制，**掩盖了 4 个真实的 stub 失败**。
+⚠️ 这是**陈旧的绿**，比陈旧的红危险：红会被人去查，绿会被相信并当成基线往下传，
+而它确实被写进了 D1 卡片。**（本条即为受害者，故就地更正。）**
+
+✅ **已加结构性守卫**（研究树 `f30f99e`）：`verify_all.sh` 现在拒绝对早于 HEAD 的二进制下结论，
+`exit 2`（既有的「前提缺失」码，不算通过），并点名是哪个、何时构建。
+负控制三向已验。→ **今后 `verify_all` 若打印 `BLOCKED: binaries older than HEAD`，
+先重建再跑，不要用 `SKIP_STALENESS_GUARD=1` 绕过。**
+
+- [ ] **D3：更新 stub 期望值以匹配 `11dcd2b4c9c` 之后的 Thread 布局**
+      **现象**：`run_vm_tests` 4 项红 + `verify_reproduction.sh`（14 stubs / 3 failure、28 artifacts / 1 failure）：
+      `StubCode_Shorebird{CpuToSimBody,CallSimFromFfi,ResumeOnSimulator,RunDartOnCPU}MatchesTheirBytes`
+      **已查明的归因（有证据，别再重查）**：Thread 布局由 **`11dcd2b4c9c`**（09-03 的 B6 修复）改动，
+      `git log -- runtime/vm/thread.h runtime/vm/thread.cc` 的最近一条就是它；
+      **D1 两个提交碰 thread 文件数均为 0**（`git show --stat <sha> | grep -c thread`）。
+      **与 D1 无关**，是 09-03 起就存在、只因 `run_vm_tests` 未重建而不可见。
+      **失败形态**：单个字之差，如 `0xF940114A` vs `0xF940E94A` ——
+      同一条 `LDR X10,[X10,#imm]`，仅 Thread 偏移字段不同（`0x220` → `0x1D28`）。
+      ⚠️ **这属于 C 表那类结构性差异**（他们的 Shorebird 块在结构中部、我们只能追加
+      ⇒ **所有编码 Thread 偏移的指令永远不会逐字节相同**）。
+      **所以 D3 不是「修好让它们逐字节相同」——那做不到。**
+      正确做法是让期望值随 Thread 布局重新推导（或在比较时排除位移字段），
+      **并在测试里写明这几个字为何被豁免**，否则下一次 Thread 一动又是一片红而无人知道该不该慌。
+      ⚠️ **期望值必须 product/release 两个构建都测**（本项目已记：两构建的 stub 期望值不同，
+      差异索引就是必须推导的集合）。
+      **判据**：① `verify_all` 回到 `19 ran / 0 failed`（且守卫未 BLOCKED，即四个二进制都比 HEAD 新）；
+      ② **负控制**：手工把某个豁免字段改成别的值，对应测试必须变红——
+      证明豁免的是位移字段本身，不是把整条指令都放过了。
+
+⚠️ **待合并**：本块是在一轮正在运行时**追加**的（改写会覆盖它的输出）。
+下次无轮次运行时，应把第 364 行的 `19 ran / 0 failed` 就地改掉并删除本段的重复声明——
+**同一份状态文件里两个基线并存，正是本项目栽过的「多重真相」。**
+
+- 2026-09-04 PST — ⏸️ **PAUSE 已置于 D2 运行中（用户指令：D2 跑完后重测完成度）。**
+  PAUSE 只拦新轮次启动，不杀在跑的轮次（09-04 10:53 实测：10:01 那轮照样跑到 11:29）。
+  **D2 结束后循环停住**，构建资源让给测量，不与 D3 抢 ninja。
+
+  **下一项（人工执行，非循环）= 完成度重测**。动机：`CLAUDE.md` 的 **36–42% / 80–85%**
+  是 **2026-08-24** 记的，而 `git log --since=2026-08-24` 显示此后 SDK 有 **80 个提交**，
+  其中 08-24→08-27 的 **55 个**是实打实的子系统面积
+  （`object_pool_editor.cc` 1331 行、类表/对象池两个映射器、`field_hasher.cc`、
+  `print_shorebird_info` 两个 pass、聚合器、`WrapCode`、`ObjectPoolLinkInfo` 格式、
+  5 个 analyze_snapshot flag、`--dump_object_pool`、subgraph hash walk、`CascadeLimiter`）。
+  ⇒ **那个数字几乎肯定偏低，且它过期这件事本身就是结论，不是注脚。**
+  （09-01→09-04 的 12 个提交确实几乎没加面积：B4→B8 是真机 bring-up，
+  09-04 大半是修记录——插桩未还原、四棵树少一棵、陈旧二进制假绿、memo 涨到 498KB。
+  必须做，但其中相当一部分是在还早期草率的债。）
+
+  🛑 **测量前置（今天已被证明四次）**：必须先把 **ProductARM64 与 ReleaseARM64 都建新**，
+  否则测的是混龄二进制。`verify_all` 的保鲜守卫拦得住它自己，**拦不住手工 `nm`**。
+  ⚠️ 且符号表判据已知失效四例（`sha1_`/`ClassTableMapper`/`SubgraphHasher`/`mappers`
+  都是「名字对不上」而非功能缺失）→ **「一侧为 0」只是提示，真判据是逐项对比他们的产物。**
+
+## 📊 完成度重测（2026-09-04，实测，取代 CLAUDE.md 的 2026-08-24 记录）
+
+**动机**：旧数 36–42% 记于 08-24，而其后 SDK 有 **80 个提交**，其中 08-24→08-27 的 55 个
+是实打实的子系统面积。**「数字过期」本身就是结论，不是注脚。**
+
+**前置**：`ninja` 判定新鲜（Release「no work to do」；Product `analyze_snapshot` 确实陈旧、已重建）。
+⚠️ **他们的产物只有一个带私有符号**：`ios-release/gen_snapshot_arm64`（32373 唯一符号，与旧记录吻合）。
+其余 20+ 变体 `ShorebirdLinker` 全是 **0** —— 我第一次选了 `darwin-x64-release`，测出一片假的「仅他们有」。
+**选错产物会让整张表变成噪音。**
+
+| 轴 | 他们 | 我们 | 判定 |
+|---|---:|---:|---|
+| gen_snapshot 唯一符号 | 32373 | 33851 | （我们未 strip，高不代表进展）|
+| **12 项私有子系统标志符号** | 均 >0 | **均 >0** | ✅ **12/12 双边都有**（08-24 时是 5/12）|
+| `ShorebirdLinker` | 20 | 40 | ✅ |
+| `IndirectStaticCallInstr::` | 42 | 32 | ✅（方法名集合早已 diff 为空）|
+| `DDTableBuilder` / `DDSlotMapping` | 8 / 2 | 8 / 2 | ✅ 持平 |
+| `ObjectPoolEditor` / `PadLoadStore` / `FieldHash` | 2/2/2 | 4/2/6 | ✅ |
+| **私有 flag（`FLAG_` 符号）** | **8** | **8** | ✅ **8/8，零缺口** |
+| 全部 `FLAG_` 符号 | 258 | 254 | **仅他们有 4 个**，全是 `sim_*`/`stop_sim_at`/`trace_sim_after` ——
+  已复核在 `DebugSIMARM64` 构建里存在 ⇒ **模拟器条件编译差异，不是缺口** |
+| `gen_snapshot --help` | 54 行 | 54 行 | ✅ **`cmp` 逐字节相同** |
+| analyze_snapshot `CascadeLimiter` | 18 | 31 | ✅ |
+| analyze_snapshot `GetObjectPoolLinkInfo` / `Dart_DumpObjectPool` | 2 / 4 | 2 / 4 | ✅ 持平 |
+| analyze_snapshot `SubgraphHasher` | 12 | **0** | ⚠️ **命名差异非缺口**（我们是自由函数，
+  三个 hash 在他们 1380 个函数上 1380/1380 相同）|
+| `WrapperAllocator` | 34 | 4 | ⚠️ 无判别力（他们 32/34 是 `std::function` 样板，其余内联）|
+
+**新估计：实现 65–80%（旧 36–42%），逆向/oracle ~90%（旧 80–85%）。**
+
+🔴 **三条必须跟着这个数字一起读**：
+1. **符号持平会高估。** 「有同名符号」不等于「行为正确」——真判据是逐项对比他们的产物，
+   而那部分已验证的有：`print_shorebird_info` 八行逐行相同、`dd_function_identity` 逐字节相同、
+   `ObjectPoolLinkInfo` 两份产物逐字节重现、`subgraph_hash` 1380/1380、`op_dump` pairs 385/385。
+2. **当前树没站在自己的绿基线上**：`verify_all` **17 ran / 2 failed**，两项红是 D3
+   （Thread 位移，C 表结构性）。
+3. **结构上到不了 100%**：所有编码 Thread 偏移的指令永远不会逐字节相同。
+
+**可复核命令**：`nm -a <bin> | c++filt | sort -u`；他们的须先 `lipo -thin arm64`，
+且**必须用 `ios-release/gen_snapshot_arm64`**。
