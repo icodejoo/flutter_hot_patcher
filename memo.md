@@ -805,13 +805,55 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       - 他们 1380 的构成与 CLAUDE.md 记的行谓词精确吻合：1179 Function-owned + 87 allocation stub
         + 110 TTS + 4 null-owner = 1380 ✓
       - 另一个正面数据：按 `self_hash` 配对**1136 个函数逐字节相同**（他们 1380 的 82%）
-      ⚠️ **成因未确立，不要照抄任何猜测。** 我怀疑是 dedup 差异（我们的树里有 dedup，
-      CLAUDE.md 记过「dedup 后的陈旧 Code」），但**没有验证，所以不写进结论**。
-      ⚠️ `self_hash` 不是合法的跨 VM 身份键（它含指令字节，两个编译器的码不同）；
-      名字也不是（见 F4）。**先立一个可信的配对键，再谈计数差。**
-      **判据**：+209 有具体机制说明（哪个 pass、哪个判据），10 个 unknown 格得到分类；
-      若证明可关闭则它是 gap，若证明两 VM 必然不同则是 structural **并写明是哪个结构**。
-      **负控制**：所提机制在他们的产物上必须能预测出 1179 这个数。
+      🟢 **2026-09-04 19:15 实测：机制已确立，而且它是「对拍工具自己的缺陷」，不是我们的缺口。**
+      这是本阶段第三个同型的仪器缺陷（前两个：硬编码 `structural`、分类存进生成产物）。
+      **两侧的输入根本不是同模式构建的**：`parity_matrix.sh` 用 `$OUR_GS_REL`
+      （`xcodebuild/ReleaseARM64/gen_snapshot`）造我们的 `as.*.so`，
+      用 `$THEIR_GS`（`ios-release/gen_snapshot_arm64`，他们**出厂的 product 构建**）造他们的。
+      而 `FLAG_dedup_instructions` 恰好是一个 **R（Release）flag**：
+      `runtime/vm/flag_list.h:70` 是 `R(dedup_instructions, true, bool, false, …)`，
+      `runtime/vm/flags.cc` 的宏展开决定——**PRODUCT 下它是编译期常量 `product_value=true`
+      且根本不注册；非 PRODUCT 下它是注册 flag，默认 `default_value=false`。**
+      去重那趟是 `ProgramVisitor::DedupInstructions`（`program_visitor.cc:1423-1425`，
+      `DedupInstructionsWithSameMetadataVisitor`）。
+      **→ 我们的 Release gen_snapshot 压根没做指令去重，他们的 product 做了。**
+
+      **判据（同一份 `hello.dill`，只加一个 flag）**：
+      | 产物 | total | `[Optimized]` | 其余 |
+      |---|---:|---:|---:|
+      | ours Release（矩阵现状） | 1589 | 1388 | 201 |
+      | ours Release **`--dedup_instructions`** | **1384** | **1183** | 201 |
+      | theirs（product 出厂件） | 1380 | 1179 | 201 |
+
+      去重解释掉 **209 里的 205**。物证：去重前那 16 个同 payload 的 12 字节 getter
+      在我们镜像里占 **16 个互不相同的 offset**（9848/50308/…/294292），他们只有 1 个（244532）；
+      两侧都是「一个 offset 一条记录、无 offset 复用」，所以这不是枚举差异，**多出来的码真在镜像里**。
+
+      **负控制（决定性，且能判别）**：
+      `$THEIR_GS … --no_dedup_instructions` → `Setting VM flags failed: Unrecognized flags:
+      dedup_instructions`（product 构建对 R flag 的确切行为）；
+      同一 flag 给我们的 Release 二进制 → 接受，rc=0。**两侧构建模式不同，就此坐实。**
+
+      **残差 +4** 尚未解释，但它已不是「+209」那个量级的东西。
+      🔴 **同时被这条推翻的**：去重后名字集合两侧各有 ~344 个独有名
+      （他们 `_Double.==` / `_ExternalFloat32Array.[]=` / `FixedLengthListBase.add`，
+      我们 `Float32List.[]=` / `FixedLengthListMixin.add`）——**这是「去重组里哪个成员的名字
+      赢得这条记录」的差异**，不是渲染 bug。→ **F4 的「mixin 全名 他们 101 / 我们 0」
+      是在一份没做去重的产物上量的，必须重量。**
+
+- [ ] **F7：修掉对拍工具的构建模式不对称，并重跑矩阵（F6 的后半，人工持有）**
+      🛑 **本项由人工持有，无人值守轮次不得认领。** 它会让 59 格里的多数重新判定，
+      与循环正在做的 F1–F5 抢同一批产物；顺序必须是「F1–F5 全部落地 → 一次性重跑」。
+      **要改的**：`parity_matrix.sh` 造 `as.*.ours.so` 那步（`$OUR_GS_REL`）必须加
+      `--dedup_instructions`，否则我们的输入永远比他们多两成的码。
+      ⚠️ **不要改成用 `$PRODUCT/gen_snapshot`**：`analyze_snapshot` 拒绝 product 快照
+      （脚本 :277 的注释就是这么写的），换二进制会把整组 as 格打成 blocked。
+      ⚠️ 同时要检查 `gs.*` 那 27 格有没有同一个病：那半用的是 `$OUR_GS`（Product），
+      与他们同模式，**看起来是干净的，但要实测确认而不是照这句话相信**。
+      **判据**：重跑后 `unknown` 从 10 降下来，且每格的 note 不再引用「+209 未解释的
+      Function-owned surplus」（`parity_matrix.sh:459/463/467` 三处现在都这么写）。
+      **负控制**：把 `--dedup_instructions` 去掉重跑一次，那几格必须变回 unknown ——
+      **这一条是本项唯一能证明「修的是真病」的东西**，不做等于没修。
 
 - 2026-09-04 PST — 🔴 **E 表的「0 个 gap」已撤回。审计出 6 个缺口，其中 2 个是 E 表自己的仪器缺陷造成的盲区。**
 
@@ -928,3 +970,5 @@ FHP 树（memo/docs）不在守卫里，随便写。
 - **任何 `structural` 判定必须具名结构**；说不出结构的一律记 `unknown`，不许记 structural
 - **分类不得写进被生成器覆盖的产物**（E2 踩过：重跑一次全抹掉且退出码正常）
 - **判定不得写成常量**（E 表踩过：`shorebird` 三格硬编码，原理上不可能报缺口）
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F2 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F2）。**下一项 = F2（`--shorebird` 发出 `subgraph_field_table`）→ 派发子代理。**
