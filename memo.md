@@ -629,10 +629,18 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       - `dump_object_pool_link_data × 3`：structural — 同上 code_infos 差异 + 98 个 deserializer-reset 槽含 per-process 地址（`kResetToBootstrapNative` + `kResetToSwitchableCallMissEntryPoint`）；`op_dump_check.sh` 在 base fixture 上通过
       - `compute_dd_table × 3`：structural — `CascadeLimiter` 在不同函数集上运行（hello/base_dd: 1589 vs 1380，ours count=64 theirs=67；prog: 3526 vs 3216，ours=353 theirs=357），函数集差异来自 snapshot version hash
 
-      🔑 **无任何 gap**：E3 不需要编写任务卡（没有可修的缺口）。
+      🔴 **「无任何 gap」这个结论已于 2026-09-04 撤回，见下方 F 表。**
+      三条实测否证（每条都可复核）：① 同一份 TSV 里**本来就有 3 行 `class=gap`**
+      （`print_dd_resolution_to`，`rewritten` ours=0/theirs=2），E2 说的「13 个 unknown 全是
+      structural」为真，但它被读成了「全表 0 gap」；② `shorebird` 那 3 格的判定是
+      **硬编码**的（`parity_matrix.sh:355-358`，注释「Known: instruction counts differ」），
+      **连 diff 都没看** ⇒ 那 3 格在原理上不可能报出缺口，也正是这样藏住了 4 个缺字段；
+      ③ 上面 9 条 note 的归因「snapshot version hash difference produces different function set」
+      **不是解释**——版本 hash 是个字符串，它不能产生函数集；两者都是「两个 VM 不同」的症状。
 
 - [x] **E3：把真缺口编号成可派发的任务卡**，每张带判据与负控制，接回循环
-      **E2 结论：0 个 gap。** 完成动作已执行：E 表已清，无编号 gap，已向用户呈报。
+      🔴 **原文「E2 结论：0 个 gap，E 表已清」已作废**（2026-09-04 实测撤回）。
+      任务卡已按本条的原意编号，见下方 **F 表**（F1–F5）。
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E1 派发前写入）。恢复：SDK @ `eadefa30021`；研究树 clean；FHP clean；引擎树 diff==probefree.diff（rc=0）；无 PAUSE 文件。**下一项 = E1（建覆盖矩阵）→ 派发子代理。**
 - 2026-09-04 PST — ❤️ **心跳**（续会话，E1 已完成，E2 写入前记录）。SDK @ `eadefa30021`；研究树有 parity_matrix.sh/tsv 未提交；FHP memo 已更新。**E1 完成：`59 cells, 0 unrun, 3 blocked`，verify_all 20/0，负控制通过。下一项 = E2（对不一致做分类）。**
@@ -719,3 +727,116 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
   **文档**：`docs/DEVICE_VERIFICATION.md` 加 §7（256 → 305 行）——物证位置、
   抓日志进程的纪律、两条观测通道都不可靠这件事、以及禁止清单五项各自的理由。
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**D 表全部关闭 ✅、E 表全部关闭 ✅（0 gap，13 structural）、CLAUDE.md 规则 0 阶段三条判据全满足（65–80% 实现，verify_all 19/0）。循环在人类决策节点，根据契约§七停下来向用户呈报。**
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**D/E 表全部关闭，CLAUDE.md 规则 0 当前阶段三条判据全满足。根据契约§七停下来向用户呈报。**
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `b502748c187`；研究树仅未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**D/E 表全部关闭，规则 0 当前阶段三条判据全满足（65–80% 实现，verify_all 19/0，负控制通过）。循环在人类决策节点，根据契约§七停下来向用户呈报。**
+
+## 📋 F 表：E 表撤回后的真缺口（2026-09-04 立，全部有实测证据）
+
+**由来**：E3 关表的理由是「0 个 gap」。审计后**六个缺口**，其中两个是 E 表自己的
+仪器缺陷造成的盲区。**判据全在宿主，不需要真机。**
+基线：`verify_all.sh` **20 ran / 0 failed**（2026-09-04 实测，含 `parity_matrix.sh` 一格）。
+矩阵现状：`59 cells, 0 unrun, 3 blocked` / **gap 6、structural 12、na 31、unknown 10**。
+
+⚠️ **两个仪器缺陷已修，不要再犯**（研究树本轮提交）：
+① `shorebird` 那 3 格的判定曾**硬编码**为 structural（`parity_matrix.sh:355-358`，
+注释「Known: instruction counts differ」），**连 diff 都不看** ⇒ 原理上不可能报出缺口。
+现改为按 per-function 键集合实比对，**缺口补上后判定自动翻回 structural**（负控制已验：
+伪造一份含四字段的 ours → missing 集为空）。
+② E2 把 13 条分类**写进了被生成器覆盖的 TSV**，我重跑一次就全抹掉了
+（原件在 `2dbb750`，已恢复）。分类现已搬进脚本，经得起重新生成。
+→ **教训：分类不能存在产物里，判定不能写成常量。**
+
+- [ ] **F1：`--shorebird` 发出 `subgraph_pp`** ⬅️ 当前任务
+      **现状**：他们每个 function 对象有 14 个键，我们只有 10（全量 1589/1380 条取并集实测，
+      不是只看第一条）。缺的四个：`subgraph_pp`/`subgraph_field_table`/`self_selectors`/`subgraph_selectors`。
+      🔑 **F1 最便宜，因为数据已经算出来了**：`subgraph_pp_indices` 在
+      `runtime/vm/analyze_snapshot_api_impl.cc:2060` 已发进 `--dump_object_pool_link_data`
+      （`grep -rn subgraph_pp_indices runtime/` = 15 处），只是没发进 `--shorebird` 的 functions 数组。
+      **纯发射缺口。** 他们那边 1380 条里 874 条非空、共 21375 个元素。
+      **判据**：矩阵 `shorebird` 三格的 note 里 `subgraph_pp` 消失（剩三个）；
+      与他们逐 function 比对该数组（CLAUDE.md 已记 `subgraph_pp_indices` 在他们 1380 个函数上 1380/1380）。
+      **负控制**：把发出的索引整体 +1 → 逐 function 比对必须变红。
+
+- [ ] **F2：`--shorebird` 发出 `subgraph_field_table`**
+      **现状**：我们已发 `self_field_table`（同文件 :2237），subgraph 变体没有。
+      他们 280/1380 条非空、共 2816 个元素。callee walk 已实现且验证过
+      （`subgraph_hash_check.sh` 1380/1380），所以这是「在已有 walk 上取并集」。
+      **判据**：与他们逐 function 相同。**负控制**：把并集换成只取自身 → 变红。
+
+- [ ] **F3：`self_selectors` / `subgraph_selectors`（真没算）**
+      **现状**：`grep -nEc 'Selector|selector' runtime/vm/analyze_snapshot_api_impl.cc` = **1**
+      ⇒ 与 F1/F2 不同，这两个是**没有计算**，不是没发。
+      他们 159/430 条非空、共 332/3561 个元素，值形如 `[0, 0, 4864]`。
+      🔑 **不必从零反推**：`print_dispatch_table_link_info_to` 已**逐字节相同**，
+      且 DWARF 给过 `SelectorRowInfo` 类型（CLAUDE.md 有记录）⇒ selector 数据在树里已有来源。
+      **判据**：逐 function 与他们相同。**负控制**：漏掉 subgraph 的传递闭包 → `subgraph_selectors` 变红而 `self_selectors` 不变。
+
+- [ ] **F4：函数名渲染的两处分歧**
+      实测（`as.hello.{ours,theirs}.shorebird`）：
+      ① **mixin application 全名我们从不渲染**：含 `&` 的名字 **他们 101 / 我们 0**。
+      他们 `__Map&_HashVMBase&MapMixin&_HashBase&_OperatorEqualsAndHashCode._hashCode`，
+      我们 `_HashBase._hashCode`（只给声明处的 mixin 名）。
+      ② **`[unknown stub]` 被我们多加了 `[Stub] ` 前缀**：他们 4 个裸 `[unknown stub]`，
+      我们 4 个 `[Stub] [unknown stub]`（`[Stub] ` 前缀总数 ours 201 / theirs 197，差额恰是这 4 个）。
+      ⚠️ **我试过的一条捷径是错的，别重走**：把他们的名字按「取最后一个 `&` 段」归一化后
+      再配对，命中数 **+0**（1040 → 1040）⇒ 映射规则不是这个，得去看他们怎么取 owner class。
+      **判据**：含 `&` 的名字数两侧相等且逐条相同；`[unknown stub]` 前缀两侧相同。
+      **负控制**：故意对某一类少加前缀 → 计数必须变红。
+
+- [ ] **F5：`print_dd_resolution_to` 的 `rewritten` 列（矩阵里 3 行 `class=gap`，E3 漏掉的那 3 行）**
+      我们发 **0**、他们读 **2**。CLAUDE.md 已查明这是**有证据可依的小活**：
+      那个 0 来自 `linker.cc:1159` 的**硬编码字面量**，且旧理由「缺 DD IL 子系统」已作废
+      （子系统于 `b13e2a0d54e` 实现，`dd_pass_check.sh`/`dd_runtime_check.sh` 常设通过）。
+      **做法**：把两个计数器接到已存在的改写路径。
+      **判据**：`dd_pipeline.sh` 我们那行 `rewritten=2`；矩阵这 3 格从 gap 变 na。
+      **负控制**：把改写路径短路 → 计数回 0。
+
+- [ ] **F6：解释 code_infos 的 +209（挡着 10 个 unknown 格）**
+      **已推进到具名位置，不再是「version hash 差异」那种非解释**（同一份 `base.dill`，
+      两侧只差 gen_snapshot）：
+      - `[Stub]` 条目**两侧恰好相等 = 201**（他们 197 + 4 个裸 `[unknown stub]`）
+      - **整个 +209 全在 `[Optimized]` 即 Function-owned 条目**：ours 1388 / theirs 1179
+      - 他们 1380 的构成与 CLAUDE.md 记的行谓词精确吻合：1179 Function-owned + 87 allocation stub
+        + 110 TTS + 4 null-owner = 1380 ✓
+      - 另一个正面数据：按 `self_hash` 配对**1136 个函数逐字节相同**（他们 1380 的 82%）
+      ⚠️ **成因未确立，不要照抄任何猜测。** 我怀疑是 dedup 差异（我们的树里有 dedup，
+      CLAUDE.md 记过「dedup 后的陈旧 Code」），但**没有验证，所以不写进结论**。
+      ⚠️ `self_hash` 不是合法的跨 VM 身份键（它含指令字节，两个编译器的码不同）；
+      名字也不是（见 F4）。**先立一个可信的配对键，再谈计数差。**
+      **判据**：+209 有具体机制说明（哪个 pass、哪个判据），10 个 unknown 格得到分类；
+      若证明可关闭则它是 gap，若证明两 VM 必然不同则是 structural **并写明是哪个结构**。
+      **负控制**：所提机制在他们的产物上必须能预测出 1179 这个数。
+
+- 2026-09-04 PST — 🔴 **E 表的「0 个 gap」已撤回。审计出 6 个缺口，其中 2 个是 E 表自己的仪器缺陷造成的盲区。**
+
+  **为什么去审计**：规则 0 的完成判据第 2 条要求「『结构性』必须给出是哪个结构的哪个偏移」，
+  而 E2 把 13 处里的 **9 处**归因为「snapshot version hash difference produces different
+  function set」。**版本 hash 是个字符串，它不能产生函数集**——那个 hash 和函数集差异是
+  同一个原因的两个症状，把其中一个说成另一个的成因，等于没有归因。
+  **这就是 09-04 把 `Isolate` 误判成 `Thread` 的同一形态：观测为真、推论未验。**
+
+  **三条实测结果**（全部可复核，命令见 F 表各卡）：
+  1. `--shorebird` 的 per-function 对象**我们 10 键 / 他们 14 键**，4 个字段从不发出，
+     且在他们那边实打实有数据（21375 / 2816 / 332 / 3561 个元素）→ F1/F2/F3
+  2. 名字渲染两处分歧：mixin application 全名 **他们 101 / 我们 0**；
+     `[unknown stub]` 我们多加 `[Stub] ` 前缀（4/4 精确）→ F4
+  3. TSV 里**本来就有 3 行 `class=gap`**（`print_dd_resolution_to`），E2 说的
+     「13 个 unknown 全是 structural」为真，但 E3 把它读成了「全表 0 gap」→ F5
+
+  🔑 **比这三条更重要的是两个仪器缺陷**（都已修，研究树本轮提交）：
+  - `parity_matrix.sh:355-358` 把 `shorebird` 三格的判定**硬编码**成 structural，**连 diff 都不看**
+    ⇒ 那三格**在原理上不可能报出缺口**。规则 0 判据第 2 条在这几格上是**空洞满足**的。
+    现改为按键集合实比对，缺口补上后自动翻回 structural（负控制已验）。
+  - E2 的 13 条分类**写在了被生成器覆盖的 TSV 里**，我重跑一次就全抹掉
+    （原件在 `2dbb750`，已恢复并搬进脚本）。**分类存在产物里 = 矩阵不是仪器，是一次性快照。**
+
+  **另一半是好消息**（同一次审计的正面结果）：`[Stub]` 条目两侧**恰好相等 = 201**；
+  按 `self_hash` 配对 **1136 个函数逐字节相同**（他们 1380 的 82%）；
+  +209 已收窄到**只在 Function-owned 条目**，且他们 1380 的构成与 CLAUDE.md 的行谓词精确吻合。
+
+  **改动**：`parity_matrix.sh`（硬编码判定 → 实比对；13 条分类搬进脚本）、`parity_matrix.tsv` 重新生成、
+  `memo.md`（E2/E3 就地更正 + F 表）。**无 SDK 源码改动。**
+  **判据**：`verify_all.sh` **20 ran / 0 failed**（独立复跑，保鲜守卫放行）。
+  ⚠️ 上面那几条心跳里的「E 表全部关闭（0 gap）」**是历史记录，保留存真，结论已由本条取代**。
