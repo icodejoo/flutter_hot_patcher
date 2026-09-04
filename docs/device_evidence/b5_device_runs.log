@@ -1,0 +1,34 @@
+# 真机运行物证（从 /private/tmp/b5_all_logs.txt 抽出，2026-09-04）
+# 原文件 12 GB，是 idevicesyslog 从 09-03 10:40 起灌了 29 小时的整机 syslog。
+# 进程 PID 75989 已停，原文件已删。以下是其中全部有信息量的行。
+
+3985634:Sep  3 11:43:04.560613 Runner(Flutter)[2918] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+4072607:Sep  3 11:44:31.677959 Runner(Flutter)[2919] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+12722402:Sep  3 14:28:17.658076 Runner(Flutter)[3070] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+14691549:Sep  3 15:02:00.914778 Runner(Flutter)[3093] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+14781765:Sep  3 15:03:13.538088 Runner(Flutter)[3094] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+14904493:Sep  3 15:05:09.780661 Runner(Flutter)[3097] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+15644342:Sep  3 15:15:38.362047 Runner(Flutter)[3106] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+20812031:Sep  3 16:34:57.086094 Runner(Flutter)[3185] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+21037337:Sep  3 16:38:26.899205 Runner(Flutter)[3189] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+21410827:Sep  3 16:42:50.653168 Runner(Flutter)[3192] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+23108897:Sep  3 17:11:23.362805 Runner(Flutter)[3209] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+23503005:Sep  3 17:18:05.783872 Runner(Flutter)[3215] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+23522940:Sep  3 17:18:09.670379 Runner(Flutter)[3216] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+23690422:Sep  3 17:21:14.744502 Runner(Flutter)[3218] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+24086787:Sep  3 17:25:59.005063 Runner(Flutter)[3221] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+30040693:Sep  3 19:23:28.603240 Runner(Flutter)[3280] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+30149440:Sep  3 19:24:57.979304 Runner(Flutter)[3281] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+30416778:Sep  3 19:29:11.467049 Runner(Flutter)[3283] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+30596645:Sep  3 19:32:08.065015 Runner(Flutter)[3284] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+30688176:Sep  3 19:33:48.001565 Runner(Flutter)[3287] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+33875697:Sep  3 20:40:40.724155 Runner(Flutter)[3330] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+34422684:Sep  3 20:53:37.999623 Runner(Flutter)[3337] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+35109181:Sep  3 21:06:06.362272 Runner(Flutter)[3347] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+35140236:Sep  3 21:06:27.400895 Runner(Flutter)[3350] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+37073789:Sep  3 21:38:21.947571 Runner(Flutter)[3370] <Notice>: flutter: [B5_RESULT] PASS: PASS ✅
+41962825:Sep  3 23:26:48.094623 Runner(Flutter)[3435] <Notice>: flutter: [B5_RESULT] PASS: PATCHED_V2 ✅
+43143721:Sep  3 23:54:06.343841 Runner(Flutter)[3448] <Notice>: flutter: [B5_RESULT] PASS: PATCHED_V2 ✅
+43313921:Sep  3 23:57:16.317841 Runner(Flutter)[3449] <Notice>: flutter: [B5_RESULT] PASS: PATCHED_V2 ✅
+73201870:Sep  4 10:17:21.646238 Runner(Flutter)[3813] <Notice>: flutter: [B5_RESULT] PASS: PATCHED_V2 ✅
+73392154:Sep  4 10:18:09.058593 Runner(Flutter)[3814] <Notice>: flutter: [B5_RESULT] PASS: PATCHED_V2 ✅
