@@ -618,13 +618,21 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **负控制通过**：删一个 GS_FILE_FLAGS 条目 → `FAIL: expected 59 cells, declared 56`，exit 1。
       **2026-09-04 实测**，提交待本条写完后入库（研究树）。
 
-- [ ] **E2：对 E1 找出的每处不一致做分类**（⬅️ 当前任务）
-      「结构性」这个结论**必须指名是哪个结构的哪个偏移**，不许只写「Thread 位移」。
-      2026-09-04 教训：我把 `Isolate+0x20` 误判成 Thread，**手里已有 `LDR X10,[X10,#0x220]`
-      的解码证据却没去看**——观测为真、推论未验。
-      **判据**：每条「结构性」都能给出「他们 X+0xA / 我们 X+0xB」的具体数值。
+- [x] **E2：对 E1 找出的每处不一致做分类**
+      **结论**：13 个 unknown → **全部为 structural，0 个 gap**。提交 `2dbb750`（route-a-research）。
+      `verify_all.sh` 20/0，负控制通过（注入 unknown 行 → 检查报 1 → 还原 → 0）。
 
-- [ ] **E3：把真缺口编号成可派发的任务卡**，每张带判据与负控制，接回循环
+      **分类明细**：
+      - `print_field_table_link_debug_info_to × 3`：structural — (id,hash) multiset 与 non-debug 版本相同（hello/base_dd 各 622 条，prog 1206 条），仅字段排序由 heap traversal order 决定，两 VM 不同
+      - `dump_class_table × prog`：structural — `num_cids` 相同（823），但 ours 748 vs theirs 743 classes；5 个多余 class（ID 186/187/210/213/321：`_HttpSessionManager`/`_HttpSession`/`Cookie`/`HttpSession`/`VMServiceEmbedderHooks`）是 `dart_force_simulator` 构建在 prog 的 `dart:io` 路径里额外拉入的（hello/base_dd 不含 dart:io 重路径，故 identical）
+      - `dump_object_pool × 3`：structural — code_infos 数量差异（hello/base_dd: ours 1589 theirs 1380；prog: ours 3526 theirs 3216），与 `--shorebird` 行同一根因（snapshot version hash 差异）；entries/pairs 在 hello/base_dd 上完全一致
+      - `dump_object_pool_link_data × 3`：structural — 同上 code_infos 差异 + 98 个 deserializer-reset 槽含 per-process 地址（`kResetToBootstrapNative` + `kResetToSwitchableCallMissEntryPoint`）；`op_dump_check.sh` 在 base fixture 上通过
+      - `compute_dd_table × 3`：structural — `CascadeLimiter` 在不同函数集上运行（hello/base_dd: 1589 vs 1380，ours count=64 theirs=67；prog: 3526 vs 3216，ours=353 theirs=357），函数集差异来自 snapshot version hash
+
+      🔑 **无任何 gap**：E3 不需要编写任务卡（没有可修的缺口）。
+
+- [x] **E3：把真缺口编号成可派发的任务卡**，每张带判据与负控制，接回循环
+      **E2 结论：0 个 gap。** 完成动作已执行：E 表已清，无编号 gap，已向用户呈报。
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E1 派发前写入）。恢复：SDK @ `eadefa30021`；研究树 clean；FHP clean；引擎树 diff==probefree.diff（rc=0）；无 PAUSE 文件。**下一项 = E1（建覆盖矩阵）→ 派发子代理。**
 - 2026-09-04 PST — ❤️ **心跳**（续会话，E1 已完成，E2 写入前记录）。SDK @ `eadefa30021`；研究树有 parity_matrix.sh/tsv 未提交；FHP memo 已更新。**E1 完成：`59 cells, 0 unrun, 3 blocked`，verify_all 20/0，负控制通过。下一项 = E2（对不一致做分类）。**
@@ -653,6 +661,21 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   `Google`/`CocoaPods`/`ms-playwright`/`camoufox` 缓存是真被删了**（约 4–5 GB，都在安全清单内）。
   这是测试副作用，已如实记录。磁盘现 **54 GB**。
 
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，E3 执行前写入）。恢复检查：SDK @ `eadefa30021`；研究树；FHP 仅 memo 修改；引擎树 diff==probefree.diff；无 PAUSE 文件。**下一项 = E3（E 表已清，0 个 gap，关闭并呈报）。**
+
+- 2026-09-04 PST — ✅ **E3 完成，E 表全部关闭（E1/E2/E3 ✅）。**
+
+  **结论：0 个 gap。所有 13 处不一致均为 structural，无任何可通过代码修改消除的输出差异。**
+
+  分类汇总（E2 已验，此处为摘要）：
+  - `print_field_table_link_debug_info_to × 3`：structural — heap traversal order 决定字段排序，两 VM 不同
+  - `dump_class_table × prog`：structural — `dart_force_simulator` 构建多拉入 5 个 `dart:io` 类（hello/base_dd 上 identical）
+  - `dump_object_pool × 3`：structural — snapshot version hash 差异导致 code_infos 数量不同
+  - `dump_object_pool_link_data × 3`：structural — 同上 + 98 个 per-process 地址槽
+  - `compute_dd_table × 3`：structural — `CascadeLimiter` 在不同函数集上运行（snapshot version hash）
+
+  **根据契约§七停下来向用户呈报**（见下文）。
+
 - 2026-09-04 PST — 🔧 **磁盘地板 15 → 25 GB**（`run_round.sh`）。
   **15 不是我定的，是 B4 时期就有的**，理由是「iOS 引擎 sync 吃了 15 GB」。
   🔴 **但按它自己的理由 15 就站不住**：一次已知操作要 15 GB，
@@ -666,3 +689,33 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
   ⚠️ 已校核不死锁：`TARGET=地板+10`，但**放行判据是 `after >= FLOOR` 不是 `>= TARGET`**
   → 从 24 GB 回收 5 GB 到 29 GB，够不到 TARGET 35 但仍放行。
   负控制：地板设 60（>当前 54）→ 触发瘦身、缓存已空、**保持暂停并说明原因**，rc=1。已解除。
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**——无未完成任务行。**D 表全部关闭 ✅、E 表全部关闭 ✅（0 gap，13 structural）、CLAUDE.md 规则 0 阶段判据三条全满足。循环在人类决策节点，根据契约§七停下来向用户呈报。**
+
+- 2026-09-04 PST — 🧹 **磁盘 53 → 79 GB。真问题不是「东西多」，是有个进程在漏。**
+
+  🔴 **`/private/tmp/b5_all_logs.txt` 12 GB，且仍在增长**：B7 插桩期间开的
+  `idevicesyslog --udid 00008110-…`（PID 75989）**用完没关**，从 09-03 10:40 灌到
+  09-04 15:59 —— **29 小时、约 400 MB/小时**、`lsof` 三个 fd 开着。
+  已 `kill` 并删除。**纪律**：收工时 `kill`，或用 `timeout N idevicesyslog …`；
+  判据 `ps aux | grep [i]devicesyslog` 应为空。
+  ✅ **删前抽出 33 行信号存入 `docs/device_evidence/b5_device_runs.log`**（提交 `6c4d6e6`）：
+  09-03 23:54/23:57 的原始里程碑 + 09-04 10:17/10:18 的**干净产物复验**，
+  且来自**设备自己的 syslog 而非 harness 自报**，是更硬的物证。
+  ⚠️ **12 GB 里 `FHPMARK` 出现 0 次** → 探针的 stderr **连 syslog 通道也没进去**；
+  09-03 能读到探针靠的是 `dart_runtime_hooks.cc` 把 Dart `print()` 转发到 stderr（B 类改动）。
+
+  🔴 **我的账漏了 50 GB，原因是判据有洞**：`du -sg /Users/Cruz/*` —— **通配符不匹配点开头的目录**，
+  整片隐藏缓存被静默跳过（`.gradle` 16G、`.cache` 14G、`.android` 7G…），
+  而 `df` 一直在说 332 GB。**输出看起来完全正常。今天第五次同型：判据覆盖面有洞、退出码却正常。**
+  正确做法是从卷根往下数（`du -xg -d 1 /System/Volumes/Data`），不是猜哪些路径值得看。
+  ⚠️ 另订正一条我自己造的假信息：我曾说 OS 更新快照「通常几十 GB」——**纯推测，已证伪**。
+  实测数据卷上只有 2 个快照（**都是本循环自己建的**），那三个 `com.apple.os.update-*`
+  在**系统卷**上，而系统卷总共才 15 GB。**我把「未知」讲成了「通常」，第二次说时就成了事实。**
+
+  **仍可回收约 45 GB，全部与主任务无关**：`.gradle` 16G（本项目用 ninja 不用 gradle）、
+  `.cache/uv` 9G、`.android` 7G（Android 在待定清单第 5 项）、`.cache/huggingface` 3G、
+  `/tmp` 其余约 10G。**另：重启可回收 40 GB swapfile（独立卷，不在数据卷的 332 GB 内）。**
+
+  **文档**：`docs/DEVICE_VERIFICATION.md` 加 §7（256 → 305 行）——物证位置、
+  抓日志进程的纪律、两条观测通道都不可靠这件事、以及禁止清单五项各自的理由。

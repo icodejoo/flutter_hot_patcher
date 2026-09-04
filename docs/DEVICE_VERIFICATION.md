@@ -254,3 +254,52 @@ Jp's iPhone   ...   connected   iPhone 13 (iPhone14,5)
 
 ⚠️ `/loop <间隔>` **实测不建 cron**，走的是自排；自举链一轮死掉就永久断且不报错
 （曾空过 14h53m）。起了之后隔一阵看 `.loop/rounds.log` 的时间戳，别假设它一直活着。
+
+---
+
+## §7 真机物证与一个花了 12 GB 才发现的教训（2026-09-04）
+
+### 物证在哪
+
+`docs/device_evidence/b5_device_runs.log` —— 33 行，从设备**自己的 syslog** 抽出，
+不是 harness 自报，因此是这两件事更硬的见证：
+
+| 时间 | 事件 |
+|---|---|
+| 2026-09-03 23:54 / 23:57 | 原始里程碑，`[B5_RESULT] PASS: PATCHED_V2` ×2 |
+| 2026-09-04 10:17 / 10:18 | **清掉调试插桩后**的干净产物复验，同样 `PATCHED_V2` |
+
+第二组尤其重要：09-03 那次的 `Flutter.framework`（md5 `2597bced83…`）里带着 6 条
+`fprintf FHPMARK`；09-04 那次（md5 `03a8062739…`，`strings | grep -c FHPMARK` = **0**）
+证明里程碑不依赖插桩。
+
+### 🔴 抓日志的进程要记得关
+
+那 33 行是从 **12 GB** 的 `/private/tmp/b5_all_logs.txt` 里抽出来的。
+B7 插桩期间开了 `idevicesyslog --udid …` 抓设备日志（因为 `devicectl --console`
+看不见 `FML_LOG`），**用完没关**：从 09-03 10:40 一直灌到 09-04 15:59，
+**29 小时、12 GB、约 400 MB/小时、仍在增长**，`lsof` 显示 3 个 fd 开着。
+它是当天磁盘从 74 GB 掉到 37 GB 的主因之一，而没有任何东西会提醒你。
+
+**纪律**：`idevicesyslog` 只在需要时开，收工时 `kill`；
+或者用 `timeout 300 idevicesyslog …` 让它自己死。
+判据：`lsof | grep idevicesyslog` 或 `ps aux | grep [i]devicesyslog` 应为空。
+
+⚠️ **12 GB 里 `FHPMARK` 出现 0 次** —— 探针写的 `stderr` **连设备 syslog 也没进去**。
+所以「插了 `fprintf(stderr,…)` 就能看见」这条本身也是要验证的，
+`devicectl --console` 与 `idevicesyslog` **两条通道都不保证**。
+09-03 那次能读到探针，靠的是 `dart_runtime_hooks.cc` 把 Dart `print()` 转发到 stderr
+（见 `engine/patches/README_b8_milestone.md` 的 B 类改动）。
+
+### 磁盘：什么能清、什么绝对不能
+
+自动瘦身见 `tools/loop/disk_slim.sh`（地板 25 GB，撞到就暂停→瘦身→恢复，不通知人）。
+**禁止清单里的五样，每一个都曾是候选，都是看过之后才排除的**：
+
+| 目录 | 大小 | 为什么不能删 |
+|---|---:|---|
+| `~/shorebird_engine` | 21 G | 引擎构建树，重编数小时 |
+| `~/dart-3122/sdk/xcodebuild` | 15 G | 五个配置，`verify_all` 要用其中三个 |
+| `Xcode/iOS DeviceSupport` | 5.5 G | **只有一条，正是本文档这台 iPhone 13** |
+| `~/.shorebird/.../flutter` | 3.9 G | 他们的二进制 = 我们的 oracle |
+| `~/Library/Caches/vpython-root.502` | 587 M | depot_tools；缺它引擎 `xcframework` 打包会失败（实测） |
