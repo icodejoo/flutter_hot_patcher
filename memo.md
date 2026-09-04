@@ -3578,3 +3578,41 @@ App terminated due to signal 6.
   **改动文件**：`engine/patches/{b8_milestone_engine_tree.diff,engine_tree_current_probefree.diff,README_b8_milestone.md}`、
   `docs/LOOP_CONTRACT.md`（第八节三棵树→四棵）、`memo.md`。
   提交：`b2f0335` / `53ca016` / `9227e7f`。**引擎树与 SDK 树均无源码回退。**
+
+## 📋 下一项：D 表（收债，两项，均有现成基线可判回归）
+
+**基线**：`verify_all.sh` **19 ran / 0 failed**（2026-09-04 实测，三个宿主二进制全新）。
+任何一项做完都要复跑它，**数字必须仍是 19/0**。
+
+- [ ] **D1：`elf_loader.cc` 走 `mode` 参数，别再无条件改上游**（⬅️ 当前任务）
+      **现状**：`runtime/bin/elf_loader.cc:296` 把 `PF_R|PF_X` **无条件**映射成 `kReadOnly`。
+      理由（「`dart_force_simulator=true` 所以不需要 PROT_EXEC」）写在注释里，
+      **但代码里没有任何地方检查这个条件**。
+      ⚠️ **这不是 bug**（2026-09-04 实测：重建 `dartaotruntime` 后 `verify_all` 19/0、
+      `run_vm_tests` 151/151 全绿），是**规则 3 的保真度问题**。别按 bug 记账。
+      🔑 **调查已完成，不需要再推测**：引擎调的就是 6 参数变体，且**显式传了意图**——
+      `~/shorebird_engine/…/flutter/runtime/shorebird/patch_cache.cc:41`：
+      `Dart_LoadELF(path, elf_file_offset, &error, &isolate_data, &isolate_instrs, dart::bin::kReadOnly)`
+      对应 `runtime/bin/elf_loader.h:91` 的 `inline Dart_LoadELF(..., int /*mode*/)`，
+      其注释自己写着「The mode value is accepted but not consulted --
+      the mapping is always read-only」。
+      **做法**：把 `mode` 接到 `LoadedElf` → `LoadSegments()`；6 参数变体传 `kReadOnly` 时强制只读，
+      **默认 7 参数路径恢复上游的 `kReadExecute`**。注意 `elf_loader.cc:332`
+      `if (map_type == File::kReadExecute)` 那个分支也要一并考虑。
+      **判据**：① `verify_all` 仍 19/0；② 真机 `PATCHED_V2 ✅` 仍出现（iOS 走 6 参数路径）；
+      ③ **负控制**：把 6 参数变体传下去的值改成非只读 → iOS 上应重新出现
+      `mmap failed Operation not permitted`。
+
+- [ ] **D2：给 `WrapCode` 恒等包装加上 link=100% 的断言**
+      `runtime/vm/app_snapshot.cc`（commit `1f1e51ad16e`）在 `dart_force_simulator=true` 时
+      三条路径全用恒等包装，提交理由是「link%=100% ⇒ 补丁字节可证与 base 逐字节相同」。
+      **该前提对当前这一个补丁成立（只改了字符串字面量），不普遍成立**；
+      link < 100% 时恒等包装会让 CPU 侧函数拿到未经转换的字节。
+      **现在代码里没有任何地方检查这个前提。**
+      **做法**：在恒等包装路径上断言 link 比例为 100%（或至少在不满足时 FATAL 而非静默）。
+      ⚠️ 用 `RELEASE_ASSERT` 不要用 `ASSERT` —— 本项目已栽过一次
+      （`ObjectPoolEditor_CountFollowsPrepareLargeOffset` 的两条断言在 release 里被编译掉）。
+
+🛑 **开工前必读**：`docs/LOOP_CONTRACT.md` 第八节现在是**四棵树**，
+且**第四棵（引擎构建树）的健康判据与前三棵相反——它应该是脏的，不许清理**。
+判据是 `diff <(git -C ~/shorebird_engine/engine/src/flutter diff -- engine/src/flutter/) engine/patches/engine_tree_current_probefree.diff` 为 0。

@@ -175,6 +175,24 @@
     params.vm_snapshot_{data,instructions}）→ 还原它，功能就没了
 
 ⇒ 判据是 git -C <构建树> status --porcelain，不是 grep 一个标记串。
+
+🛑🛑 但【第四棵树的"干净"判据与前三棵相反】—— 它【应该是脏的】，不许清理。
+2026-09-04 起的期望状态：恰好 4 个已修改文件、+19 −4，内容与
+engine/patches/engine_tree_current_probefree.diff 相同：
+  · lib/ui/dart_runtime_hooks.cc      +6   把 Dart print() 转发到 stderr
+  · runtime/dart_vm_initializer.cc    +6   VM init 错误直写 stderr
+  · runtime/dart_snapshot.cc        +4 −4  四个 ELF 符号名
+  · runtime/dart_vm.cc                +3   params.vm_snapshot_{data,instructions}
+
+【禁止】对这棵树跑 git checkout / git stash / git clean / "还原插桩"。
+还原前两个 → [B5_RESULT] 判据不可观测（iOS 上 LogMessage 走 os_log，devicectl 抓不到）；
+还原后两个 → 补丁加载功能消失。前三棵树用"干净"判定健康，这一棵用
+"diff 是否等于那份 .diff"判定健康：
+
+  diff <(git -C ~/shorebird_engine/engine/src/flutter diff -- engine/src/flutter/) \
+       ~/Documents/flutter_hot_patcher/engine/patches/engine_tree_current_probefree.diff
+
+不相等才是异常。多出 FHPMARK 行 = 有人留了探针；少了 = 有人还原过头。
    那 33 行已抢救进版本控制：engine/patches/b8_milestone_engine_tree.diff
    （连同分类说明 engine/patches/README_b8_milestone.md，commit b2f0335）。
 
