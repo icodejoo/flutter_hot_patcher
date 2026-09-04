@@ -889,7 +889,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 空对空判等）都是「在没有依据时给出了一个判定」。**没有依据时正确的动作是把依据找齐，
 不是挑一个类。** 若你测完认为已经足以定性，**把证据写进 note 和 memo 并停下来呈报**。
 
-- [ ] **F8：刷新那些还在引用 F7 之前数字的 note（纯机械，无判断）**
+- [x] **F8：刷新那些还在引用 F7 之前数字的 note（纯机械，无判断）** ✅ `28aa283` (research)
       `dump_object_pool` ×3 与 `compute_dd_table` ×3 的 note 仍写着 `1589 / 1380`、
       `3526 / 3216`、`+209 / +310`——**这些是 F7 之前的值，现在已经不对了**。
       它们是 `parity_matrix.sh` 里的人工分类字符串，不会自己更新。
@@ -897,6 +897,8 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **判据**：`grep -c "1589\|3526\|+209\|+310" parity_matrix.sh` 在这几处归零；
       重跑矩阵后 note 里的数字与实测一致。
       **负控制**：把某个测量点故意改错一位，note 必须跟着变。
+      **结果**：全部通过。notes 现在动态测量并报告 1384/1380 (+4) 与 3221/3216 (+5)。
+      verify_all.sh: **22 ran / 0 failed**。
 
 - [ ] **F9：`dump_class_table/prog` 的 5 个多余类（只测量）**
       现有实测：`num_cids` 两侧同为 **823**，但我们列出 **748** 个类、他们 **743**；
@@ -1098,3 +1100,12 @@ FHP 树（memo/docs）不在守卫里，随便写。
   **两个负控制均通过**：Fix 1 回退 → 101 个 mixin 名消失变红；Fix 2 回退 → 4 个 `[Stub] [unknown stub]` 变红。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列）。**
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F5 派发前写入）。恢复检查：SDK clean @ `b502748c187`（F4 后的 SDK HEAD，F4 改动在 `bd86cb31e94`）；研究树 clean；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` 检查——F5 标 `- [ ]`，F6/F7 人工持有。**下一项 = F5（`print_dd_resolution_to` 的 `rewritten` 列接真计数）→ 派发子代理。**
+
+- 2026-09-04 PST — ❤️ **心跳**（本会话，F5/F6/F7 皆已完成，下一项 = F8，派发前写入）。
+  **F5 额외 검증（이 세션에서 수행）**: `afa1f9c73cc` 가 HEAD의 ancestor임을 확인；
+  OUR gen_snapshot 을 full DD pipeline 으로 실행 → `# table_size=8 retained=7 rewritten=2 sentinel_filled=1 rewritten_null=0` ✅；
+  부정 제어: `NoteDDSlotRewritten` 주석처리 → `rewritten=0` ✅, 복원 후 `rewritten=2` ✅；
+  `verify_all.sh` **22 ran / 0 failed** ✅. F5 는 이전 세션에서 이미 `[x]` 로 기록되어 있음이 확인됨.
+  **다음 항목 = F8（`parity_matrix.sh` 의 구식 숫자를 동적으로 교체）→ 子代理 派遣。**
+
+- 2026-09-04 PST — ✅ **F8 完成**（research `28aa283`）。`parity_matrix.sh` 的所有 `1589/3526/+209/+310` 已替换为从 `out_pm/` 产物动态测量的值。notes 现报 1384/1380 (+4) 与 3221/3216 (+5)。verify_all.sh: **22 ran / 0 failed**。负控制（测量公式 -1 → note 显示 1383）通过。**下一项 = F9（`dump_class_table/prog` 的 5 个多余类测量）。**
