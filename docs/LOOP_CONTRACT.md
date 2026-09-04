@@ -152,10 +152,31 @@
 
 ━━━━━━━━━━ 八、本项目具体信息 ━━━━━━━━━━
 
-三个工作树，各管一段（在错误的目录里既跑不了验证也改不了源码）：
+四个工作树，各管一段（在错误的目录里既跑不了验证也改不了源码）：
   · 源码   ~/dart-3122/sdk                 （分支 shorebird-3.12.2）
   · 验证   ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/
   · 状态   ~/Documents/flutter_hot_patcher （memo.md 所在地）
+  · 引擎   ~/shorebird_engine/engine/src/flutter   （iOS 构建树，engine HEAD e16cf749）
+           真正参与构建的源码在它下面的 engine/src/flutter/
+           flutter/third_party/dart 是指向 ~/dart-3122/sdk 的 symlink
+
+🔴 第四棵是 2026-09-04 补进来的，因为它缺席造成过一次假绿（实测）：
+真机 PATCHED_V2 那个 Flutter.framework（md5 2597bced83…）里带着 6 条调试 fprintf，
+而当轮报告「插桩已还原、grep -c FHPMARK = 0」—— 那个 grep 查的是
+~/.shorebird/bin/cache/flutter/*/engine/（两份缓存，确实干净），不是构建树。
+于是「三棵树干净」每轮为真，第四棵却带着 33 行未提交改动参与构建。
+
+🔴 而且【按标记串 grep 这个谓词本身就是错的】，跑在对的树上也不够：
+那 33 行里只有 6 行带 FHPMARK。另外两类它一行都抓不到——
+  · 观测通路（dart_runtime_hooks.cc 把 Dart print() 转发到 stderr，
+    因为 iOS 上 LogMessage 走 os_log、devicectl 抓不到）
+    → 还原它，[B5_RESULT] 判据本身就不可观测了
+  · 真逻辑改动（dart_snapshot.cc 改四个 ELF 符号名、dart_vm.cc 补
+    params.vm_snapshot_{data,instructions}）→ 还原它，功能就没了
+
+⇒ 判据是 git -C <构建树> status --porcelain，不是 grep 一个标记串。
+   那 33 行已抢救进版本控制：engine/patches/b8_milestone_engine_tree.diff
+   （连同分类说明 engine/patches/README_b8_milestone.md，commit b2f0335）。
 
 验证方式：
   cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle
