@@ -486,7 +486,16 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 - [ ] **D3：更新 stub 期望值以匹配 `11dcd2b4c9c` 之后的 Thread 布局**（⬅️ 当前任务）
       **现象**：`run_vm_tests` 4 项红 + `verify_reproduction.sh`（14 stubs / 3 failure、28 artifacts / 1 failure）：
       `StubCode_Shorebird{CpuToSimBody,CallSimFromFfi,ResumeOnSimulator,RunDartOnCPU}MatchesTheirBytes`
-      **已查明的归因（有证据，别再重查）**：Thread 布局由 **`11dcd2b4c9c`**（09-03 的 B6 修复）改动，
+      🔴 **我原先写在这里的归因是错的，已由 D3 那轮订正（`eadefa30021`）**：
+      不是 Thread 布局、也不是 `11dcd2b4c9c`，而是 **`Isolate` 布局**、由 **`50c8136cc5f`** 引起——
+      它把三个 stub 生成器从硬编码 `0x20` 改成 `dart::Isolate::simulator_offset()`；
+      他们重排了 `Isolate` 私有成员使 `simulator_` 落在 `Isolate+0x20`，我们不能重排
+      （要重生成 16 个构建配置的偏移表）⇒ 我们的 host 偏移在更高地址。
+      ⚠️ **我的错误形态值得记**：`git log -- thread.h thread.cc` 最近一条确实是 `11dcd2b4c9c`——
+      **这个观测为真**，但我由「Thread 文件最近被改过」直接推出「这是 Thread 位移」，
+      **没有验证那条指令读的是哪个结构**。我甚至解码出了 `LDR X10,[X10,#0x220]`，
+      却因为文档通篇在讲 Thread 就默认它是 Thread。**观测为真、推论未验——今天我在别处反复指出的同一种错。**
+      （原文保留于此以存真：）Thread 布局由 **`11dcd2b4c9c`**（09-03 的 B6 修复）改动，
       `git log -- runtime/vm/thread.h runtime/vm/thread.cc` 的最近一条就是它；
       **D1 两个提交碰 thread 文件数均为 0**（`git show --stat <sha> | grep -c thread`）。
       **与 D1 无关**，是 09-03 起就存在、只因 `run_vm_tests` 未重建而不可见。
@@ -567,6 +576,8 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
 **可复核命令**：`nm -a <bin> | c++filt | sort -u`；他们的须先 `lipo -thin arm64`，
 且**必须用 `ios-release/gen_snapshot_arm64`**。
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约再执行下一项」，D3 派发前写入）。恢复检查：SDK @ `b502748c187`；研究树 clean；FHP clean；引擎树 diff 待查。**下一项 = D3（更新 stub 期望值）→ 派发子代理。**
 
 - 2026-09-04 PST — ▶️ **循环恢复做 D3。** 起轮前四棵树实测：SDK `0` @ `b502748c187`、
   研究树 `0`、FHP `0`、**引擎树 diff == 保存的 probe-free diff（rc=0，这棵健康＝脏得正确）**；
