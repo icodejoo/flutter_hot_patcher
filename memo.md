@@ -848,8 +848,9 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       `--dedup_instructions`，否则我们的输入永远比他们多两成的码。
       ⚠️ **不要改成用 `$PRODUCT/gen_snapshot`**：`analyze_snapshot` 拒绝 product 快照
       （脚本 :277 的注释就是这么写的），换二进制会把整组 as 格打成 blocked。
-      ⚠️ 同时要检查 `gs.*` 那 27 格有没有同一个病：那半用的是 `$OUR_GS`（Product），
-      与他们同模式，**看起来是干净的，但要实测确认而不是照这句话相信**。
+      ✅ **`gs.*` 那 27 格没有这个病，已实测不是推理**：那半用 `$OUR_GS`（ProductARM64），
+      给它 `--dedup_instructions` 同样报 `Unrecognized flags`——与他们出厂件行为一致，
+      即两侧都是 product、去重都开着。**受影响的只有 as 那组。**
       **判据**：重跑后 `unknown` 从 10 降下来，且每格的 note 不再引用「+209 未解释的
       Function-owned surplus」（`parity_matrix.sh:459/463/467` 三处现在都这么写）。
       **负控制**：把 `--dedup_instructions` 去掉重跑一次，那几格必须变回 unknown ——
