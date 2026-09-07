@@ -352,6 +352,11 @@ done
   || say "WARNING: snapshot failed -- a bad round would not be undoable"
 
 out=$(mktemp "$STATE/round.XXXXXX")
+# The worker's pid, published from inside the pipeline. $! after a pipeline is
+# the *tail* (tee), and the worker is its sibling, not its descendant: probing
+# or killing $! reaches neither. That is why the 2026-09-07 controls showed a
+# real hang outliving its own "KILLED" line by 24 seconds.
+worker_pid_file=$(mktemp "$STATE/round_worker.XXXXXX")
 LIVE=$STATE/live.log
 rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
 (
@@ -366,7 +371,10 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
     # live.log line still stamped 14:41:53, while having committed work at
     # 16:26 -- from outside, a working round was indistinguishable from a hung
     # one, which is the one thing this log exists to tell apart.
-    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
+    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} &
+    worker=$!
+    echo $worker >"$worker_pid_file"
+    wait $worker
     echo $? >"$rc_tmp"
   ) 2>&1 | tr -u -d '\r' | sed -l 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g'
 ) | tee -a "$LIVE" >"$out" &
@@ -381,36 +389,82 @@ pid=$!
 # committed c2bf220 fifteen minutes earlier -- and whatever it was doing after
 # that was lost. Rounds here routinely run 30 to 70 minutes.
 #
-# STALL_TIMEOUT is the real predicate: no bytes written to $out for that long.
-# It only became measurable once the pipeline stopped block-buffering.
-# ROUND_TIMEOUT stays as a backstop for a round that produces output forever.
-STALL_TIMEOUT=${FHP_LOOP_STALL_TIMEOUT:-1800}
+# STALL_TIMEOUT is the real predicate, but "bytes written to $out" is NOT the
+# way to measure it, and on 2026-09-07 I shipped it that way anyway. `claude -p`
+# without --output-format stream-json prints nothing until it is finished, so a
+# working round writes zero bytes for its entire life: the 16:47 round sat at 0
+# bytes for seventy minutes while landing three commits. A 30-minute
+# no-bytes rule would have killed it -- and every round before it, since they
+# run 30 to 70 minutes.
+#
+# The two negative controls that passed did so because their producer wrote a
+# line a second. The production producer never does. A control whose subject
+# has a different shape than the real one tests the harness, not the harness
+# against its job.
+#
+# What actually moves while a round works is CPU: the CLI streaming a response,
+# ninja compiling, a script grepping. What does not move is a round blocked on
+# a prompt, deadlocked, or waiting on a socket that will never answer. So the
+# probe is cumulative CPU across the round's whole process subtree, plus $out
+# bytes when they do appear (free, and decisive when present).
+#
+# ROUND_TIMEOUT stays as a backstop for a round that burns CPU forever.
+STALL_TIMEOUT=${FHP_LOOP_STALL_TIMEOUT:-2700}
+STALL_SAMPLE=${FHP_LOOP_STALL_SAMPLE:-60}
+
+# $1 = root pid; prints root and every descendant, space separated.
+subtree() {
+  local frontier="$1" all="$1" next p
+  while [ -n "$frontier" ]; do
+    next=""
+    for p in $frontier; do next="$next $(pgrep -P "$p" 2>/dev/null | tr '\n' ' ')"; done
+    frontier=$(printf '%s' "$next" | tr -s ' ' | sed 's/^ *//; s/ *$//')
+    all="$all $frontier"
+  done
+  printf '%s' "$all"
+}
+
+kill_worker() {
+  local w p
+  w=$(cat "$worker_pid_file" 2>/dev/null)
+  [ -n "$w" ] && for p in $(subtree "$w"); do kill -TERM "$p" 2>/dev/null; done
+  kill -TERM $pid 2>/dev/null
+}
+
 (
-  last_size=-1
+  probe() {
+    local w acc=0
+    w=$(cat "$worker_pid_file" 2>/dev/null)
+    [ -z "$w" ] && { printf '0'; return; }
+    acc=$(ps -o time= -p "$(subtree "$w" | tr ' ' ',' | sed 's/^,*//; s/,*$//')" 2>/dev/null \
+          | awk '{n=split($1,a,":"); s=0; for(i=1;i<=n;i++) s=s*60+a[i]; t+=int(s)} END{print t+0}')
+    printf '%s' "$(( acc + $(wc -c <"$out" 2>/dev/null || echo 0) ))"
+  }
+  last=-1
   stalled=0
   while kill -0 $pid 2>/dev/null; do
-    sleep 60
-    now_size=$(wc -c <"$out" 2>/dev/null || echo 0)
-    if [ "$now_size" = "$last_size" ]; then
-      stalled=$(( stalled + 60 ))
+    sleep "$STALL_SAMPLE"
+    now=$(probe)
+    if [ "$now" = "$last" ]; then
+      stalled=$(( stalled + STALL_SAMPLE ))
     else
       stalled=0
-      last_size=$now_size
+      last=$now
     fi
     if [ "$stalled" -ge "$STALL_TIMEOUT" ]; then
-      say "WATCHDOG: no output for ${stalled}s -- terminating round"
-      kill -TERM $pid 2>/dev/null
+      say "WATCHDOG: no CPU and no output for ${stalled}s -- terminating round"
+      kill_worker
       break
     fi
   done
 ) &
 stall_watchdog=$!
-( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && { say "WATCHDOG: hit the ${ROUND_TIMEOUT}s ceiling while still producing output -- terminating"; kill -TERM $pid 2>/dev/null; } ) &
+( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && { say "WATCHDOG: hit the ${ROUND_TIMEOUT}s ceiling while still burning CPU -- terminating"; kill_worker; } ) &
 watchdog=$!
 
 wait $pid
 rc=$(cat "$rc_tmp" 2>/dev/null || echo 1)
-rm -f "$rc_tmp"
+rm -f "$rc_tmp" "$worker_pid_file"
 kill "$watchdog" 2>/dev/null
 kill "$stall_watchdog" 2>/dev/null
 
