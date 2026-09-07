@@ -900,7 +900,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **结果**：全部通过。notes 现在动态测量并报告 1384/1380 (+4) 与 3221/3216 (+5)。
       verify_all.sh: **22 ran / 0 failed**。
 
-- [ ] **F9：`dump_class_table/prog` 的 5 个多余类（只测量）**
+- [x] **F9：`dump_class_table/prog` 的 5 个多余类（只测量）** ✅ 2026-09-04（本会话主循环）
       现有实测：`num_cids` 两侧同为 **823**，但我们列出 **748** 个类、他们 **743**；
       多的 5 个 cid 是 186/187/210/213/321 =
       `_HttpSessionManager` / `_HttpSession` / `Cookie` / `HttpSession` / `VMServiceEmbedderHooks`。
@@ -911,21 +911,74 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **这本身就是线索**：同样的 dump 在另外两个输入上两侧相同）。
       **判据**：三个问题各有一条实测命令与输出。**不要下结论。**
 
-- [ ] **F10：`shorebird` 三格的残差 +4 / +5（只测量）**
-      F7 之后 ours 1384 / theirs 1380（`prog` 3221 / 3216）。
-      **做法**：按 `(name, size, self_hash)` 三元组做多重集差集，把这 4 条（prog 5 条）**逐条列出来**，
-      每条给出 name、offset、size、self_hash，以及它在对侧是否存在同 name 的条目。
-      **判据**：4 条与 5 条都被具名列出并写进 memo。**class 保持 unknown。**
-      ⚠️ 已知陷阱：`self_hash` 含指令字节，**不是**跨 VM 的合法身份键（F6 卡片已记）；
-      名字也不是（去重会决定哪个成员的名字赢得该条目）。所以这里要的是**列出来**，不是配对。
+- [x] **F10：`shorebird` 三格的残差 +4 / +5（只测量）** ✅ 2026-09-04（本会话主循环，纯读 JSON，未重建）
 
-- [ ] **F11：`dump_object_pool_link_data` 三格在 F7 之后还剩什么（只测量）**
-      F7 前后字节数：hello ours 217349 → **193773**，theirs 193312（残差从 24037 降到 **461**）。
-      note 里「98 个 deserializer-reset 槽装进程地址」那部分是**已解释的**；
-      「code_infos surplus」那部分**已被 F7 关掉，note 还没改**（与 F8 同源）。
-      **做法**：F7 之后重新分解这 461 字节：多少来自那 98 个槽、多少来自 code_infos 残差、
-      是否还有第三部分。三个输入各做一遍。
-      **判据**：461（及 prog/base_dd 的对应值）被分解成带名字的分量，加总吻合。
+      **方法论订正**：card 说「按 (name,size,self_hash) 三元组做差集，找 4 条」，实测该差集给 259 条，
+      不是 4 条——许多函数在两侧有相同名字但不同 self_hash（Thread/Isolate 偏移差异导致指令不同）。
+      正确的分析层次是按「name only」计数差，再按 self_hash 交叉匹配找去重 winner 差异。
+
+      **三层结构**（hello/base_dd，全部 class=unknown）：
+
+      **层 A：iso_stub 命名格式差异（net = 0）**
+      76 个 allocation stub：ours 有 `[Stub] [Stub] _iso_stub_X`，theirs 有 `[Stub] _iso_stub_X`。
+      ours 多加了一层 `[Stub] ` 前缀。将 ours 名字去掉最外层 `[Stub] ` 后，76/76 都能在 theirs 中命中。
+      两侧都有这些 stub，只是命名格式不同，net 为 0。
+
+      **层 B：去重 winner 差异（net = 0）**
+      2 对函数有相同 self_hash 但不同名字：
+      - self_hash `bc87175f214dcbbc`：ours 赢家 `[Optimized] _BufferingStreamSubscription._onError=` (size 52)；
+        theirs 赢家 `[Optimized] _AsyncStarStreamController.asyncStarBody=` (size 52)
+      - self_hash `f383f38eb222dd8d`：ours 赢家 `[Optimized] new _InternalError` (size 52)；
+        theirs 赢家 `[Optimized] Error._stackTrace=` (size 52)
+      两对去重方向不同，net 为 0。
+
+      **层 C：truly extra in ours（net = +4，且 self_hash 在 theirs 中完全不存在）**
+      | name | offset | size | self_hash |
+      |---|---:|---:|---|
+      | `[Optimized] _AsyncStarStreamController.isAdding=` | 241836 | 12 | `868c7de940ce3694` |
+      | `[Optimized] _AsyncStarStreamController.isScheduled=` | 241096 | 12 | `c84f22488bc947bb` |
+      | `[Optimized] _AsyncStarStreamController.isSuspendedAtYield=` | 241324 | 12 | `232b37e77451ae7c` |
+      | `[Optimized] _AsyncStarStreamController.onListenReceived=` | 241824 | 12 | `e9f86b26b1e6f0b1` |
+      `same_name_in_theirs = False`（四个名字在 theirs 的全表里均不存在）。
+      size=12 = 3 条 ARM64 指令（布尔 getter 典型大小）。
+
+      **prog（+5）**：层 A 结构相同；层 B 有 3 对去重 winner 差异；层 C 有 5 条：
+      上面 4 条 `_AsyncStarStreamController` getter（self_hash 相同，offset 不同）
+      + `[Optimized] _postEvent`（offset 178668，size 84，self_hash `cd59ff06dbd37218`，仅在 prog 里出现）。
+      Theirs 侧：所有层 C 均为 0 条（`Truly unmatched theirs = 0`）。
+
+      **class 保持 unknown，归因由人工做。**
+
+- [x] **F11：`dump_object_pool_link_data` 三格在 F7 之后还剩什么（只测量）** ✅ 2026-09-04（本会话主循环，纯读已有 out_pm/ 产物，未重建）
+
+      **文件格式订正**：`dump_object_pool_link_data` 的二进制 = CodeInfo 序列（self_hash + op_hash + self_pp_indices + subgraph_pp_indices）+ pairs 索引列表 + pool 总大小。**不含任何运行时地址**。卡片里的「98 个 deserializer-reset 槽装进程地址」是 `--dump_object_pool` 格式（另一个 flag）的内容，与本格无关。
+
+      **字节分解（Python decode→re-encode 全部零余量）**：
+
+      **hello / base_dd（两份文件完全相同）：477 bytes**
+
+      | 分量 | bytes |
+      |---|---:|
+      | 4 条额外 CodeInfo（位置 1380–1383） | +489 |
+      | 前 1380 条每条平均略小（ours < theirs） | −12 |
+      | 计数 varint（1384/1380 均为 2 字节） | 0 |
+      | pairs / pool 字段（两侧同：385 pairs，pool=1421）| 0 |
+      | **合计** | **477 ✓** |
+
+      **prog：1323 bytes**
+
+      | 分量 | bytes |
+      |---|---:|
+      | 前 3216 条每条字节差（ours > theirs） | +705 |
+      | 5 条额外 CodeInfo（位置 3216–3220） | +608 |
+      | 计数 varint（3221/3216 均为 2 字节） | 0 |
+      | pairs 列表（894 vs 889，多 5 个约束） | +10 |
+      | pool total 字段（3860/3849 均为 2 字节）| 0 |
+      | **合计** | **1323 ✓** |
+
+      **结论**：三个输入的全部残差完全由 code_infos surplus 及其关联的 pair 约束解释，不存在第三部分。**class 保持 unknown，归因由人工做。**
+
+      **改动**：无（纯读产物）。**下一项 = F12（人工持有，停下呈报）。**
 
 - [ ] **F12：12 条 `structural` 里至少 3 条站不住（人工持有，已带实测证据）**
       G-e 要求「structural 必须给出是哪个结构的哪个偏移」。我按这条去查 `dump_blobs` 三格，
@@ -952,6 +1005,15 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **判据**：12 条各自要么给出合规 locus（`Name+0xHEX`，或具名容器/具名构建身份），
       要么改回 `unknown`。**说不出来就必须改回去，这就是 G-e 的全部意义。**
       **负控制**：`phase_gate.sh` 的四个控制已跑过（填合规 locus → 欠账降；填复述症状 → 不降）。
+
+- 2026-09-07 PST — 🧹 **09-03 那份 auto-stash 已丢弃**（`360df3a6f7c`，需要时 `git -C ~/dart-3122/sdk stash apply 360df3a6f7c`，
+  该对象在 gc 剪掉不可达对象之前一直可取回，默认约两周）。
+  内容是 `elf_loader.cc` 把 `PF_R|PF_X` 段无条件改成 `kReadOnly` 的 iOS PROT_EXEC 修复。
+  **丢弃理由是它被 HEAD 取代且更差**：`1f1e51ad16e` + `1f872f94da7` 已把
+  `exec_segment_map_type_` 经构造函数注入（`elf_loader.cc:37/83/300`），
+  而 stash 里那种写死会连宿主的 AOT 加载一起改掉。丢弃后 STASH DEBT 两棵树都为 0。
+  ⚠️ **值得记的不是这份 stash，是它躺了一天没人发现**：auto-stash 只打一行 WARNING 就滚走了。
+  已改成每轮复报（`b4f0842`），判据非恒真（当时 SDK 1 / 研究树 0），并在 21:11 的真实轮次里打出来过。
 
 - 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
   `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
@@ -1135,3 +1197,41 @@ FHP 树（memo/docs）不在守卫里，随便写。
   **다음 항목 = F8（`parity_matrix.sh` 의 구식 숫자를 동적으로 교체）→ 子代理 派遣。**
 
 - 2026-09-04 PST — ✅ **F8 完成**（research `28aa283`）。`parity_matrix.sh` 的所有 `1589/3526/+209/+310` 已替换为从 `out_pm/` 产物动态测量的值。notes 现报 1384/1380 (+4) 与 3221/3216 (+5)。verify_all.sh: **22 ran / 0 failed**。负控制（测量公式 -1 → note 显示 1383）通过。**下一项 = F9（`dump_class_table/prog` 的 5 个多余类测量）。**
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F9 派发前写入）。恢复检查待子代理完成后记录。**下一项 = F9（`dump_class_table/prog` 的 5 个多余类，只测量）→ 派发子代理。**
+
+- 2026-09-04 PST — ✅ **F9 测量完成（本会话主循环直接执行，因为是纯读 JSON，不触发构建）。class 保持 unknown，不定性。**
+
+  **三个问题的实测答案**（源：`out_pm/as.prog.{ours,theirs}.dump_class_table` + hello/base_dd 同路径文件，均无重建）：
+
+  **① 这 5 个类在他们的快照里存不存在**：
+  `prog/theirs` 有 743 个类、`num_cids=823`，按名字全表搜索——
+  `_HttpSessionManager` / `_HttpSession` / `Cookie` / `HttpSession` / `VMServiceEmbedderHooks`
+  **一个都不存在**，连不同 cid 的同名类都没有。
+
+  **② 那 5 个 cid 在他们那边被谁占了**：
+  他们的 prog 输出里，cid 186/187/210/213/321 均 `NOT PRESENT`——
+  这 5 个 slot 在他们那边是空洞（num_cids=823 与 743 个已列类之间的 80 个空缺之一）。
+
+  **③ 换 hello / base_dd 时这 5 个名字是否出现**：
+  hello 和 base_dd 两侧（ours + theirs）四份转储里，这 5 个类名**全部缺席**——
+  但 cid 187/210/213/321 在 hello/base_dd 两侧被以下类占用（两侧完全相同）：
+  - cid 187 → `InternetAddressType`
+  - cid 210 → `FileSystemException`
+  - cid 213 → `PathAccessException`
+  - cid 321 → `_FfiInlineArray`
+  - cid 186 → NOT PRESENT（hello/base_dd 两侧均缺）
+
+  **汇总**：这 5 个 HTTP/VMService 类只出现在 `prog/ours`，在 `prog/theirs` 和所有 hello/base_dd 里都不存在。只有 `prog` 输入两侧存在差异，hello/base_dd 对应 cid 上两侧一致。**class 保持 unknown，归因由人工做。**
+
+  **改动的文件**：无（纯读已有产物，未重建任何二进制，未提交）。**下一项 = F10（`shorebird` 三格残差 +4/+5 逐条列出）。**
+
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F10 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（porcelain 0 行）；研究树 clean @ `993b36ad`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。**下一项 = F10（`shorebird` 三格残差 +4/+5，只测量）→ 派发子代理。**
+- 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F11 派发前写入）。恢复检查：SDK clean（porcelain 0）；研究树 clean；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **0**（F11 无 ⬅️ 标记，但它是第一个 `- [ ]` 任务）。**下一项 = F11（`dump_object_pool_link_data` 三格在 F7 之后还剩什么，只测量）→ 派发子代理。**
+
+- 2026-09-04 PST — ✅ **F10 测量完成**（本会话主循环直接执行，纯读 JSON，无重建，无提交）。**下一项 = F11（`dump_object_pool_link_data` 三格在 F7 之后的残差分解）。**
+
+- 2026-09-04 PST — ✅ **F11 完成**（本会话主循环，纯读 out_pm/ 已有产物，未重建）。字节残差已分解：hello/base_dd 477 bytes = 489（4 额外 CodeInfo）−12（前 1380 条压缩差）；prog 1323 bytes = 1313（codes 含 5 额外）+10（pairs）；**全部由 code_infos surplus 解释，不存在第三部分，无运行时地址贡献**（「98 slots」是 dump_object_pool 的内容，非 dump_object_pool_link_data）。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。根据契约§七停下呈报。
+- 2026-09-04 UTC（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `993b36a`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点：唯一未完成任务 F12 标注「人工持有」，根据契约§七停下呈报。**
+- 2026-09-04 UTC（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点——唯一未完成任务 F12 标注「人工持有」，根据契约§七停下向用户呈报。**
+- 2026-09-04 UTC（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点——唯一未完成任务 F12 标注「人工持有」，根据契约§七停下向用户呈报。**
