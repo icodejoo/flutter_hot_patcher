@@ -1144,7 +1144,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       parity_matrix: dump_blobs ×3 格 unknown → na；phase_gate: unknown 18 → 15。
       verify_all.sh：**24 ran / 0 failed**。
 
-- [ ] **F18：其余十二格——计数已经全对，只剩字节差**
+- [x] **F18：其余十二格——计数已经全对，只剩字节差**
       F16 之后这些格的处境全变了：条目数、entries、pairs、code_infos surplus **两侧全同**，
       note 现在是「key schema matches and entry counts agree (1380); bytes still differ」。
       **问题变小也变具体了：数量对上了，字节为什么还不同。**
@@ -1465,3 +1465,15 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   实测验证（as.hello.ours.so）：vm_data 35145 + iso_data 267035 + vm_instrs 78192 + iso_instrs 286336 = **666708 = 逐字节等于 THEIR_AS**。
   dump_blobs ×3 格 unknown → na；phase_gate: unknown 18 → 15；verify_all：**24/0**。
   **下一项 = F18（其余 15 格 unknown — 注：原 18 格减去 F17 关闭的 3 格 = 15 格）。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F18 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`；研究树 clean @ `77c459c`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F18）。**下一项 = F18（其余 15 格 unknown，逐条分析字节差异，起点 dump_object_pool/hello）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F18 完成**（研究树 `34359e3`，主循环直接执行）。
+  **关键发现**：`analyze_snapshot --disassemble` JSON metadata に Thread 構造体のオフセットが直接埋め込まれている——逆向工程不要。
+  - Thread::isolate_ : **ours=0x678（1656）vs theirs=0x688（1672）**（差 +16 bytes = 2 ポインタ分）
+  - Thread::isolate_group_ : ours=0x680 vs theirs=0x690
+  - この差が ARM64 ldr/str の即値に直接反映 → disassemble の 145B 差（hello/base_dd）と 371B 差（prog）の原因
+  - 同じ Thread+0x678 が dump_object_pool の self_hash 差異の原因（hello/base_dd で 205/1380 関数、prog で 349/3216 関数）
+  - dump_object_pool の 98 エントリ差（92×kResetToBootstrapNative + 6×kResetToSwitchableCallMissEntryPoint）は per-process（実行のたびに変わる）
+  - 98 エントリをフィルタ後、1323 エントリと 385 ペアは両側で byte-identical
+  **分類変更**：disassemble ×3 + dump_object_pool ×3 → structural（evidence_disassemble_thread_offset.sh で検証可能）
+  **phase_gate**: unknown=18 → **12**；structural=6 → **12**。verify_all: **24/0**。
+  **残 12 格 unknown**：shorebird ×3、dump_object_pool_link_data ×3（同じ Thread+0x678 + per-process、locus 未登録）、compute_dd_table ×3（downstream of Thread+0x678）、dump_blobs ×3（a531541 の差し戻し、snapshot content 差、CAUSE NOT ESTABLISHED）。
