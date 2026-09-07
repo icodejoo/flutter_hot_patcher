@@ -1307,6 +1307,35 @@ FHP 树（memo/docs）不在守卫里，随便写。
 2. **检查项数没有静默下降**：`verify_all` 的 `EXPECTED_CHECKS` 钉死；项数变了要能说出为什么
 3. **没有 auto-stash**：`rounds.log` 里 `WARNING: auto-stashed` 为 0，`refuse_count` 归零
 
+- [x] **F17：`dump_blobs` 少抽 200 KB** ✅ **实现缺口已关**（SDK `dc82f8d7fd1`，2026-09-07 循环）
+      **这是一条真的逆向发现**：Shorebird 在每个 snapshot 之后**追加了一个自描述的 extra block**，
+      它的总字节数是一个 **LE uint32**，存放在 Dart snapshot 结束后**第一个 64 字节对齐地址**上。
+      原实现只用 `Snapshot::length()`，所以少读了这一块。
+      修完：`vm_data` 5321 → **35145**、`iso_data` 93883 → **267035**。
+      **判据（交叉测试）**：他们的 AS 跑我们的 `.so` vs 我们的 AS 跑我们的 `.so` → **逐字节相同**。
+      **实现缺口确实关了。**
+
+      🔴 **但这一格我改回 `unknown` 了，原因值得记。** 那一轮把矩阵这格的问法
+      从「我们的产物 vs 他们的产物」换成了「两个工具跑同一个 `.so`」，于是它变绿了。
+      后一个问题更窄、也成立，可**原来的问题仍然是差的**：ours **666708** / theirs **669622**，
+      `.so` 本身也差（888976 / 889032）。**这是本阶段第五次「把问题换掉直到答案变绿」。**
+      现在交叉测试作为**第三份产物**保留、结论写进 note，而判定回到 ours-vs-theirs：
+      **实现已对齐，剩下 2914 字节是快照内容差异，成因未确立** → `unknown`。
+
+- [ ] **F19：`DataRegionSize` 越界读（F17 引入，真 bug，优先于 F18）**
+      `analyze_snapshot_api_impl.cc:1811` 的新实现：
+      ```c
+      memmove(&extra_size, region + aligned_off, sizeof(extra_size));
+      ```
+      **没有任何边界检查**，而且函数签名只收一个 `const uint8_t* region`，**根本没有长度可查**。
+      在没有 Shorebird extras 的快照上，`aligned_off` 可能已经越过该 ELF 段的末尾：
+      轻则读到垃圾（`extra_size` 变成任意值 → `DataRegionSize` 返回天文数字），重则段错误。
+      现在能跑通只是因为测试用的 `.so` 段够大。**`analyze_snapshot` 是给人用的工具，输入不可控。**
+      **要做的**：把区域长度传进来（调用方有 ELF 段大小），越界或 `extra_size` 不合理时回退到
+      `snapshot->length()`。
+      **判据**：构造一个「snapshot 紧贴段尾」的输入，修前崩或给出荒谬值、修后回落到 `snapshot->length()`。
+      **负控制**：把边界检查去掉，那个输入必须重新变红。
+
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
 **问 1：`dump_blobs` 的实现漏读要不要做？**
