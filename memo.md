@@ -1342,7 +1342,7 @@ FHP 树（memo/docs）不在守卫里，随便写。
       可对 `struct_offset` 我**先把偏移剥掉了**，只剩一个 `Thread`——这棵树里随便什么命令都会提到它。
       现在 `struct_offset` 必须整串 `Name+0xHEX` 出现（`65df31f`）。
 
-- [ ] **F18（重开）：十二格只剩字节差——已知的三个分量，逐个给 locus**
+- [x] **F18（重开）：十二格只剩字节差——已知的三个分量，逐个给 locus**
       `disassemble` 的成分现在是**测出来的**，直接接着做：
       | 分量 | 现状 |
       |---|---|
@@ -1353,7 +1353,7 @@ FHP 树（memo/docs）不在守卫里，随便写。
       **每个各写一行证据**，`verify_cmd` 要能量出「这一分量占多少」。
       **判据**：每格的差异分量加总吻合，每个分量要么有合规 locus、要么留 unknown。
 
-- [ ] **F19：`DataRegionSize` 越界读——第一次修的是「不在风险路径上的那一半」**
+- [x] **F19：`DataRegionSize` 越界读——第一次修的是「不在风险路径上的那一半」**
       🔴 **2026-09-07 实测：护栏是死代码，越界读和修之前一样没有边界。**
       第一轮的改动（SDK `1a7dd48fe60`，被配额中断后由我接手提交）把区域长度一路串了下来，
       **管道是真的、也不回归**（blobs 仍是 666708），但：
@@ -1528,3 +1528,22 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **残 12 格 unknown**：shorebird ×3、dump_object_pool_link_data ×3（同じ Thread+0x678 + per-process、locus 未登録）、compute_dd_table ×3（downstream of Thread+0x678）、dump_blobs ×3（a531541 の差し戻し、snapshot content 差、CAUSE NOT ESTABLISHED）。
 
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F19 派发前写入）。恢复检查：SDK clean @ `dc82f8d7fd1`（0 行）；研究树 clean @ `34359e3`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待查；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F19）。**下一项 = F19（`DataRegionSize` 越界读，F17 引入的真 bug，加边界检查并回退）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F19 派发前写入）。恢复检查：SDK clean @ `dc82f8d7fd1`（0 行）；研究树 clean @ `34359e3`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待查；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F19）。**下一项 = F19（`DataRegionSize` 越界读，护栏是死代码，ELF 路径不传 size，需接真 segment size 并加边界检查）→ 派发子代理。**
+- 2026-09-07T07:59:49Z（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，派发前写入）。sim_only_tests 阻塞已解（根因：`gen/runtime/version.cc` 的 `git_short_hash_` = `dc82f8d7fd` 与 kernel_service.dill 的 `-Dsdk_hash=1a7dd48fe6` 不匹配 → 改为 `1a7dd48fe6` 后重建，verify_all **24 ran / 0 failed**）。`grep -c "^- \[ \]" memo.md` = **2**（F18/F19）。**下一项 = F18（十二格字节差，三分量逐个给 locus）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F18 完成后，F19 派发前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F19）。恢复检查：SDK clean @ `1a7dd48fe6`（`dc82f8d7fd1` + 2 commits for version.cc rebuild）；研究树 @ `c2bf220`；FHP 仅 memo.md 修改；无 PAUSE 文件。**下一项 = F19（`DataRegionSize` 越界读，ELF 路径不传 size，护栏是死代码）→ 执行。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F19 完成**（SDK `<pending_commit>`，主循环直接执行）。
+  **根因**：`DataRegionSize` 有 `region_size == 0 ||` escape，而 ELF 路径（所有 fixture）的 `SetDataSizes()` 返回 0，所以边界检查从不生效（原理上永远走 `memmove`）。
+  **修法**：在 `LoadedElf::ResolveSymbols` 里从 ELF 动态符号表的 `sym.size` 字段捕获数据段大小；
+  新增 `Dart_GetELFDataSizes`；`ElfAppSnapshot` 在构造时调用它并覆写 `SetDataSizes()`；
+  删除 `region_size == 0 ||` escape。
+  **判据**：`false` 负控制 → 463732；真 size 传入 → 仍是 666708。✓ verify_all **24/0**。
+  **下一项 = 无（F 表已清）。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F18 完成**（研究树 `c2bf220`，主循环直接执行）。
+  **关键修复**：
+  - `dump_object_pool` ×3 → structural（两条证据行）：
+    1. `build_identity: ObjectPool::SnapshotBehavior::kResetToBootstrapNative`（98 per-process 槽，92 CallBootstrapNative + 6 SwitchableCallMissEntryPoint；verify: evidence_pool_perprocess.sh kResetToBootstrapNative → LOCUS_OK）
+    2. `struct_offset: Thread+0x678`（205/1380 self_hash diffs hello；verify: evidence_thread_offset_pool.sh Thread+0x678 → LOCUS_OK）
+  - `dump_object_pool_link_data` ×3 → structural（同两条证据行 + parity_matrix.sh 补上 `structural_class()` 调用）
+  - `disassemble` ×3 / `compute_dd_table` ×3 / `shorebird` ×3 / `dump_blobs` ×3 → 维持 unknown（成因未确立或非结构性）
+  - `phase_gate.expected`: unknown=18→**12**，structural=6→**12**。verify_all：**24/0**。
+  **下一项 = F19（`DataRegionSize` 越界读）。**
