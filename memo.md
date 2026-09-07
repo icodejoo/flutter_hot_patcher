@@ -1322,6 +1322,37 @@ FHP 树（memo/docs）不在守卫里，随便写。
       现在交叉测试作为**第三份产物**保留、结论写进 note，而判定回到 ours-vs-theirs：
       **实现已对齐，剩下 2914 字节是快照内容差异，成因未确立** → `unknown`。
 
+- [x] **F18（第一轮）：`disassemble`×3 / `dump_object_pool`×3 判成 structural** 🔴 **已撤回，2026-09-07**
+      循环给的 locus 是 `Thread+0x678`（我们的 `Thread::isolate_`，他们 `0x688`）。
+      **这个偏移差是真的，而且本身确实是结构性的**——他们的 Shorebird 块在结构中部、我们只能追加。
+      **但判定不成立**，实测（我，2026-09-07）：
+      - `disassemble` 两侧按名字配上的 9934 个对象里 **9922 个不同**，
+        把两个 Thread 偏移在两个方向上都归一化之后，**闭合 0 个**。
+      - 真正的差异是**代码布局**：同名、同 size、offset 平移
+        （`Subtype7TestCache` 我们 -17456 / 他们 -18900）。
+      - 装着这两个偏移的 `metadata` 块两侧**都是 251 字节**，对 145 字节的差**贡献为 0**。
+      - 他们还多一个 `GetCStackPointer` stub，**我们从不发**——note 里写了，判定里无视了。
+      `dump_object_pool` 一并撤回，理由更窄：它的 note 自己列了**两个**分量
+      （98 个 per-process 槽 + 205 个 Thread 驱动的 self_hash 差），**证据行只给了其中一个的 locus**。
+
+      **由此新增两条规则**（已写进红线）：
+      1. **locus 必须解释这一格的差异，不是「存在即可」。** 说得出偏移不等于那个偏移造成了这个差。
+      2. **一格有几个分量，就要几行证据。** 一行盖不住两个成因。
+      ⚠️ **放它过去的是我写的规则**：`structural_evidence_check.sh` 要求 `verify_cmd` 提到 locus，
+      可对 `struct_offset` 我**先把偏移剥掉了**，只剩一个 `Thread`——这棵树里随便什么命令都会提到它。
+      现在 `struct_offset` 必须整串 `Name+0xHEX` 出现（`65df31f`）。
+
+- [ ] **F18（重开）：十二格只剩字节差——已知的三个分量，逐个给 locus**
+      `disassemble` 的成分现在是**测出来的**，直接接着做：
+      | 分量 | 现状 |
+      |---|---|
+      | 代码布局 offset 平移（同名同 size） | 主体，**成因未确立**——为什么两侧代码起始位置不同 |
+      | `GetCStackPointer` stub 我们不发 | **这是 gap 不是 structural**，我们少发一个 stub |
+      | Thread 偏移（`Thread+0x678` vs `0x688`） | 真结构差，但在这一格里**贡献为 0**；它该出现在 `dump_object_pool` 的 self_hash 那一分量上 |
+      `dump_object_pool` 的两个分量已经列清楚（98 per-process 槽 / 205 self_hash），
+      **每个各写一行证据**，`verify_cmd` 要能量出「这一分量占多少」。
+      **判据**：每格的差异分量加总吻合，每个分量要么有合规 locus、要么留 unknown。
+
 - [ ] **F19：`DataRegionSize` 越界读（F17 引入，真 bug，优先于 F18）**
       `analyze_snapshot_api_impl.cc:1811` 的新实现：
       ```c
@@ -1376,6 +1407,9 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   单独改钉子把它对上，就是把棘轮锉平了——门在两个方向都会失败正是为了逼出这个动作，
   不是为了让人绕过它
 - **`verify_cmd` 必须演示 locus 本身**，不能是随便打印点什么让检查变绿
+- **locus 必须解释这一格的差异，不是「存在即可」**（2026-09-07 踩：`Thread+0x678` 是真偏移，
+  但在 `disassemble` 那一格上闭合 0 / 9922 个不同对象）
+- **一格有几个成因分量，就要几行证据**；一行盖不住两个分量
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F2 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F2）。**下一项 = F2（`--shorebird` 发出 `subgraph_field_table`）→ 派发子代理。**
 
@@ -1477,3 +1511,5 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **分類変更**：disassemble ×3 + dump_object_pool ×3 → structural（evidence_disassemble_thread_offset.sh で検証可能）
   **phase_gate**: unknown=18 → **12**；structural=6 → **12**。verify_all: **24/0**。
   **残 12 格 unknown**：shorebird ×3、dump_object_pool_link_data ×3（同じ Thread+0x678 + per-process、locus 未登録）、compute_dd_table ×3（downstream of Thread+0x678）、dump_blobs ×3（a531541 の差し戻し、snapshot content 差、CAUSE NOT ESTABLISHED）。
+
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F19 派发前写入）。恢复检查：SDK clean @ `dc82f8d7fd1`（0 行）；研究树 clean @ `34359e3`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待查；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F19）。**下一项 = F19（`DataRegionSize` 越界读，F17 引入的真 bug，加边界检查并回退）→ 派发子代理。**
