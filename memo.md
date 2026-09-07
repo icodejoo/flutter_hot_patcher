@@ -1382,6 +1382,38 @@ FHP 树（memo/docs）不在守卫里，随便写。
       **判据**：构造一个「snapshot 紧贴段尾」的输入，修前崩或给出荒谬值、修后回落到 `snapshot->length()`。
       **负控制**：把边界检查去掉，那个输入必须重新变红。
 
+### 🔧 F20–F21：最后 12 格 + 一条待补的因果判据
+
+**当前**（2026-09-07 16:5x 实测，钉子一致）：`na=35 structural=12 unknown=12 gap=0`，**47/59 = 80%**。
+剩下的 12 格是 `shorebird`×3、`dump_blobs`×3、`disassemble`×3、`compute_dd_table`×3。
+
+- [ ] **F20：给 `Thread+0x678` 补一条**能判别的**因果判据（优先，因为它已经在放行 6 格）**
+      `dump_object_pool`×3 与 `dump_object_pool_link_data`×3 现在靠两行证据放行，
+      分量拆得对（per-process 槽 + Thread 偏移）、`verify_cmd` 也整串引了 locus，**这些都合规**。
+      ⚠️ **但 `evidence_thread_offset_pool.sh` 证明的是两件并排的事实**：
+      ① `runtime_offsets_extracted.h` 里确有 `Thread_isolate_offset = 0x678`；
+      ② 205/1380 个 `self_hash` 不同。**它没有证明②是①造成的。**
+      这正是我撤回 `disassemble` 那条时用的同一条标准（红线：locus 必须**解释**这一格）。
+      **区别是这次很可能真的成立**——`self_hash` 哈希指令字节，装载 `Thread::isolate_`
+      的指令确实编码那个偏移。所以要的不是撤回，是判据。
+      **要交的判据（能判别的）**：hash 不同的那 205 个函数**引用了这个偏移**，
+      hash 相同的 1175 个**没有引用**。（做法：从 `--shorebird` 拿带名字的 self_hash，
+      与他们的按 name 配对找出不同的那批，再看这批的指令里是否编码 0x678/0x688。）
+      **判据**：两侧计数给出类似「205 个里 N 个引用、1175 个里 M 个引用」的表，
+      且 N/M 有明显区分度。**做不出来就把 `struct_offset` 那两行撤掉，该分量记 unknown。**
+      ⚠️ 不许用「它们在同一格里同时出现」当因果。
+
+- [ ] **F21：最后 12 格**
+      每格的已知成分（都是实测，不是推测）：
+      | 格 | 已知 | 缺什么 |
+      |---|---|---|
+      | `shorebird`×3 | 键集合相同、条目数相同（1380/1380、3216/3216） | 字节为何仍不同 |
+      | `dump_blobs`×3 | **实现已对齐**（交叉测试逐字节相同），差 2914 字节 | 那 2914 字节是哪部分快照内容 |
+      | `disassemble`×3 | 主体是**代码布局 offset 平移**（同名同 size）；另有 `GetCStackPointer` **我们不发** | 布局为何不同；那个 stub **是 gap 不是 structural**，补上它 |
+      | `compute_dd_table`×3 | 下游 | 等上面三格 |
+      **判据**：每格差异分量加总吻合；每分量要么合规 locus、要么留 unknown 并写清测到了什么。
+      ⚠️ `disassemble` 的 `GetCStackPointer` 是**四格里唯一一个明确可关的东西**，先做它。
+
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
 **问 1：`dump_blobs` 的实现漏读要不要做？**
