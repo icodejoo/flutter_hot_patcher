@@ -883,7 +883,8 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
 ### 🔬 F8–F11：13 个 `unknown` 格的取证（循环可做，**只测量不定性**）
 
-🛑 **这四项的共同红线：`class` 一律保持 `unknown`，不许改成 `structural` 或 `na`。**
+🛑 **这四项的共同红线：`class` 一律保持 `unknown`。**
+（2026-09-07 起这条已由脚本执行：`structural` 拿不到就是拿不到，见新版红线表。）
 你的产出是**数字与名字**，不是结论。归因由人工做。
 理由：本阶段五个仪器缺陷里有三个（硬编码 structural、fallback 的第二份硬编码、
 空对空判等）都是「在没有依据时给出了一个判定」。**没有依据时正确的动作是把依据找齐，
@@ -980,40 +981,60 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
       **改动**：无（纯读产物）。**下一项 = F12（人工持有，停下呈报）。**
 
-- [ ] **F12：12 条 `structural` 里至少 3 条站不住（人工持有，已带实测证据）**
-      G-e 要求「structural 必须给出是哪个结构的哪个偏移」。我按这条去查 `dump_blobs` 三格，
-      它的 note 写的是「blob contents depend on snapshot version hash」——
-      **这正是 E2 被撤回的那种非解释**（版本 hash 是症状，不是成因）。
-      **实测（2026-09-04 21:5x，读 `out_pm/as.hello.{ours,theirs}.dump_blobs` 的头部）**：
-      blob 头里带的是**快照 features 串**，两侧 11 个 token **只差 2 个**：
-      | | ours | theirs |
-      |---|---|---|
-      | 构建模式 | **`release`** | **`product`** |
-      | 目标平台 | **`macos`** | **`ios`** |
-      | 其余 9 个 | 全同（含 `dedup_instructions`——F7 生效的独立旁证，它以前是 `no-dedup_instructions`）|
-      🔴 **所以这两条都不是「结构」，是构建目标，而且都可能可关**：
-      ① `release` vs `product` 是 F6 那个不对称的**同一条根**——我们用 Release
-      `analyze_snapshot` 是因为它拒绝 product 快照；**但他们的 analyze_snapshot 就读 product**，
-      说明造一个 Product 版 `analyze_snapshot` 也许就能对齐。**没验过，所以是待办不是结论。**
-      ② `macos` vs `ios` 是目标平台，他们用的是 iOS 版 `gen_snapshot`。
-      ⚠️ **不要过度解读**：两侧字节数 ours 494073 / theirs 669622，**差 175 KB，
-      这两个 token 远不足以解释**。所以本卡的结论只有一条：**「structural」这个判定没有依据**，
-      对应格应回到 `unknown`，而不是「已查明成因」。
-      **同一形态的嫌疑**：`disassemble` 三格写的是「addresses and version hash differ」，
-      同样是复述症状；`print_field_table_link_*` 六格写「heap traversal order」，
-      **那个至少指了容器，但没指哪个容器**。
-      **判据**：12 条各自要么给出合规 locus（`Name+0xHEX`，或具名容器/具名构建身份），
-      要么改回 `unknown`。**说不出来就必须改回去，这就是 G-e 的全部意义。**
-      **负控制**：`phase_gate.sh` 的四个控制已跑过（填合规 locus → 欠账降；填复述症状 → 不降）。
+### 🔧 F12–F15：25 个 `unknown` 的收口（**全部可无人值守执行**）
 
-- 2026-09-07 PST — 🧹 **09-03 那份 auto-stash 已丢弃**（`360df3a6f7c`，需要时 `git -C ~/dart-3122/sdk stash apply 360df3a6f7c`，
-  该对象在 gc 剪掉不可达对象之前一直可取回，默认约两周）。
-  内容是 `elf_loader.cc` 把 `PF_R|PF_X` 段无条件改成 `kReadOnly` 的 iOS PROT_EXEC 修复。
-  **丢弃理由是它被 HEAD 取代且更差**：`1f1e51ad16e` + `1f872f94da7` 已把
-  `exec_segment_map_type_` 经构造函数注入（`elf_loader.cc:37/83/300`），
-  而 stash 里那种写死会连宿主的 AOT 加载一起改掉。丢弃后 STASH DEBT 两棵树都为 0。
-  ⚠️ **值得记的不是这份 stash，是它躺了一天没人发现**：auto-stash 只打一行 WARNING 就滚走了。
-  已改成每轮复报（`b4f0842`），判据非恒真（当时 SDK 1 / 研究树 0），并在 21:11 的真实轮次里打出来过。
+**队列规则**（2026-09-07 立，为的是不再出现「只剩人工项 → 停摆」）：
+按编号顺序做，一轮一项；**做不动就把测量结果写进 memo 并转下一项，不要停下来等人**。
+只有当 F12–F15 全部 `[x]` 且 `unknown != 0` 时才停下呈报。
+
+每一项的收口方式只有两种，**没有第三种**：
+① 交出会自己重跑的证据 → 往 `structural_evidence.tsv` 加一行（7 列，含 `verify_cmd`/`expect`），
+   `structural_evidence_check.sh` 会在每次 `verify_all` 里重跑它，**写错就变红**；
+② 交不出 → **保持 `unknown`，把测到的东西写进 note 和 memo**。这不是失败，是本阶段的正常产出。
+⚠️ 不许为了让数字好看去凑一条能通过正则、但 `verify_cmd` 跟结论无关的证据。
+`verify_cmd` 必须**演示 locus 本身**，不是随便打印点什么。
+
+- [ ] **F12：`print_field_table_link_*` 六格——「heap traversal order」是哪个遍历？**
+      现有 note 至少指了机制（堆遍历顺序），但**没指哪个容器**，所以按新规则它现在是 `unknown`。
+      已知（CLAUDE.md）：两侧 622 条（prog 1206）**多重集相等**，只是同一 id 组内顺序不同。
+      **要交的**：产生这个顺序的那个遍历/容器的名字（`container_order` 类，`locus` 写具名容器），
+      `verify_cmd` 要能演示「换成按 id+hash 排序后两侧相同」这类事实。
+      ⚠️ 记忆里有一条现成提醒：**field_table 已被证伪不是 libc++ unordered_map 那一族**，
+      是堆遍历顺序——所以别照抄 `dd_function_identity` 的桶宽解释。
+
+- [ ] **F13：`dump_blobs` + `disassemble` 六格——两个 build token 之外的那 175 KB**
+      已测（2026-09-04）：blob 头的 features 串 11 个 token 只差 2 个，
+      `release` vs `product`、`macos` vs `ios`；其余 9 个全同。
+      **但字节数 494073 vs 669622，差 175 KB，两个 token 远不够解释。**
+      **要测的三件事**：① 那 175 KB 分布在哪些 blob；② `release`/`product` 是否可关——
+      **他们的 `analyze_snapshot` 就能读 product 快照**，所以造一个 Product 版
+      `analyze_snapshot` 也许就对齐了（`xcodebuild/ProductARM64` 里有没有？没有就试着构建）；
+      ③ `macos` vs `ios` 是否可关。
+      ⚠️ ②③ 任一成立，这六格就不是「结构性」而是**又一个构建模式不对称**，与 F6 同型。
+      **这条要优先查**，因为它可能一次性关掉 6 格。
+
+- [ ] **F14：十格 code_infos 残差（`shorebird` / `dump_object_pool` / `..._link_data` / `compute_dd_table`）**
+      F11 已证明这十格是**同一件事**：字节残差 100% 由 code_infos surplus 及其 pair 约束解释，
+      不存在第三部分（hello/base_dd 477 bytes、prog 1323 bytes，两边加总吻合）。
+      F10 已把 surplus 定位到具名函数：hello/base_dd 的 **+4 全是 `_AsyncStarStreamController`
+      的 12 字节 getter**（`isAdding` / `isScheduled` / `isSuspendedAtYield` / `onListenReceived`），
+      prog 的 +5 多一条 `_AsyncStarStreamController` @178668 size 84。
+      **要回答的**：为什么这 4 个在他们那边被去重掉而我们没有——
+      `DedupInstructionsWithSameMetadataVisitor` 用的是 `CodeKeyValueTrait`，
+      **它按对象地址哈希**，所以要求元数据对象**指针相同**，而元数据的规范化由前面几趟
+      （`DedupPcDescriptors` / `NormalizeAndDedupCompressedStackMaps` / `DedupCodeSourceMaps` /
+      `DedupLists` / `DedupUnlinkedCalls` / `DedupCatchEntryMovesMaps`）负责。
+      **所以这是一个可查的级联**：看这 4 个函数的哪一项元数据在我们这边没被合并。
+      ⚠️ 一次关十格，值得花时间。**但仍然：查不出就留 `unknown`，别写猜测。**
+
+- [ ] **F15：`dump_class_table/prog` 的 5 个多余类**
+      F9 已测：`num_cids` 两侧同为 823，我们列 748 类、他们 743，
+      多的是 cid 186/187/210/213/321 =
+      `_HttpSessionManager`/`_HttpSession`/`Cookie`/`HttpSession`/`VMServiceEmbedderHooks`。
+      note 里已经写了一个**未验证的假设**：「a dart_force_simulator tree-shaking difference is
+      plausible but untested」，并给了判据——**去掉 `dart_force_simulator` 重建 `gen_snapshot`
+      再跑这一格**。把它跑掉。
+      ⚠️ 这是本阶段唯一一条「note 里躺着未验假设」的格子，**要么验掉，要么把那句话删掉**。
 
 - 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
   `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
@@ -1139,10 +1160,10 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 |---|---|---|
 | G-a | `unrun == 0` | ✅ 0 |
 | G-b | `blocked` 每条写明被什么挡住 | ✅ 3（闭源 `--dd_caller_links`）|
-| G-c | `unknown == 0` | 🔴 **13**（F6/F7 之后仍是 13：shorebird 三格的假 structural 被拆开、`dump_class_table/prog` 新增。**剩下的活就是这 13 格**）|
+| G-c | `unknown == 0` | 🔴 **25**（2026-09-07：12 条没有具名 locus 的 `structural` 已被脚本自动撤回并入 unknown。**数字变大是主张被收回，不是活变多**；剩下的活就是这 25 格 = F12–F15）|
 | G-d | `gap == 0`（关闭→`na`，或证明→`structural`）| ✅ **0**（F1–F5 全关；`print_dd_resolution_to` 三格改为带证据的 `na`，oracle 是 `dd_pipeline.sh`）|
-| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | 🔴 未施行，**欠账 12 条**；`phase_gate.sh` 四个负控制已过，F7 已完成，下一步就是落地它 |
-| G-f | `verify_all` 全绿且保鲜守卫放行 | ✅ **21/0**（2026-09-04 19:5x 我独立复跑，非轮次自报） |
+| G-e | 每条 `structural` 带**具名结构**（结构名 + 偏移/字段），free-text note 不算 | ✅ **已施行**（`ecda5cd` + `0c3f58b` + `b513116`）：`structural` 只能经 `structural_class()` 取得，locus 不合规自动降级；证据行必须带 `verify_cmd`/`expect` 并在每次 `verify_all` 里重跑。现有证据 **0 行**，即当前**没有任何一格有资格叫 structural** |
+| G-f | `verify_all` 全绿且保鲜守卫放行 | ✅ **24/0**（2026-09-07 独立复跑；新增 `structural_evidence_check.sh` 与 `phase_gate.sh`） |
 | G-g | 每条判定有可复跑的负控制 | 部分 |
 
 **G-e 是这一节的核心。** 规则 0 判据第 2 条本来就要求「『结构性』必须给出是哪个结构的
@@ -1167,12 +1188,30 @@ FHP 树（memo/docs）不在守卫里，随便写。
 2. **检查项数没有静默下降**：`verify_all` 的 `EXPECTED_CHECKS` 钉死；项数变了要能说出为什么
 3. **没有 auto-stash**：`rounds.log` 里 `WARNING: auto-stashed` 为 0，`refuse_count` 归零
 
-### 红线（写给循环，违反即回退）
+### 红线（2026-09-07 重写：**从「写给循环的规矩」改成「脚本执行的约束」**）
 
-- **F6 不得由无人值守轮次认领或结案**（卡片里已写，`88c1f18`）
-- **任何 `structural` 判定必须具名结构**；说不出结构的一律记 `unknown`，不许记 structural
+**为什么重写**：旧版红线里有一条是「F6/F12 由人工持有，无人值守轮次不得认领」。
+它把我自己变成了唯一的瓶颈——**09-04 22:18 循环就是这么停的**：F9/F10/F11 做完之后，
+memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下呈报，连续 3 轮无痕迹，
+自动 PAUSE，然后**空转了 3 天**。循环没做错任何事，**是我给它留了一个它不许碰的队列**。
+
+**新原则：把人工红线换成机器红线。方向不对称——撤回主张永远安全，作出主张必须自证。**
+
+| 动作 | 谁可以做 | 靠什么保证 |
+|---|---|---|
+| `structural` → `unknown`（**撤回**一个没依据的主张） | 循环，随时 | `structural_class()` 自动降级，无需判断 |
+| `unknown` → `structural`（**作出**主张） | 循环也可以，**但必须交出会自己重跑的证据** | `structural_evidence.tsv` 的 `verify_cmd`/`expect` + `structural_evidence_check.sh`（进了 `verify_all`，23 项） |
+| `unknown` → `na` | 只有逐字节相同，或指名另一个真 oracle | `cmp_files` 的 `vacuous` 第三值堵住了「空对空」 |
+
+- **不许再有「人工持有」的任务。** 队列里若只剩人工项，那是**流程 bug**，不是等待状态。
+- **任何 `structural` 必须具名结构**——现在这条由 `structural_class()` 强制，写不出就自动是 `unknown`
 - **分类不得写进被生成器覆盖的产物**（E2 踩过：重跑一次全抹掉且退出码正常）
-- **判定不得写成常量**（E 表踩过：`shorebird` 三格硬编码，原理上不可能报缺口）
+- **判定不得写成常量**（E 表踩过两次：`shorebird` 三格硬编码，审计删了早退那条、fallback 那条活到 F3）
+- **空对空不算相同**（F5 踩过：`cmp_files` 对两个不存在的文件答 `yes`，三格凭空变绿）
+- **`phase_gate.expected` 这个钉子，只能和挪动它的那次改动在同一个提交里改。**
+  单独改钉子把它对上，就是把棘轮锉平了——门在两个方向都会失败正是为了逼出这个动作，
+  不是为了让人绕过它
+- **`verify_cmd` 必须演示 locus 本身**，不能是随便打印点什么让检查变绿
 
 - 2026-09-04 PST — ❤️ **心跳**（新会话，用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F2 派发前写入）。恢复检查：SDK clean @ `b502748c187`；研究树有未追踪文件；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（待查）；无 PAUSE 文件。`grep -c "^- \[ \].*⬅️ 当前任务"` = **1**（F2）。**下一项 = F2（`--shorebird` 发出 `subgraph_field_table`）→ 派发子代理。**
 

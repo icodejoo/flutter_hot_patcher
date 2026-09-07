@@ -397,7 +397,16 @@ if [ "$(fingerprint)" = "$idle_before" ]; then
   say "round left no trace ($idle/$IDLE_LIMIT: no new commit in any tree, no non-heartbeat memo line)"
   if [ "$idle" -ge "$IDLE_LIMIT" ]; then
     touch "$PAUSE"
-    say "PAUSED automatically after $IDLE_LIMIT rounds with nothing to show -- the task list is probably empty"
+    # "the task list is probably empty" was wrong the two times it mattered.
+    # 2026-09-04 16:16 it paused while the F table was minutes from being
+    # committed; 2026-09-04 22:18 the list was not empty at all -- it held one
+    # task marked human-held, which the loop was forbidden to touch, and that
+    # cost three idle days. So say what is actually open.
+    open_tasks=$(grep -c '^- \[ \]' "$REPO/memo.md" 2>/dev/null || echo '?')
+    open_names=$(grep '^- \[ \]' "$REPO/memo.md" 2>/dev/null | sed 's/^- \[ \] *//; s/\*\*//g' | cut -c1-60 | tr '\n' '|')
+    say "PAUSED automatically after $IDLE_LIMIT rounds with nothing to show"
+    say "  memo.md has $open_tasks open task(s): $open_names"
+    say "  if that count is nonzero, the loop had work it could not take -- that is a process bug, not an empty queue"
     osascript -e "display notification \"连续 $IDLE_LIMIT 轮无产出，循环已自动暂停\" with title \"FHP loop\"" 2>/dev/null || true
   fi
 else
