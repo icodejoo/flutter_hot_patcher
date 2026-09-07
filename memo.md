@@ -1102,6 +1102,47 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       `parity_matrix.tsv`：`dump_class_table/prog` → `structural`。
       `phase_gate.expected`：`unknown=18, structural=7`（各±1）。
 
+- [x] **F16：整组 `as.*` 改成 Product 对 Product** ✅ 2026-09-07 研究树 `00b51eb`（人工）
+      `ProductARM64/analyze_snapshot` **一直就在构建树里**，而且支持全部私有 flag
+      （`--shorebird`/`--dump_class_table`/`--dump_object_pool`/`--dump_object_pool_link_data`/
+      `--dump_blobs`/`--disassemble`/`--no_pp_hash`）。挡了几周的那句注释
+      「analyze_snapshot 拒绝 product 快照」**只对 Release 版成立**——拒绝 product 快照的是
+      *Release* 版 analyze_snapshot，因为 features 串对不上。
+      **一次关掉的东西**：`dump_class_table/prog` → 逐字节相同 `na`；
+      条目数 **1384/1380 → 1380/1380**，prog **3221/3216 → 3216/3216**，surplus **+0**。
+      🔴 **同时订正 F15 的判定**：它查明的成因是对的（vmservice HTTP 类被 product 构建摇掉），
+      但把这格记成了 `structural`——**那是错的**。structural 的含义是「两 VM 必然不同、不可关闭」，
+      而这是**我们的对拍脚本拿错了二进制**，可关。证据行已删，格子已变 `na`。
+      ⚠️ **换构建目录 = 悄悄换了一个不同年龄的二进制**：`ProductARM64/analyze_snapshot`
+      是 14:15 的，比 F1（19:08）早四小时，切过去第一跑把 F1–F3 的四个字段全报成缺失（gap 3）。
+      重新编译后 gap 归 0。**陈旧二进制假红，本项目第二次。**
+
+      🔴 **F14 的前提随之消失，那才是这一轮最该记住的事。**
+      F10 把差异逐条定位到 4 个具名的 `_AsyncStarStreamController` getter，
+      F11 把 477 / 1323 字节完全配平、证明「不存在第三部分」——
+      **两份都是好工作，而且都指向一个不存在的病**。它们共享的前提（我们这侧没去重/带 VMService）
+      是对拍工具造成的。→ **「测得越细越可信」在前提错的时候不成立。**
+
+### 🔧 F17–F18：剩下 18 格（全部可无人值守）
+
+- [ ] **F17：`dump_blobs` 六格——我们少抽了 200 KB，这是真缺口不是结构差异**
+      F13 实测：从**同一个 Product `.so`**，我们的 analyze_snapshot 抽出 **463732** 字节，
+      他们抽出 **666708**，而 `.so` 大小两侧相同。**这是我们 `--dump_blobs` 的实现缺口。**
+      **要做的**：查清少抽的是哪些 blob（他们枚举了什么我们没枚举），补上。
+      **判据**：字节数相同或接近；若仍有差，差在哪要说得出。
+      **补上之后这格应记 `gap` → 关闭 → `na`，不是 `structural`。**
+
+- [ ] **F18：其余十二格——计数已经全对，只剩字节差**
+      F16 之后这些格的处境全变了：条目数、entries、pairs、code_infos surplus **两侧全同**，
+      note 现在是「key schema matches and entry counts agree (1380); bytes still differ」。
+      **问题变小也变具体了：数量对上了，字节为什么还不同。**
+      **要做的**：挑一格（建议 `dump_object_pool/hello`，entries 1421、pairs 385 两侧全同）
+      逐条 diff，把「哪一类字段不同」列出来。已知候选：Thread 偏移（我们只能追加）、
+      运行期地址（`kResetToBootstrapNative` 那 92+6 个槽，跨进程本就不可能相同）。
+      **判据**：每一类差异要么给出合规 locus 进证据表，要么留 `unknown` 并写清测到了什么。
+      ⚠️ 这是第一次真的可能出现**够格的 `structural`**——Thread 偏移有具名结构和偏移
+      （他们的 Shorebird 块在 `Thread+0x8d8..0x900`，我们只能追加，见 CLAUDE.md）。
+
 - 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
   `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
   F5 那轮把 `print_dd_resolution_to` 从硬编码的 `gap`（连 `bytes_id="no"` 都是写死的）
@@ -1358,3 +1399,4 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   dart_force_simulator 假设证伪；真因：构建模式不对称（develop vs product），ProductARM64 给 743/743。
   structural_evidence.tsv +1 行，parity_matrix.tsv dump_class_table/prog→structural，phase_gate.expected unknown=18/structural=7。
 - 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F-table 全部完成后写入）。`grep -c "^- \[ \]" memo.md` = **0**（F12–F15 全部 [x]）。verify_all 24/0。`phase_gate.expected`: unknown=18，gap=0，structural=7。⚠️ **G-c 未满足**（`unknown==0` 仍需 unknown 降至 0；当前 18 = F13 的 12 格 dump_blobs/disassemble + F14 的 12 格 code_infos，减去 F12 的 6 + F15 的 1 = 18 remaining）。**循环在阶段门：F 表已做完，unknown != 0，需呈报人类。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `00b51eb`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **0**——无未完成任务行。**循环在阶段门：F 表全部关闭，但 G-c 未满足（unknown=18）。根据契约§七停下来向用户呈报。**
