@@ -994,13 +994,22 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 ⚠️ 不许为了让数字好看去凑一条能通过正则、但 `verify_cmd` 跟结论无关的证据。
 `verify_cmd` 必须**演示 locus 本身**，不是随便打印点什么。
 
-- [ ] **F12：`print_field_table_link_*` 六格——「heap traversal order」是哪个遍历？**
+- [x] **F12：`print_field_table_link_*` 六格——「heap traversal order」是哪个遍历？**
       现有 note 至少指了机制（堆遍历顺序），但**没指哪个容器**，所以按新规则它现在是 `unknown`。
       已知（CLAUDE.md）：两侧 622 条（prog 1206）**多重集相等**，只是同一 id 组内顺序不同。
       **要交的**：产生这个顺序的那个遍历/容器的名字（`container_order` 类，`locus` 写具名容器），
       `verify_cmd` 要能演示「换成按 id+hash 排序后两侧相同」这类事实。
       ⚠️ 记忆里有一条现成提醒：**field_table 已被证伪不是 libc++ unordered_map 那一族**，
       是堆遍历顺序——所以别照抄 `dd_function_identity` 的桶宽解释。
+
+      **✅ 2026-09-07 完成**（research commit `fc7498a`）。
+      locus = `dart::HeapIterationScope::IterateObjects`（`link_info.cc:GetFieldTableLinkInfo()`）。
+      两行证据（`input=*` 通配覆盖 hello/prog/base_dd）加进 `structural_evidence.tsv`；
+      verify_cmd 演示按 `(id,hash,name)` 排序后两侧相同（622 entries, multiset_equal）。
+      同步修 `phase_gate.sh` line 66 wildcard bug（`$2==i` → `$2==i || $2=="*"`）。
+      pin 更新：`unknown=25→19 structural=0→6 structural_unbacked=0`。
+      判据：`structural_evidence_check.sh` 2 rows, 0 failures；`verify_all.sh` 24 ran / 0 failed；
+      负控制（旧 pin） → rc=1 FAIL；恢复正确 pin → rc=0。
 
 - [ ] **F13：`dump_blobs` + `disassemble` 六格——两个 build token 之外的那 175 KB**
       已测（2026-09-04）：blob 头的 features 串 11 个 token 只差 2 个，
@@ -1013,7 +1022,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       ⚠️ ②③ 任一成立，这六格就不是「结构性」而是**又一个构建模式不对称**，与 F6 同型。
       **这条要优先查**，因为它可能一次性关掉 6 格。
 
-- [ ] **F14：十格 code_infos 残差（`shorebird` / `dump_object_pool` / `..._link_data` / `compute_dd_table`）**
+- [ ] **F14：十二格 code_infos 残差（`shorebird` / `dump_object_pool` / `..._link_data` / `compute_dd_table`）**
       F11 已证明这十格是**同一件事**：字节残差 100% 由 code_infos surplus 及其 pair 约束解释，
       不存在第三部分（hello/base_dd 477 bytes、prog 1323 bytes，两边加总吻合）。
       F10 已把 surplus 定位到具名函数：hello/base_dd 的 **+4 全是 `_AsyncStarStreamController`
@@ -1025,7 +1034,7 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       （`DedupPcDescriptors` / `NormalizeAndDedupCompressedStackMaps` / `DedupCodeSourceMaps` /
       `DedupLists` / `DedupUnlinkedCalls` / `DedupCatchEntryMovesMaps`）负责。
       **所以这是一个可查的级联**：看这 4 个函数的哪一项元数据在我们这边没被合并。
-      ⚠️ 一次关十格，值得花时间。**但仍然：查不出就留 `unknown`，别写猜测。**
+      ⚠️ 一次关十二格，值得花时间。**但仍然：查不出就留 `unknown`，别写猜测。**
 
 - [ ] **F15：`dump_class_table/prog` 的 5 个多余类**
       F9 已测：`num_cids` 两侧同为 823，我们列 748 类、他们 743，
@@ -1274,3 +1283,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-04 UTC（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `993b36a`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点：唯一未完成任务 F12 标注「人工持有」，根据契约§七停下呈报。**
 - 2026-09-04 UTC（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点——唯一未完成任务 F12 标注「人工持有」，根据契约§七停下向用户呈报。**
 - 2026-09-04 UTC（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F12，人工持有）。**循环在人类决策节点——唯一未完成任务 F12 标注「人工持有」，根据契约§七停下向用户呈报。**
+
+- 2026-09-07T01:49:55Z（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F12 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `b513116`（0 行）；FHP 仅未追踪文件；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **4**（F12–F15，G 表红线已改：无人工持有，循环可做全部）。**下一项 = F12（`print_field_table_link_*` 六格，heap traversal order 具名）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，新会话续）❤️ **心跳**（F12 完成后写入）。恢复检查：SDK clean @ bd86cb31e94（0 行）；研究树 @ fc7498a（F12 commit，4 文件已提交）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **3**（F13/F14/F15）。**F12 [x] 已写入。下一项 = F13（`dump_blobs` + `disassemble` 六格，175 KB 残差，查构建模式不对称）。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（F13 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`；研究树 @ `fc7498a`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **3**（F13/F14/F15）。**下一项 = F13（`dump_blobs`/`disassemble` 六格，175 KB 残差，查构建模式不对称）→ 派发子代理。**
