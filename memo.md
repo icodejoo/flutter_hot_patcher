@@ -1570,6 +1570,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   删除 `region_size == 0 ||` escape。
   **判据**：`false` 负控制 → 463732；真 size 传入 → 仍是 666708。✓ verify_all **24/0**。
   **下一项 = 无（F 表已清）。**
+- 2026-09-07T09:17（claude-sonnet-4-6）❤️ **心跳**（F21 派发前。F20 已由本会话直接完成：因果判据 59/205 diff vs 0/1175 same，research `d26f3eb`，verify_all 24/0。`grep -c "^- \[ \]" memo.md` = **1**（F21）。**下一项 = F21（最后 12 格，先做 `GetCStackPointer` gap）→ 派发子代理。**）
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F20 派发前写入）。恢复检查：SDK clean @ `18c6599ba8d`（0 行）；研究树 clean @ `c2bf220`（0 行）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F20/F21）。**下一项 = F20（给 `Thread+0x678` 补因果判据）→ 派发子代理。**
 - 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F18 完成**（研究树 `c2bf220`，主循环直接执行）。
   **关键修复**：
