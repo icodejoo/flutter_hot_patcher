@@ -1543,14 +1543,64 @@ residual 行必须打印 `EXAMINED <n>` 且 **n 必须等于该数**，外加 `U
 
 **当前**：`na=35 structural=6 unknown=18 gap=0`，`verify_all` 24/0，闸门与 pin 一致。
 
-- [ ] **F26：`shorebird`×3 的残差（85,822 单位，先从最大的一块下手）**
-      不许再换题。要交的是「这 85,822 个单位里，每一个归给哪个具名成因」，
-      或者把它留在 unknown。已知的两块真缺口（F23 订正后）是
-      DD 派发 0 vs 92 与模拟守卫 2 vs 85，两者都**不是** structural。
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F26 派发前写入）。恢复检查：SDK clean @ `d0ffb337b6d`（0 行）；研究树 clean @ `8ebfcbe`（0 行）；FHP 仅未追踪文件 + memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F26/F27）。**下一项 = F26（`shorebird`×3 的残差 85,822 单位，逐条归因或留 unknown）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F27 派发前写入）。恢复检查：SDK clean @ `d0ffb337b6d`；研究树 clean @ `8ebfcbe`（F26 完成，verify_all 24/0）；FHP 仅未追踪文件 + memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F27）。**下一项 = F27（compute_dd_table×3 先做，14 单位；再看 disassemble×3、dump_blobs×3）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，新会话续）✅ **F27 完成**（主循环直接执行，无新提交）。
+  `grep -c "^- \[ \]" memo.md` = **0**（F 表全部关闭）。
+  **三个 flag 九格全部留在 unknown**，成因相同：
+  - compute_dd_table×3：解码 DD 表，5 条 theirs-only 条目中 4 条来自 size 不同函数（Sim guard / DD dispatch 代码 gap），1 条为 Thread+0x678；parity_matrix.sh 还硬编码为 unknown
+  - disassemble×3：metadata 仅 2 行 structural（thread.isolate/isolate_group），objects 1568 Code 对象中 1371 个尺寸不同（272 stubs + 1099 non-stubs），EXAMINED 210118 / UNEXPLAINED >> 0
+  - dump_blobs×3：138 用户函数 + 272 stub 尺寸不同（code gap），EXAMINED 10049 / UNEXPLAINED >> 0
+  **矩阵终态：na=35 structural=6 unknown=18 gap=0**，phase_gate 一致（与 pin 匹配）。verify_all：**24/0**。
+  **全部 18 格 unknown 的根因 = 两个代码 gap**（F23 已实证）：
+    1. Sim guard：`ldr x16,[x26,#0x8d8]; cbz x16,+8; brk #0xb129`（+3 指令 / 约 87 函数 + 众多 stub）
+    2. DD dispatch：`asr x16,x16,#1; ldr x30,[x26,x16]`（+2 指令 / 约 42 函数间接派发序列）
+  **F 表全部关闭，unknown=18 ≠ 0，G-c 未满足。循环按契约§七停下呈报。**
 
-- [ ] **F27：`disassemble`×3（210,118 单位）/ `compute_dd_table`×3（14 单位）/
-      `dump_blobs`×3（10,049 单位）**
+- [x] **F26：`shorebird`×3 的残差（85,822 单位）**（✅ 2026-09-07，研究树 `4917ee6`）
+      **EXAMINED 85,822 / UNEXPLAINED 5,541（下界）→ shorebird×3 留在 unknown**。
+      分解：hello/base_dd 各 138 个、prog 247 个函数的 size 差 → 合计 5,541 单位
+      来自有额外指令的函数（Thread+0x678 只移动偏移量，不会增减指令，所以这些无法归因）。
+      另有 offset 级联（上游函数改变尺寸导致下游函数的 offset 字段变化）与
+      subgraph 级联（调用者的 subgraph_hash 因被调方有额外指令而变化）共约 72,000 单位也
+      无法归因于 Thread+0x678，但脚本只报下界。
+      **负的制御**：临时向 structural_evidence.tsv 加 fake residual 行 →
+      structural_evidence_check.sh 报 `FAIL shorebird/*: expected UNEXPLAINED 0`（5541≠0）；
+      还原后 0 failure。verify_all: **24/0**。
+      **下一项 = F27（`compute_dd_table`×3 先做，只有 14 单位）。**
+
+- [x] **F27：`disassemble`×3（210,118 单位）/ `compute_dd_table`×3（14 单位）/
+      `dump_blobs`×3（10,049 单位）**（✅ 2026-09-07，主循环直接执行）
       ⚠️ `compute_dd_table` 只有 **14** 个单位，是四格里唯一可能真能逐项归因的，先做它。
+
+      **compute_dd_table × 3（14 单位）**：
+      解码两侧二进制 DD 表（hello 各 67 条目）。
+      - only_ours=5 / only_theirs=5 / common=61 / idx_diffs=25（hello/base_dd），prog 31/31/309/299
+      - 5 条 theirs-only 条目与 shorebird JSON 交叉验证：
+        allocateOneByteString +4B、StackTrace.current +4B、_StringBase.+ +4B、Uri.parseIPv6Address +12B
+        → **4 条来自 size 不同的函数（代码 gap：Sim guard / DD dispatch）**，Thread+0x678 只改偏移量不增减指令
+        → 仅 _Uri._escapeChar（+0B 同尺寸）可归因于 Thread+0x678
+      - EXAMINED 14，UNEXPLAINED > 0（code-gap 条目无法归因）
+      - **无法 structural；parity_matrix.sh 还把 compute_dd_table 硬编码为 unknown。保持 unknown。**
+
+      **disassemble × 3（210,118 单位）**：
+      - JSON metadata：仅 thread.isolate / thread.isolate_group 两字段 diff（每组 fixture 2 行，共 6 行 → Thread+0x678 结构性）
+      - JSON objects：1568 Code 对象，其中 stubs=388（272 尺寸不同，最大 delta -248/+212/+160）、non-stubs=1180（1099 尺寸不同，仅 1 个逐字节相同，80 个同尺寸但 offset 不同 = cascade）
+      - EXAMINED 210118，UNEXPLAINED >> 0（code-gap 函数 + stub size 差 + offset 级联，压倒性多数）
+      - **无法 structural；structural_class() 无 residual 行 → 保持 unknown。**
+
+      **dump_blobs × 3（10,049 单位）**：
+      - Blob 包含全部快照代码字节（函数 + stub）
+      - hello：138 个 size 不同用户函数 + disassemble 分析给出 272 个 size 不同 stub → code gap 贡献为主
+      - EXAMINED 10049，UNEXPLAINED >> 0（code-gap 函数 / stub 的额外指令字节无法归因于 Thread+0x678）
+      - **无法 structural；structural_class() 无 residual 行 → 保持 unknown。**
+
+      **F27 总结**：三个 flag 九格全部保持 **unknown**。
+      所有 18 格 unknown 的共同根因 = 两个代码 gap（F23 已实证）：
+        1. **Sim guard**：`ldr x16,[x26,#0x8d8]; cbz x16,+8; brk #0xb129`（+3 指令）被 Shorebird 加到约 87 个函数及众多 stub
+        2. **DD dispatch**：`asr x16,x16,#1; ldr x30,[x26,x16]`（+2 指令）间接派发序列，约 42 个函数
+      实现这两处代码生成器改动将关闭全部 18 格 unknown，phase_gate 才能通过。
+      矩阵不变：**na=35 structural=6 unknown=18 gap=0**。verify_all：**24/0**。
 
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
