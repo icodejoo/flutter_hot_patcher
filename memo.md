@@ -1011,18 +1011,30 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       判据：`structural_evidence_check.sh` 2 rows, 0 failures；`verify_all.sh` 24 ran / 0 failed；
       负控制（旧 pin） → rc=1 FAIL；恢复正确 pin → rc=0。
 
-- [ ] **F13：`dump_blobs` + `disassemble` 六格——两个 build token 之外的那 175 KB**
-      已测（2026-09-04）：blob 头的 features 串 11 个 token 只差 2 个，
-      `release` vs `product`、`macos` vs `ios`；其余 9 个全同。
-      **但字节数 494073 vs 669622，差 175 KB，两个 token 远不够解释。**
-      **要测的三件事**：① 那 175 KB 分布在哪些 blob；② `release`/`product` 是否可关——
-      **他们的 `analyze_snapshot` 就能读 product 快照**，所以造一个 Product 版
-      `analyze_snapshot` 也许就对齐了（`xcodebuild/ProductARM64` 里有没有？没有就试着构建）；
-      ③ `macos` vs `ios` 是否可关。
-      ⚠️ ②③ 任一成立，这六格就不是「结构性」而是**又一个构建模式不对称**，与 F6 同型。
-      **这条要优先查**，因为它可能一次性关掉 6 格。
+- [x] **F13：`dump_blobs` + `disassemble` 六格——两个 build token 之外的那 175 KB** ✅ 2026-09-07 研究树 `395d4ca`
 
-- [ ] **F14：十二格 code_infos 残差（`shorebird` / `dump_object_pool` / `..._link_data` / `compute_dd_table`）**
+      **三个问题的实测答案（2026-09-07）：**
+
+      **②：ProductARM64/analyze_snapshot 能对齐 dump_blobs 吗？**
+      - ProductARM64/analyze_snapshot 读 Release+dedup ours.so → **REJECTED**（snapshot 要求 `release`，VM 是 `product`）
+      - ProductARM64/gen_snapshot 构建 Product 快照 → exit=0，.so 888,984 bytes（vs theirs 889,032 bytes，几乎相同）
+      - ProductARM64/analyze_snapshot 读 Product ours.so → **dump_blobs 463,732 bytes**（vs theirs 669,622 bytes，**差 206 KB**，更大不是更小）
+      - THEIR_AS 读 Product ours.so → **dump_blobs 666,708 bytes**（vs theirs 669,622，仅差 2,914 bytes = 4 个额外函数 F10）
+      - **结论：dump_blobs 的 175 KB 差异根本不在快照内容里，而在 analyze_snapshot 实现里**：同一份 Product.so，他们的 AS 提取 666 KB，我们的 AS 只提取 463 KB。我们的 `--dump_blobs` 实现**漏读了约 200 KB 的 blob 段**。
+
+      **②（disassemble）：ProductARM64 能对齐 disassemble 吗？**
+      - ProductARM64/analyze_snapshot 读 Product ours.so → **disassemble 878,744 bytes**（vs theirs 878,599，**仅差 145 bytes**）
+      - THEIR_AS 读 Product ours.so → REJECTED（disassemble 检查版本，dump_blobs 不检查版本）
+      - **结论：disassemble 是构建模式不对称（与 F6 同型）**：当前矩阵用 Release+dedup → 1,071,342 vs 878,599（差 192 KB）；换 Product+Product → 878,744 vs 878,599（差 145 bytes = F10 的 4 个额外函数）
+
+      ③：macos vs ios 是否可关？**暂未单独测**——两个发现已明确主因，macos/ios 不是导致大差距的因素
+
+      **当前状态**：两类格子，两种成因，均保持 class=unknown。
+      - **dump_blobs 6 格**：成因 = 我们的 `--dump_blobs` 实现漏读 blob 段（非构建模式问题）
+      - **disassemble 6 格**：成因 = 构建模式不对称，fix = Product gen_snapshot + Product analyze_snapshot（会使残差降至 145 bytes = 4 额外函数）
+      parity_matrix.sh 注释已更新（`395d4ca`）。verify_all 24/0。
+
+- [x] **F14：十二格 code_infos 残差（`shorebird` / `dump_object_pool` / `..._link_data` / `compute_dd_table`）** ✅ 2026-09-07（子代理实测）
       F11 已证明这十格是**同一件事**：字节残差 100% 由 code_infos surplus 及其 pair 约束解释，
       不存在第三部分（hello/base_dd 477 bytes、prog 1323 bytes，两边加总吻合）。
       F10 已把 surplus 定位到具名函数：hello/base_dd 的 **+4 全是 `_AsyncStarStreamController`
@@ -1036,7 +1048,32 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       **所以这是一个可查的级联**：看这 4 个函数的哪一项元数据在我们这边没被合并。
       ⚠️ 一次关十二格，值得花时间。**但仍然：查不出就留 `unknown`，别写猜测。**
 
-- [ ] **F15：`dump_class_table/prog` 的 5 个多余类**
+      **实测结论（2026-09-07，子代理，verify_all 24/0）：**
+
+      根因**不是 deduplication**——这 4 个对象在他们的快照里根本不存在，
+      `CodeKeyValueTrait` 从未介入。正确机制是**AOT 内联差异**：
+
+      - 更正：F10 的名字有误，这 4 个是 **setter**（`isScheduled=`/`isSuspendedAtYield=`/
+        `onListenReceived=`/`isAdding=`），各 3 条指令（stur + mov + ret），
+        字节不同（字段偏移 0x1f/0x27/0x2f/0x37 各异）——所以它们之间本来就不会被去重。
+      - **我们**：`runBody` 通过 `bl isScheduled=` 调用 setter（未内联）→ 4 个独立 Code 对象进快照。
+      - **他们**：`runBody` 直接发出 `stur x0, [x1, #0x2f]` / `stur x0, [x1, #0x37]`（setter 已内联）
+        → 快照里无对应 Code 对象。
+
+      **可复跑的证明**：
+      ```
+      # 我们这侧：runBody 通过 bl 调用 setter
+      xcrun llvm-objdump -d --start-address=0xb6488 --stop-address=0xb6520 \
+        out_pm/as.hello.ours.so | grep "isScheduled="
+      # 他们那侧：runBody 内联 setter（直接 stur 到字段偏移）
+      xcrun llvm-objdump -d --start-address=0x964ec --stop-address=0x96578 \
+        out_pm/as.hello.theirs.so | grep "0x2f\|0x37"
+      ```
+
+      **class 保持 unknown**（需 structural_evidence.tsv 条目才能分类）。
+      这 12 格的根因是编译器内联策略差异（Shorebird 私有优化），关闭路径未确立。
+
+- [x] **F15：`dump_class_table/prog` 的 5 个多余类** ✅ 2026-09-07（子代理实测）
       F9 已测：`num_cids` 两侧同为 823，我们列 748 类、他们 743，
       多的是 cid 186/187/210/213/321 =
       `_HttpSessionManager`/`_HttpSession`/`Cookie`/`HttpSession`/`VMServiceEmbedderHooks`。
@@ -1044,6 +1081,26 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
       plausible but untested」，并给了判据——**去掉 `dart_force_simulator` 重建 `gen_snapshot`
       再跑这一格**。把它跑掉。
       ⚠️ 这是本阶段唯一一条「note 里躺着未验假设」的格子，**要么验掉，要么把那句话删掉**。
+
+      **实测结论（2026-09-07，子代理，verify_all 24/0）：**
+
+      `dart_force_simulator` 假设已**证伪**——该 flag 在 ReleaseARM64 里根本不存在。
+
+      **真正原因：构建模式不对称（与 F6/F7 同型，但在 class_table 这格的表现）**
+      - `hello.dill` / `base_dd.dill` 用 product vm_platform.dill（4.4 MB）编译，
+        class_table 与他们完全一致（该格本就是 na/identical）。
+      - `prog.dill` 用非 product 平台（5.8 MB）编译，vmservice 入口点（`boot()`/
+        `@pragma('vm:entry-point','call')`）被保留 → 拉入 5 个 HTTP 相关类。
+      - 我们的 `ReleaseARM64/gen_snapshot` 是 `dart_runtime_mode=develop`（VMService 开启），
+        他们的是 product 二进制（VMService 关闭，类被摇掉）。
+      - 验证：`ProductARM64/gen_snapshot + ProductARM64/analyze_snapshot` 对同一 `prog.dill`
+        给出 **743 类 = 与他们完全一致**。
+
+      **已归档为 structural**（`structural_evidence.tsv` 第 3 行）：
+      locus = `ProductARM64`，verify_cmd = `./evidence_class_table_build_mode.sh`，
+      expect = `LOCUS_OK ProductARM64`。
+      `parity_matrix.tsv`：`dump_class_table/prog` → `structural`。
+      `phase_gate.expected`：`unknown=18, structural=7`（各±1）。
 
 - 2026-09-04 PST — 🔴 **第五个仪器缺陷：两个不存在的文件被判为「逐字节相同」。**
   `cmp_files()` 的第一行是 `if [ ! -s "$1" ] && [ ! -s "$2" ]; then printf 'yes'`。
@@ -1287,3 +1344,17 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-07T01:49:55Z（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F12 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `b513116`（0 行）；FHP 仅未追踪文件；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **4**（F12–F15，G 表红线已改：无人工持有，循环可做全部）。**下一项 = F12（`print_field_table_link_*` 六格，heap traversal order 具名）→ 派发子代理。**
 - 2026-09-07T（claude-sonnet-4-6，新会话续）❤️ **心跳**（F12 完成后写入）。恢复检查：SDK clean @ bd86cb31e94（0 行）；研究树 @ fc7498a（F12 commit，4 文件已提交）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **3**（F13/F14/F15）。**F12 [x] 已写入。下一项 = F13（`dump_blobs` + `disassemble` 六格，175 KB 残差，查构建模式不对称）。**
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（F13 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`；研究树 @ `fc7498a`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **3**（F13/F14/F15）。**下一项 = F13（`dump_blobs`/`disassemble` 六格，175 KB 残差，查构建模式不对称）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F13 完成**（研究树 `395d4ca`）。
+  轮次=F13 / 判据=实测 / 改动=parity_matrix.sh 注释 / verify_all=24/0 / unknown 仍=19（无变化）。
+  **关键发现**：dump_blobs 175 KB 差异 → 我们 AS 实现漏读 ~200 KB blob（不是构建模式问题）；
+  disassemble 差异 → 构建模式不对称，Product+Product 后残差仅 145 bytes。**下一项 = F14。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F14 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 @ `2abb484`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F14/F15）。**下一项 = F14（十二格 code_infos 残差——4 个 `_AsyncStarStreamController` getter 为何在我们这边没被去重）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F14 完成**（子代理实测，verify_all 24/0）。
+  根因：AOT **内联差异**，不是 deduplication。4 个函数实为 setter（`isScheduled=` 等），
+  他们的 `runBody` 直接 stur 到字段（内联），我们的通过 bl 调用（未内联）→ 4 个独立 Code 对象。
+  class 保持 unknown，未加 structural_evidence.tsv 条目。**下一项 = F15。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F15 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 @ `2abb484`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F15）。**下一项 = F15（`dump_class_table/prog` 5 个多余类，验证 dart_force_simulator tree-shaking 假设）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F15 完成**（子代理实测，verify_all 24/0）。
+  dart_force_simulator 假设证伪；真因：构建模式不对称（develop vs product），ProductARM64 给 743/743。
+  structural_evidence.tsv +1 行，parity_matrix.tsv dump_class_table/prog→structural，phase_gate.expected unknown=18/structural=7。
+- 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F-table 全部完成后写入）。`grep -c "^- \[ \]" memo.md` = **0**（F12–F15 全部 [x]）。verify_all 24/0。`phase_gate.expected`: unknown=18，gap=0，structural=7。⚠️ **G-c 未满足**（`unknown==0` 仍需 unknown 降至 0；当前 18 = F13 的 12 格 dump_blobs/disassemble + F14 的 12 格 code_infos，减去 F12 的 6 + F15 的 1 = 18 remaining）。**循环在阶段门：F 表已做完，unknown != 0，需呈报人类。**
