@@ -1353,7 +1353,22 @@ FHP 树（memo/docs）不在守卫里，随便写。
       **每个各写一行证据**，`verify_cmd` 要能量出「这一分量占多少」。
       **判据**：每格的差异分量加总吻合，每个分量要么有合规 locus、要么留 unknown。
 
-- [ ] **F19：`DataRegionSize` 越界读（F17 引入，真 bug，优先于 F18）**
+- [ ] **F19：`DataRegionSize` 越界读——第一次修的是「不在风险路径上的那一半」**
+      🔴 **2026-09-07 实测：护栏是死代码，越界读和修之前一样没有边界。**
+      第一轮的改动（SDK `1a7dd48fe60`，被配额中断后由我接手提交）把区域长度一路串了下来，
+      **管道是真的、也不回归**（blobs 仍是 666708），但：
+      `SetDataSizes()` 默认返回 **0**，**只有 `MappedAppSnapshot` 覆写了它**；
+      而 ELF 路径——**所有 fixture、所有真实用户走的那条**——不覆写，
+      于是 `region_size` 到达时是 0，`DataRegionSize` 靠自己那句 `region_size == 0 ||`
+      直接跳过边界检查，走回无保护的 `memmove`。
+      **判据是实测不是推理**：把那个 escape 换成 `false` 重新编译，
+      `--dump_blobs` 从 **666708 掉回 463732**（修之前的数）。
+      → **extra block 能被读到，恰恰是因为边界没被检查。**
+      **剩下的活**：ELF loader 自己就知道段大小（它负责 mmap），把它暴露出来即可，不需要发明。
+      **判据**：同样那个 `false` 负控制，修好之后 `--dump_blobs` 必须**仍是 666708**
+      （说明 size 真的传到了，而不是靠 escape）。
+      ⚠️ **这条属于「护栏存在但从不生效」**，和记忆里第 26 种（判据被写成常量，原理上不可能失败）
+      同族：那种是**不可能红**，这种是**根本没跑**。**查法一样：把它改坏，看会不会变红。**
       `analyze_snapshot_api_impl.cc:1811` 的新实现：
       ```c
       memmove(&extra_size, region + aligned_off, sizeof(extra_size));
