@@ -56,7 +56,7 @@ MODEL=${FHP_LOOP_MODEL:-}
 # Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
 # clear the slowest of them by a wide margin or it becomes the thing that breaks
 # the loop. 3000s used to be the default and would have guillotined task 64.
-ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-7200}
+ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-21600}
 BACKOFF=${FHP_LOOP_BACKOFF:-3600}
 
 # THE SINGLE LINE THAT MAKES UNATTENDED ROUNDS WORK AT ALL.
@@ -374,13 +374,45 @@ pid=$!
 
 # Portable timeout: macOS has no timeout(1). A hung round must not hold the
 # lock past the next interval.
-( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && kill -TERM $pid 2>/dev/null ) &
+#
+# Two ceilings, because "hung" and "long" are not the same thing and the old
+# code only knew the second one. On 2026-09-07 the elapsed-time cap killed the
+# 14:41 round at the two-hour mark while it was still working -- it had
+# committed c2bf220 fifteen minutes earlier -- and whatever it was doing after
+# that was lost. Rounds here routinely run 30 to 70 minutes.
+#
+# STALL_TIMEOUT is the real predicate: no bytes written to $out for that long.
+# It only became measurable once the pipeline stopped block-buffering.
+# ROUND_TIMEOUT stays as a backstop for a round that produces output forever.
+STALL_TIMEOUT=${FHP_LOOP_STALL_TIMEOUT:-1800}
+(
+  last_size=-1
+  stalled=0
+  while kill -0 $pid 2>/dev/null; do
+    sleep 60
+    now_size=$(wc -c <"$out" 2>/dev/null || echo 0)
+    if [ "$now_size" = "$last_size" ]; then
+      stalled=$(( stalled + 60 ))
+    else
+      stalled=0
+      last_size=$now_size
+    fi
+    if [ "$stalled" -ge "$STALL_TIMEOUT" ]; then
+      say "WATCHDOG: no output for ${stalled}s -- terminating round"
+      kill -TERM $pid 2>/dev/null
+      break
+    fi
+  done
+) &
+stall_watchdog=$!
+( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && { say "WATCHDOG: hit the ${ROUND_TIMEOUT}s ceiling while still producing output -- terminating"; kill -TERM $pid 2>/dev/null; } ) &
 watchdog=$!
 
 wait $pid
 rc=$(cat "$rc_tmp" 2>/dev/null || echo 1)
 rm -f "$rc_tmp"
 kill "$watchdog" 2>/dev/null
+kill "$stall_watchdog" 2>/dev/null
 
 if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then
   echo $(( $(date +%s) + BACKOFF )) >"$BLOCKED"
