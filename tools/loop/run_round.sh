@@ -171,9 +171,35 @@ fi
 # ---- kill switch -----------------------------------------------------------
 # `touch .loop/PAUSE` stops the loop without unloading the job. Nothing else
 # in this script can override it.
+# An auto-idle PAUSE expires; a hand-made one does not.
+#
+# Until 2026-09-07 every PAUSE was terminal, so the 22:18 auto-pause sat for
+# three days doing nothing but writing "skip: PAUSE present" every five
+# minutes. One notification fired at the moment of pausing and never repeated.
+# That is a fine design for a kill switch a human threw, and a bad one for a
+# guess the script made about its own queue being empty.
+IDLE_RETRY=${FHP_LOOP_IDLE_RETRY:-3600}
 if [ -e "$PAUSE" ]; then
-  say_once "skip: PAUSE present"
-  exit 1
+  pause_kind=$(head -1 "$PAUSE" 2>/dev/null)
+  case "$pause_kind" in
+    "auto-idle "*)
+      pause_at=${pause_kind#auto-idle }
+      age=$(( $(date +%s) - pause_at ))
+      if [ "$age" -ge "$IDLE_RETRY" ]; then
+        rm -f "$PAUSE"
+        printf '0' >"$STATE/idle_count"
+        say "auto-idle PAUSE expired after ${age}s -- retrying; if there is still nothing to do it will pause again in ${FHP_LOOP_IDLE_LIMIT:-3} rounds"
+        osascript -e "display notification \"空转暂停已过期，循环自动重试\" with title \"FHP loop\"" 2>/dev/null || true
+      else
+        say_once "skip: auto-idle PAUSE, retry in $(( IDLE_RETRY - age ))s"
+        exit 1
+      fi
+      ;;
+    *)
+      say_once "skip: PAUSE present (hand-made, stays until someone removes it)"
+      exit 1
+      ;;
+  esac
 fi
 
 # ---- quota backoff ---------------------------------------------------------
@@ -396,7 +422,11 @@ if [ "$(fingerprint)" = "$idle_before" ]; then
   printf '%s' "$idle" >"$IDLE_COUNT_FILE"
   say "round left no trace ($idle/$IDLE_LIMIT: no new commit in any tree, no non-heartbeat memo line)"
   if [ "$idle" -ge "$IDLE_LIMIT" ]; then
-    touch "$PAUSE"
+    # Mark it as the auto-idle kind. A human kill-switch is `touch .loop/PAUSE`,
+    # which leaves the file empty; that one stays terminal, because being
+    # terminal is its whole job. This one is a guess that there is no work, and
+    # a guess should expire.
+    printf 'auto-idle %s\n' "$(date +%s)" >"$PAUSE"
     # "the task list is probably empty" was wrong the two times it mattered.
     # 2026-09-04 16:16 it paused while the F table was minutes from being
     # committed; 2026-09-04 22:18 the list was not empty at all -- it held one
