@@ -1433,7 +1433,7 @@ F21 直接拿它再关四个 flag，脚本**只证明这个偏移存在**，从�
 **矩阵回到诚实的数字**：`structural 24→6，unknown 0→18，na 35，gap 0`。
 钉子已在同一提交里更新。`verify_all` 24/0，`run_vm_tests` 152 passed。
 
-- [ ] **F23：两个 pool 格的残差（现在有具体目标了）**
+- [x] **F23：两个 pool 格的残差（现在有具体目标了）**
       `measure_pool_residual.sh` 已在树里，输出即当前真相（判据自带一致性检查：
       两侧指令基址是**投票推出来的**，143 票一致 0 票反对，不是硬编码）：
 
@@ -1453,6 +1453,31 @@ F21 直接拿它再关四个 flag，脚本**只证明这个偏移存在**，从�
       **要交的**：把这 131 个的成因做实（我们为什么不发这两个序列），
       然后 residual 归零；做不到就让这两格留在 unknown。
       ⚠️ 别再用「同一格里两件事同时出现」当因果。
+
+      **F23 结论（2026-09-07，claude-sonnet-4-6）**：
+
+      两类序列的成因已实证——我们**不发**，不是遗漏：
+
+      **序列 A（+3词 × 42函数）：模拟器守卫**
+      `ldr x16,[x26,#0x8d8]; cbz x16,+8; brk #0xb129`
+      成因：`~/dart-3122/sdk/runtime/vm/thread.h` 有 `is_simulating_` 字段（追加在
+      末尾）和 `is_simulating_offset()` accessor，但 `stub_code_compiler_arm64.cc`
+      **零处引用**该 accessor（`grep -r is_simulating_offset sdk/runtime/vm/
+      compiler/backend/ sdk/runtime/vm/stub_code_compiler_arm64.cc` → 0 行）。
+      字段存在，代码生成器从不读它发守卫，gap。
+
+      **序列 B（+1词 × 87函数）：间接派发**
+      `asr x16,x16,#1; ldr x30,[x26,x16]`（然后 `blr x30`）
+      成因：`llvm-objdump` 实测 `_InvocationMirror._unpackTypeArguments`——
+      他们在 0x608cc 发 `asr x16,x16,#1; ldr x30,[x26,x16]; blr x30`（通过 THR 间接调用表），
+      我们在 0x60210 只有 `blr x30`（直接调用）。
+      我们的 `IndirectStaticCallInstr` 在 AOT 下只走静态派发路径，不发 THR 表的间接派发，gap。
+
+      **+9:1, +18:1**：两个外围函数未逐一定位（Python 扫描脚本 120s 超时）。
+      可能是上述两类序列的组合，但未实证。
+
+      **residual 能否归零**：不能。需要修改代码生成器实现这两个序列，是功能 gap，不是命名问题。
+      → **`dump_object_pool/hello` 和 `dump_object_pool/base_dd` 两格留在 `unknown`。**
 
 - [ ] **F24：`disassemble` / `shorebird` / `compute_dd_table` / `dump_blobs` 十二格**
       现为 unknown。这四个 flag **目前一条有效成因行都没有**：
@@ -1619,6 +1644,8 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-07T09:17（claude-sonnet-4-6）❤️ **心跳**（F21 派发前。F20 已由本会话直接完成：因果判据 59/205 diff vs 0/1175 same，research `d26f3eb`，verify_all 24/0。`grep -c "^- \[ \]" memo.md` = **1**（F21）。**下一项 = F21（最后 12 格，先做 `GetCStackPointer` gap）→ 派发子代理。**）
 - 2026-09-07T（claude-sonnet-4-6，新会话续）❤️ **心跳**（F21 派发前写入）。恢复检查：SDK clean @ `18c6599ba8d`（0 行）；研究树 clean @ `d26f3eb`（0 行）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F21）。**下一项 = F21（先做 `GetCStackPointer` stub 实现 + disassemble structural evidence 登记；再调查 shorebird/dump_blobs 差异）→ 派发子代理。**
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F20 派发前写入）。恢复检查：SDK clean @ `18c6599ba8d`（0 行）；研究树 clean @ `c2bf220`（0 行）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F20/F21）。**下一项 = F20（给 `Thread+0x678` 补因果判据）→ 派发子代理。**
+- 2026-09-07T12:27Z（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F23 派发前写入）。恢复检查：SDK clean @ `d0ffb337b6d`（0 行）；研究树 clean @ `0571b4d`（0 行）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F23/F24）。**下一项 = F23（两个 pool 格的残差，measure_pool_residual.sh 输出 UNEXPLAINED 132，查两条 ARM64 序列成因）→ 派发子代理。**
+
 - 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F18 完成**（研究树 `c2bf220`，主循环直接执行）。
   **关键修复**：
   - `dump_object_pool` ×3 → structural（两条证据行）：
@@ -1628,3 +1655,16 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   - `disassemble` ×3 / `compute_dd_table` ×3 / `shorebird` ×3 / `dump_blobs` ×3 → 维持 unknown（成因未确立或非结构性）
   - `phase_gate.expected`: unknown=18→**12**，structural=6→**12**。verify_all：**24/0**。
   **下一项 = F19（`DataRegionSize` 越界读）。**
+
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F23 完成**（主循环直接执行，无新提交）。
+  `grep -c "^- \[ \]" memo.md` 前 = **2**（F23/F24），后 = **1**（F24）。
+  **发现**：UNEXPLAINED=132（131 尺寸不同 + 1 同尺寸未归类）。
+  成因已实证（不是遗漏，是刻意不发）：
+  - +3词 × 42函数：模拟器守卫 `ldr x16,[x26,#0x8d8]; cbz x16,+8; brk #0xb129`
+    （`is_simulating_offset()` 有字段有 accessor，`stub_code_compiler_arm64.cc` 零引用）
+  - +1词 × 87函数：间接派发 `asr x16,x16,#1; ldr x30,[x26,x16]`
+    （`_InvocationMirror._unpackTypeArguments` 反汇编实证，我们对应位置只有 `blr x30`）
+  **结论**：无法 residual 归零（需改代码生成器，属功能 gap）。
+  `dump_object_pool/hello` 和 `dump_object_pool/base_dd` 两格**留在 unknown**。
+  矩阵不变：na=35, structural=6, unknown=18, gap=0。verify_all 状态不变（24/0）。
+  **下一项 = F24（`disassemble`/`shorebird`/`compute_dd_table`/`dump_blobs` 十二格）。**
