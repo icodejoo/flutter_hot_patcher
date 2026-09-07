@@ -1531,7 +1531,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F19 派发前写入）。恢复检查：SDK clean @ `dc82f8d7fd1`（0 行）；研究树 clean @ `34359e3`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待查；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F19）。**下一项 = F19（`DataRegionSize` 越界读，护栏是死代码，ELF 路径不传 size，需接真 segment size 并加边界检查）→ 派发子代理。**
 - 2026-09-07T07:59:49Z（claude-sonnet-4-6，本轮）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，派发前写入）。sim_only_tests 阻塞已解（根因：`gen/runtime/version.cc` 的 `git_short_hash_` = `dc82f8d7fd` 与 kernel_service.dill 的 `-Dsdk_hash=1a7dd48fe6` 不匹配 → 改为 `1a7dd48fe6` 后重建，verify_all **24 ran / 0 failed**）。`grep -c "^- \[ \]" memo.md` = **2**（F18/F19）。**下一项 = F18（十二格字节差，三分量逐个给 locus）→ 派发子代理。**
 - 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F18 完成后，F19 派发前写入）。`grep -c "^- \[ \]" memo.md` = **1**（F19）。恢复检查：SDK clean @ `1a7dd48fe6`（`dc82f8d7fd1` + 2 commits for version.cc rebuild）；研究树 @ `c2bf220`；FHP 仅 memo.md 修改；无 PAUSE 文件。**下一项 = F19（`DataRegionSize` 越界读，ELF 路径不传 size，护栏是死代码）→ 执行。**
-- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F19 完成**（SDK `<pending_commit>`，主循环直接执行）。
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F19 完成**（SDK `18c6599ba8d`，主循环直接执行）。
   **根因**：`DataRegionSize` 有 `region_size == 0 ||` escape，而 ELF 路径（所有 fixture）的 `SetDataSizes()` 返回 0，所以边界检查从不生效（原理上永远走 `memmove`）。
   **修法**：在 `LoadedElf::ResolveSymbols` 里从 ELF 动态符号表的 `sym.size` 字段捕获数据段大小；
   新增 `Dart_GetELFDataSizes`；`ElfAppSnapshot` 在构造时调用它并覆写 `SetDataSizes()`；
