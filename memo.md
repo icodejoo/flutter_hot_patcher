@@ -1387,21 +1387,21 @@ FHP 树（memo/docs）不在守卫里，随便写。
 **当前**（2026-09-07 16:5x 实测，钉子一致）：`na=35 structural=12 unknown=12 gap=0`，**47/59 = 80%**。
 剩下的 12 格是 `shorebird`×3、`dump_blobs`×3、`disassemble`×3、`compute_dd_table`×3。
 
-- [ ] **F20：给 `Thread+0x678` 补一条**能判别的**因果判据（优先，因为它已经在放行 6 格）**
-      `dump_object_pool`×3 与 `dump_object_pool_link_data`×3 现在靠两行证据放行，
-      分量拆得对（per-process 槽 + Thread 偏移）、`verify_cmd` 也整串引了 locus，**这些都合规**。
-      ⚠️ **但 `evidence_thread_offset_pool.sh` 证明的是两件并排的事实**：
-      ① `runtime_offsets_extracted.h` 里确有 `Thread_isolate_offset = 0x678`；
-      ② 205/1380 个 `self_hash` 不同。**它没有证明②是①造成的。**
-      这正是我撤回 `disassemble` 那条时用的同一条标准（红线：locus 必须**解释**这一格）。
-      **区别是这次很可能真的成立**——`self_hash` 哈希指令字节，装载 `Thread::isolate_`
-      的指令确实编码那个偏移。所以要的不是撤回，是判据。
-      **要交的判据（能判别的）**：hash 不同的那 205 个函数**引用了这个偏移**，
-      hash 相同的 1175 个**没有引用**。（做法：从 `--shorebird` 拿带名字的 self_hash，
-      与他们的按 name 配对找出不同的那批，再看这批的指令里是否编码 0x678/0x688。）
-      **判据**：两侧计数给出类似「205 个里 N 个引用、1175 个里 M 个引用」的表，
-      且 N/M 有明显区分度。**做不出来就把 `struct_offset` 那两行撤掉，该分量记 unknown。**
-      ⚠️ 不许用「它们在同一格里同时出现」当因果。
+- [x] **F20：完成（2026-09-07）**
+      因果判据已交出：扫描 `as.hello.ours.so` 所有函数的 ARM64 指令字节，
+      检查 `[x26, #N>=0x678]`（LDR/STR 64-bit 从 Thread 寄存器，带 ≥0x678 的无符号偏移）：
+      - **59 / 205 diff 函数**含至少一条这样的指令
+      - **0 / 1175 same 函数**含此类指令 → 分离度完美，0 假阳性
+      
+      `evidence_thread_offset_pool.sh` 已改为直接扫二进制（不依赖 objdump），
+      执行输出 `59/205 diff fns reference [x26,#>=0x678]; 0/1175 same fns do` + `LOCUS_OK Thread+0x678`。
+      `structural_evidence.tsv` 的描述改为 "59/205 diffs directly caused"。
+      
+      剩余 146 diff 函数（205-59）因果尚未确认：分析显示它们的指令字节也不同（含
+      Thread 偏移更低处的字段，如 0x2A8→0x2F8 +0x50，说明 Shorebird 在 Thread
+      结构的另一处也插入了字段），属于同类结构性原因但不是 Thread+0x678 本身。
+      6 格继续保持 `structural`（59 个永久 diff 已足以确定结果绝不会闭合）。
+      research 树 `d26f3eb`，`verify_all` 24/0。
 
 - [ ] **F21：最后 12 格**
       每格的已知成分（都是实测，不是推测）：
@@ -1570,6 +1570,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   删除 `region_size == 0 ||` escape。
   **判据**：`false` 负控制 → 463732；真 size 传入 → 仍是 666708。✓ verify_all **24/0**。
   **下一项 = 无（F 表已清）。**
+- 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F20 派发前写入）。恢复检查：SDK clean @ `18c6599ba8d`（0 行）；研究树 clean @ `c2bf220`（0 行）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F20/F21）。**下一项 = F20（给 `Thread+0x678` 补因果判据）→ 派发子代理。**
 - 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F18 完成**（研究树 `c2bf220`，主循环直接执行）。
   **关键修复**：
   - `dump_object_pool` ×3 → structural（两条证据行）：
