@@ -359,9 +359,16 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
     cd "$REPO" || exit 1
     # script -q fakes a TTY so claude flushes output line-by-line instead of
     # block-buffering; tr strips PTY \r and ANSI escape codes.
+    #
+    # tr and sed need -u and -l or they undo that: both block-buffer when
+    # writing to a pipe, so live.log only got written in 4 KB chunks. On
+    # 2026-09-07 a round ran an hour and fifty-five minutes with its last
+    # live.log line still stamped 14:41:53, while having committed work at
+    # 16:26 -- from outside, a working round was indistinguishable from a hung
+    # one, which is the one thing this log exists to tell apart.
     script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
     echo $? >"$rc_tmp"
-  ) 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g'
+  ) 2>&1 | tr -u -d '\r' | sed -l 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g'
 ) | tee -a "$LIVE" >"$out" &
 pid=$!
 
@@ -408,7 +415,7 @@ if [ "$FINISHER" -eq 1 ]; then
     (
       cd "$REPO" || exit 1
       script -q /dev/null "$CLAUDE" -p "$FIN_PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
-    ) 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g' | tee -a "$LIVE" >>"$out"
+    ) 2>&1 | tr -u -d '\r' | sed -l 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g' | tee -a "$LIVE" >>"$out"
     if git -C "$finisher_tree" diff --quiet 2>/dev/null; then
       say "finisher: $finisher_tree is clean"
     else
