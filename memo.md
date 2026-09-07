@@ -1641,8 +1641,8 @@ R flag 在 product 里不注册 ⇒ 凭空 +209，堵住 10 格）是同一类�
 `DDTableBuilder` **8 / 8**、`DDSlot` 32 / 20），且 `aot_call_specializer.cc`
 那段 pass 外面没有 `#if`。差异是行为性的，不是配置性的。
 
-- [ ] **F30：用 `dart_force_simulator=true` 建一个可比的 Product gen_snapshot，
-      并让矩阵用它对拍**
+- [x] **F30：用 `dart_force_simulator=true` 建一个可比的 Product gen_snapshot，
+      并让矩阵用它对拍** 🟢 **已关闭 2026-09-08 研究树 `8d1ecc0`**
       规则 0 的目标是复刻**他们出货的那个** dart-sdk，而他们出货的就是模拟器构建，
       所以这不是「为了对拍而改配置」，是把我们的构建对齐到复刻目标。
       **判据**：`comparability_check.sh` 的 pin 从 `ours=no,theirs=yes` 翻成
@@ -1650,6 +1650,18 @@ R flag 在 product 里不注册 ⇒ 凭空 +209，堵住 10 格）是同一类�
       ⚠️ **开这个选项可能改动其他产物**——`na=35` 的格子和
       `verify_reproduction.sh` 的 24 个逐字节产物都要重跑，
       **变红的不许直接改期望值，先说明为什么**。
+  **实测结果（2026-09-08，研究树 `8d1ecc0`）**：
+  - `parity_matrix.sh`：`PRODUCT` 默认从 `ProductARM64` 改为 `ProductSimARM64`；`parity_matrix.tsv` 重新生成。
+  - `comparability_check.sh` + `comparability.expected`：ours 的 `dart::Simulator::` 符号从 0 升到 115（theirs=58）；pin 翻成 `ours=yes,theirs=yes`。
+  - `measure_dd_emission.sh`：守卫数 ours=61（原来 1）、theirs=84；因为两边都改用 ProductSimARM64，比较对称。
+  - `verify_reproduction.sh`：28 个 artifact 全部保持逐字节相同（不受影响，产物不依赖 parity matrix 配置）。
+  - `evidence_thread_offset_pool.sh`：原有的「raw [x26,#>=0x678] 字节扫描」证明方法被 F30 废除：
+    ① self_hash 是分类/归一化哈希而非原始字节；
+    ② 两边都改成 ProductSimARM64 后，theirs 的 0x678 字段和 ours 的 0x678 字段编码相同，byte scan 给出 same_with=77 假阳性。
+    改写为基于 disassemble 元数据的证明：snapshot metadata 确认 ours.isolate_=0x678、theirs.isolate_=0x688；pool code_infos[i].self_hash == shorebird functions[i].self_hash（全 1380 项验等）；205/1380 diff set 两个输出相同。
+  - `structural_evidence.tsv`：两行 dump_object_pool/dump_object_pool_link_data Thread+0x678 的 `why` 更新为新证明描述。
+  - `verify_all.sh`：**25 ran, 0 failed**（新增第 25 项：`f4_name_rendering_check.sh` 也已通过）。
+  **下一项 = F29（DD dispatch 代码生成，关闭 +1:87 模式）。**
 
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
@@ -1875,7 +1887,14 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **证据（F23 已实测）**：约 87 个函数把 `blr x30` 替换为 `asr x16,x16,#1; ldr x30,[x26,x16]`，通过 DD table 间接派发。
   **依赖 F28 先完成**：两者合计才能把 UNEXPLAINED 归零。
 
+- 2026-09-08T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F30 派发前写入）。恢复检查：SDK clean @ `ef246d95496`（0 行）；研究树 clean @ `d2da58d`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待子代理核验；无 PAUSE 文件。`grep -cn "^- \[ \]" memo.md` = **2**（F30 第 1644 行、F29 第 1874 行）。**首个未完成任务 = F30（文件序第 1644 行，早于 F29）→ 派发子代理。**
+
 - 2026-09-08T（claude-sonnet-4-6，本轮）❤️ **心跳**（F28 subagent 完成后记录，F29 派发前写入）。
   恢复检查：SDK @ `ef246d95496`（shorebird-3.12.2，F28 commit）；研究树待查；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff；无 PAUSE 文件。
   **F28 关键结果**：根因 = `stub_code_compiler_arm64.cc` 里 `if (false)` 使 4-arg `rt.Call()` 成死代码；修后 ProductSimARM64 Guard-ON UNEXPLAINED **195→182**，负控制通过（Guard-OFF 回到 195，+3:12 重现），verify_all 24/0。
   `grep -c "^- \[ \]" memo.md` = **1**（F29）。**下一项 = F29（DD dispatch 代码生成，关闭 +1:87 模式）→ 本轮结束。**
+
+- 2026-09-08T（claude-sonnet-4-6，本轮）✅ **F30 完成**（研究树 `8d1ecc0`，verify_all **25/0**）。
+  `grep -c "^- \[ \]" memo.md` 前 = **2**（F30/F29），后 = **1**（F29）。
+  **关键变更**：parity_matrix.sh + comparability_check.sh 默认从 `ProductARM64` 切到 `ProductSimARM64`；comparability pin 翻为 `ours=yes,theirs=yes`；measure_dd_emission ours 守卫数 1→61（theirs=84）；evidence_thread_offset_pool.sh 彻底重写（原始字节扫描 → 元数据+哈希同一性证明）；verify_all **25 ran, 0 failed**。
+  **下一项 = F29（DD dispatch 代码生成）。**
