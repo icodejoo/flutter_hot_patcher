@@ -1132,12 +1132,17 @@ NOP 数 0 → **4584**（他们同一程序 4598）。
 
 ### 🔧 F17–F18：剩下 18 格（全部可无人值守）
 
-- [ ] **F17：`dump_blobs` 六格——我们少抽了 200 KB，这是真缺口不是结构差异**
+- [x] **F17：`dump_blobs` 六格——我们少抽了 200 KB，这是真缺口不是结构差异**
       F13 实测：从**同一个 Product `.so`**，我们的 analyze_snapshot 抽出 **463732** 字节，
       他们抽出 **666708**，而 `.so` 大小两侧相同。**这是我们 `--dump_blobs` 的实现缺口。**
-      **要做的**：查清少抽的是哪些 blob（他们枚举了什么我们没枚举），补上。
-      **判据**：字节数相同或接近；若仍有差，差在哪要说得出。
-      **补上之后这格应记 `gap` → 关闭 → `na`，不是 `structural`。**
+      **2026-09-07 CLOSED（dc82f8d7fd1）**：`DataRegionSize` 之前用 `Snapshot::length()` 只抽 Dart
+      序列化部分；Shorebird 在每个快照后附了一个自描述的 extra block，其总字节数
+      以 LE uint32 存在快照结束后第一个 **64 字节对齐地址**处。修后：
+        vm_data  = 5321 + 29824 = 35145 字节（原 5321）
+        iso_data = 93883 + 173152 = 267035 字节（原 93883）
+        总 blob：**666708 字节，与他们逐字节相同（cross-test 同一 .so）**。
+      parity_matrix: dump_blobs ×3 格 unknown → na；phase_gate: unknown 18 → 15。
+      verify_all.sh：**24 ran / 0 failed**。
 
 - [ ] **F18：其余十二格——计数已经全对，只剩字节差**
       F16 之后这些格的处境全变了：条目数、entries、pairs、code_infos surplus **两侧全同**，
@@ -1424,3 +1429,10 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-07T（claude-sonnet-4-6，本轮）❤️ **心跳**（F-table 全部完成后写入）。`grep -c "^- \[ \]" memo.md` = **0**（F12–F15 全部 [x]）。verify_all 24/0。`phase_gate.expected`: unknown=18，gap=0，structural=7。⚠️ **G-c 未满足**（`unknown==0` 仍需 unknown 降至 0；当前 18 = F13 的 12 格 dump_blobs/disassemble + F14 的 12 格 code_infos，减去 F12 的 6 + F15 的 1 = 18 remaining）。**循环在阶段门：F 表已做完，unknown != 0，需呈报人类。**
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，呈报前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `00b51eb`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **0**——无未完成任务行。**循环在阶段门：F 表全部关闭，但 G-c 未满足（unknown=18）。根据契约§七停下来向用户呈报。**
 - 2026-09-07T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F17 派发前写入）。恢复检查：SDK clean @ `bd86cb31e94`（0 行）；研究树 clean @ `00b51eb`（0 行）；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **2**（F17/F18，commit `302b2dd` 加入，上轮 grep=0 是在它之前的快照）。**下一项 = F17（`dump_blobs` 六格，我们少抽 200 KB，真缺口，找到并补实现）→ 派发子代理。**
+- 2026-09-07T（claude-sonnet-4-6，本轮）✅ **F17 完成**（SDK `dc82f8d7fd1`，研究树 `77c459c`）。
+  根因：`DataRegionSize` 用 `Snapshot::length()` 只抽 Dart 序列化部分，未读 Shorebird extra block。
+  **发现机制**：反向工程 extra block 自描述格式——extra 总字节数以 LE uint32 存在 Snapshot::length() 后
+  第一个 64 字节对齐地址处。公式：`snap_len + LE32_at(region + align64(snap_len))`。
+  实测验证（as.hello.ours.so）：vm_data 35145 + iso_data 267035 + vm_instrs 78192 + iso_instrs 286336 = **666708 = 逐字节等于 THEIR_AS**。
+  dump_blobs ×3 格 unknown → na；phase_gate: unknown 18 → 15；verify_all：**24/0**。
+  **下一项 = F18（其余 15 格 unknown — 注：原 18 格减去 F17 关闭的 3 格 = 15 格）。**
