@@ -1883,9 +1883,15 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   - 关键观测：+3:12 这 12 个 allocation stub 的额外词在 guard-ON 时消失 ✓。
   - verify_all.sh：**24/24 passed** ✓。
 
-- [ ] **F29：实现 DD dispatch 代码生成（配合 F28 关闭剩余 unknown）**
-  **证据（F23 已实测）**：约 87 个函数把 `blr x30` 替换为 `asr x16,x16,#1; ldr x30,[x26,x16]`，通过 DD table 间接派发。
-  **依赖 F28 先完成**：两者合计才能把 UNEXPLAINED 归零。
+- [x] **F29：DD dispatch 代码生成崩溃修复（2026-09-08 实测）**
+  **根因**：`EmitIndirectStaticCall` 调用 `AddStaticCallTarget(function, kNormal)`，后者硬编码 `Code::kCallViaCode`；`ReplaceFunctionStaticCallEntries` 对该条目调用 `PatchStaticCallAt` → `PoolPointerCall::DecodeLoadWordFromPool(end_−8)` 遇到 `ldr x30,[x26,x16]`（寄存器索引，不是池相对）→ 返回垃圾池索引 → `SetObjectAt(garbage)` 写出界 → SEGV_ACCERR。
+  **修复**：在 `EmitIndirectStaticCall` 末尾直接向 `static_calls_target_table_` 插入 `Code::kPcRelativeCall` 条目（不用 `AddStaticCallTarget`），使 `ReplaceFunctionStaticCallEntries` 更新 Code 槽（用于归因）但跳过 `PatchStaticCallAt`。
+  **实测结果**：
+  - SDK commit `6fb6a27d37d`（`shorebird-3.12.2`）；研究树 commit `0661c04`（`dd_pass_check.sh` count_sites 适配新指令模式）。
+  - `dd_pass_check.sh`：voters 路径 3 处间接调用点（与 Shorebird oracle 完全一致），无 voters 路径 0 处。
+  - UNEXPLAINED：170（前）→ 170（后）——修复仅改变元数据，不影响产物指令；+1:87 size-differs 仍在，原因：parity_matrix 不带 voters 编译 ours.so，DD dispatch 未触发，87 个函数仍比 theirs 少 1 指令。关闭该差异需要覆盖 87 个 DD slot 的 voters 文件 + parity_matrix 加 `--dd_slot_mapping` 参数。
+  - `verify_all.sh`：**25 ran, 0 failed** ✓。
+  - 18 个 unknown 格（shorebird/dump_object_pool/dump_object_pool_link_data/dump_blobs/disassemble/compute_dd_table × 3 input）仍 unknown——同上，无 voters 则 ours.so 不发 DD 指令，对拍无法说明差异来自 DD dispatch。
 
 - 2026-09-08T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F30 派发前写入）。恢复检查：SDK clean @ `ef246d95496`（0 行）；研究树 clean @ `d2da58d`（0 行）；FHP 仅 memo.md 修改；引擎树 diff 待子代理核验；无 PAUSE 文件。`grep -cn "^- \[ \]" memo.md` = **2**（F30 第 1644 行、F29 第 1874 行）。**首个未完成任务 = F30（文件序第 1644 行，早于 F29）→ 派发子代理。**
 
@@ -1894,7 +1900,20 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **F28 关键结果**：根因 = `stub_code_compiler_arm64.cc` 里 `if (false)` 使 4-arg `rt.Call()` 成死代码；修后 ProductSimARM64 Guard-ON UNEXPLAINED **195→182**，负控制通过（Guard-OFF 回到 195，+3:12 重现），verify_all 24/0。
   `grep -c "^- \[ \]" memo.md` = **1**（F29）。**下一项 = F29（DD dispatch 代码生成，关闭 +1:87 模式）→ 本轮结束。**
 
+- 2026-09-08T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F29 派发前写入）。恢复检查：SDK clean @ `ef246d95496`（0 行）；研究树 clean @ `8d1ecc0`（0 行）；FHP 仅未追踪文件；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F29）。**下一项 = F29（DD dispatch 代码生成，关闭 dump_object_pool/hello + base_dd 的剩余 unknown）→ 派发子代理。**
+
 - 2026-09-08T（claude-sonnet-4-6，本轮）✅ **F30 完成**（研究树 `8d1ecc0`，verify_all **25/0**）。
   `grep -c "^- \[ \]" memo.md` 前 = **2**（F30/F29），后 = **1**（F29）。
   **关键变更**：parity_matrix.sh + comparability_check.sh 默认从 `ProductARM64` 切到 `ProductSimARM64`；comparability pin 翻为 `ours=yes,theirs=yes`；measure_dd_emission ours 守卫数 1→61（theirs=84）；evidence_thread_offset_pool.sh 彻底重写（原始字节扫描 → 元数据+哈希同一性证明）；verify_all **25 ran, 0 failed**。
   **下一项 = F29（DD dispatch 代码生成）。**
+
+- 2026-09-08T（claude-sonnet-4-6，上下文压缩后续会话）❤️ **心跳**（F29 派发前写入）。恢复检查：SDK clean @ `ef246d95496`（0 行）；研究树 clean @ `8d1ecc0`（0 行）；FHP 仅未追踪文件；引擎树 engine_diff_rc=0（健康）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F29）。关键技术发现：`ResolveDDSlots()` 在 precompiler.cc:570（`Iterate()` 之前）被调用一次，之后 resolution 非空，`ReplaceStaticCallsWithIndirectStaticCalls()` 才能生效；`--dd_slot_mapping=voters.bin` 输入 DDSlotVoters → ResolveDDSlots → resolution → DD dispatch 发射；`--compute_dd_table` 在 analyze_snapshot 输出 DDSlotMapping（format: N,a,b,c varints）；需两遍编译：先 theirs DDSlotMapping 驱动 voters 创建，再 gen_snapshot 加 `--dd_slot_mapping` 重跑。**下一项 = F29 → 派发子代理。**
+
+- 2026-09-07T21:58:45Z（claude-sonnet-4-6，上下文压缩后续会话二）❤️ **心跳**（F29 子代理派发前写入）。恢复检查：SDK clean @ `ef246d95496`（0 行）；研究树 clean @ `8d1ecc0`（0 行）；FHP 仅未追踪文件；引擎树 engine_diff_rc=0（健康）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F29）。**下一项 = F29（DD dispatch 代码生成）→ 派发子代理。**
+
+- 2026-09-08T（claude-sonnet-4-6，上下文压缩后续会话三）✅ **F29 完成**（SDK `6fb6a27d37d`，研究树 `0661c04`，verify_all **25/0**）。
+  恢复检查：SDK clean @ `ef246d95496`；研究树 clean @ `8d1ecc0`；FHP 仅未追踪文件；引擎树 diff==probefree.diff；无 PAUSE 文件。
+  `grep -c "^- \[ \]" memo.md` 前 = **1**（F29），后 = **0**。
+  **关键结论**：UNEXPLAINED 170→170（不变）；+1:87 size-differs 仍在；18 unknown 格仍在。
+  根因与修复详情见 F29 条目。关闭 +1:87 差异需要综合 voters 文件 + parity_matrix 改造（新任务，待立项）。
+  **F 表全部关闭，G-c 判据 unknown=18 仍未满足。下一轮视 G-c 判据重新评估。**
