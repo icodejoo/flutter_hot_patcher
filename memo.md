@@ -1602,6 +1602,55 @@ residual 行必须打印 `EXAMINED <n>` 且 **n 必须等于该数**，外加 `U
       实现这两处代码生成器改动将关闭全部 18 格 unknown，phase_gate 才能通过。
       矩阵不变：**na=35 structural=6 unknown=18 gap=0**。verify_all：**24/0**。
 
+### 🔴 F28 的关闭已撤回（2026-09-08 04:1x，实测）
+
+`ef246d95496` 把 F28 标成 🟢 已关闭。**它自己写的判据②没达标**：
+
+    measure_pool_residual.sh  ->  UNEXPLAINED 132   （判据②要求 < 132，一分未动）
+    measure_dd_emission.sh    ->  ours sim guard 1  （未动）
+    ProductARM64/gen_snapshot mtime 03:50，而 F28 提交在 03:55  → 二进制根本没重建
+
+两个独立原因指向同一结论，见下面的 F30。
+
+⚠️ 它的卡片里还把「stub_code_compiler_arm64.cc 零引用」又写了一遍——
+那条已在 `a2e133a` 订正为**假阴性**（grep 了不存在的路径，实际 4 处引用）。
+**订正过的结论被后一轮重新写回来了**：订正必须写在卡片本体上，只写在提交信息里挡不住。
+
+⚠️ **代码本身不一定要回退**：F28 那三处守卫结构上多半是对的，
+它只是（a）没被编译进对拍用的二进制、（b）因此不可能移动任何数字。
+先做 F30，再回来重测它。
+
+### 🔴 F30 — 对拍的两个 gen_snapshot 构建配置不同（2026-09-08 04:0x 实测）
+
+**`ours dart::Simulator:: 符号 = 0`，`theirs = 58`。**
+`DART_INCLUDE_SIMULATOR` 只由 `dart_force_simulator` 定义
+（`runtime/BUILD.gn:217-222`），而 `xcodebuild/ProductARM64/args.gn` **没有设**。
+
+**后果一：F23 里那条「模拟守卫 2 vs 85 是缺口」不成立。**
+它测的是构建选项，不是我们实现了什么。这与 **F16**（我们 Release / 他们 Product，
+R flag 在 product 里不注册 ⇒ 凭空 +209，堵住 10 格）是同一类仪器问题，**这是第二次**。
+
+**后果二：F28（`ef246d95496`）的三处守卫在被对拍的那个二进制里不会被编译。**
+它们全部门控在 `DART_INCLUDE_SIMULATOR` 上。**代码本身多半是对的**
+（和他们的结构一致），但只要 ProductARM64 不开这个选项，矩阵里的数字一分不动。
+⚠️ 这正是记忆里那条：*改 `#if` 块里的代码，必须在会定义该宏的构建里编译，
+否则「编译通过」只是「没被编译」*。
+
+**没有被污染的：DD 派发 0 vs 92 仍然成立。**
+判据：两侧二进制都编译了 DD 机制（`IndirectStaticCall` 我们 64 / 他们 68、
+`DDTableBuilder` **8 / 8**、`DDSlot` 32 / 20），且 `aot_call_specializer.cc`
+那段 pass 外面没有 `#if`。差异是行为性的，不是配置性的。
+
+- [ ] **F30：用 `dart_force_simulator=true` 建一个可比的 Product gen_snapshot，
+      并让矩阵用它对拍**
+      规则 0 的目标是复刻**他们出货的那个** dart-sdk，而他们出货的就是模拟器构建，
+      所以这不是「为了对拍而改配置」，是把我们的构建对齐到复刻目标。
+      **判据**：`comparability_check.sh` 的 pin 从 `ours=no,theirs=yes` 翻成
+      `ours=yes,theirs=yes`；`measure_dd_emission.sh` 的守卫数从 2 往 85 移动。
+      ⚠️ **开这个选项可能改动其他产物**——`na=35` 的格子和
+      `verify_reproduction.sh` 的 24 个逐字节产物都要重跑，
+      **变红的不许直接改期望值，先说明为什么**。
+
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
 **问 1：`dump_blobs` 的实现漏读要不要做？**
