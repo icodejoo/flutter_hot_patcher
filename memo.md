@@ -1663,6 +1663,105 @@ R flag 在 product 里不注册 ⇒ 凭空 +209，堵住 10 格）是同一类�
   - `verify_all.sh`：**25 ran, 0 failed**（新增第 25 项：`f4_name_rendering_check.sh` 也已通过）。
   **下一项 = F29（DD dispatch 代码生成，关闭 +1:87 模式）。**
 
+### 📐 F33 — 残差脚本的基址是硬编码的常量，已修（2026-09-08 09:3x）
+
+`measure_pool_residual.sh` 里写着 `ISO_BASE_OURS = 0x5f180`。
+F30 切到 `ProductSimARM64`、守卫改变布局之后，**这个常量就过期了**——
+ELF 符号 `_kDartIsolateSnapshotInstructions` 给的是 `0x5f2c0`。
+⚠️ **基址错了不会报错**，它只是把每一次逐字比较变成噪声，同时照样印出一个像样的数字：
+它当时报 `UNEXPLAINED 170`，真值是 **122**。
+
+已修（研究树 `08d0766`）：两侧基址都从各自 ELF 的符号读。
+顺带把「按逐字节相同的函数投票推基址」那套删掉了——投票会被出错的那一侧带偏，
+而且有一次它已经分裂成两个值却没叫得够响。同时给分类器补上 `B`（此前只认 `BL`）。
+
+**修正后的真实构成**（F28/F31 的守卫落地之后）：
+
+    尺寸不同的函数        131 -> 88
+    他们多出的字，按函数   +1×87, +9×1      ← +3×42 那一组整组消失，那组就是守卫
+    同尺寸的差异字        422 BL/B  +  256 THR 偏移  +  34 未归类
+    UNEXPLAINED          132 -> 122
+
+⇒ **剩下的主体就是 DD 派发**（我们 0 / 他们 92），见 F34。
+34 个未归类里已知包含 Thread 字段走参数寄存器的一族（基址不是 x26），未逐条定名。
+
+- [ ] **F33：给那 34 个未归类词定名**
+      ⚠️ **放宽分类器正是残差可以被做假的方式。** 每放宽一条都要满足：
+      ① locus 具名（哪个结构的哪个偏移）；② 位移与已确立的插入点一致
+      （已知两种：`0x678->0x688` 是 +0x10、`0x880->0x8a0` 是 +0x20，
+      说明他们的 Thread 有**两处**插入点）；
+      ③ 负控制：把该类的位移改成一个不存在的值，未归类数必须回升。
+      **不许**用「看起来像同一类」当理由。
+
+### 🔴 F34 — 他们无输入也发 92 个间接派发点；`dd_pass_check.sh` 把相反的行为断言成了正确（2026-09-08 08:0x 实测）
+
+**测量**（判据自带阳性对照，`measure_dd_emission.sh`）：
+他们那份 `as.hello.theirs.so` 的生成命令是**裸的**——
+`"$THEIR_GS" --snapshot_kind=app-aot-elf --elf=... hello.dill`
+（`parity_matrix.sh:428`，没有任何 DD 参数、没有 voters/resolution 文件）。
+产物里 `ldr x30,[x26,x16]` 共 **92** 条，全部 `asr` 在前、`blr x30` 在后（92/92 零例外）。
+
+**它们不是快照自带 stub 里继承来的**：按 `--shorebird` 的函数区间定位，
+**92 条全部落在被列出的函数体内**（`[Optimized]` 84 + `[Stub]` 8，**区间外 0 条**）
+⇒ 是编译这份 dill 时发出来的。
+
+
+🔑 **完整发射形状已解出**（他们 92 个点逐一相同，`llvm-objdump` 口径的解码）：
+
+    ldr x16, [x27, #<pool_off>]   ; x27 = PP，从对象池取 Smi 索引
+    nop                           ; ┐ 补齐到 3 条
+    nop                           ; ┘ = kObjectPoolLoadStoreMinInstructionCount
+    asr x16, x16, #1              ; 解 Smi 标记
+    ldr x30, [x26, x16]           ; THR[byte_offset] -> LR
+    blr x30
+
+那两个 NOP 正是 `ObjectPoolEditor::PadLoadStore` 的补齐——**本项目已逆出并实现过这个常量**
+（`f426f46f5b0`，`kObjectPoolLoadStoreMinInstructionCount = 3`）。
+⇒ 索引**走对象池**（不是立即数），补齐槽的用途也随之清楚：
+补丁的池更大时索引需要更长编码，这个槽就是留给重写的。
+⚠️ 我们若用 `movz` 立即数发这个索引，形状对不上，而且**丢掉可打补丁性**。
+
+
+🔴🔴 **`EXPECTED_VOTER_SITES=3` 是编出来的常量，实测他们是 92**（2026-09-08 08:1x）
+
+`dd_pass_check.sh:36` 的注释写着「Matches the number Shorebird's own gen_snapshot
+emits with the same voters.bin on the same dill」。**该脚本从头到尾没有运行过他们的二进制**
+（`grep -nE "THEIRS|THEIR_GS" dd_pass_check.sh` 零命中），那个 3 是硬编码的。
+
+我用他们的 `gen_snapshot_arm64`、同一份 `out_dd/base.dill`、同一份 `out_dd/voters.bin` 实测：
+
+    theirs + voters.bin :  92
+    theirs, 无任何输入   :  92      ← 两者相同
+    ours   + voters.bin :   3
+    ours,  无输入        :   0
+
+⇒ **voters 文件在他们那边不决定发多少个点**，只驱动解析
+（stderr 打出 `DD resolution: 7 resolved, ...`，那是另一回事）。
+⇒ 我们与他们的差距不是「0 vs 92 只在无输入时」，而是**两种输入下都差一个数量级**。
+⇒ `dd_pass_check.sh` 一直是绿的，因为它拿我们的输出去比一个**没人复核过的常量**，
+   **在这个方向上原理上不可能失败**。
+
+**冲突的三方**：
+1. 上面的实测：他们无输入 → 92 个点
+2. `aot_call_specializer.cc:1227-1228`：我们在 `resolution() == nullptr` 时**直接 return**
+3. `dd_pass_check.sh`：把「no input: 0 indirect sites」打印成 **(gate holds)**，
+   即**把这个门控断言为正确行为**——它会在我们与他们分歧时**一直是绿的**
+4. `CLAUDE.md` 的 A5 记录：「resolution 是他们 IL pass 唯一的路径」——**被本条实测推翻**
+
+⚠️ `dd_pass_check.sh` 的 voters 路径（3 个点 vs 他们 oracle 的 3）是**对的**，别动它。
+问题只在「无输入」那一格的断言。
+
+- [ ] **F34：查明无输入时是什么在选中那 92 个点**
+      ⚠️ **不许**用「让我们的 pass 无条件改写」来关它——他们是**选择性**的
+      （1380 个函数里只有 84 个 optimized 函数命中），无条件改写会大幅过冲，
+      而且那正是「改代码去凑数字」。
+      **要交的**：选择规则本身（哪些调用点、按什么判据），
+      并用「我们发的点集合 == 他们发的点集合」验证，不只是数目相等。
+      **顺带（必须做，不是可选）**：`dd_pass_check.sh` 的两个期望值都要改成
+      **当场运行他们的二进制得到**，而不是硬编码常量：no-input 与 voters 两格都是。
+      ⚠️ 改完之后这个检查**会变红**（3 vs 92），那是它第一次真正开始工作，
+      **不许通过调大常量来消红**。
+
 ### 已拍板的两个问题（2026-09-07，循环问过，答完写在这里，别再问）
 
 **问 1：`dump_blobs` 的实现漏读要不要做？**
