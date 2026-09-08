@@ -1685,13 +1685,16 @@ ELF 符号 `_kDartIsolateSnapshotInstructions` 给的是 `0x5f2c0`。
 ⇒ **剩下的主体就是 DD 派发**（我们 0 / 他们 92），见 F34。
 34 个未归类里已知包含 Thread 字段走参数寄存器的一族（基址不是 x26），未逐条定名。
 
-- [ ] **F33：给那 34 个未归类词定名**
-      ⚠️ **放宽分类器正是残差可以被做假的方式。** 每放宽一条都要满足：
-      ① locus 具名（哪个结构的哪个偏移）；② 位移与已确立的插入点一致
-      （已知两种：`0x678->0x688` 是 +0x10、`0x880->0x8a0` 是 +0x20，
-      说明他们的 Thread 有**两处**插入点）；
-      ③ 负控制：把该类的位移改成一个不存在的值，未归类数必须回升。
-      **不许**用「看起来像同一类」当理由。
+- [x] **F33：给那 34 个未归类词定名** 🟢 **已关闭 2026-09-08 研究树 `4bd7f92`**
+      ① locus：Thread 字段经非 x26 寄存器访问（copied pointer in argument register）。
+         33 对：Thread+0x880 → +0x8a0，Δ=+0x20（第二插入点累积）
+          1 对：Thread+0x680 → +0x690，Δ=+0x10（第一插入点区域）
+      ② 位移与已确立插入点一致：0x678→0x688(+0x10)、0x880→0x8a0(+0x20)。
+      ③ 负控制（实测）：
+         delta==0x30 代替 0x20 → UNCLASSIFIED=33 ✓
+         delta==0x30 代替 0x10 → UNCLASSIFIED=1  ✓
+      **实测结果**：UNCLASSIFIED 0（原 34），UNEXPLAINED 88（原 122，净减 34）。
+      `measure_pool_residual.sh` 已更新，注释与分类规则同步。
 
 ### 🔴 F34 — 他们无输入也发 92 个间接派发点；`dd_pass_check.sh` 把相反的行为断言成了正确（2026-09-08 08:0x 实测）
 
@@ -2132,3 +2135,9 @@ NEG_CONTROL: [PASS|FAIL] (<ours 计数修改前后对比>)
 FINDING: <1-2 句描述 guard 的位置和实现方式>
 BLOCKER: <如果 FAIL，具体阻塞原因；PASS 时写 none>
 ```
+
+<!-- heartbeat 2026-09-08 09:35 PST — 本轮开始，执行 F33 -->
+
+<!-- round 2026-09-08 PST | 任务 F33 | 判据：UNCLASSIFIED 34→0，UNEXPLAINED 122→88，负控制两条全红后还原 | 改动：measure_pool_residual.sh | 提交：研究树 4bd7f92 -->
+
+- 2026-09-08T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F34 派发前写入）。恢复检查：SDK clean @ `232849c87d8`（0 行，含 F28/F31 之后）；研究树 clean @ `4bd7f92`（0 行，F33）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F34）。**下一项 = F34（查明无输入时是什么在选中那 92 个 DD dispatch 点，并把 dd_pass_check.sh 改成实测他们的二进制）→ 派发子代理。**
