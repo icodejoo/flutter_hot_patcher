@@ -30,6 +30,7 @@ CLAUDE=${FHP_LOOP_CLAUDE:-$(command -v claude || true)}
 
 STATE=$REPO/.loop
 LOOP_TOOLS=${FHP_LOOP_TOOLS:-/Users/Cruz/Documents/loop}
+HANDOFF=$STATE/RESCUED
 LOCK=$STATE/round.lock
 PAUSE=$STATE/PAUSE
 BLOCKED=$STATE/blocked_until
@@ -78,6 +79,35 @@ BACKOFF=${FHP_LOOP_BACKOFF:-3600}
 export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
+
+# A rescued stash that nobody is told about preserves bytes and loses progress:
+# the next round sees a clean tree, starts the same task from zero, and gets cut
+# off in the same place. Three of those cost three times the same hours with
+# nothing committed, and the only trace is a stash list nobody reads.
+if [ -s "$HANDOFF" ]; then
+  PROMPT="$PROMPT
+
+【循环状态】上一轮被中断，它未提交的改动已被救援进 git stash（没有丢）。
+在重做任何东西之前先读这个，重做是额度中断变成空烧循环的方式：
+$(cat "$HANDOFF")"
+fi
+
+# And after repeated barren rounds, stop asking for the same thing. Pausing
+# stops the burn but also stops the work -- this loop sat for three days that
+# way. Repeated failure to commit anything is evidence the task does not fit in
+# a round, so the ask becomes: split it into steps that each commit.
+SPLIT_AFTER=${FHP_LOOP_SPLIT_AFTER:-2}
+# $IDLE_COUNT_FILE is not defined until much further down; using it
+# here read an empty path, made barren 0, and the escalation below
+# could never fire. Referenced through $STATE, which is set above.
+barren=$(cat "$STATE/idle_count" 2>/dev/null || echo 0)
+if [ "$barren" -ge "$SPLIT_AFTER" ]; then
+  PROMPT="$PROMPT
+
+【循环状态】最近 $barren 轮没有产出任何提交。不要再用同样的方式做同一个任务。
+改做这件事：把当前任务拆成每一步都能以一次提交结束的小步，把拆分写进队列并提交它，然后结束本轮。
+产出这个拆分就是本轮的工作。"
+fi
 
 mkdir -p "$STATE"
 LIVE=$STATE/live.log
@@ -514,10 +544,17 @@ if [ "$FINISHER" -eq 1 ]; then
   # The engine tree is deliberately absent: its diff is supposed to equal a
   # recorded patch, so "dirty" is health there and stashing it would remove
   # instrumentation the verification depends on.
-  fin_out=$(python3 "$LOOP_TOOLS/finisher.py" "round-$$" "$round_finished" "$@" 2>&1)
+  fin_out=$(LOOP_HANDOFF="$HANDOFF" python3 "$LOOP_TOOLS/finisher.py" \
+             "round-$$" "$round_finished" "$@" 2>&1)
   printf '%s\n' "$fin_out" | grep -v '^\[' | while IFS= read -r l; do
     [ -n "$l" ] && say "$l"
   done
+fi
+
+if [ "$(fingerprint)" != "$idle_before" ]; then
+  # Only useful until someone acts on it; leaving it would keep pointing later
+  # rounds at a stash that has already been dealt with.
+  rm -f "$HANDOFF"
 fi
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
