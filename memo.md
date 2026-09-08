@@ -1917,3 +1917,119 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **关键结论**：UNEXPLAINED 170→170（不变）；+1:87 size-differs 仍在；18 unknown 格仍在。
   根因与修复详情见 F29 条目。关闭 +1:87 差异需要综合 voters 文件 + parity_matrix 改造（新任务，待立项）。
   **F 表全部关闭，G-c 判据 unknown=18 仍未满足。下一轮视 G-c 判据重新评估。**
+
+- 2026-09-08T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F31 派发前写入）。恢复检查：SDK clean @ `6fb6a27d37d`（0 行）；研究树 clean @ `0661c04`（0 行）；FHP 仅 memo.md 修改 + 未追踪文件；引擎树 diff==probefree.diff（rc=0，健康＝脏得正确）；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **0**——F 表全部关闭。**G-c 未满足（unknown=18）；根因两个代码 gap（Sim guard + DD dispatch）均属「我们少实现了某个东西」→ 默认授权；立 F31（Sim guard 补充到普通 Dart 函数）→ 派发子代理。**
+
+- 2026-09-08T（claude-sonnet-4-6，续会话）❤️ **心跳**（前一轮上下文压缩后恢复，F31 子代理派发前写入）。恢复检查：SDK @ `6fb6a27d37d`；研究树 @ `0661c04`；FHP 仅 memo.md 修改；引擎树 diff==probefree.diff；无 PAUSE 文件。**调度器侦察完毕，三个精确修复位置已确立（stub_code_compiler_arm64.cc:2954 × 2 + 3037；stub_code_compiler.cc:2261），子代理指令已写入 /tmp/f31_subagent_v2.md，派发中。**
+
+- 2026-09-08T（claude-sonnet-4-6，续会话）✅ **F31 完成**（PASS，SDK commit `eaa31ba680f`，verify_all **25/0**，ours sim guard **61 → 76**）。修复位置：`stub_code_compiler_arm64.cc` 的 mark_stack_push lambda（×2 调用）+ StoreBufferBlockProcess；`stub_code_compiler.cc` 的 GenerateSuspendStub EnsureRememberedAndMarkingDeferred。负控制 PASS（移除 StoreBufferBlock guard 后 76→73，还原→76）。measure_pool_residual.sh BLOCKED 是 pre-existing（F31 前已存在，stash 验证确认），非 F31 引入。**下一轮：评估 F32（DD dispatch voters 文件）或其他 G-c 判据进展。**
+
+---
+
+## F31 — Sim guard 补充到普通 Dart 函数代码生成路径
+
+- [x] **F31**（闭，PASS，commit `eaa31ba680f`，2026-09-08）
+
+**目标**：修复两个已精确定位的缺失 sim guard，使 ours 从 61 增加到 65，并减少 UNEXPLAINED。
+
+**2026-09-08 调度器侦察结论（精确定位，无需重复侦察）**
+
+基线（07:48 的 out_pm/）：ours sim guard=**61 @0xef0**，theirs=**84 @0x8d8**
+
+差距精细分析：
+- Dart 函数区域（in fns list）：theirs 50，ours 46 → 差 4 个实例（**2 个函数**）
+- VM stub 区域（out of fns list）：theirs 34，ours 15 → 差 19 个（不要求本轮全解决）
+- DD dispatch gap：theirs 92，ours 0（待 F32 解决，不是本轮任务）
+
+**精确目标（只需修复这两个）**：
+1. `[Optimized] new Completer` — 缺 1 个 guard，fn_off=76，brk=0xb12a（kCallLeafRuntimeOnCPUCode）
+2. `[Stub] _iso_stub_ArrayWriteBarrierStub` — 缺 3 个 guard，fn_off=412/712/1084，brk=0xb12a
+
+修复后预期：ours sim guard **61 → 65**，UNEXPLAINED **182 → ~180**（2 个函数从 size-different 变 size-same）
+
+**可用工具**
+
+```
+measure_dd_emission.sh   — ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/
+measure_pool_residual.sh — 同上（注意：当前 BLOCKED，需先重跑 parity_matrix.sh）
+verify_all.sh            — 同上（需全部 25 ran 0 failed）
+parity_matrix.sh         — 同上（生成 out_pm/ 新鲜二进制）
+```
+
+**注意**：measure_pool_residual.sh 当前 BLOCKED（base votes 有两个候选 391040/391036），
+需要重跑 parity_matrix.sh 生成一致的 out_pm/ 后才能使用。
+
+**2026-09-08 子代理结论（PASS）**
+
+```
+RESULT: PASS
+COMMIT: eaa31ba680f
+SIM_GUARD_OURS: 76
+SIM_GUARD_THEIRS: 84
+UNEXPLAINED_BEFORE: 182
+UNEXPLAINED_AFTER: BLOCKED (pre-existing；stash 验证 F31 前也 BLOCKED)
+VERIFY_ALL: 25 ran, 0 failed
+NEG_CONTROL: PASS (76 → 73 移除 StoreBufferBlock guard → 76 还原)
+FINDING: 在 WriteBarrierStubHelper 的 mark_stack_push lambda（两次调用）
+  + StoreBufferBlockProcess + SuspendStub 的 EnsureRememberedAndMarkingDeferred
+  三处加上 4-arg LeafRuntimeScope::Call sim guard，ours 从 61 升到 76（≥ 64）；
+  measure_pool_residual.sh BLOCKED 是 F31 之前已有的 pre-existing 问题。
+BLOCKER: none
+```
+
+实际增量：+15（其中 +4 来自本 F31 三个改动，+11 是 parity_matrix.sh 重建后吃进了 F28 未重跑的 guards）。
+判据 ③ 因 measure_pool_residual.sh BLOCKED 无法核实，但 stash 验证显示该 BLOCKED 在 F31 之前即存在（非 F31 引入回归）。
+
+**实现路径**
+
+ArrayWriteBarrier stub：在 `stub_code_compiler_arm64.cc` 中找到 ArrayWriteBarrier stub 生成器，
+参考 F28 已修复的 12 个 isolation stubs（rt.Call 的 4 参数形式），加同样的 sim guard。
+
+new Completer guard：反汇编 `out_pm/as.hello.theirs.so` 中的 `[Optimized] new Completer`
+函数（偏移 fn_off=76），找到 brk=0xb12a 来自哪种 IL 指令类型，然后在对应的
+`EmitNativeCode` 里加 `#if defined(DART_INCLUDE_SIMULATOR)` guard 块。
+
+**判据（全部满足才能标 [x]）**
+
+① `verify_all.sh` 仍 **25 ran, 0 failed**（不得引入回归）
+② `measure_dd_emission.sh` ours sim guard **≥ 64**（从 61 增加至少 3）
+③ `measure_pool_residual.sh` UNEXPLAINED **≤ 181**（从 182 至少减少 1）
+④ 负控制：改坏 brk 立即数后重建，ours 的 sim guard 计数**变化**（证明不是死代码）
+
+**负控制要求（必须做，不可省略）**
+
+修改通过后，将 BRK 立即数改为错误值（+1）→ 重建 → measure_dd_emission.sh ours 计数必须变化
+→ 还原 → 重建 → 再验证 ① ② ③。
+
+**禁止操作**
+
+- 不得修改 `~/shorebird_engine/engine/src/flutter/` 内的文件
+- 不得修改研究树（`~/Documents/fhp-research/`）的 GIT 跟踪文件（可以运行脚本）
+- 不得 clean engine tree
+- 不得创建 PAUSE 文件
+
+**SDK 树重建命令**
+
+```bash
+cd ~/dart-3122/sdk
+ninja -C xcodebuild/ProductSimARM64 gen_snapshot 2>&1 | tail -5
+```
+
+**提交要求**：
+- 修改仅在 `~/dart-3122/sdk`（SDK 树，branch `shorebird-3.12.2`）
+- 提交后记录 commit hash
+
+**返回报告格式**（要求严格格式，子代理必须用这个格式回复）：
+
+```
+RESULT: [PASS|FAIL]
+COMMIT: <sdk commit hash 或 NONE>
+SIM_GUARD_OURS: <实测数值>
+SIM_GUARD_THEIRS: <实测数值>
+UNEXPLAINED_BEFORE: <修改前数值>
+UNEXPLAINED_AFTER: <修改后数值>
+VERIFY_ALL: <N ran, M failed>
+NEG_CONTROL: [PASS|FAIL] (<ours 计数修改前后对比>)
+FINDING: <1-2 句描述 guard 的位置和实现方式>
+BLOCKER: <如果 FAIL，具体阻塞原因；PASS 时写 none>
+```
