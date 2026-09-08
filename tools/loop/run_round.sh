@@ -29,6 +29,7 @@ RESEARCH=/Users/Cruz/Documents/fhp-research
 CLAUDE=${FHP_LOOP_CLAUDE:-$(command -v claude || true)}
 
 STATE=$REPO/.loop
+LOOP_TOOLS=${FHP_LOOP_TOOLS:-/Users/Cruz/Documents/loop}
 LOCK=$STATE/round.lock
 PAUSE=$STATE/PAUSE
 BLOCKED=$STATE/blocked_until
@@ -464,6 +465,7 @@ watchdog=$!
 
 wait $pid
 rc=$(cat "$rc_tmp" 2>/dev/null || echo 1)
+round_finished=$([ "$rc" = "0" ] && echo 1 || echo 0)
 rm -f "$rc_tmp" "$worker_pid_file"
 kill "$watchdog" 2>/dev/null
 kill "$stall_watchdog" 2>/dev/null
@@ -487,27 +489,35 @@ say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
 # does not start new work, and it is allowed to revert rather than commit:
 # a leftover half-applied negative control must not be committed just because
 # something is dirty.
+# The finisher no longer asks an agent to decide. It stashes.
+#
+# 2026-09-08 18:24:59: a round was killed after two and a half hours having
+# written 478 lines, 412 of them a new Precompiler::BuildInternalDDSlotMapping.
+# The prompt that used to live here told a fresh process "if it is a leftover
+# negative control or a half-finished edit, revert it". A half-finished edit is
+# exactly what it was, so the agent did as instructed and the work was gone
+# sixty seconds later, with no commit and no stash. Nothing could bring it back:
+# the pre-round tmutil snapshot predates the work by two hours.
+#
+# The judgement that prompt demanded -- is this valuable, or is it residue? --
+# is one a fresh process cannot make. It has strictly less context than the one
+# that made the mess and can only reconstruct intent from the diff. So it is not
+# asked any more. A stash keeps the work, keeps history honest, clears the tree
+# so the loop moves, and costs no quota, which matters because dirt appears most
+# often when a round was cut off by a rate limit in the first place.
 FINISHER=${FHP_LOOP_FINISHER:-1}
 if [ "$FINISHER" -eq 1 ]; then
-  finisher_tree=
-  for tree in "$SDK" "$RESEARCH"; do
-    if ! git -C "$tree" diff --quiet 2>/dev/null; then finisher_tree=$tree; break; fi
+  # Path and policy as separate arguments. The colon-delimited form lost its
+  # separator in transit here -- "/tmp/x:clean" arrived as "/tmp/xlean" -- and
+  # the finisher then skipped every tree while exiting 0.
+  set -- "$SDK" clean "$RESEARCH" clean "$REPO" clean
+  # The engine tree is deliberately absent: its diff is supposed to equal a
+  # recorded patch, so "dirty" is health there and stashing it would remove
+  # instrumentation the verification depends on.
+  fin_out=$(python3 "$LOOP_TOOLS/finisher.py" "round-$$" "$round_finished" "$@" 2>&1)
+  printf '%s\n' "$fin_out" | grep -v '^\[' | while IFS= read -r l; do
+    [ -n "$l" ] && say "$l"
   done
-  if [ -n "$finisher_tree" ]; then
-    say "finisher: $finisher_tree left dirty -- one bounded pass to commit or revert"
-    FIN_PROMPT="上一轮结束时把 $finisher_tree 留成了 dirty。请只做这一件事，不要开新任务：\
-看 git -C $finisher_tree diff。若它是本轮已完成并已验证的工作，跑相关检查后提交它；\
-若它是残留的负控制或改了一半的编辑，还原它。两者都做完后报告你选了哪一条以及为什么。"
-    (
-      cd "$REPO" || exit 1
-      script -q /dev/null "$CLAUDE" -p "$FIN_PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"}
-    ) 2>&1 | tr -u -d '\r' | sed -l 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\x07//g' | tee -a "$LIVE" >>"$out"
-    if git -C "$finisher_tree" diff --quiet 2>/dev/null; then
-      say "finisher: $finisher_tree is clean"
-    else
-      say "WARNING: finisher ran and $finisher_tree is still dirty -- next round will refuse"
-    fi
-  fi
 fi
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
