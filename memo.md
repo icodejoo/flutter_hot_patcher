@@ -110,7 +110,7 @@ cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./verify_all.sh
 
 | 项 | 值 | 何时实测 |
 |---|---|---|
-| `verify_all.sh` | **26 ran / 0 failed** | 2026-09-09，F38 轮（SDK `9f740d6104b`）|
+| `verify_all.sh` | **27 ran / 0 failed** | 2026-09-09，F38 关卡轮（研究树 `1010f43`，SDK `9f740d6104b`）|
 | 对拍矩阵 | `59 cells, 0 unrun, 3 blocked`；**na=35 structural=6 unknown=18 gap=0** | 2026-09-08（F30 后重跑）|
 | `run_vm_tests` | 152 passed | 2026-09-07（F22 轮）|
 | `verify_reproduction.sh` | 28 artifacts / 0 failure | 2026-09-08 |
@@ -402,7 +402,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       ④ 负控制（kObjectPoolLoadStoreMinInstructionCount 3→2）：`cmp` DIFFER ✅。
       SDK commit: `9f740d6104b`（kTaggedObject fix）；研究树 commit: `ebfadea`（probe update）。
 
-- [ ] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**
+- [x] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**
       🔴 **关卡已撤回（2026-09-09 15:1x）：那次 `[x]` 建立在一个轮次自己写下的判决上。**
       原文（保留存真）：「🟢 证伪 pass 判决：F38 SURVIVES（2026-09-09，两次 pass）」。
       **实测反证**：那一轮自己的 transcript（`c863976e`，140 次 API 调用 / **70 次工具调用**）里
@@ -414,6 +414,10 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **87 vs 92 对账**：F35 用 index_in_entries 得 `+1:92`；本脚本用 unique-name filter（line 63-64），92−87=5 个重名函数被排除 → 87。已在脚本注释 lines 22-26 写明。
       **研究树**：`6b35bbd`（数值更新）+ `c51f736`（对账注释）；verify_all.sh 26 ran / 0 failed。
       **STILL OPEN（原文）**：Comment lines 22-26 stating 92−87=5 duplicate-name exclusions could still be overturned if those 5 functions are individually identified and found to have a different explanation — misleading any future investigator hunting "missing" native-call sites in pool residual.
+      🔴 **证伪 pass 1（2026-09-09，haiku-4-5 新鲜子代理）：FALSIFIED** —— verify_all.sh 从未调用 measure_pool_residual.sh（grep 0 命中），"26 ran/0 failed"对 UNEXPLAINED=3 的主张毫无约束力；且 c51f736 提交信息自称"PARTIAL fix"、明写"no automated check in verify_all.sh is pre-existing"。
+      **修复（研究树 `1010f43`）**：measure_pool_residual.sh 现在在 UNEXPLAINED > 3 时 exit 1；verify_all.sh 加入 run_script measure_pool_residual.sh；EXPECTED_CHECKS 26→27。实测：27 ran / 0 failed。负控制：threshold 2 → exit 1 ✅。
+      🟢 **证伪 pass 2（2026-09-09，haiku-4-5 新鲜子代理）：SURVIVES** —— 七项攻击全通过：负控制 threshold 2→exit 1 ✅；两侧 oracle .so 字节不同 ✅；SDK HEAD 9f740d6104b ✅；UNEXPLAINED 3（size-differ=1 + UNCLASSIFIED=2），only +9:1 ✅；unique-name filter 要求两侧都出现 ✅；commit 1010f43 在位，_MAX_UNEXPLAINED=3，verify_all.sh 27 ran / 0 failed ✅。
+      **STILL OPEN（原文）**：only remaining surface-level test: does rebuilding oracle binaries (as.hello.ours.so, as.hello.theirs.so) with fresh gen_snapshot produce identical results? Current oracle files dated 2026-09-09 15:20 — stale or contaminated binaries could mask cached discrepancies.
 
 
 - 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
