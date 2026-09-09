@@ -538,3 +538,64 @@ pre/post 快照可 diff，而重启会打断在跑的会话与轮次，**所以�
     结束时若留下脏树，`finisher.py` 只会 stash（不提交不还原），**字节不会丢**。
     ⚠️ **它的 memo 记录仍可能被 F40 那个缺陷 stash 掉** ⇒ **下次开工先看 `git stash list`**。
   - **恢复后的第一件事 = F40**（一行参数），第二件 = F37（前置已解，见上）
+
+## 🔧 无人值守完善（2026-09-09 下午开工，按「已发生的损失」优先）
+
+清单来自对 GitHub 同类项目的取舍（gh-aw / looper_rust / beads / jj / aider / ralph-claude-code /
+claude-auto-retry / OpenHands / claude-code-autopilot），**并经过一次自审修正**：
+原清单有三处不诚实 —— ① jj 与 auto-commit 是同一问题的两解却都列了（精华是「未提交的工作必须被自动保全」，不是 jj）；
+② 我把「wrapper 拦破坏性 git」说成与 gh-aw 的只读权限等价，**它可被绕过，是形状不是执行**；
+③ **漏借了今天唯一真正起作用的东西** —— 与执行者分离的评审者（F35 那个以证伪为判据的独立子代理，
+它推翻了挂着 18 格、驱动三轮工作的「DD 派发 92 vs 0」）。**那一条才是最该制度化的。**
+
+- [x] **F41：定时 WIP 快照（取代原清单里的 jj 那条）** ✅ `129b685`
+      `tools/loop/wip_snapshot.sh` + `ralph.sh` 启动它。每 120 秒对三棵树做
+      `git stash create` 并把结果 commit 锚到 `refs/wip/`。
+      🔑 **为什么是 `stash create`**：它返回 commit 哈希而**不写索引、不改工作树、不进 stash 列表**。
+      dirty-guard 与 finisher 都读 `git status` ⇒ **一个会扰动 status 的快照器会污染它要保护的轮次**。
+      **刻意不覆盖未追踪文件**：覆盖它们要 `git add -N`，那正是上面禁止的扰动；
+      而 09-08 丢的是**已追踪文件的修改**，覆盖面对得上真实事故。
+      **实测（在一个专门复现事故的临时仓里）**：478 行未提交 → 快照 → 把该文件还原到 HEAD
+      （当天 finisher 干的事）→ 工作仍可从 ref 取回、**逐字节相同**；
+      无扰动（`status --porcelain` 前后逐字节相同、stash 列表仍为 0、staged diff 为空）；
+      **负控制**：`FHP_WIP_ANCHOR=0` 时对象建出来但不锚 → 激进 prune 后**被删** ⇒ `update-ref` 是承重的；
+      正控制：锚了的 ref 扛过同一次 prune。
+      **上线即见效**：集成测试那 5 秒里它就锚住了**正在飞的那轮**在研究树的未提交工作（15+/15−）。
+      ⚠️ **两个缺陷是测出来的、不是读出来的**（都已修）：
+      ① `trap '...' EXIT INT TERM` 只杀子进程 ⇒ **TERM 后 ralph 继续跑而快照器已死**
+      （bash 把 handler 推迟到前台 `sleep` 返回，执行完 handler **不退出**）——
+      **时钟在转、护栏静默关闭、日志里一个字都没有**，正是本仓库反复登记的那类失败；
+      现在 handler 显式 `exit 143`，TERM 复测 ralph 0 / 快照器 0。
+      ② 早先的 `chmod +x` 与一条被沙箱拒绝的调用同在一条复合命令里 ⇒ **从没执行**，
+      于是第一遍「无扰动 ✅」是**对着一个没跑起来的脚本**给的绿。
+
+- [ ] **F40（仍被阻塞）：把状态树从 finisher 的参数里去掉**
+      `pgrep -f "tools/loop/run_round.sh"` = **5** ⇒ 11:41 那轮仍在执行它。
+      **bash 增量读取脚本文件，改一个正在跑的脚本会让它从错误的字节偏移继续。**
+      → **等它结束再改。** 改法与判据见上方 F40 原卡。
+
+- [ ] **F42：把「证伪 pass」制度化（自审补上的那条，价值最高）**
+      每张卡片关闭前，派一个**新鲜**子代理，其成功判据是**「找出破绽」**而不是「确认通过」。
+      依据：五个同类项目都有与执行者分离的评审者（gh-aw 的 trusted applier、looper 的 review/fix
+      角色、ralph 的 `/goal` + evaluator），**而我们的 `verify_all` 是执行者自己跑的自检**。
+      今天 F35 挡住了整整三轮白烧，成本约等于一次派发。
+      **要交的**：`tools/loop/prompts/falsify.md`（自包含模板）+ 在轮次提示词里挂上「关卡前必跑」。
+      **判据**：拿一张**已知结论错误**的历史卡片（F14 的内联归因、F18 的 `Thread+0x678`）当回放输入，
+      模板必须能让一个新鲜代理报出破绽。**没有这一步就只是又一份文档。**
+
+### 🔴 headroom 的残余风险已从「未验证」变成「实测命中」（2026-09-09 12:4x）
+
+半小时前我把它记为「未验证的残余风险」。**今天下午它就命中了**：
+我用 `sed -n` 读 `ralph.sh` 准备逐字编辑，返回的内容末尾是
+`[166 words compressed to 113 (from 23 source lines). Retrieve more: hash=d4b31f1e21a2b1d9267a39d6]`,
+**注释里的词被丢掉了**（"cadence because no lock"、"lock doing pacing, short interval strictly better
+cannot cause overlap" —— 都不是原文能读通的句子；原文见 `ralph.sh:36-39`）。
+
+⇒ **它压的不只是「大块无关输出」，也会压带源码的 Bash 输出。** 我当时没有据此改代码（改用了 `Read`，
+router 里有 `read_protected` 路由），但**如果据此改了，写出来的就是错的代码**。
+
+**新增纪律（立即生效）**：
+1. **要逐字编辑一个文件，必须用 `Read` 或能确认未被压缩的通路取原文**，不能用 `sed`/`cat` 的输出。
+2. **判据类比较（byte diff、指令编码、hash）同理** —— 那是本项目的全部价值所在。
+3. 待做：`headroom evals` 的 compression robustness 负控制（喂一对只差一个十六进制偏移的 dump），
+   若会合并就把 Bash/objdump 输出加进 `excluded_tool`（该机制本来就在，router 里已有 340 次命中）。
