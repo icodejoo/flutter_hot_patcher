@@ -36,6 +36,21 @@ if ! grep -q 'fix_queue.py' "$BLOCK"; then
 fi
 note ok "extraction: $(grep -c . "$BLOCK") lines, calls fix_queue.py"
 
+# ---- ordering: the warning path must be able to warn ------------------------
+# The first version of this gate assigned $FIX_QUEUE and called say() forty
+# lines above say()'s own definition. `bash -n` is happy with that and so is
+# every green run, because the call sits on the failure branch: it would have
+# printed "say: command not found" at precisely the moment the instrument was
+# broken. Cheap to assert, and the bug class is one this project keeps paying
+# for -- a check that only misbehaves when it has something to report.
+say_line=$(grep -n '^say() {' "$SRC" | cut -d: -f1 | head -1)
+fq_line=$(grep -n '^FIX_QUEUE=' "$SRC" | cut -d: -f1 | head -1)
+if [ -n "$say_line" ] && [ -n "$fq_line" ] && [ "$fq_line" -gt "$say_line" ]; then
+  note ok "the warning path can warn (say() line $say_line, gate prompt line $fq_line)"
+else
+  note FAIL "FIX_QUEUE block at line ${fq_line:-none} does not follow say() at line ${say_line:-none}"
+fi
+
 # ---- harness ---------------------------------------------------------------
 # One round = one invocation. $memo_added / $agent_calls are what the round
 # produced; the trees are real git repos because the block reads them with
