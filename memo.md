@@ -460,3 +460,81 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **理由**：那一轮 09:59 就把旧 memo 读进了上下文，若它在我重写后回写自己的副本，我的改动会被抹掉——
   这与 09-08 那次 478 行不可恢复的丢失同源（一个进程按它自己那份陈旧视图做决定）。
   手术完成后 PAUSE 已移除，无人值守恢复。
+
+## 🔴 第七个仪器缺陷：finisher 把状态树也 stash 了 ⇒ 轮次自己的记录被抹掉、还被误报成空转
+
+**2026-09-09 11:39 由监控警告发现（`WARNING: 2 rescue stashes now waiting in this tree`），逐条实测：**
+
+两个救援 stash **都在 FHP（状态）树**，内容**全是 `memo.md`**：
+- `11:13` +8 −9 行 = **F36 的关闭记录**（研究树 `9bc5443`，提交已核实存在）
+- `11:39` +2 行 = 🔑 **F37 的阻塞前置的答案**（见下），差一点被当垃圾扫掉
+
+**机制（一行参数 + 一个顺序）**：
+1. `run_round.sh` 把状态树交给了 finisher：`set -- "$SDK" clean "$RESEARCH" clean "$REPO" clean`
+2. 轮次按契约把结论写进 `memo.md`（**那就是它的产物**）→ 树脏 → finisher 按 `clean` 策略 **stash 走**
+3. **finisher 跑在 fingerprint 判定之前** ⇒ 那几行已经不在了 ⇒ 判为 `round left no trace (1/3)`
+4. `idle_count` 累加，**到 3 自动 PAUSE**
+
+⇒ **一个「产物是知识」的轮次，会被同时抹掉并误报为空转。**
+前六个仪器缺陷都是「判据在结论不成立时给绿」，**这一个反过来：把成功的轮次读成失败。**
+
+- [ ] **F40：把状态树从 finisher 的参数里去掉（一行，恢复循环后的第一件事）**
+      **改法**：`run_round.sh` 那行删掉 `"$REPO" clean`，照引擎树的写法留注释说明它**必须缺席**。
+      **安全性已实测**：dirty-tree 守卫只遍历 `"$SDK" "$RESEARCH"`（`run_round.sh:271`），
+      状态树本就不在里面 ⇒ 让 `memo.md` 保持脏**不会**阻塞下一轮启动。
+      **判据**：故意让一轮只写 memo 不提交 → 轮末 memo 改动仍在树上，且 `rounds.log` **不**打 `left no trace`。
+      🛑 **不许在有轮次正在执行 `run_round.sh` 时改它**：bash 是**增量读取脚本文件**的，
+      改一个正在跑的脚本会让它从错误的字节偏移继续（这一族属于「退出码正常但事情不对」）。
+      本轮因此没有动手——11:41 那轮当时正在跑。
+
+  **顺带记两件正面的**：① `finisher.py` 的「只 stash、不提交、不还原」是对的，**字节一个没丢**；
+  ② 11:41 那轮**读了 `.loop/RESCUED` 并把救援内容提交了**（`26b2a79` + `109f95d`），
+  反空烧机制这一半确实工作了。**坏的只有「状态树不该进 finisher」这一条。**
+
+### 🔑 F37 的阻塞前置已解（从救援 stash 里捞回来的）
+
+`THR+0x908` = **`call_bootstrap_native_entry_point_`**（他们 iOS-release 的 dSYM，line 1660）；
+我们的等价字段是 **`bootstrap_native_wrapper_entry_point_`**。
+⇒ F37 卡片里那句「🛑 前置（规则 3，不许跳）：`THR+0x908` 是哪个字段尚未确立」**已经不成立了**，
+可以直接做发射端。⚠️ 仍需自己核一遍字段与写入方（谁在什么时候写这个槽）。
+
+### 📊 Headroom（上下文压缩代理）实测：它一直在路径里，省 6–8%，且几乎不碰内容
+
+**它不是待评估的选项，是既成事实**：`ANTHROPIC_BASE_URL=http://127.0.0.1:8787`、
+代理 PID 4236（`headroom.cli proxy --port 8787`）、`ANTHROPIC_CUSTOM_HEADERS=X-Headroom-Project: flutter_hot_patcher`、
+v0.37.0 ⇒ **所有轮次与会话都经过它**。
+
+它自己的账（`~/.headroom/savings_events.jsonl`，18,838 条）：
+累计 `before=4,061,247,524` → `after=3,773,207,032`，**saved=288,040,492 = 7.09%**
+（opus 8.01% / sonnet 5.83%；`cost_usd` 累计 $864.12 = 它估的花费，不是省下的）。
+⚠️ 交叉校验：4B tokens / 8 天与「9.5 小时空转约 190 轮 ⇒ 三亿级 cache-read」同量级
+⇒ 它的 `before` 量的确实是**含 cache-read 的总输入**。
+
+**它动了什么**（从 `proxy.log` 的 router 决策数出来，1,601 条请求）：
+**只有 11.5% 的请求发生过压缩；块级 compressed=205 / frozen=217,537 ⇒ 只碰了 0.09%。**
+决策以拒绝为主：`ratio_too_high` 646、`excluded_tool` 340、**`lossy_unrecoverable_skipped` 317**、
+`read_protected` 152、`cache_control_protected` 102、`error_protected` 54；
+接受的是 `cross_turn_dedup` 284、`bash_lossless_search` 35、`lossless_accept` 27。
+
+🔴 **判据没跑到的那一半（别当已验证）**：`headroom inspect` 要求代理以 `--log-messages` 重启才有
+pre/post 快照可 diff，而重启会打断在跑的会话与轮次，**所以那 205 个被碰过的块我没有逐个看过**。
+**残余风险的准确位置是 `cross_turn_dedup`**：若它曾合并两个**只差一个十六进制偏移**的反汇编转储
+（`0x5f2c0` vs `0x5f840` —— F34a 今天正是因为这 4 个字节报了一整套错数字），
+就正好命中本项目最致命的失败模式。
+**待做**：用 `headroom evals` 的 compression robustness 喂一对只差一个偏移的 dump 做负控制；
+若会合并，就把 Bash/objdump 输出加进 `excluded_tool`（该机制本来就在）。
+
+**结论**：留着它（保守、零维护、已在收 6–8%），但**它不是答案**——
+实测最大杠杆仍是「子代理少问、每次问得更大」：F35 那个子代理 **116 次工具调用 → 15,271,819 cache-read**，
+压到 60 次省 **730 万 ≈ 48%**，比 7% 大一个数量级。
+
+- 2026-09-09 12:3x（claude-opus-5，交互式会话，用户「暂时关闭无人值守和循环」）⏸️ **循环已关闭。**
+  - `.loop/PAUSE` **在位**（11:41 为救援手术置上，保留）⇒ 不会有新轮次启动
+  - 外层时钟 **`tools/loop/ralph.sh`（PID 4839，起于 09-01）已 kill** ⇒ 连 tick 都不再发生
+  - 恢复方法：在一个**终端**里 `cd ~/Documents/flutter_hot_patcher && ./tools/loop/ralph.sh`
+    然后移走 `.loop/PAUSE`（⚠️ 走终端不是 launchd：launchd 作业没有 TCC 授权，读不了 `~/Documents`）
+  - **关闭时仍在飞的**：11:41 那轮（PID 50589/50593）带着一个 **F37 子代理**在跑。
+    没有杀它——杀轮次正是 09-08 丢掉 478 行的起因。它会自己结束；
+    结束时若留下脏树，`finisher.py` 只会 stash（不提交不还原），**字节不会丢**。
+    ⚠️ **它的 memo 记录仍可能被 F40 那个缺陷 stash 掉** ⇒ **下次开工先看 `git stash list`**。
+  - **恢复后的第一件事 = F40**（一行参数），第二件 = F37（前置已解，见上）
