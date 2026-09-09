@@ -18,25 +18,34 @@ round added, the commit subjects it produced, and the subagent count from its
 own transcript. Never the round's account of itself -- at 15:03 that day a round
 wrote its own SURVIVES verdict into memo.md and the closure gate said "ok".
 
-Rules:
+Rules (ids are only ids if cards.tsv lists them; see --cards):
 
-  neg(X)   an added memo line or a commit subject carries X and FALSIFIED|PARTIAL
-  fix(X)   a commit subject from this round carries X
-  pos(X)   an added memo line or a commit subject carries X, SURVIVES and a fix
-           marker (`(fix)` or `修补丁`), AND the round dispatched >=1 subagent
+  neg(X)        an added memo line or a commit subject carries X and FALSIFIED|PARTIAL
+  fix(X)        a commit subject from this round carries X
+  pos_same(X)   X and SURVIVES anywhere this round, AND >=2 dispatches
+  pos_drain(X)  X, SURVIVES and a fix marker (`(fix)`/`修补丁`), AND >=1 dispatch
 
-  enqueue  neg & fix & !pos     fixed after a defect report, no pass on the fix
-  drain    queued & pos
-  hold     queued & !pos        re-reported every round, never expires by itself
+  enqueue  neg & fix & !(pos_same | pos_drain)
+  drain    queued & pos_drain
+  hold     queued & !pos_drain     re-reported every round, never expires by itself
 
-The asymmetry is deliberate: a false enqueue costs one dispatch, a false drain
-costs an unreviewed fix nobody will look at again. So `pos` is the strict side.
-A bare "F41 VERDICT: SURVIVES" is a verdict about the *card*; the patch written
-after that card's own pass came back red is a different object, and the bare
-form does not drain it. That is why the prompt spells the exact wording out --
-matching any SURVIVES near the id would let one token stand for two different
-constructions, which is exactly how the largest gap in this project came to be
-mislabelled for three rounds (F35, 2026-09-09).
+Two bars rather than one, and that was the first version's defect. It demanded
+the marker in both places, and attack 4's replay over 120 commits touching
+memo.md showed five of its six enqueues were the legitimate flow -- "record
+two-pass falsification (FALSIFIED then SURVIVES)", "pass 5 SURVIVES after
+bypass + word-boundary fix" -- rounds that really had re-attacked their own fix,
+using words no round had been told to write. A queue wrong five times in six is
+wallpaper, and wallpaper is how a demand stops being read.
+
+Draining keeps the marker, because there the demand is specific: an entry an
+earlier round left behind owes a pass on the patch, and "F41 SURVIVES" is a
+verdict about the card. Enqueue-prevention does not need it -- a second
+SURVIVES inside the round already says the repair was re-attacked -- but it
+does need two dispatches, since one cannot be both the pass that found the flaw
+and the pass that re-attacked the repair.
+
+The asymmetry that sets these bars: a false enqueue costs one dispatch, a false
+drain costs an unreviewed fix nobody looks at again.
 
 Usage:
   fix_queue.py --queue F --memo-added F --commits F --agents N [--now TS]
@@ -57,36 +66,77 @@ import tempfile
 # The lookarounds are the whole point of writing this in Python rather than in
 # grep: without them "ARM64" yields the id "M64", and BSD and GNU grep disagree
 # about \b. Bounded by non-alphanumerics on both sides, "ARM64" yields nothing.
-ID = re.compile(r"(?<![0-9A-Za-z])([A-Z][0-9]+[a-z]?)(?![0-9A-Za-z])")
+# `_` is in the class because it is not alphanumeric and the first version left
+# it out: "PATCHED_V2" -- 332 occurrences in memo.md's history -- yielded the id
+# "V2", and the replay in attack 4 duly enqueued a card that does not exist.
+ID = re.compile(r"(?<![0-9A-Za-z_])([A-Z][0-9]+[a-z]?)(?![0-9A-Za-z_])")
 
 NEG = ("FALSIFIED", "PARTIAL")
 POS = "SURVIVES"
 FIX_MARKERS = ("(fix)", "（fix）", "修补丁")
 
 
-def ids_on(line):
-    return set(ID.findall(line))
+def ids_on(line, known=None):
+    found = set(ID.findall(line))
+    # The pattern is a shape, and a shape matches prose. Filtering against the
+    # card table turns "looks like an id" into "is a card", which is the only
+    # form of this test that cannot be fooled by a new piece of vocabulary.
+    # Optional so the queue still works with the table absent -- but then
+    # run_round.sh says so out loud rather than quietly loosening.
+    return found & known if known is not None else found
 
 
-def scan(memo_lines, subjects, agents):
-    """Returns (neg, fix, pos) as sets of ids."""
-    neg, fix, pos = set(), set(), set()
+def known_ids(path):
+    """Card ids from cards.tsv, or None if it cannot be read."""
+    if not path or not os.path.exists(path):
+        return None
+    out = set()
+    with io.open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            out.add(line.split("\t", 1)[0].strip())
+    return out or None
+
+
+def scan(memo_lines, subjects, agents, known=None):
+    """Returns (neg, fix, pos_same, pos_drain) as sets of ids.
+
+    Two questions, two bars. Requiring the `(fix)` marker for both was the first
+    version's defect: replayed over 120 commits touching memo.md, five of six
+    enqueues were the *legitimate* flow -- "record two-pass falsification
+    (FALSIFIED then SURVIVES)", "pass 5 SURVIVES after bypass + word-boundary
+    fix" -- where the fix really had been re-attacked in the same round, just
+    without a word no round had been told to write yet. A queue that is wrong
+    five times out of six is wallpaper, and wallpaper is how a demand stops
+    being read.
+
+    So the marker is required only where the demand is specific: draining an
+    entry that an EARLIER round put in the queue, where what is owed is a pass
+    on the patch itself. Within one round, a second SURVIVES already means the
+    fix was re-attacked -- provided there were two dispatches, because one
+    dispatch cannot be both the pass that found the flaw and the pass that
+    re-attacked the repair.
+    """
+    neg, fix, surv, surv_fix = set(), set(), set(), set()
     for line in list(memo_lines) + list(subjects):
-        here = ids_on(line)
+        here = ids_on(line, known)
         if not here:
             continue
         if any(t in line for t in NEG):
             neg |= here
-        if POS in line and any(m in line for m in FIX_MARKERS):
-            pos |= here
+        if POS in line:
+            surv |= here
+            if any(m in line for m in FIX_MARKERS):
+                surv_fix |= here
     for line in subjects:
-        fix |= ids_on(line)
-    # A verdict the round wrote itself does not count. This is the same
-    # condition the closure gate grew on 2026-09-09 after its first production
-    # firing turned out to be green on a review that never happened.
-    if agents < 1:
-        pos = set()
-    return neg, fix, pos
+        fix |= ids_on(line, known)
+    # A verdict the round wrote itself does not count, at either bar. Same
+    # condition the closure gate grew on 2026-09-09, after its first production
+    # firing turned out green on a review that never happened.
+    pos_same = surv if agents >= 2 else set()
+    pos_drain = surv_fix if agents >= 1 else set()
+    return neg, fix, pos_same, pos_drain
 
 
 def read_queue(path):
@@ -125,8 +175,11 @@ def write_queue(path, rows):
         raise
 
 
-def update(queue_path, memo_lines, subjects, agents, now):
-    neg, fix, pos = scan(memo_lines, subjects, agents)
+def update(queue_path, memo_lines, subjects, agents, now, known=None,
+           allow_enqueue=True):
+    neg, fix, pos_same, pos_drain = scan(memo_lines, subjects, agents, known)
+    pos = pos_drain          # what drains a standing entry
+    reviewed = pos_same | pos_drain   # what prevents a new one
     rows = read_queue(queue_path)
     queued = {r[0] for r in rows}
 
@@ -139,9 +192,9 @@ def update(queue_path, memo_lines, subjects, agents, now):
             kept.append((cid, seen, reason))
             actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
 
-    for cid in sorted((neg & fix) - pos - queued):
+    for cid in sorted((neg & fix) - reviewed - queued) if allow_enqueue else []:
         shas = " ".join(
-            sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s)})
+            sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
         )
         reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
             "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED",
@@ -165,8 +218,10 @@ def render(rows):
 def self_test():
     cases = []
 
-    def case(name, queue_in, memo, subjects, agents, expect_actions, expect_queue):
-        cases.append((name, queue_in, memo, subjects, agents, expect_actions, expect_queue))
+    def case(name, queue_in, memo, subjects, agents, expect_actions, expect_queue,
+             known=None, allow_enqueue=True):
+        cases.append((name, queue_in, memo, subjects, agents, expect_actions,
+                      expect_queue, known, allow_enqueue))
 
     # 1. The gap this file exists for: a pass came back red, the round fixed it,
     #    and no pass ran on the fix.
@@ -272,12 +327,87 @@ def self_test():
         [],
     )
 
+    # 10. The flow attack 4 found being enqueued wrongly: one round finds the
+    #     flaw, fixes it, re-attacks it, and says so in the words rounds have
+    #     actually used for months. Two dispatches, so the second SURVIVES
+    #     cannot be the first pass wearing a different hat.
+    case(
+        "no enqueue: same-round re-pass in the wording rounds really use",
+        [],
+        ["🔴 **证伪 pass 1：FALSIFIED**", "🟢 **F38 证伪 pass 2：SURVIVES**"],
+        ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
+        2,
+        [],
+        [],
+    )
+    # 11. Negative control for 10: the same text with a single dispatch. One
+    #     pass cannot have found the flaw and re-attacked the repair.
+    case(
+        "enqueue: same-round SURVIVES with only one dispatch",
+        [],
+        ["🔴 pass 1：FALSIFIED", "🟢 **F38 pass 2：SURVIVES**"],
+        ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
+        1,
+        ["enqueue F38"],
+        ["F38"],
+        {"F38"},
+    )
+    # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
+    #     used to yield the id "V2"; `_` is not alphanumeric.
+    case(
+        "no enqueue: PATCHED_V2 / state(B8) are not cards",
+        [],
+        ["state(B8): PATCHED_V2 verified on device after the PARTIAL verdict"],
+        ["024d48e fhp state(B8): PATCHED_V2 second round complete"],
+        1,
+        [],
+        [],
+        {"F38", "F49"},
+    )
+    # 12b. Negative control for the filter, and the reason it is not optional in
+    #      production: with no table, this same line yields the phantom "B8" --
+    #      `(` and `_` are both non-alphanumeric, so no lookaround can save a
+    #      pattern that is being asked to recognise vocabulary. Attack 4 found
+    #      V2 this way; B8 turned up when the case for V2 was written.
+    case(
+        "the id pattern alone is not enough: without the table, B8 is enqueued",
+        [],
+        ["state(B8): PATCHED_V2 verified on device after the PARTIAL verdict"],
+        ["024d48e fhp state(B8): PATCHED_V2 second round complete"],
+        1,
+        ["enqueue B8"],
+        ["B8"],
+        None,
+    )
+    # 12c. So a table that was asked for and could not be read must not leave
+    #      the queue filling with prose. It holds and drains as before, and
+    #      refuses to enqueue; run_round.sh prints the WARNING.
+    cases.append((
+        "no enqueue when the table was requested and is unreadable",
+        [], ["F38 pass 1 → PARTIAL"], ["1f2daaa fhp F38: fix it"], 1, [], [],
+        None, False,
+    ))
+    # 13. And the filter that does not depend on the pattern being clever: an id
+    #     shaped like a card, absent from the table, is not a card.
+    case(
+        "no enqueue: F99 is not in the card table",
+        [],
+        ["F99 pass 1 → PARTIAL"],
+        ["deadbee fhp F99: fix the thing"],
+        1,
+        [],
+        [],
+        {"F38", "F39", "F41", "F49"},
+    )
+
     failed = 0
     tmpdir = tempfile.mkdtemp(prefix="fix_queue_test.")
-    for name, queue_in, memo, subjects, agents, want_actions, want_queue in cases:
+    for (name, queue_in, memo, subjects, agents, want_actions, want_queue, known,
+         allow_enq) in cases:
         path = os.path.join(tmpdir, "queue")
         write_queue(path, queue_in)
-        actions, kept = update(path, memo, subjects, agents, "2026-09-09 17:00")
+        actions, kept = update(path, memo, subjects, agents, "2026-09-09 17:00",
+                               known, allow_enq)
         got_actions = sorted(a.split(" (")[0].split(" --")[0].strip() for a in actions)
         got_queue = [r[0] for r in read_queue(path)]
         ok = got_actions == sorted(want_actions) and got_queue == want_queue
@@ -298,6 +428,8 @@ def main():
     ap.add_argument("--memo-added")
     ap.add_argument("--commits")
     ap.add_argument("--agents", type=int, default=0)
+    ap.add_argument("--cards", default="",
+                    help="cards.tsv; ids absent from it are not treated as cards")
     ap.add_argument("--now", default="")
     ap.add_argument("--render", action="store_true",
                     help="print the queue as prompt text and exit")
@@ -323,8 +455,18 @@ def main():
             return [l.rstrip("\n") for l in fh if l.strip()]
 
     now = args.now or __import__("time").strftime("%Y-%m-%d %H:%M")
+    known = known_ids(args.cards)
+    allow_enqueue = True
+    if args.cards and known is None:
+        # Loud, and closed rather than loose. Unfiltered, the id pattern reads
+        # prose as cards: the real corpus yields V2 from PATCHED_V2 and B8 from
+        # state(B8). A queue of phantoms is worse than an empty one, because a
+        # demand nobody believes is a demand nobody reads.
+        print("WARNING: cards table unreadable (%s) -- enqueue disabled this round"
+              % args.cards)
+        allow_enqueue = False
     actions, _ = update(args.queue, lines(args.memo_added), lines(args.commits),
-                        args.agents, now)
+                        args.agents, now, known, allow_enqueue)
     for a in actions:
         print(a)
     return 0

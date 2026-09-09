@@ -66,7 +66,9 @@ run_round_gate() {  # $1 memo_added text, $2 agent_calls, $3.. commit subjects
   for s in "$@"; do
     git -C "$tree" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "$s"
   done
+  printf '# test table\nF77\tbuilt\t-\t-\tc\tn\t-\n' >"$WORK/cards.tsv"
   REPO=$ROOT heads_before=" $tree=$h" memo_added=$memo agent_calls=$agents \
+    FHP_LOOP_CARDS=$WORK/cards.tsv RESEARCH=$WORK \
     FIX_QUEUE=$WORK/queue bash -c '
       say() { printf "%s\n" "$*"; }
       source "$1"' _ "$BLOCK"
@@ -125,6 +127,13 @@ expect "card-level SURVIVES does not drain the fix" "F77" "$out"
 #    the 15:03 failure, replayed against the new gate.
 out=$(run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix)' 0)
 expect "a verdict with 0 dispatches does not drain" "F77" "$out"
+
+# 7. The phantom, through the wired path: the round names a card that is not in
+#    the table, in the shape the real corpus produces.
+rm -f "$WORK/queue"
+out=$(run_round_gate '+state(B8): PATCHED_V2 verified after the PARTIAL verdict' 1 \
+        'state(B8): PATCHED_V2 second round complete')
+expect "a phantom id from prose is not enqueued" "" "$out"
 
 printf '%d failure(s)\n' "$fail"
 [ "$fail" -eq 0 ]

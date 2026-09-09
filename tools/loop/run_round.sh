@@ -986,11 +986,18 @@ round_subjects=$(for pair in $heads_before; do
     git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
   done)
 if [ -n "$round_subjects" ] || [ -s "$FIX_QUEUE" ]; then
+  # An id is only an id if the card table lists one. Unfiltered, the pattern
+  # reads prose as cards: attack 4's replay over 120 commits touching memo.md
+  # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
+  # If the table is named and unreadable, fix_queue.py refuses to enqueue and
+  # prints a WARNING rather than filling the queue with phantoms.
+  CARDS_TSV=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
   fq_memo=$(mktemp) && fq_commits=$(mktemp)
   printf '%s\n' "$memo_added" >"$fq_memo"
   printf '%s\n' "$round_subjects" >"$fq_commits"
   python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
-      --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" 2>&1 |
+      --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" \
+      --cards "$CARDS_TSV" 2>&1 |
     while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
   rm -f "$fq_memo" "$fq_commits"
   if [ -s "$FIX_QUEUE" ]; then
