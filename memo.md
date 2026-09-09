@@ -2402,6 +2402,8 @@ BLOCKER: <如果 FAIL，具体阻塞原因；PASS 时写 none>
 
 - 2026-09-09T（claude-sonnet-4-6，新会话续跑）❤️ **心跳**（契约读取已在会话开头完成；此条在派发 F34b 子代理后写入）。恢复检查：SDK `232849c87d8`（verify_all BLOCKED：ProductARM64 verify_sdk_hash=true，ReleaseARM64 71 步落后）；研究树 `bcbc5aa` @ `spikes/shorebird_linkinfo_oracle`；FHP memo.md 仅修改。无 PAUSE 无 RESCUED。`grep -c "^- \[ \]" memo.md` **6**（F34b/F34c/F34d/F37/F38/F39）。**F34b 为首项未完成任务：已派发子代理，指令含 gn_configure+重建+FunctionKey 修复+负控制+verify_all。**
 
+- 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
+
 - [ ] **F39：18 格 unknown 的根因重估（旧归因一半已作废）**
       账上写的是「全部 18 格 unknown 的共同根因 = 两个代码 gap：Sim guard + DD dispatch」。
       **DD dispatch 那半已作废**（F35），**Sim guard 那半的量级也错了**（差是 8 不是 83）。
