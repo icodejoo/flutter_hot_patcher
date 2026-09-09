@@ -75,6 +75,17 @@ NEG = ("FALSIFIED", "PARTIAL")
 POS = "SURVIVES"
 FIX_MARKERS = ("(fix)", "（fix）", "修补丁")
 
+# A SURVIVES has to be a *verdict* to count as one. Pass 2 of F49's own review
+# found the hole: `pos_same` accepted any line that carried the id and the word,
+# so a round that said something unrelated but approving about the card while
+# fixing it would suppress the enqueue its fix was owed.
+#
+# `pass` is bounded because "bypass" contains it -- and "bypass" really occurs
+# in this corpus, in `c48f07b`'s subject. `two-pass` still matches: `-` is not
+# alphanumeric.
+PASS_VOCAB = re.compile(r"(?<![0-9A-Za-z])pass(?![0-9A-Za-z])|证伪|VERDICT|falsif",
+                        re.IGNORECASE)
+
 
 def ids_on(line, known=None):
     found = set(ID.findall(line))
@@ -125,7 +136,7 @@ def scan(memo_lines, subjects, agents, known=None):
             continue
         if any(t in line for t in NEG):
             neg |= here
-        if POS in line:
+        if POS in line and PASS_VOCAB.search(line):
             surv |= here
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here
@@ -352,6 +363,21 @@ def self_test():
         ["F38"],
         {"F38"},
     )
+    # 13b. The misfire pass 2 constructed: two dispatches, a SURVIVES that
+    #      names the card, and nothing about it is a verdict on the repair.
+    #      Without the vocabulary requirement this suppresses an enqueue the
+    #      fix is owed.
+    case(
+        "enqueue: an approving mention is not a verdict",
+        [],
+        ["F42 pass 1 → PARTIAL",
+         "F42 的旧基线在重建后仍然 SURVIVES，与本次修补无关"],
+        ["c48f07b fhp F42: fix the circular criterion"],
+        2,
+        ["enqueue F42"],
+        ["F42"],
+        {"F42"},
+    )
     # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
     #     used to yield the id "V2"; `_` is not alphanumeric.
     case(
@@ -400,6 +426,17 @@ def self_test():
         {"F38", "F39", "F41", "F49"},
     )
 
+    # 14. Finding from F49's own pass 2: case 12c hands update() the decision
+    #     already made, so it tests the function's obedience and not the code
+    #     that decides. Removing the fail-closed branch in main() left all
+    #     fifteen cases green. This one runs the real CLI, so the branch that
+    #     computes allow_enqueue is the thing under test.
+    cli_cases = [(
+        "CLI: an unreadable card table refuses to enqueue, out loud",
+        ["F38 pass 1 → PARTIAL"], ["1f2daaa fhp F38: fix it"], 1,
+        "/nonexistent/cards.tsv", [], "WARNING",
+    )]
+
     failed = 0
     tmpdir = tempfile.mkdtemp(prefix="fix_queue_test.")
     for (name, queue_in, memo, subjects, agents, want_actions, want_queue, known,
@@ -418,7 +455,32 @@ def self_test():
             failed += 1
             print("       actions want=%s got=%s" % (sorted(want_actions), got_actions))
             print("       queue   want=%s got=%s" % (want_queue, got_queue))
-    print("%d case(s), %d failure(s)" % (len(cases), failed))
+    # The CLI cases go through argv, so a regression in main() cannot hide
+    # behind a helper that is called correctly by the test and not by anything
+    # else.
+    import subprocess
+    for name, memo, subjects, agents, cards, want_queue, want_out in cli_cases:
+        d = tempfile.mkdtemp(prefix="fix_queue_cli.")
+        qp = os.path.join(d, "queue")
+        mp = os.path.join(d, "memo")
+        cp = os.path.join(d, "commits")
+        io.open(mp, "w", encoding="utf-8").write("\n".join(memo) + "\n")
+        io.open(cp, "w", encoding="utf-8").write("\n".join(subjects) + "\n")
+        r = subprocess.run([sys.executable, os.path.abspath(__file__),
+                            "--queue", qp, "--memo-added", mp, "--commits", cp,
+                            "--agents", str(agents), "--cards", cards,
+                            "--now", "2026-09-09 17:00"],
+                           capture_output=True, text=True)
+        got_queue = [x[0] for x in read_queue(qp)]
+        ok = got_queue == want_queue and want_out in r.stdout
+        print("%-4s %s" % ("ok" if ok else "FAIL", name))
+        if not ok:
+            failed += 1
+            print("       queue want=%s got=%s; stdout had %r: %s"
+                  % (want_queue, got_queue, want_out, want_out in r.stdout))
+
+    total = len(cases) + len(cli_cases)
+    print("%d case(s), %d failure(s)" % (total, failed))
     return 1 if failed else 0
 
 
