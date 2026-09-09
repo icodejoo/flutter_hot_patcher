@@ -384,6 +384,21 @@ idle_before=$(fingerprint)
 # Counted here so that "a card was closed this round" is a fact rather than a
 # claim in the round's own report. The gate rule is in the prompt, but a rule in
 # a prompt is a request; this is the part that notices when it was not followed.
+# ---- is the safety net actually up? ----------------------------------------
+# Two changes made today rest on the snapshotter running: the finisher now
+# leaves a round's conclusions uncommitted, and the no-commit deadline
+# terminates rounds. A review found the daemon simply not running -- `pgrep`
+# returned 0 -- with nothing anywhere that would have noticed, because a dead
+# daemon and a working one produce identical logs when nothing is dirty.
+#
+# Not a refusal: an unattended loop that stops working because a helper died is
+# worse than one that runs with a thinner net. It warns, and it takes a
+# one-shot snapshot so this round starts anchored either way.
+if ! pgrep -f 'wip_snapshot.sh --daemon' >/dev/null 2>&1; then
+  say "WARNING: wip_snapshot daemon is not running -- taking a one-shot snapshot; start it with tools/loop/ralph.sh"
+  "$REPO/tools/loop/wip_snapshot.sh" --once >/dev/null 2>&1 || say "WARNING: one-shot snapshot failed too"
+fi
+
 closed_ids() {
   # Ids of closed cards, sorted. Counting was not enough: see the gate below.
   grep '^- \[x\]' "$REPO/memo.md" 2>/dev/null |
@@ -567,16 +582,28 @@ watchdog=$!
 # only ever stashes, so the bytes survive being cut off. Killing a round used to
 # mean losing its work; it no longer does.
 NOCOMMIT_TIMEOUT=${FHP_LOOP_NOCOMMIT_TIMEOUT:-5400}
-heads_at_start=$(for t in "$SDK" "$RESEARCH" "$REPO"; do git -C "$t" rev-parse HEAD 2>/dev/null || echo none; done | tr '\n' ' ')
+# The predicate is `fingerprint`, not a list of HEADs, and the reason is a
+# hazard this file created for itself in one afternoon: the finisher change
+# earlier today deliberately leaves a round's conclusions uncommitted in
+# memo.md, so a round whose whole product is knowledge moves no HEAD at all. A
+# HEAD-only deadline would have snapshotted and killed exactly the rounds the
+# other change was written to protect. `fingerprint` already counts non-blank,
+# non-heartbeat memo lines alongside the three HEADs, and it is what the
+# end-of-round idle check uses -- so progress now means the same thing to both.
+#
+# It also answers the narrower version of the same finding: a round may commit
+# to a repo not in the list (`~/Documents/loop`, where finisher.py lives, among
+# others). Memo evidence covers that case too, because a round that did work
+# elsewhere still records it here.
+progress_at_start=$(fingerprint)
 (
   slept=0
   while kill -0 $pid 2>/dev/null; do
     sleep "$STALL_SAMPLE"
     slept=$(( slept + STALL_SAMPLE ))
     [ "$slept" -lt "$NOCOMMIT_TIMEOUT" ] && continue
-    heads_now=$(for t in "$SDK" "$RESEARCH" "$REPO"; do git -C "$t" rev-parse HEAD 2>/dev/null || echo none; done | tr '\n' ' ')
-    if [ "$heads_now" = "$heads_at_start" ]; then
-      say "WATCHDOG: ${slept}s with no commit in any tree -- snapshotting, then terminating"
+    if [ "$(fingerprint)" = "$progress_at_start" ]; then
+      say "WATCHDOG: ${slept}s with no commit and no memo line -- snapshotting, then terminating"
       # $REPO, not $LOOP_TOOLS: finisher.py lives outside this repo, wip_snapshot.sh
       # inside it. Writing $LOOP_TOOLS here (first attempt) pointed at a file that
       # does not exist, and the `||` branch would have logged a failure while the
@@ -585,7 +612,7 @@ heads_at_start=$(for t in "$SDK" "$RESEARCH" "$REPO"; do git -C "$t" rev-parse H
       "$REPO/tools/loop/wip_snapshot.sh" --once >/dev/null 2>&1 || say "WATCHDOG: wip snapshot failed -- terminating anyway"
       kill_worker
     else
-      say "no-commit deadline passed at ${slept}s but a commit landed -- deadline retired for this round"
+      say "no-commit deadline passed at ${slept}s but the round has shown progress -- deadline retired for this round"
     fi
     break
   done
