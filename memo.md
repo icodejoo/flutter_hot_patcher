@@ -689,7 +689,35 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 ⚠️ **`built` 不等于 `closed`。** 下面四项实现完成、各自带双向负控制**已跑过**，但**都还没过证伪 pass**——
 而那条规则正是本轮装上的（F42），**它同样约束写它的人**。状态以 `cards.tsv` 为准。
 
-- [ ] **F41：定时 WIP 快照**（`built`，`129b685`）
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F41 pass 1 → FALSIFIED（haiku-4-5）**：
+  提交说明里的验证「在临时 scratch repo 里做」，而那个 scratch repo 没有复现真实问题的关键条件：三棵树中两棵（fhp-research + flutter_hot_patcher）共享同一个 git dir（`.git-common-dir` = FHP/.git）。wip.log 里 12:44:05 和 12:45:19 两次记录了碰撞（两棵树写同名 `refs/wip/20260909T044405Z`，后者覆盖前者）。修复（树名 + sha8 进 ref 名）是在 `129b685`（12:46:17）提交的，但验证是在 scratch repo（无共享 git dir）而非真实环境里做的。
+  **FLAW：多工作树场景（共享 ref store）从未在真实 FHP 环境里跑负控制。**
+  **但注意**：wip.log 的 14:27:27 行（提交后 1.5h）已经显示修复在真实环境生效：`refs/wip/fhp-research-...` 和 `refs/wip/flutter_hot_patcher-...` 各自独立，无碰撞。这是实测证据，但 pass 1 的代理没有发现它。
+  → **不关卡，开 pass 2，把 wip.log 作为证据指向。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F41 pass 2 → PARTIAL（haiku-4-5）**：
+  `129b685` 的 wip_snapshot.sh 里 ref 格式是 `refs/wip/$(date...)` —— 仍是旧的碰撞格式。
+  真正修复碰撞的提交是 `2e7e3cb`（14:17:38，"`wip: two of three trees share one ref store`"）；
+  修复内容：`refs/wip/$name-$(date...)-${sha:0:8}`。
+  cards.tsv 的 commits 字段已更新为 `129b685,2e7e3cb`，memo 里同步修正。
+  → **不关卡，开 pass 3。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F41 pass 3 → PARTIAL（haiku-4-5）**：
+  负控制（`FHP_WIP_ANCHOR=0` + gc prune）与 478 行恢复都在 scratch repo 里做的，从未在真实 flutter_hot_patcher+fhp-research 多工作树环境里跑。
+  **修复**：在真实多工作树环境里实测：
+  ① ANCHOR=1（默认）：两棵树在同一秒（16:45:32）各创建不同 ref：`refs/wip/fhp-research-20260909T084532Z-fc653c7f` 和 `refs/wip/flutter_hot_patcher-20260909T084532Z-d37edaa2` —— 无碰撞 ✅
+  ② ANCHOR=0：两棵树各创建 commit 对象（`760729a6c343`、`17575d62ed1a`），wip.log 打印「NOT anchored」，refs/wip 计数不变（39→39），对象无任何 ref 指向 —— 可达性为零，gc 可删 ✅
+  → **不关卡，开 pass 4，把真实环境实测结果作为证据。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）✅ **F41 pass 4 → SURVIVES（haiku-4-5）**：
+  七项攻击全部通过：① ANCHOR=0 对象存在（commit 类型），零 ref 指向（git for-each-ref 空输出）；
+  ② 16:45:32 的两个 refs 时间戳和 sha8 均不同（fc653c7f vs d37edaa2）；
+  ③ 同内容不同 message → 不同 sha，碰撞概率极低；④ `git stash create` 无终端交互，无锁竞争风险；
+  ⑤ `2e7e3cb` 在 HEAD 前 8 个提交；⑥ `git fsck --unreachable` 确认两个 ANCHOR=0 对象为 unreachable；
+  ⑦ SDK tree 干净时 snapshot_tree 第 78 行 `diff --quiet HEAD` 直接 return，不创建对象。
+  **STILL OPEN（原文）**：Could SDK tree generate an ANCHOR=0 object if forced dirty during a real pending round? (Not a flaw in F41; would just verify SDK behaves like the other two trees did.)
+
+- [x] **F41：定时 WIP 快照**（`built`，`129b685` + `2e7e3cb`）
       判据已过：478 行经 revert 仍可从 `refs/wip` 取回、逐字节相同；`status`/index/stash 三项零扰动；
       负控制 `FHP_WIP_ANCHOR=0` + 激进 prune → 对象被删。**待证伪 pass。**
 - [ ] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786`）
