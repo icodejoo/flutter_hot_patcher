@@ -1876,7 +1876,12 @@ F34 问的是**哪些调用点被改写成间接派发**（92 个）。
       产物：`dd_sites.tsv`（92 行）+ `dd_sites.sh`（生成脚本，含 3 个负控制）。
       **🔑 关键发现：这 92 个点根本不是 DD 派发，而是懒绑定原生调用点（lazy-linked native calls）。**
       四个独立证据，每个 92/92 无例外：
-      1. 每个点载入同一常量 `Smi 2312`（= THR 偏移 0x908 = `Thread::indirect_static_call_table_` 前段）
+      1. 每个点载入同一常量 `Smi 2312`（= THR 偏移 `0x908`）
+         🔴 **本行括号里原写「= `Thread::indirect_static_call_table_` 前段」，已由 F35 实测删除**（2026-09-09）：
+         我们树里记着**他们的** `indirect_static_call_table_` 在 **`Thread+0x978`**（`thread.h:643-652`），
+         不是 `0x908`；`0x908` 也**不在**他们 dSYM 给出的 Shorebird 六字块 `0x8d8..0x900` 里。
+         **这个字段叫什么仍未确立**（F35 只把它定性为「服务懒链接原生调用的 stub 入口」且明确标为假设）。
+         → 这就是本轮**第二次**「观测为真、推论未验」：常量 2312 是真的，「它属于哪张表」是顺手补的。
       2. `pool[index-1]` 处处是 `dart::NativeEntry::LinkNativeCall`
       3. 我们自己的快照在同一 pool 槽存的是 `Code([Stub] CallBootstrapNative)`
       4. 92 个点全部落在 `[Optimized]` 区间内（**0 个** `[Stub]`）——
@@ -1885,21 +1890,29 @@ F34 问的是**哪些调用点被改写成间接派发**（92 个）。
       替换成可原位改写的 `ldr x16,[PP,#slot]; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30`。
       **这意味着 F34 的整个原始假设前提是错的：92 个点与 IndirectStaticCall 无关。**
 
-- [ ] **F34b：确认真实 DD 派发数并修 `linker.cc` 的硬编码字面量（F34a 已推翻原假设）**
+- [x] **F34b：确认真实 DD 派发数并修 `linker.cc` 的硬编码字面量（F34a 已推翻原假设）**  🟢 **已关闭 2026-09-09（commit `afa1f9c73cc`，已在树里；本轮仅重建 + 验证）**
       F34a 证明 `measure_dd_emission.sh` 数出的 92 个「DD 点」是原生调用点，
       F34 的首要假设（「92 = 指向 8 个被选中函数的静态调用点总数」）基于错误前提，作废。
 
       **真实 DD 派发数**来自 `dd_pipeline.sh`：他们输出 `DD table: 8 slots, 7 retained, 2 rewritten`，
       即他们 hello 快照里实际有 **2 个** IndirectStaticCall 改写点。
-      我们的输出是 `rewritten=0`，因为 `linker.cc:1159` 有一行硬编码字面量：
-      `" rewritten=0 sentinel_filled=%" Pd " rewritten_null=0\n"`
+      我们的输出也是 `rewritten=2`（commit `afa1f9c73cc` 已修复硬编码字面量，把计数器接到
+      `ShorebirdLinker::NoteDDSlotRewritten(slot)` 的实际路径上）。
 
-      **本步任务**：
-      1. 把 `linker.cc:1159` 的硬编码 `rewritten=0` 接到已有的改写路径上，发出真实计数
-      2. 跑 `dd_pipeline.sh` 确认 ours 行也输出 `rewritten=2`
-      判据：`./dd_pipeline.sh` ours 行 `rewritten=2`；
-      负控制：改坏计数器 → ours 变 0。
-      产物：修复 `linker.cc:1159` + `dd_pipeline.sh` 绿。
+      **修复说明**：`linker.cc` 的格式串原来硬编码 `rewritten=0`；`afa1f9c73cc` 改成实际计数
+      `g_dd_rewritten_slots.size()`，在 `ReplaceStaticCallsWithIndirectStaticCalls` 里通过
+      `SlotForOwner(target.ptr())` 找到 slot 后调用 `NoteDDSlotRewritten(slot)` 记入集合。
+
+      **本轮实测结果（2026-09-09）**：
+      - `rewritten` 修复前状态：`verify_sdk_hash = true` 导致 ProductARM64/ReleaseARM64 BLOCKED，
+        ProductSimARM64 Sep 8 17:57 → 重建后 Sep 9 10:32，ReleaseARM64 Sep 8 17:57 → 重建。
+      - ProductSimARM64 `--print_dd_resolution_to` 输出：`rewritten=2` ✓
+      - ReleaseARM64 `--print_dd_resolution_to` 输出：`rewritten=2` ✓
+      - 负控制：`NoteDDSlotRewritten` 注释掉 → 重建 → `rewritten=0` ✓（复原后 `rewritten=2`）
+      - `./dd_pass_check.sh`（ReleaseARM64）：`voters ours=3 vs theirs=92 -- DEBT, pinned (F34)`，
+        **0 failure(s)** ✓
+      - `./verify_all.sh`：**25 ran, 0 failed** ✓
+      判据满足：`dd_pipeline.sh` ours 行 `rewritten=2`；负控制变 0 → 复原 → 变 2。
 
 - [N/A] **F34c：调用点侧的判别**（F34a 已证明原选择规则假说无效，本步不需要）
 
@@ -2335,7 +2348,64 @@ BLOCKER: <如果 FAIL，具体阻塞原因；PASS 时写 none>
   且「测得越细越可信」在前提错的时候不成立（F16 已栽过：F10/F11 两份细活都指向一个不存在的病）。
   ⇒ 已派独立子代理**以证伪为目标**复核，判据见卡内。**在它回来之前，不要把这条写进任何别的文档。**
 
+- 2026-09-09T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F34b 派发前写入）。恢复检查：SDK clean @ `232849c87d8`（0 行，含 F28/F29/F31）；研究树 @ `9aac66d` + 3 untracked（F34a 残骸文件，非 git 追踪，finisher 未碰）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F34b）。**F35 注：前会话派发 F35 独立证伪子代理，上下文压缩后结果未回收（子代理属于旧 session，不可找回）。F34a 的结论（92 个点 = 原生调用，非 DD 派发）暂维持「未被采信」状态，不进 CLAUDE.md，待后续处理。F34b 与 F35 无依赖关系，可独立前进。** 关键发现：`afa1f9c73cc`（2026-08-27）已实现 `rewritten` 计数（非硬编码），F34b 的「修 linker.cc 硬编码」部分实际已完成；F34b 当前任务是**验证现有修复正确工作**（ours 行输出 `rewritten=2`）并做负控制。**下一项 = F34b（验证 rewritten 计数，跑负控制，mark done）→ 派发子代理。**
+
 - 2026-09-09T（claude-opus-5，交互式会话）🔒 **决定：`pre-push` 钩子保留，无人值守轮次继续不许 push**（用户把这个决定交给我，2026-09-09）。
   理由三条，都不是风格偏好：① **三个树的 origin 是同一个公开仓库**（契约§八），而契约§八同时写着「他们的二进制与反编译产物永不入库，反编译产物后缀就是 `.c`，靠后缀过滤挡不住，只能按目录挡」——push 是外向且不可逆的，发出去即被缓存/索引，事后删除不能撤销；② 契约§七把外向/不可逆操作列为「必须停下来问人」，**摘掉钩子等于把那条规矩里唯一的机器执行部分删掉**，只剩纸面；③ 实测依据：本阶段已有五个仪器缺陷、两次阶段性「完成」被撤回，今天 F34a 又把 18 格的归因前提整体推翻——**本地提交错了可以撤回，公开仓推错了不能**。
   **而且循环并不需要 push**：它的进展判据是「提交 + `verify_all`」，不是远端状态。
   → 若目标是防机器丢失（这是 push 唯一真正解决的问题），正确手段是**不经网络发布的离机备份**（私有远端或 `git bundle` 到外置盘），不是给公开仓开门。这件事需要人给一个目标位置，未做。
+
+- 2026-09-09T（claude-opus-5，交互式会话）🔬 **F35 完成：F34a 的结论经独立证伪后存活（`CLAIM_SURVIVES`）**，研究树 `6026011`（`F35_NATIVE_VS_DD.md` + `f35_native_vs_dd_probe.py`，66 条断言，只读，exit 0）。
+  🔴 **上一条心跳里「F35 结果未回收、子代理属旧 session 不可找回」的记录作废** —— 结果在这里，已落盘。
+
+  **六项测试全跑，逐项结果（每项都带 locus，不是「看起来对」）**：
+  1. **`ObjectPool` 布局：`(pool_off-16)/8` 正确。** `UntaggedObjectPool` = `tags_`(8) + `intptr_t length_`(8) + data（`raw_object.h:2156-2167`）⇒ `ObjectPool::element_offset(i) = 16+8*i`（`object.h:5705-5708`）；**PP 是未打标签的**（`LoadPoolPointer` 做 `sub(pp,pp,Operand(kHeapObjectTag))`，`assembler_arm64.cc:494-506`）。实测：1421/3849 条转储项全部满足 `offset == 16+8*index`；按 `/8` 算，那 92 个点给出 **11 种不同的东西**（null、closure、"function result"）——**错得很像数据**。
+  2. **`THR+0x908` 是单一共享目标，不是表基址。** 92/178 个点上 `x16` 都是**编译期常量**、一次 load 后直接 `blr`，**没有第二次解引用、全函数没有任何寄存器索引进得来**；且一个 per-thread 的字**装不下 92 个被调方**。**不是他们的 DD 表**（我们树里记着**他们的** `indirect_static_call_table_` 在 `Thread+0x978`，`thread.h:643-652`），**也不在** dSYM 给出的 Shorebird 六字块 `0x8d8..0x900` 内；在全部 15 个快照 `.so` 里它**从未以 `ldr [x26,#imm]` 的立即数形式出现过**。上游只缓存三个 C++ `NativeEntry` 包装（`thread.h:222-268`），不缓存这种 stub 入口 ⇒ **它是 Shorebird 加的**。🔴 **但它的名字未确立，F35 明确只记为假设。**
+  3. **序列匹配 = 原生调用。判决性的那一条指令是 `ldur x30,[x30,#7]`**（= `Code::entry_point_offset - kHeapObjectTag`）：**我们**在那 92 个点上发它，**他们**把它换成 `asr x16,x16,#1` + `ldr x30,[x26,x16]`。R5=`LinkNativeCall`、R1=argc_tag（`movz` 分布 `{0:7,1:30,2:31,3:15,4:6,5:2,6:1}`）、R2=`add x2,x15,#k` —— **92/92 且两侧逐字节同分布**，与 `il_arm64.cc:1299-1344` 一致。
+     ⚠️⚠️ **最该记住的一条：这个形状本身有歧义。** 我们自己的 `EmitIndirectStaticCall`（`flow_graph_compiler_arm64.cc:673-696`）**发的就是同样 6 条指令** ⇒ **光靠 `asr`+`ldr x30,[x26,x16]`+`blr` 这个 pattern，分不出 DD 派发和它。** 这就是 `measure_dd_emission.sh` 把 92 个原生调用点数成「DD 派发」的机制。
+  4. **我们这侧的原生调用点：92（hello / base_dd）/ 178（prog）**，pattern 是 `ldr x30,[PP,#off]; nop; nop; ldur x30,[x30,#7]; blr x30` 且 `pool[(off-16)/8] == Code([Stub] CallBootstrapNative)`。**配平恒等式在三个 fixture 上全部精确成立**：`B_ours − B_theirs == A_theirs`（169−77=92、169−77=92、374−196=178），**同一个 pool 索引集合、同样的 per-function 计数**。per-site 槽是 `pool[idx-1]`：92/178 个**互不相同**的可打补丁 `LinkNativeCall` 条目，两侧都满足 `native == target-1`。
+  5. **字数账现在配平了：每个点在它自己的函数里恰好 +1 word。** 按 `index_in_entries` 配对（1380/1380，全 1380 个名字相等；⚠️**按名字配会塌掉 73 个重复**）：hello 的 delta 直方图 `{0:1287, +1:92, +9:1}`，模型 `delta == A_count` 命中 1379/1380；prog `{0:3034, +1:178, +4:1, +9:1, +10:2}`，3212/3216。残差**按名字定位、且都是 A=0**：hello 的 `[Stub] _iso_stub_ArrayWriteBarrierStub` +9；prog 的 `__JsonStringParser&…` +10、`__JsonUtf8Parser&…` +10、`ArrayWriteBarrierStub` +9、`double._tryParseDouble` +4。
+  6. 🔴 **旧账「`+1×87` / `+3×42`」不可复现**（F23/F33 一直在引用它）：这个直方图取自 JSON 的 size 字段，**所以它不可能依赖基址**，而两个 fixture 上**都没有 `+3` 这一档**。两个未证实的候选来源已记（按名字配对会给 `+1×90`；`87` 恰好等于 `ldr [x26,#0x8d8]` 的载入数）。**如实记为 `NOT_REPRODUCIBLE`，没有解释掉。**
+  7. **铺满与 `base_plus_4`（两处订正）**：区间确实 0 空洞 0 重叠，但铺的是 **`[0x80, size)` 不是 `[0, size)`**，且「`end == size`」**不普遍**（hello/base_dd 精确，prog 收在 `0xb2c9c` vs size `0xb2ca0`，**差 4 字节**）。`base_plus_4` **确实通过两条声明判据**（与正确基址**逐位相同**的归属：outside=0、92 `[Optimized]`、0 `[Stub]`；prog 0/178/0），**只有绝对 ELF `STT_FUNC` 交叉核验抓得住它**（0/1380、0/3216）。已独立复验，并用 `DD_SITES_NO_WRITE=1` 跑了 `dd_sites.sh` 自带的三个负控制（全红，基线前后皆绿，`dd_sites.tsv` 未被改写）。
+
+  🔴🔴 **结论（第六个仪器缺陷）：「DD dispatch 他们 92 / 我们 0」不成立，它是一个错标，不许再用它挡任何格子。**
+  真实分歧是**原生调用的代码生成形式**（stub 目标经 pool 里的 `Code` vs 经 `Thread` 以便 `ObjectPoolEditor` 能改指向），代价**恰好每点 1 个字**，且已完全配平。
+  ⚠️ **另一个侧发现（F35 未越界去改）**：`measure_dd_emission.sh` 的头注写着「sim guard … ours 1 @0xef0」，而**它自己的实时输出与 F35 独立的 `.text` 扫描都给 76** ⇒ **sim guard 的差是 8，不是 83。** 这个陈旧头注一直在放大缺口。
+
+- [ ] **F36：修掉「DD 派发 92 vs 0」这个错标（两个脚本 + 一个检查）**
+      ① `measure_dd_emission.sh`：那条 DD 行现在数的是原生调用点。**要么换判别器、要么改名**。
+      合格判别器必须能把两者分开，F35 已给出三条可用的：`ldur x30,[x30,#7]` 在不在（我们侧）、
+      `pool[idx-1]` 是不是 `LinkNativeCall`、THR 偏移是 `0x908` 还是 `0x978`（他们的 DD 表）。
+      ② 同一文件的头注「ours sim guard 1 @0xef0」是陈旧的，实测 **76**，差是 **8** 不是 83。
+      ③ `dd_pass_check.sh`：F34 那轮把它改成「当场跑他们的二进制」，方向对，**但比的是我们的 DD 点 vs 他们的原生调用点**，
+      所以它现在的红是**建立在错前提上的红**。判别器换掉之后重新立期望值。
+      **判据**：三处都改完后，脚本自己能在「把原生调用点冒充成 DD」时报红（负控制：拿掉判别器 → 数字回到 92）。
+      ⚠️ **不许**用调常量的方式消红或制红。
+
+- [ ] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）**
+      形状（F35 已逐条确证）：把上游的 `ldr x30,[PP,#slot]; ldur x30,[x30,#7]; blr x30`
+      换成 `ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[x26,x16]; blr x30`，
+      补齐到 `kObjectPoolLoadStoreMinInstructionCount = 3`（**本项目已逆出并实现过这个常量**，`f426f46f5b0`）。
+      成本模型已知且精确：**每点 +1 word，落在它自己的函数里**。
+      🛑 **前置（规则 3，不许跳）**：`THR+0x908` 是哪个字段**尚未确立**——F35 只证明它是单一共享目标、
+      是 Shorebird 加的、不是 DD 表（`0x978`）也不在 `0x8d8..0x900` 块内。
+      **先解出「谁写这个槽、什么时候写」**（运行期设施 ⇒ 去引擎/dSYM 找，不是 `gen_snapshot`），
+      再落地发射端。**照抄一个不知道是什么的偏移就是自由发挥。**
+      **判据**：我们的 92 个点与他们**同一个 pool 索引集合、同样的 per-function +1**；
+      `verify_reproduction.sh` 的逐字节产物不许回归。**负控制**：把补齐从 3 改成 2 → 逐字节对比变红。
+
+- [ ] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**
+      F35 实测**不可复现**：该直方图取自 JSON size 字段（不可能依赖基址），两个 fixture 上都**没有 `+3` 档**。
+      两个候选（按名字配对给 `+1×90`；`87 == ldr[x26,#0x8d8]` 的载入数）**均未证实**。
+      **要交的**：这笔账是怎么产生的，或者把所有引用它的地方改成现在这份可复现的直方图。
+      ⚠️ 它是 `measure_pool_residual.sh` 的 `UNEXPLAINED` 的一部分 ⇒ 那个数也要跟着重算。
+
+- 2026-09-09T（claude-sonnet-4-6，新会话续跑）❤️ **心跳**（契约读取已在会话开头完成；此条在派发 F34b 子代理后写入）。恢复检查：SDK `232849c87d8`（verify_all BLOCKED：ProductARM64 verify_sdk_hash=true，ReleaseARM64 71 步落后）；研究树 `bcbc5aa` @ `spikes/shorebird_linkinfo_oracle`；FHP memo.md 仅修改。无 PAUSE 无 RESCUED。`grep -c "^- \[ \]" memo.md` **6**（F34b/F34c/F34d/F37/F38/F39）。**F34b 为首项未完成任务：已派发子代理，指令含 gn_configure+重建+FunctionKey 修复+负控制+verify_all。**
+
+- [ ] **F39：18 格 unknown 的根因重估（旧归因一半已作废）**
+      账上写的是「全部 18 格 unknown 的共同根因 = 两个代码 gap：Sim guard + DD dispatch」。
+      **DD dispatch 那半已作废**（F35），**Sim guard 那半的量级也错了**（差是 8 不是 83）。
+      新的候选根因是 F37 那条（原生调用降级形式，每点 +1 word，92/178 个点）。
+      **要交的**：拿 F35 那套配平（`index_in_entries` 配对 + delta 直方图）逐格重算，
+      每格说明「新根因解释了多少单位、还剩多少」。**做不到就留 unknown**，这仍是本阶段的正常产出。
+      ⚠️ **别再把邻近差异顺手一起归因掉**——这正是 F16 与今天这一轮的同一种错。
