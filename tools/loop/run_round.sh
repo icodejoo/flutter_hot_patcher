@@ -399,7 +399,7 @@ IDLE_LIMIT=${FHP_LOOP_IDLE_LIMIT:-3}
 IDLE_COUNT_FILE=$STATE/idle_count
 
 fingerprint() {
-  for t in "$SDK" "$RESEARCH" "$REPO"; do
+  for t in "$SDK" "$RESEARCH" "$REPO" "$LOOP_TOOLS"; do
     git -C "$t" rev-parse HEAD 2>/dev/null || echo none
   done
   # non-blank AND non-heartbeat. Counting blank lines made every heartbeat
