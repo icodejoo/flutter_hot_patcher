@@ -650,3 +650,37 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
   residual 必须 examine 全部 7032 并逐分量给 locus（**没有一个是 Thread 偏移**）。
 ⚠️ 现有的 `evidence_disassemble_residual.sh` 打 `UNEXPLAINED 0` 但**没有 `EXAMINED` 行**
 ⇒ 接进闸门会直接被分母判据打红。**别接，重写。**
+
+### 🔧 无人值守：已实现但**未关卡**的四项，以及新立的三项（2026-09-09）
+
+⚠️ **`built` 不等于 `closed`。** 下面四项实现完成、各自带双向负控制**已跑过**，但**都还没过证伪 pass**——
+而那条规则正是本轮装上的（F42），**它同样约束写它的人**。状态以 `cards.tsv` 为准。
+
+- [ ] **F41：定时 WIP 快照**（`built`，`129b685`）
+      判据已过：478 行经 revert 仍可从 `refs/wip` 取回、逐字节相同；`status`/index/stash 三项零扰动；
+      负控制 `FHP_WIP_ANCHOR=0` + 激进 prune → 对象被删。**待证伪 pass。**
+- [ ] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786`）
+      提示词规则 + 轮末机器闸门（关卡而 memo 无判决 → `WARNING` + `.loop/UNREVIEWED_CLOSURE` 交给下一轮）。
+      四个用例用**从 `run_round.sh` 原文抽出的代码块**测过。**待证伪 pass。**
+- [ ] **F43：零提交截止线**（`built`，`b8ce9d8`）
+      既有两个看门狗（CPU 停滞 2700s / 6h 上限）都抓不到 09-08 那轮（2h25m、CPU 244s、零提交）。
+      新判据：任一树都没有新提交超过 `NOCOMMIT_TIMEOUT`（默认 5400s）→ **先快照再终止**。
+      两个分支都测过。**待证伪 pass。**
+- [ ] **F47：`cards.tsv` + `claims.tsv` 与一致性检查**（`built`）
+      抄 beads 的 schema（可寻址、依赖、就绪）与 Graphiti 的双时态失效列（`invalidated_at/by`），
+      **都不引它们的运行时**。`cards_check.sh` 断言 memo 的 `- [ ]` 集合 == 表里 `{open,built}` 集合、
+      开放卡不得**以**失效 claim **为前提**（`!C3` 表示「以它为对象」，那是清理卡的理由）、
+      失效必须写明被谁推翻、已关卡片引用的提交必须真实存在。**待证伪 pass。**
+      🔑 **它第一次运行就抓出两处真不一致**（open 集合不齐 + 三张卡引用失效 claim），
+      其中第二处**是我的规则写窄了**——F38/F39 的存在就是为了清理被推翻的 C3/C4。
+      **禁止修复一条被撤回的断言，会让撤回变得昂贵，而这个项目全靠撤回是便宜的那一侧。**
+
+- [ ] **F44：headroom 的 `cross_turn_dedup` 负控制**（`open`，claim C6 已实测失效）
+      喂一对只差一个十六进制偏移的 dump；若合并，把 Bash/objdump 加进 `excluded_tool`。
+- [ ] **F45：额度检测改造**（`open`）
+      现状 `run_round.sh` 是 `grep -qiE 'spend limit|usage limit|rate.?limit'` + 固定退避。
+      改成解析打印出的 reset 时间，并**区分 exit 124 超时**（`ralph-claude-code` 记着这个坑）。
+      ⚠️ claim C7（「硬阻塞可由 `rate_limit_info.status` 检出」）**从未观测到**，先做判别实验。
+- [ ] **F46：轮次在权限层面碰不到历史**（`open`）
+      我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
+      判据：**用 python 调 git 绕过按命令名的拦截，它仍然必须失败。**
