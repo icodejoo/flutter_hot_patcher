@@ -748,7 +748,10 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
   - `/tmp/test_gate_f42.sh` 更新为 7 个用例（新增 Case 6 词界测试、Case 7 关→开测试），7/7 通过。
   → **不关卡，开 pass 5。**
 
-- [ ] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786` + `6cde403` + `00cc083`）
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F42 pass 5 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① sed 模式 `^+- \[x\] \*\*([A-Za-z][0-9a-z]*)[：:]` 与测试脚本完全一致；② `+` diff 前缀被 sed 正确消费（`printf '+- [x] **F42: title\n' | sed...` → `F42`）；③ `memo_rev_before` = HEAD 提交哈希（约行 500），`closed_before` 从文件系统直接读取，不经代理输入，无法篡改；④ `\b` 词界锚点正确：`F42\b` 匹配 `F42` 不匹配 `F42x`；⑤ `bash /tmp/test_gate_f42.sh` 七个用例全通过，falsify.md 提示词强制要求全新代理；⑥ `closed_before` 来自 `grep '^- \[x\]'` 对磁盘文件，不可被代理操控；⑦ `通过` 仍不在正则里（已知遗留边界情形），但 falsify.md 里的判决格式明确要求英文 `SURVIVES/FALSIFIED/PARTIAL`，写 `通过` 的代理违反模板约定。
+  STILL OPEN：falsify.md 中的 `通过`（中文 SURVIVES）不被 gate 正则匹配——如果某轮代理用中文写了判决而卡仍关闭，闸门无法检测到。实际风险低（模板要求英文），但属未关闭漏洞。
+
+- [x] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786` + `6cde403` + `00cc083`）
       提示词规则 + 轮末机器闸门（关卡而 memo 无判决 → `WARNING` + `.loop/UNREVIEWED_CLOSURE` 交给下一轮）。
       四个用例用**从 `run_round.sh` 原文抽出的代码块**测过。**待证伪 pass。**
 - [ ] **F43：零提交截止线**（`built`，`b8ce9d8`）
