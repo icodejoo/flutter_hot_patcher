@@ -921,6 +921,21 @@ newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$clos
 memo_added=$( { git -C "$REPO" diff "$memo_rev_before" -- memo.md 2>/dev/null;
                 git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
 
+# Augment newly_closed with cards that were transiently closed then re-opened
+# within this round. comm -13 only sees the net state; a close→reopen in one
+# round yields an empty newly_closed and the verdict gate never fires. Reading
+# the ever-closed set from memo_added catches this bypass.
+_ec=$(printf '%s\n' "$memo_added" \
+  | sed -n 's/^+- \[x\] \*\*\([A-Za-z][0-9a-z]*\)[：:].*/\1/p' \
+  | sort -u)
+for _id in $_ec; do
+  if ! printf '%s\n' "$closed_before" | grep -qxF "$_id" \
+     && ! printf '\n%s\n' "$newly_closed" | grep -qxF "$_id"; then
+    newly_closed="${newly_closed:+$newly_closed }$_id"
+  fi
+done
+unset _ec _id
+
 if [ -n "$newly_closed" ]; then
   # The verdict has to be about the card that closed. The bare token was not
   # enough: memo.md already contains 11 lines carrying it, so any round that
@@ -929,7 +944,7 @@ if [ -n "$newly_closed" ]; then
   # evidence to the claim.
   unreviewed=""
   for id in $newly_closed; do
-    if ! printf '%s' "$memo_added" | grep -qE "$id.*(VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪)|((VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪).*$id)"; then
+    if ! printf '%s' "$memo_added" | grep -qE "$id\b.*(VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪)|((VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪).*\b$id\b)"; then
       unreviewed="$unreviewed $id"
     fi
   done
