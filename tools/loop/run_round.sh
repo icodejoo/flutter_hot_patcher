@@ -911,6 +911,7 @@ fi
 # cannot be fooled that way.
 read -r agent_calls tool_calls transcript_seen <<<"$(round_dispatch_stats)"
 say "round dispatch: $agent_calls subagent(s), $tool_calls tool call(s) (transcript: $transcript_seen)"
+printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent_calls" "$tool_calls" "$transcript_seen" >>"$STATE/dispatch_stats.tsv"
 
 closed_after=$(closed_ids)
 newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
