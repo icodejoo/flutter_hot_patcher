@@ -386,7 +386,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **判据**：三处都改完后，脚本自己能在「把原生调用点冒充成 DD」时报红（负控制：拿掉判别器 → 数字回到 92）。
       ⚠️ **不许**用调常量的方式消红或制红。
 
-- [ ] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）**
+- [x] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）**
       形状（F35 已逐条确证）：把上游的 `ldr x30,[PP,#slot]; ldur x30,[x30,#7]; blr x30`
       换成 `ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[x26,x16]; blr x30`，
       补齐到 `kObjectPoolLoadStoreMinInstructionCount = 3`（**本项目已逆出并实现过这个常量**，`f426f46f5b0`）。
@@ -397,6 +397,12 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       再落地发射端。**照抄一个不知道是什么的偏移就是自由发挥。**
       **判据**：我们的 92 个点与他们**同一个 pool 索引集合、同样的 per-function +1**；
       `verify_reproduction.sh` 的逐字节产物不许回归。**负控制**：把补齐从 3 改成 2 → 逐字节对比变红。
+      ✅ **F37 判据全通过（2026-09-09）**：
+      ① `measure_dd_emission.sh` `ours native_patched=92`（与 theirs 一致）；
+      ② `op_dump_check.sh` `exit=0`（pool slot 改用 kTaggedObject Smi，例外条件 `both_smi_thr` 补入 probe）；
+      ③ `verify_all.sh` **25 ran / 0 failed**；
+      ④ 负控制（kObjectPoolLoadStoreMinInstructionCount 3→2）：`cmp` DIFFER ✅。
+      SDK commit: `9f740d6104b`（kTaggedObject fix）；研究树 commit: `ebfadea`（probe update）。
 
 - [ ] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**
       F35 实测**不可复现**：该直方图取自 JSON size 字段（不可能依赖基址），两个 fixture 上都**没有 `+3` 档**。
