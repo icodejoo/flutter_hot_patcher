@@ -530,12 +530,60 @@ stall_watchdog=$!
 ( sleep "$ROUND_TIMEOUT"; kill -0 $pid 2>/dev/null && { say "WATCHDOG: hit the ${ROUND_TIMEOUT}s ceiling while still burning CPU -- terminating"; kill_worker; } ) &
 watchdog=$!
 
+# ---- the no-commit deadline ------------------------------------------------
+# The stall watchdog above asks "is anything moving", and the ceiling asks "has
+# this run absurdly long". Neither catches the shape that actually cost us the
+# most: 2026-09-08 15:39, a round ran 2h25m, burned 244s of CPU -- so the CPU
+# probe never fired, and 6h was far away -- and committed nothing. It was
+# reasoning about one indivisible question, and when it was finally cut off, 478
+# uncommitted lines went with it.
+#
+# So the third predicate is the one the contract already states as a rule: a
+# step that cannot end in a commit is too big for a round. Here it becomes a
+# deadline instead of a request. Zero commits in any tree after this long means
+# the round is not going to produce one.
+#
+# The threshold is not tight, on purpose: measured rounds run 30-70 minutes and
+# do land commits, and the deadline only fires when there have been *no* commits
+# at all, so a round that commits at minute 65 is untouched.
+#
+# It snapshots before terminating, which is the whole reason this is safe to do
+# now: wip_snapshot.sh anchors the working tree under refs/wip/ and the finisher
+# only ever stashes, so the bytes survive being cut off. Killing a round used to
+# mean losing its work; it no longer does.
+NOCOMMIT_TIMEOUT=${FHP_LOOP_NOCOMMIT_TIMEOUT:-5400}
+heads_at_start=$(for t in "$SDK" "$RESEARCH" "$REPO"; do git -C "$t" rev-parse HEAD 2>/dev/null || echo none; done | tr '\n' ' ')
+(
+  slept=0
+  while kill -0 $pid 2>/dev/null; do
+    sleep "$STALL_SAMPLE"
+    slept=$(( slept + STALL_SAMPLE ))
+    [ "$slept" -lt "$NOCOMMIT_TIMEOUT" ] && continue
+    heads_now=$(for t in "$SDK" "$RESEARCH" "$REPO"; do git -C "$t" rev-parse HEAD 2>/dev/null || echo none; done | tr '\n' ' ')
+    if [ "$heads_now" = "$heads_at_start" ]; then
+      say "WATCHDOG: ${slept}s with no commit in any tree -- snapshotting, then terminating"
+      # $REPO, not $LOOP_TOOLS: finisher.py lives outside this repo, wip_snapshot.sh
+      # inside it. Writing $LOOP_TOOLS here (first attempt) pointed at a file that
+      # does not exist, and the `||` branch would have logged a failure while the
+      # round was terminated with nothing anchored -- a guard that reports itself
+      # working while doing nothing, from a path never checked with `ls`.
+      "$REPO/tools/loop/wip_snapshot.sh" --once >/dev/null 2>&1 || say "WATCHDOG: wip snapshot failed -- terminating anyway"
+      kill_worker
+    else
+      say "no-commit deadline passed at ${slept}s but a commit landed -- deadline retired for this round"
+    fi
+    break
+  done
+) &
+nocommit_watchdog=$!
+
 wait $pid
 rc=$(cat "$rc_tmp" 2>/dev/null || echo 1)
 round_finished=$([ "$rc" = "0" ] && echo 1 || echo 0)
 rm -f "$rc_tmp" "$worker_pid_file"
 kill "$watchdog" 2>/dev/null
 kill "$stall_watchdog" 2>/dev/null
+kill "$nocommit_watchdog" 2>/dev/null
 
 if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then
   echo $(( $(date +%s) + BACKOFF )) >"$BLOCKED"
