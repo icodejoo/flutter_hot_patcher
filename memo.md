@@ -455,6 +455,8 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   **移进归档的**：那张逐项状态大表、两份符号实测表、三阶段映射与对象池编辑器的地址级证据、
   16 个 stub 的逐字节命中率、以及被本文件自己标注为过期的旧百分比原文。
 
+- 2026-09-09T（claude-sonnet-4-6，第四次新会话）❤️ **心跳**（契约正文已读；恢复：SDK `954cd28` F37 已落地（native_patched ours=92）、研究树 @ `4039cbb`（F36）、FHP memo.md 仅修改，open=3（F37/F38/F39））。**⚠️ F37 引入 op_dump_check.sh 回归**（AddImmediate→kImmediate `0x510 (unknown)` vs theirs kTaggedObject `2312 (obj)`，4 处 pool slot 失配）。**下一项 = F37 收尾：修 kImmediate→kTaggedObject + 更新 op_dump_probe.py 例外条件 + 关 F37 → 派发子代理。**
+
   ⚠️ **手术是在无轮次运行的窗口里做的**：`.loop/PAUSE` 于 10:42 置上（只拦新轮次，不杀在跑的），
   等 09:59 那轮 **10:43:54 `round end rc=0`**、`ps` 无 `claude -p` 之后才动手。
   **理由**：那一轮 09:59 就把旧 memo 读进了上下文，若它在我重写后回写自己的副本，我的改动会被抹掉——
