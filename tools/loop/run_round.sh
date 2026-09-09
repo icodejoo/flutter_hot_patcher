@@ -80,6 +80,27 @@ export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
 
+# Closing a card is the one action in a round that cannot be undone by the next
+# round, because a closed card stops being looked at. Everything else -- a bad
+# commit, a wrong number, a dirty tree -- gets revisited. So the reviewer is
+# separated from the worker for exactly this step.
+#
+# The phase was declared complete twice and retracted twice; eight instrument
+# defects are on record; and on 2026-09-09 one adversarial pass (F35) overturned
+# a gap that had blocked 18 matrix cells and driven three rounds of work, for the
+# price of one dispatch. The same pass, replayed against a card whose conclusion
+# was already known to be wrong, returned FALSIFIED -- and found a ninth defect
+# on the way, a gate that accepts a fabricated locus.
+PROMPT="$PROMPT
+
+【关卡规则，不可跳过】把任何 memo.md 里的 \`- [ ]\` 改成 \`- [x]\` 之前，
+必须先派一个**新鲜的**子代理跑一次证伪 pass：模板在 tools/loop/prompts/falsify.md，
+按它的占位符填入这张卡的 CLAIM / CRITERION / EVIDENCE / WHERE TO LOOK。
+它的成功判据是**找出破绽**，不是确认通过。
+- 它报 FALSIFIED 或 PARTIAL：**不许关卡**，把它的结论写进 memo.md 并结束本轮。
+- 它报 SURVIVES：可以关卡，但必须把它那句「STILL OPEN」原文抄进 memo.md。
+不许由做这件事的那个子代理自己跑这一遍，也不许你自己代替它下结论。"
+
 # A rescued stash that nobody is told about preserves bytes and loses progress:
 # the next round sees a clean tree, starts the same task from zero, and gets cut
 # off in the same place. Three of those cost three times the same hours with
@@ -90,6 +111,17 @@ if [ -s "$HANDOFF" ]; then
 【循环状态】上一轮被中断，它未提交的改动已被救援进 git stash（没有丢）。
 在重做任何东西之前先读这个，重做是额度中断变成空烧循环的方式：
 $(cat "$HANDOFF")"
+fi
+
+# Written by the gate at the end of a round that closed a card without a
+# falsification verdict. It is handed forward rather than acted on there,
+# because the round that closed it is gone and this process knows less than it
+# did.
+if [ -s "$STATE/UNREVIEWED_CLOSURE" ]; then
+  PROMPT="$PROMPT
+
+【上一轮关卡未经证伪】
+$(cat "$STATE/UNREVIEWED_CLOSURE")"
 fi
 
 # And after repeated barren rounds, stop asking for the same thing. Pausing
@@ -339,6 +371,11 @@ fingerprint() {
 # identical on disk -- which is exactly what cost us an evening.
 say "round start (permission-mode=$PERMISSION_MODE)"
 idle_before=$(fingerprint)
+# Counted here so that "a card was closed this round" is a fact rather than a
+# claim in the round's own report. The gate rule is in the prompt, but a rule in
+# a prompt is a request; this is the part that notices when it was not followed.
+open_before=$(grep -c '^- \[ \]' "$REPO/memo.md" 2>/dev/null || echo 0)
+memo_rev_before=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none)
 
 # ---- undo point ------------------------------------------------------------
 # .claude/hooks/deny-destructive.sh refuses the destructive commands it knows.
@@ -570,6 +607,34 @@ if [ "$(fingerprint)" != "$idle_before" ]; then
   # Only useful until someone acts on it; leaving it would keep pointing later
   # rounds at a stash that has already been dealt with.
   rm -f "$HANDOFF"
+fi
+
+# ---- gate: a card was closed, was it reviewed? ------------------------------
+# The prompt tells the round to run a falsification pass before it turns a
+# `- [ ]` into a `- [x]`. That is a request. This is the part that notices when
+# the request was ignored, because the cost of an unreviewed closure is not paid
+# this round: a closed card stops being looked at, and the two retractions on
+# record each sat for days before anybody went back.
+#
+# Deliberately not a refusal, and not a reopen. The round is already over, and
+# this process knows strictly less than the one that closed the card -- the same
+# argument that made the old finisher destroy 478 lines. So it records the fact
+# and hands it to the next round, which can either produce the missing pass or
+# say why it does not apply.
+open_after=$(grep -c '^- \[ \]' "$REPO/memo.md" 2>/dev/null || echo 0)
+if [ "$open_after" -lt "$open_before" ]; then
+  # Everything the round wrote into memo.md this round: committed and not.
+  memo_added=$( { git -C "$REPO" diff "$memo_rev_before" -- memo.md 2>/dev/null;
+                  git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
+  if printf '%s' "$memo_added" | grep -qE 'VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪 pass|falsif'; then
+    say "gate ok: $(( open_before - open_after )) card(s) closed with a falsification verdict recorded"
+  else
+    say "WARNING: $(( open_before - open_after )) card(s) closed with NO falsification verdict in memo.md -- next round must supply it or justify"
+    printf 'A card was closed in the previous round (%s) with no falsification verdict\nin memo.md. Before doing anything else: either run the pass now\n(tools/loop/prompts/falsify.md) against that card and record the verdict, or\nwrite in memo.md why the pass does not apply to it. Closing a card is the one\naction a later round does not revisit.\n' \
+      "$(date '+%Y-%m-%d %H:%M')" >"$STATE/UNREVIEWED_CLOSURE"
+  fi
+else
+  rm -f "$STATE/UNREVIEWED_CLOSURE"
 fi
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
