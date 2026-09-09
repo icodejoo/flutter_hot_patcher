@@ -48,6 +48,33 @@ export FHP_LOOP_PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
 echo "ralph: every ${INTERVAL}s, permission-mode=$FHP_LOOP_PERMISSION_MODE"
 echo "ralph: Ctrl-C to stop, or: touch $HERE/../../.loop/PAUSE"
 
+# Preserve uncommitted work whether or not anybody remembers to. On 2026-09-08 a
+# round was killed holding 478 uncommitted lines and they were unrecoverable:
+# empty stash, nothing staged, reflog unmoved, no reachable tree in git fsck.
+# "commit every step" is a rule addressed to the process about to be killed --
+# the one least able to follow it -- so the guarantee is moved here, where it
+# does not depend on the round behaving. See tools/loop/wip_snapshot.sh for why
+# `git stash create` + refs/wip is the only form of this that does not perturb
+# `git status`, which both the dirty-tree guard and the finisher read.
+WIP=${FHP_LOOP_WIP:-1}
+if [ "$WIP" -eq 1 ]; then
+  "$HERE/wip_snapshot.sh" --daemon &
+  wip_pid=$!
+  echo "ralph: wip_snapshot pid $wip_pid (recover with: $HERE/wip_snapshot.sh --list)"
+  # Without this the snapshotter outlives Ctrl-C and a second ralph would start
+  # another one; two daemons anchoring the same commits is harmless but the pile
+  # of processes is not something anybody would go looking for later.
+  #
+  # The signal handlers must exit explicitly. `trap '...' TERM` alone was tried
+  # first and measured: bash defers the handler until the foreground `sleep`
+  # returns, runs it, and then *carries on looping*. The result was the worst
+  # available outcome -- clock still ticking, snapshotter killed, nothing in any
+  # log to say so. A guard that reports itself installed while being off is the
+  # failure this repo keeps cataloguing, so the handler ends the script.
+  trap 'kill $wip_pid 2>/dev/null' EXIT
+  trap 'kill $wip_pid 2>/dev/null; exit 143' INT TERM
+fi
+
 while true; do
   "$HERE/run_round.sh"
   # A refused round (lock held, dirty tree, PAUSE) costs nothing, so there is no
