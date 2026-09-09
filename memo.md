@@ -592,7 +592,7 @@ claude-auto-retry / OpenHands / claude-code-autopilot），**并经过一次自�
 ③ **漏借了今天唯一真正起作用的东西** —— 与执行者分离的评审者（F35 那个以证伪为判据的独立子代理，
 它推翻了挂着 18 格、驱动三轮工作的「DD 派发 92 vs 0」）。**那一条才是最该制度化的。**
 
-- [x] **F41：定时 WIP 快照（取代原清单里的 jj 那条）** ✅ `129b685`
+- **F41：定时 WIP 快照（取代原清单里的 jj 那条）** ✅ `129b685`
       `tools/loop/wip_snapshot.sh` + `ralph.sh` 启动它。每 120 秒对三棵树做
       `git stash create` 并把结果 commit 锚到 `refs/wip/`。
       🔑 **为什么是 `stash create`**：它返回 commit 哈希而**不写索引、不改工作树、不进 stash 列表**。
@@ -644,7 +644,7 @@ router 里有 `read_protected` 路由），但**如果据此改了，写出来�
 3. 待做：`headroom evals` 的 compression robustness 负控制（喂一对只差一个十六进制偏移的 dump），
    若会合并就把 Bash/objdump 输出加进 `excluded_tool`（该机制本来就在，router 里已有 340 次命中）。
 
-- [x] **F42：证伪 pass 已建立并**用回放验证过** ✅ `cfad404`（模板）+ 本条（回放结果）
+- **F42：证伪 pass 已建立并**用回放验证过** ✅ `cfad404`（模板）+ 本条（回放结果）
       `tools/loop/prompts/falsify.md`，七条攻击每条都对应本仓库真出过的一次假结果。
       **回放输入**：F18 那张「用 `Thread+0x678` 关掉 `disassemble` 三格」的历史错卡（真值：解释了 0 个差异）。
       **一个新鲜代理的结论：`VERDICT: FALSIFIED`**，攻击 3 如预期命中 ⇒ **模板不是装饰。**
@@ -807,6 +807,9 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 3 → VERDICT: PARTIAL（haiku-4-5）**：attacks 1-6 通过（exit=0、4 open/10 closed；F36 行存在且 commits 存在；open-set 负控制 A 通过；closed-set 负控制 B（memo 多 F99 [x]）通过；closed-set 负控制 C（cards.tsv 多 F99 closed）通过；closed-card commit 存在检查通过）。**一处真缺陷**：check 1b 对 `- [x]` 行的解析没有计数校验——`- [x] F99: without asterisks`（缺 `**`）匹配不到 sed 表达式，被静默丢弃，不报 FAIL（与 open-set check 的 lines 41-46 行为不对称）。
       **修法（本轮当场修）**：check 1b 增加 `extracted_closed` vs `memo_closed_lines` 计数校验，仿照 open-set 的做法；解析不出 id 的 `[x]` 行报 FAIL 并打出无法解析的行内容。负控制验证：`printf '- [x] F99: without asterisks\n' >> /tmp/broken_memo.md && MEMO=... bash cards_check.sh` → `exit=1`，「13 closed lines but only 12 IDs extractable」✅。待 pass 4。
 
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 4 → VERDICT: FALSIFIED（haiku-4-5）**：attacks 1-6 通过（exit=0；extraction-count 守卫存在；三个方向负控制全部命中）。**一处真缺陷**：check 1b 有 extraction-count 守卫，但没有 `uniq -d` 重复检测；而 F41 和 F42 **在 memo.md 里各出现两次**（早期非正式记录 lines 595/647 + 正式卡片 lines 720/754），脚本 exit=0 不报红（与 open-set check lines 47-51 不对称）。
+      **修法（本轮当场修）**：① check 1b 增加 `uniq -d` 重复检测（仿照 open-set 的 lines 47-51）→ `FAIL: duplicate closed card id(s): F41 F42`；② 将 memo.md 里 lines 595/647 的早期非正式记录从 `- [x] **F4x：` 降格为 `- **F4x：`（保留内容、去掉 [x] 标记）；修后 exit=0 且无重复。待 pass 5。
+
 - [x] **F49：修补丁自己的待审队列**（`closed`，2026-09-09，交互式会话补的第三道闸门）
       契约五之四末段那句「修完的东西同样是未经审的」原来**只是一句话**：
       关卡闸门看不见它——它只在 `- [ ]` 变 `- [x]` 时才响，而**修补丁通常不关掉任何卡片**，
@@ -942,6 +945,26 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       于是「在该轮自己的 pass 之后又做的修补」与「pass 之前就做完的」在轮次级证据里长得一样
       ⇒ 回放里 F49 从「入队」变成「不入队」，**对它审过的状态是对的，对最新那个补丁是错的**。
       正常轮次 20–50 分钟只做一件事，所以这是小面；但它是真的。
+
+- 2026-09-09T（claude-opus-5，交互式会话，子代理返回）📋 **F49 pass 5（窄范围）→ FALSIFIED（逃逸方向），已修**：
+      **它的攻击是对的**：`strip_meta` 原来对**两个问题都剥**，于是一条写成
+      `VERDICT: FALSIFIED/PARTIAL` 的判决**被整段删掉** ⇒ `neg` 为空 ⇒
+      有红判决、有修补提交，却**不入队**。**这是逃逸，不是噪声。**
+      （它的例子是合成的：`falsify.md` 要求判决只写三者之一，斜杠混写不是模板产物。
+      但「不该出现的形式」不等于「不会出现」，而这个方向不可承受。）
+      **修法（比原来更有原则）：剥离改成不对称的** ——
+      · **「红过没有」问原始行**：抹掉「出过红」的证据永远不安全；
+        散文里的提法最坏只造成一次误入队，而且只在没有绿判决同行时才发生。
+      · **「最终是否绿」问剥离后的行**：这一问的实质是「哪个 token 在后」，
+        而第 513 列的一句格式说明会给出错误答案。
+      🔑 **两个方向现在各有一条负控制钉住，谁都不能塌向另一边**：
+      `strip-applied-to-neg` → pass 5 的逃逸用例变红；
+      `strip-dropped-for-pol` → pass 4 的文档用例变红。
+      **判据**：`--self-test` **22 ran / 0 failed**；`test_fix_gate.sh` **10 ok / 0 failed**；
+      **负控制 14 条全部实测变红**，每条红在该守它的那个用例上。
+      ⚠️ **第五次跳过独立回放**（这次的理由「会违反只读约束」是错的——我明写了允许复制到 temp）。
+      **5/5 全跳同一项 ⇒ 这是关于审查者仪器的结论**：
+      一个「强制项」写在多项任务里就会被挤掉，要么单独派一次只做那一件事，要么别声称它被审过。
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F49 pass 3 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① `--self-test` 磁盘真实值 17/17（代理报 15/15，差异是代理侧误读，不是缺陷——本轮 orchestrator 独立验证确认 17/17）；② `test_fix_gate.sh` 10/10；③ 幽灵卡号 V2 被 `--cards` 拒绝；④ 入队判据：agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号；⑤ 消队判据：(fix) + agents≥1 + 词汇判据（pass/证伪/VERDICT/falsif）；⑥ 8 条负控制全部实测变红；⑦ end-to-end 合成测试路径完整。
       STILL OPEN: End-to-end scenario exercised only as synthetic test with `$WORK/queue`, not with `.loop/UNREVIEWED_FIX` directory during actual unattended round execution. The PROMPT integration exists but is not covered by this test suite (belongs to integration tests).
