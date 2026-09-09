@@ -58,6 +58,36 @@ same thing late.
 5. **Demand a strict return format.** Already contract law, and it protects the
    parent rather than the child, so state it anyway.
 
+## Rules for the dispatcher's own tool use
+
+The rules below were written for subagents, and on the day they were written the
+process that broke them was the dispatcher. The main loop has the same cost
+structure and a worse exposure, because its context is not thrown away at the
+end of a task -- a mistake there is re-sent for the rest of the session.
+
+Measured, 2026-09-09, in the main loop, by me:
+
+- `Read` with `offset=-8`, expecting a tail. **`Read` has no negative offset**:
+  it read from the top, 636 lines of `rounds.log`, **25k tokens**, and every
+  later call in the session paid for them again. Use `tail`.
+- Two 60-line hex dumps printed in full to test a compression question. The
+  question was legitimate; printing both was not necessary to answer it.
+- `git stash list` for two trees plus a `stash show` in one command, whose
+  combined output came back compressed and interleaved, so two repositories'
+  stashes read as one list. **One thing per command when the output must be
+  read precisely.**
+
+So the same five apply here, plus two that only bite the dispatcher:
+
+6. **A compound command that a sandbox refuses runs none of its parts.** A
+   `chmod +x` sharing a line with a refused call never executed, and the next
+   check reported green against a script that had never run. Verify the
+   precondition separately from the thing it enables.
+7. **Commit messages belong in a file.** `-m` with a message containing quotes
+   or a `$VAR` was mangled by the shell twice, and once a message mentioning
+   destructive commands as *prose* was refused by a guard reading the command
+   line. `git commit -F <file>` has neither failure mode.
+
 ## Rules for the subagent (put these in the prompt)
 
 - **Never print a tool output you only need a number from.** Pipe through
