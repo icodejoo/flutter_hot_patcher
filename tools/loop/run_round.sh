@@ -761,7 +761,7 @@ case "$rc" in
     # so a round that quoted the quota code would have blocked the loop for an
     # hour. Found by review, not by an incident, and only because the reviewer
     # grepped the repo instead of the log.
-    if grep -qiE '(claude (ai )?)?(usage|spend|rate) limit (reached|exceeded|hit)|limit will reset|rate.?limited|429|quota exceeded' "$out"; then quota_hit=1; fi
+    if grep -qiE '\b(hit|exceeded|reached)\b.{0,40}(usage|spend|rate) limit|(claude (ai )?)?(usage|spend|rate) limit.{0,20}\b(reached|exceeded|hit)\b|limit will reset|rate.?limited|429 too many|429:[[:space:]]|(monthly|spending|usage|your) quota exceeded' "$out"; then quota_hit=1; fi
     ;;
 esac
 
@@ -770,7 +770,7 @@ if [ "$quota_hit" -eq 1 ]; then
   # has lacked is an observation: memo.md still says the hard-block string has
   # never been seen, so the predicate may simply not match when it matters. The
   # first real block should teach us the wording rather than scroll past.
-  matched=$(grep -iE -m1 '(claude (ai )?)?(usage|spend|rate) limit (reached|exceeded|hit)|limit will reset|rate.?limited|429|quota exceeded' "$out" | cut -c1-200)
+  matched=$(grep -iE -m1 '\b(hit|exceeded|reached)\b.{0,40}(usage|spend|rate) limit|(claude (ai )?)?(usage|spend|rate) limit.{0,20}\b(reached|exceeded|hit)\b|limit will reset|rate.?limited|429 too many|429:[[:space:]]|(monthly|spending|usage|your) quota exceeded' "$out" | cut -c1-200)
   say "quota line seen: $matched"
 
   # Prefer the reset the message prints over a fixed hour. Accepted forms, all
