@@ -110,6 +110,29 @@ def known_ids(path):
     return out or None
 
 
+def polarity(line):
+    """Which verdict a line records: +1 SURVIVES, -1 red, 0 neither.
+
+    A line can carry both tokens, and the two real forms mean opposite things:
+
+        "F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"
+        "F49 pass 1 -> 名义 SURVIVES，实判 PARTIAL"   (nominally, actually)
+
+    Taking the union made both positive, so the second one -- a line whose whole
+    content is that a SURVIVES was rejected -- suppressed the enqueue its own fix
+    was owed. Found by replaying the gate over real round boundaries, in this
+    project's own record of reviewing this very card.
+
+    The later token wins, because that is how both sentences are written: the
+    verdict is what the line ends on.
+    """
+    last_neg = max((line.rfind(tok) for tok in NEG), default=-1)
+    last_pos = line.rfind(POS)
+    if last_pos < 0 and last_neg < 0:
+        return 0
+    return 1 if last_pos > last_neg else -1
+
+
 def scan(memo_lines, subjects, agents, known=None):
     """Returns (neg, fix, pos_same, pos_drain) as sets of ids.
 
@@ -134,9 +157,16 @@ def scan(memo_lines, subjects, agents, known=None):
         here = ids_on(line, known)
         if not here:
             continue
-        if any(t in line for t in NEG):
+        # Two different questions about one line, and conflating them cost a
+        # case each way. "Did a red verdict happen" is answered by the token
+        # being present at all -- once it has, a fix was needed, whatever the
+        # line goes on to say. "Is the final verdict green" is answered by
+        # polarity, so a rejected SURVIVES does not read as an approval. A line
+        # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
+        # it owes nothing only if the round also dispatched twice.
+        if any(tok in line for tok in NEG):
             neg |= here
-        if POS in line and PASS_VOCAB.search(line):
+        if polarity(line) > 0 and PASS_VOCAB.search(line):
             surv |= here
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here
@@ -377,6 +407,29 @@ def self_test():
         ["enqueue F42"],
         ["F42"],
         {"F42"},
+    )
+    # 13c. Both polarities on one line, in the two forms the corpus really
+    #      contains. The rejected-SURVIVES form must count as red; the
+    #      "FALSIFIED then SURVIVES" summary must count as green.
+    case(
+        "enqueue: a rejected SURVIVES is a red verdict, not a green one",
+        [],
+        ["📋 **F49 pass 1 → 名义 SURVIVES，实判 PARTIAL**"],
+        ["9d01b4d research cards: F49, the fix-patch review queue"],
+        2,
+        ["enqueue F49"],
+        ["F49"],
+        {"F49"},
+    )
+    case(
+        "no enqueue: \"FALSIFIED then SURVIVES\" is a green summary",
+        [],
+        ["🟢 F38 证伪 pass 2：SURVIVES"],
+        ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
+        2,
+        [],
+        [],
+        {"F38"},
     )
     # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
     #     used to yield the id "V2"; `_` is not alphanumeric.

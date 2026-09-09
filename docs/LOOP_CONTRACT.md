@@ -233,7 +233,12 @@
 它曾被任何一个「没关卡片」的后续轮次顺手清掉，于是缺失的 pass 还缺着，
 要求它的那张便条已经自己消失了。会自己消失的提醒等于没有提醒。
 
-规则与 10 个负控制在 `tools/loop/fix_queue.py`（`--self-test`，17 个用例，其中 1 个走真实 CLI）；
+⚠️ **一行同时含 FALSIFIED 和 SURVIVES 时**：「红过没有」看 NEG token 在不在，
+「最终是否绿」看**靠后的那个词**。`FALSIFIED then SURVIVES` = 红过且最终绿；
+`名义 SURVIVES，实判 PARTIAL` = 红过且最终不绿。取并集会让**一句「SURVIVES 被驳回」的记录
+压掉它自己欠的审查**（F49 pass 3 之后按轮次回放抓到，就在本项目审这张卡的记录里）。
+
+规则与 12 个负控制在 `tools/loop/fix_queue.py`（`--self-test`，19 个用例，其中 1 个走真实 CLI）；
 接线的 10 个用例在 `tools/loop/tests/test_fix_gate.sh`，
 它测的代码块是【从 `run_round.sh` 原文抽出来】跑的，不是抄一份——
 抄一份会在原文改了以后继续给绿。
