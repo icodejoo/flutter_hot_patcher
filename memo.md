@@ -110,7 +110,7 @@ cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./verify_all.sh
 
 | 项 | 值 | 何时实测 |
 |---|---|---|
-| `verify_all.sh` | **25 ran / 0 failed** | 2026-09-08，F31 轮（SDK `eaa31ba680f`）|
+| `verify_all.sh` | **26 ran / 0 failed** | 2026-09-09，F38 轮（SDK `9f740d6104b`）|
 | 对拍矩阵 | `59 cells, 0 unrun, 3 blocked`；**na=35 structural=6 unknown=18 gap=0** | 2026-09-08（F30 后重跑）|
 | `run_vm_tests` | 152 passed | 2026-09-07（F22 轮）|
 | `verify_reproduction.sh` | 28 artifacts / 0 failure | 2026-09-08 |
@@ -402,11 +402,11 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       ④ 负控制（kObjectPoolLoadStoreMinInstructionCount 3→2）：`cmp` DIFFER ✅。
       SDK commit: `9f740d6104b`（kTaggedObject fix）；研究树 commit: `ebfadea`（probe update）。
 
-- [ ] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**
-      F35 实测**不可复现**：该直方图取自 JSON size 字段（不可能依赖基址），两个 fixture 上都**没有 `+3` 档**。
-      两个候选（按名字配对给 `+1×90`；`87 == ldr[x26,#0x8d8]` 的载入数）**均未证实**。
-      **要交的**：这笔账是怎么产生的，或者把所有引用它的地方改成现在这份可复现的直方图。
-      ⚠️ 它是 `measure_pool_residual.sh` 的 `UNEXPLAINED` 的一部分 ⇒ 那个数也要跟着重算。
+- [x] **F38：`+1×87 / +3×42` 这笔账的来源（F23/F33 都在引用它）**  🟢 **证伪 pass 判决：F38 SURVIVES（2026-09-09，两次 pass）**
+      **来源已解**：`+1×87` 是 F37 前他们对 87 个 unique-name 函数多发一条指令（native-call 降级形式）；`+3×42` 是 2026-09-07 的旧读数（sim guard，F28/F31 修掉）。F37（SDK `9f740d6104b`）让 UNEXPLAINED 从 88→3。
+      **87 vs 92 对账**：F35 用 index_in_entries 得 `+1:92`；本脚本用 unique-name filter（line 63-64），92−87=5 个重名函数被排除 → 87。已在脚本注释 lines 22-26 写明。
+      **研究树**：`6b35bbd`（数值更新）+ `c51f736`（对账注释）；verify_all.sh 26 ran / 0 failed。
+      **STILL OPEN（原文）**：Comment lines 22-26 stating 92−87=5 duplicate-name exclusions could still be overturned if those 5 functions are individually identified and found to have a different explanation — misleading any future investigator hunting "missing" native-call sites in pool residual.
 
 
 - 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
@@ -536,6 +536,12 @@ pre/post 快照可 diff，而重启会打断在跑的会话与轮次，**所以�
 压到 60 次省 **730 万 ≈ 48%**，比 7% 大一个数量级。
 
 - 2026-09-09T（claude-sonnet-4-6，交互式会话）❤️ **心跳**（契约正文已读；open=9（F38/F39/F41/F42/F43/F45/F46/F47/F48），研究树 HEAD 待确认，FHP memo.md 仅修改，无 PAUSE 无 RESCUED）。**第一项未完成任务 = F38（`+1×87 / +3×42` 账的来源，或更新全部引用）→ 派发子代理。**
+
+- 2026-09-09T（claude-sonnet-4-6，交互式会话）✅ **F38 完成**（研究树 `6b35bbd` + `c51f736`，两次证伪 pass，第一次 PARTIAL→修复→第二次 SURVIVES）。
+  `+1×87` 来源确立：F37 前 87 个 unique-name 函数在他们侧多一条 native-call 降级指令；F37 修复后 UNEXPLAINED 88→3。
+  87 vs 92 对账写入脚本注释（line 63-64 的 unique-name filter 排除 5 个重名函数）。
+  stale「DD indirect dispatch ours 0 vs theirs 92」引用已删。verify_all.sh **26 ran / 0 failed**。
+  基线表已更新（25→26 checks）。open 卡：**F39/F41/F42/F43/F45/F46/F47/F48**（8 张）。
 
 - 2026-09-09 12:3x（claude-opus-5，交互式会话，用户「暂时关闭无人值守和循环」）⏸️ **循环已关闭。**
   - `.loop/PAUSE` **在位**（11:41 为救援手术置上，保留）⇒ 不会有新轮次启动
