@@ -1004,10 +1004,14 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       ⚠️ 造这个测试时我先写错了输入：`random.seed(7)` 只播一次、第二次调用继续同一个随机流
       ⇒ **两份转储处处不同**，那样根本测不到「近乎相同」的去重。重播种后 `diff` 才是 2 行。
       **测试输入自己也要先验证。**
-- [ ] **F45：额度检测改造**（`open`）
-      现状 `run_round.sh` 是 `grep -qiE 'spend limit|usage limit|rate.?limit'` + 固定退避。
-      改成解析打印出的 reset 时间，并**区分 exit 124 超时**（`ralph-claude-code` 记着这个坑）。
-      ⚠️ claim C7（「硬阻塞可由 `rate_limit_info.status` 检出」）**从未观测到**，先做判别实验。
+- [x] **F45：额度检测改造**（`closed`，`d8c831c` + `0b61282`）
+      实现：①时间解析要求 HH:MM 或 am/pm；②限额 pattern 从 16 处降到 2（仅 lines 764/773 自身，不可避免）；
+      ③rc 白名单加 15/9；④双向 pattern 支持「hit … spend limit」和「limit has been exceeded」形式。
+      测试：`tools/loop/tests/test_quota_detection_f45.sh` 15 ran / 0 failed（exit 0 实测 ✅）。
+      🔴 **证伪 pass 1（haiku-4-5）：PARTIAL** — `429` 和 `quota exceeded` 无上下文词，自匹配 lines 764/773；无测试脚本。
+      **修法（`0b61282`）**：双向 \b pattern + 15 case 测试脚本。
+      🟢 **证伪 pass 2（haiku-4-5）：SURVIVES** — attacks 2-7 全通过；attack 1（run script）受权限拦住，本侧补跑确认 exit 0。
+      STILL OPEN（原文）：Whether bash ~/Documents/flutter_hot_patcher/tools/loop/tests/test_quota_detection_f45.sh actually exits 0 "15 passed, 0 failed" output — the definitive criterion. Test file syntactically valid but runtime execution not confirmed by reviewer. *(本侧补验：exit 0 ✅ 2026-09-09，commit 0b61282)*
 - [ ] **F46：轮次在权限层面碰不到历史**（`open`）
       我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
       判据：**用 python 调 git 绕过按命令名的拦截，它仍然必须失败。**
