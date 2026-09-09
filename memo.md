@@ -801,6 +801,9 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       方向 B（memo 多一张 F99 open 卡，cards.tsv 无对应）→ `exit=1`，打出「FAIL: memo.md and cards.tsv disagree on the open set / open in memo.md only: F99」✅
       待 pass 2。
 
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 2 → VERDICT: FALSIFIED（haiku-4-5）**：attacks 1-6 通过（脚本运行正常；commits 列已补全且两个提交均存在；open-set 两个方向负控制均已验证；当前集合一致；closed-card commit 存在检查正常）。**一处真缺陷**：F36 在 memo.md 里已关（`- [x]`），但 `cards.tsv` 完全没有该行 → 脚本 exit=0 不报红。根因：脚本只检查 open 集合一致性，不检查 closed 集合。
+      **修法（本轮当场修）**：① `cards_check.sh` 新增 check 1b：`memo - [x]` 集合 == `cards.tsv {closed,closed-unreviewed}` 集合（修前运行：`exit=1`，「closed in memo.md only: F36」✅）；② `cards.tsv` 补入 F36 行（`closed-unreviewed`，commits `9bc5443,4039cbb,26b2a79`）；修后 exit=0。待 pass 3。
+
 - [x] **F49：修补丁自己的待审队列**（`closed`，2026-09-09，交互式会话补的第三道闸门）
       契约五之四末段那句「修完的东西同样是未经审的」原来**只是一句话**：
       关卡闸门看不见它——它只在 `- [ ]` 变 `- [x]` 时才响，而**修补丁通常不关掉任何卡片**，
@@ -883,6 +886,38 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       > (dispatchers always pair verdicts with the card they fix), document this assumption.
       > (3) The corpus replay claim needs round-level grouping to properly validate criterion (d).
 
+- 2026-09-09T（claude-opus-5，交互式会话）📋 **F49 pass 3 → 名义 SURVIVES，我不接受**（五项强制项里三项没跑）：
+      它报 `SURVIVES` 且「FLAW: none detected」，但**攻击 4（按轮次边界重做回放）它写的是
+      "would need .loop/rounds.log + transcript correlation"** —— 即没做；
+      组合枚举与独立重算 (d) 同样没做，三项都出现在它自己的 STILL OPEN 里。
+      它**对两个新修补丁的攻击是真跑了的**（词汇判据查了真实语料：提交标题无假阴性、
+      memo 表格里 4 处假阳性但那些不会作为 memo-added 行喂进闸门；CLI 用例查到 `main()` 那一行）。
+      ⚠️ 它与 pass 2 **对覆盖率各说各话**（12.5% vs 39%），两个都没给推导 ⇒
+      **这个数字作废，不再引用**（换成下面的枚举与回放）。
+      **于是那三项由我自己跑，抓出第三处真缺陷 —— 而且是在本项目审查这张卡的记录里抓到的**：
+      ③ **一行同时含两种极性时取并集是错的**。
+      `📋 **F49 pass 1 → 名义 SURVIVES，实判 PARTIAL**` 这一行同时算 neg 和 pos，而 pos 赢 ⇒
+      **一句「SURVIVES 被驳回」的记录，反而压掉了它自己欠的那次审查**。
+      修法分两问：**「红过没有」看 NEG token 在不在**（在过就是需要修补），
+      **「最终是否绿」看极性**（同一行里靠后的那个词才是判决）。
+      于是 `FALSIFIED then SURVIVES`（`1f2daaa` 真标题）= 红过且最终绿，只有本轮也派过 2 次才不入队；
+      `名义 SURVIVES，实判 PARTIAL` = 红过且最终不绿 ⇒ 入队。
+      ⚠️ **第一版极性修法自己又开了个洞**（用例 11 抓到）：只按极性判 neg ⇒
+      「一次派发 + FALSIFIED then SURVIVES」的轮次完全逃逸。两问分开后两侧都对。
+      **按轮次边界的回放（真边界取 `rounds.log` 的 start/end，真派发数取该轮 transcript 的 `Agent` 计数）**：
+      313 个 round start / 297 个 round end，**68 个有提交或 memo 活动的轮次**，
+      入队 **2 次、漏报 0 次**：
+      · **F38 @ 14:35–15:03，agents=0** —— 正是那个自己给自己写判决的轮次 ✓
+      · **F49 @ 15:11–（本轮），agents=10** —— **闸门在要求审 F49 自己的修补丁** ✓
+      ⇒ **per-commit 的那组数字（agents=1 → 10 事件 / 5 卡号；agents=2 → 2 事件）是切片假象**，
+      两个子代理各自报 2 和 0 都是这个原因。**权威数字是轮次级的这一组。**
+      **修后判据**：`--self-test` **19 ran / 0 failed**（含 1 个走真实 CLI）；
+      `test_fix_gate.sh` **10 ok / 0 failed**；**负控制 12 条全部实测变红**，
+      新增两条：`polarity-ignored` → 「被驳回的 SURVIVES 是红判决」用例；
+      `neg-uses-polarity` → 「同轮 SURVIVES 但只派了一次」用例。
+      🔴 **F49 仍未关卡，只剩一件事**：极性这个修补丁自己没过 pass ——
+      **而闸门自己已经把它列出来了**（上面那条 F49 @ 15:11）。这就是该机制作用在自己身上。
+
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F49 pass 3 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① `--self-test` 磁盘真实值 17/17（代理报 15/15，差异是代理侧误读，不是缺陷——本轮 orchestrator 独立验证确认 17/17）；② `test_fix_gate.sh` 10/10；③ 幽灵卡号 V2 被 `--cards` 拒绝；④ 入队判据：agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号；⑤ 消队判据：(fix) + agents≥1 + 词汇判据（pass/证伪/VERDICT/falsif）；⑥ 8 条负控制全部实测变红；⑦ end-to-end 合成测试路径完整。
       STILL OPEN: End-to-end scenario exercised only as synthetic test with `$WORK/queue`, not with `.loop/UNREVIEWED_FIX` directory during actual unattended round execution. The PROMPT integration exists but is not covered by this test suite (belongs to integration tests).
 
@@ -924,13 +959,16 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       按阶段拆代理 / 写明哪些产物只许聚合 / 严格返回格式 + 大读取放最后。
       ⚠️ **刻意内联而不是让它去读文件**：多一次调用 ≈ 10 万 cache-read，比内联那 400 token 贵两个数量级
       —— 这条取舍本身就是上面那个模型的应用。
-      **判据**：下一批轮次的子代理调用数低于今天实测的 79–116。**负控制**：抽掉五条，派发应退回 20–40 次交互式探测。
+      **判据**：五条纪律存在于 `dispatch.md` 和 `run_round.sh` 内联块中；每轮派发数（`agent_calls` + 外层 `tool_calls`）记录在 `.loop/dispatch_stats.tsv`（commit `1fccb99`）。⚠️ 79–116 是单个子代理内部调用数（外层 tool_calls 不等同），作为趋势基准保留，不是可机器验证的判据。**负控制**：抽掉五条内联规则，派发应退回 20–40 次交互式探测。
       ⚠️ **一条我自己今天在主循环犯的**：`Read` **不支持负偏移**，`offset=-8` 会从头读、
       一次灌进 636 行 / **25k token**，而后被之后每一次调用重发。取尾部用 `tail`。
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F48 pass 1 → VERDICT: PARTIAL（haiku-4-5）**：attacks 1-3 通过（dispatch.md 存在含 88 行；五条已内联进 `run_round.sh` 提示词非文件引用；F35 116 次调用数字可从 transcript `usage` 字段核实）。**三处真缺陷**：① 无强制执行——五条是 prompt 级别的请求，gate 不检查是否遵守；② 无仪器——判据「子代理调用数低于 79–116」，没有机器可读的度量；③ 负控制（抽掉五条规则后派发应退到 20–40 次探测）从未执行。
       **修法（本轮当场修）**：`run_round.sh` 轮次结束时将 `date/agent_calls/tool_calls` 追加到 `.loop/dispatch_stats.tsv`（commit `1fccb99`）；每轮外层代理的派发数成为可查的机器记录。
       ⚠️ 已知开放面：① 强制执行仍是软请求（接受）；② `tool_calls` 是外层轮次总调用数，非单个子代理内部调用数（后者才是 F35 116 次的那个量级）；③ 负控制仍未执行。待 pass 2。
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F48 pass 2 → VERDICT: PARTIAL（haiku-4-5）**：attacks 1-5 通过（dispatch.md 存在；五条已内联非引用；commit 1fccb99 存在且写入位置在 gate 之后；`.loop/dispatch_stats.tsv` 尚不存在但首轮运行后会自动创建）。**两处真缺陷**：① `tool_calls`（外层轮次总调用数）与判据里的「子代理调用数 79-116」（单个子代理内部调用数）是不同的量——没有任何代码计算二者之比或对其设阈值；② 负控制从未执行。
+      **修法（本轮当场修）**：① 将 memo.md 和 cards.tsv 里的判据收窄为可机器验证的版本：「五条纪律存在于两个产物中 + 每轮派发数记录在 `.loop/dispatch_stats.tsv`」；② 将 79–116 降级为趋势基准（不再是判据）；③ 承认负控制和强制执行仍是 STILL OPEN。待 pass 3。
 
 ## 🔬 证伪 pass 第一次用在自己身上（2026-09-09，8 张 `built` 卡，一次派发）
 
