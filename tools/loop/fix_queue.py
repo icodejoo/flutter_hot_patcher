@@ -73,6 +73,22 @@ ID = re.compile(r"(?<![0-9A-Za-z_])([A-Z][0-9]+[a-z]?)(?![0-9A-Za-z_])")
 
 NEG = ("FALSIFIED", "PARTIAL")
 POS = "SURVIVES"
+
+# Detecting red is liberal; accepting green is strict. Same asymmetry as the
+# stripping below, for the same reason: a missed red verdict lets a fix escape
+# review, while a missed green one costs at most one dispatch.
+#
+# So NEG matches case-insensitively -- `verdict: falsified` used to leave `neg`
+# empty and the fix behind it walked out of the queue. POS stays exact: reading
+# a lowercase "survives" as a verdict would suppress an enqueue, which is the
+# direction that cannot be allowed to be generous.
+#
+# Word-bounded so "partially" is not a verdict. Measured before choosing:
+# across 7364 added memo.md lines there are 0 with a word-bounded lowercase
+# "partial"/"falsified" and no uppercase token, so this costs no noise on the
+# corpus it will actually run against.
+NEG_RE = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za-z])",
+                    re.IGNORECASE)
 FIX_MARKERS = ("(fix)", "（fix）", "修补丁")
 
 # A SURVIVES has to be a *verdict* to count as one. Pass 2 of F49's own review
@@ -130,7 +146,8 @@ def known_ids(path):
 #                                  question is which token came last, and a
 #                                  format note at column 513 answers it wrongly.
 TOKEN_LIST = re.compile(
-    r"(?:SURVIVES|FALSIFIED|PARTIAL)(?:\s*/\s*(?:SURVIVES|FALSIFIED|PARTIAL))+")
+    r"(?:SURVIVES|FALSIFIED|PARTIAL)(?:\s*/\s*(?:SURVIVES|FALSIFIED|PARTIAL))+",
+    re.IGNORECASE)
 
 
 def strip_meta(line):
@@ -153,7 +170,7 @@ def polarity(line):
     The later token wins, because that is how both sentences are written: the
     verdict is what the line ends on.
     """
-    last_neg = max((line.rfind(tok) for tok in NEG), default=-1)
+    last_neg = max((m.start() for m in NEG_RE.finditer(line)), default=-1)
     last_pos = line.rfind(POS)
     if last_pos < 0 and last_neg < 0:
         return 0
@@ -191,7 +208,7 @@ def scan(memo_lines, subjects, agents, known=None):
         # polarity, so a rejected SURVIVES does not read as an approval. A line
         # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
         # it owes nothing only if the round also dispatched twice.
-        if any(tok in line for tok in NEG):
+        if NEG_RE.search(line):
             neg |= here
         if polarity(strip_meta(line)) > 0 and PASS_VOCAB.search(line):
             surv |= here
@@ -493,6 +510,44 @@ def self_test():
         [],
         ["📋 **F42 pass 1 → VERDICT: FALSIFIED/PARTIAL（haiku）**"],
         ["c48f07b fhp F42: fix both findings"],
+        2,
+        ["enqueue F42"],
+        ["F42"],
+        {"F42"},
+    )
+    # 13f. Pass 6's lead, which is where it died: the red test was a
+    #      case-sensitive substring, so a verdict written in lower case left
+    #      neg empty and the fix walked out. Escape direction.
+    case(
+        "enqueue: a lower-case red verdict is still a red verdict",
+        [],
+        ["📋 **F42 pass 1 → verdict: falsified（haiku）**"],
+        ["c48f07b fhp F42: fix it"],
+        2,
+        ["enqueue F42"],
+        ["F42"],
+        {"F42"},
+    )
+    # 13g. The bound that keeps 13f from costing noise: an ordinary English word
+    #      containing a token is not a verdict.
+    case(
+        "no enqueue: \"partially\" is not a verdict",
+        [],
+        ["F42 的矩阵覆盖 partially 完成，等待重跑"],
+        ["c48f07b fhp F42: rerun the matrix"],
+        2,
+        [],
+        [],
+        {"F42"},
+    )
+    # 13h. And the other half of the asymmetry, stated as a case so it cannot be
+    #      "tidied" into symmetry: a lower-case survives does NOT buy silence.
+    #      Being generous here would suppress an enqueue, not add one.
+    case(
+        "enqueue: a lower-case \"survives\" does not count as a green verdict",
+        [],
+        ["📋 **F42 pass 1 → PARTIAL**", "F42 证伪 pass 2：survives"],
+        ["c48f07b fhp F42: fix it"],
         2,
         ["enqueue F42"],
         ["F42"],
