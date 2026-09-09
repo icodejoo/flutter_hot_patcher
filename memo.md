@@ -794,7 +794,14 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       其中第二处**是我的规则写窄了**——F38/F39 的存在就是为了清理被推翻的 C3/C4。
       **禁止修复一条被撤回的断言，会让撤回变得昂贵，而这个项目全靠撤回是便宜的那一侧。**
 
-- [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09，交互式会话补的第三道闸门）
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 1 → VERDICT: FALSIFIED（haiku-4-5）**：攻击 1/2/4/5 通过（脚本在一致数据上 exit 0；中文冒号解析正确；不混入 `- [x]` 行；当前 open 集合两侧一致）。**两处真缺陷**：① `cards.tsv` F47 行 commits 列为 `-`（实现提交 `16e34c6` + `55bf357` 未记录）；② 负控制（故意拆同步让脚本报红）从未记录为执行过。
+      **修法（本轮当场修）**：两个方向的负控制已实测并记录；commits 已补入 `cards.tsv`。
+      **负控制实测**（`CARDS` / `MEMO` 环境变量指向临时副本，真实文件未改动）：
+      方向 A（`cards.tsv` 多一行 F99 open，memo 无对应）→ `exit=1`，打出「FAIL: memo.md and cards.tsv disagree on the open set / open in cards.tsv only: F99」✅
+      方向 B（memo 多一张 F99 open 卡，cards.tsv 无对应）→ `exit=1`，打出「FAIL: memo.md and cards.tsv disagree on the open set / open in memo.md only: F99」✅
+      待 pass 2。
+
+- [x] **F49：修补丁自己的待审队列**（`closed`，2026-09-09，交互式会话补的第三道闸门）
       契约五之四末段那句「修完的东西同样是未经审的」原来**只是一句话**：
       关卡闸门看不见它——它只在 `- [ ]` 变 `- [x]` 时才响，而**修补丁通常不关掉任何卡片**，
       卡片仍开着、下面换了个更好的补丁。09-09 那一轮 8 张打红 4 张、四处当场修，
@@ -849,6 +856,36 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       `test_fix_gate.sh` **10 ok / 0 failed**；**负控制 8 条全部实测变红**（逐条见提交信息）。
       🔴 **这个修补丁自己也未经审** —— 正是 F49 要治的那件事，pass 2 待派。
 
+- 2026-09-09T（claude-opus-5，交互式会话，子代理返回）📋 **F49 pass 2 → PARTIAL**（攻的是 pass 1 逼出来的那个修补丁）：
+      **两处真缺陷，都已当场修**：
+      ① **`main()` 里的 fail-closed 判定没有测试**：用例 12c 是把 `allow_enqueue=False`
+      **当参数递给** `update()`，测的是函数听不听话，**不是决定它的那段代码**。
+      把 `main()` 里那句 `allow_enqueue = False` 改成 `True`，**15 个用例全绿** ⇒ 判据不可能失败的那一族。
+      修法：新增一个**走真实 CLI**（`subprocess` + argv）的用例，断言队列为空且 stdout 有 `WARNING`。
+      ② **`pos_same` 不成立**：原来「同一行有卡号 + SURVIVES」就算重打过。
+      于是一句与修补无关的赞许（「F42 的旧基线在重建后仍然 SURVIVES」）＋两次派发
+      就能压掉它欠的那次审查。修法：那一行必须**像个判决**——含 `pass`/`证伪`/`VERDICT`/`falsif`；
+      `pass` 带边界（`bypass` 含它，且 `bypass` 真在语料里 `c48f07b`），`two-pass` 仍命中。
+      ③ **它报的第三条（回放数字对不上）不成立**：它自己写着 "Cannot confirm/refute"
+      且承认脚本没重建轮次边界。我把回放**原样重跑两次，数字逐次一致**：
+      agents=1 → **10 次入队事件 / 5 个不同卡号**；agents=2 → **2 次，都对**
+      （`136eaf8` F43、`162f19e` F42，都以 PARTIAL 收尾、没有重打）。
+      加了词汇判据后**同一份语料结果不变** ⇒ 不是靠削弱检测换来的绿。
+      **它给的分母（采纳）**：判定面 2^6 = **64** 种组合，17+10 个用例覆盖约 **39%**；
+      不可达的两类它点名了（`queued ∧ neg ∧ fix ∧ allow_enqueue`、`pos_drain ∧ agents=0`）。
+      **修后判据**：`--self-test` **17 ran / 0 failed**；`test_fix_gate.sh` **10 ok / 0 failed**；
+      **负控制 10 条全部实测变红**，且新增两条各红在该守它的那个用例上
+      （`failclosed-main` → CLI 用例；`pass-vocabulary` → 「赞许不是判决」用例）。
+      🔴 **仍未关卡**：这一轮的修补丁同样未经审，pass 3 待派。
+      **两条 STILL OPEN 采纳并原文抄录**：
+      > (2) Can a round legitimately have two dispatches with FALSIFIED and SURVIVES on the same
+      > card where the SURVIVES is not about the fix? If yes, pos_same is unsound. If no
+      > (dispatchers always pair verdicts with the card they fix), document this assumption.
+      > (3) The corpus replay claim needs round-level grouping to properly validate criterion (d).
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F49 pass 3 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① `--self-test` 磁盘真实值 17/17（代理报 15/15，差异是代理侧误读，不是缺陷——本轮 orchestrator 独立验证确认 17/17）；② `test_fix_gate.sh` 10/10；③ 幽灵卡号 V2 被 `--cards` 拒绝；④ 入队判据：agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号；⑤ 消队判据：(fix) + agents≥1 + 词汇判据（pass/证伪/VERDICT/falsif）；⑥ 8 条负控制全部实测变红；⑦ end-to-end 合成测试路径完整。
+      STILL OPEN: End-to-end scenario exercised only as synthetic test with `$WORK/queue`, not with `.loop/UNREVIEWED_FIX` directory during actual unattended round execution. The PROMPT integration exists but is not covered by this test suite (belongs to integration tests).
+
 - [x] **F44：headroom 的 `cross_turn_dedup` 负控制**（`closed`，2026-09-09）  🟢 **证伪 pass 判决：F44 SURVIVES** —— 独立代理用**另一种形状**的新造样本复现了（40 行相同 / 一处 `0x688`→`0x690` / 19 行相同），相同段折成引用、差异行逐字到达。
       🟢 **判据满足，而且结果与我的担心相反**：造一对 60 行、**只差一个十六进制偏移**的反汇编转储
       （`#0x678` vs `#0x688`，`diff` 恰好 2 行），分两次工具调用打进上下文——
@@ -890,6 +927,10 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **判据**：下一批轮次的子代理调用数低于今天实测的 79–116。**负控制**：抽掉五条，派发应退回 20–40 次交互式探测。
       ⚠️ **一条我自己今天在主循环犯的**：`Read` **不支持负偏移**，`offset=-8` 会从头读、
       一次灌进 636 行 / **25k token**，而后被之后每一次调用重发。取尾部用 `tail`。
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F48 pass 1 → VERDICT: PARTIAL（haiku-4-5）**：attacks 1-3 通过（dispatch.md 存在含 88 行；五条已内联进 `run_round.sh` 提示词非文件引用；F35 116 次调用数字可从 transcript `usage` 字段核实）。**三处真缺陷**：① 无强制执行——五条是 prompt 级别的请求，gate 不检查是否遵守；② 无仪器——判据「子代理调用数低于 79–116」，没有机器可读的度量；③ 负控制（抽掉五条规则后派发应退到 20–40 次探测）从未执行。
+      **修法（本轮当场修）**：`run_round.sh` 轮次结束时将 `date/agent_calls/tool_calls` 追加到 `.loop/dispatch_stats.tsv`（commit `1fccb99`）；每轮外层代理的派发数成为可查的机器记录。
+      ⚠️ 已知开放面：① 强制执行仍是软请求（接受）；② `tool_calls` 是外层轮次总调用数，非单个子代理内部调用数（后者才是 F35 116 次的那个量级）；③ 负控制仍未执行。待 pass 2。
 
 ## 🔬 证伪 pass 第一次用在自己身上（2026-09-09，8 张 `built` 卡，一次派发）
 
