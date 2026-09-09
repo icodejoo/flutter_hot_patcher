@@ -754,7 +754,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - [x] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786` + `6cde403` + `00cc083`）
       提示词规则 + 轮末机器闸门（关卡而 memo 无判决 → `WARNING` + `.loop/UNREVIEWED_CLOSURE` 交给下一轮）。
       四个用例用**从 `run_round.sh` 原文抽出的代码块**测过。**待证伪 pass。**
-- [ ] **F43：零提交截止线**（`built`，`b8ce9d8` + `177816d` + `43e1785`）
+- [x] **F43：零提交截止线**（`built`，`b8ce9d8` + `177816d` + `43e1785`）
       既有两个看门狗（CPU 停滞 2700s / 6h 上限）都抓不到 09-08 那轮（2h25m、CPU 244s、零提交）。
       判据：`fingerprint()`（= SDK/RESEARCH/REPO 三棵树 HEAD + memo.md 非空非心跳行数）超过 `NOCOMMIT_TIMEOUT`（默认 5400s）未变 → **先 wip_snapshot 再终止**。
       `fingerprint` 取代原来的「三棵树 HEAD 都没动」有两个原因：① F40 故意让轮次产物留在 uncommitted memo 里，HEAD 不动但 memo 行数增加 → 原判据会误杀这类轮次；② 轮次可能提交到三棵树外的仓库（如 `~/Documents/loop`），fingerprint 的 memo.md 行数部分能兜底。
@@ -776,6 +776,15 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
   **修复（`43e1785`）**：fingerprint() 加入 `$LOOP_TOOLS` 作为第四棵树，LOOP_TOOLS 的 HEAD 变化现在被计入。
   遗留开放项：`grep -v '❤'` 的混合内容行问题（Attack 1）约定级别而非代码强制，不修。
   → **不关卡，开 pass 3。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 3 → PARTIAL（haiku-4-5）**：
+  - Attack 3（误报 FALSIFIED）：代理声称 memo.md 里有 7 条含 ❤ 的"混合内容行"，判为 FALSIFIED。实际上这 7 条全是心跳行（均含 `心跳` 关键字），`grep -v '❤'` 正确过滤掉它们。代理混淆了「心跳行含有实质内容」（设计意图）与「非心跳行含有 ❤」（真实缺陷），这是循环推理，非结构缺陷。
+  - Attack 4（真实测试缺口）：`/tmp/test_deadline_f43.sh` 只用 3 棵树（SDK/RESEARCH/REPO），未测 LOOP_TOOLS 第四棵树的检测路径（对应 `43e1785` 的修复）。
+  **修复**：测试更新为 7 个用例（原 4 个 + Case 5 LOOP_TOOLS 提交改变 fingerprint + Case 6 含 ❤+`心跳` 的行被正确排除），7/7 通过。
+  → **不关卡，开 pass 4。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 4 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① fingerprint() 确认含四棵树 `{SDK, RESEARCH, REPO, LOOP_TOOLS}`；② LOOP_TOOLS 行 32 定义，早于 fingerprint() 调用（行 700）；③ 测试脚本 for 循环与 run_round.sh 原文完全一致；④ 心跳行排除正确（返回 0）、真实 memo 行返回 1；⑤ `bash /tmp/test_deadline_f43.sh` 7/7 通过；⑥ wip_snapshot.sh 存在（8049B），失败时 `||` 仍终止；⑦ 三个 watchdog 在 wait $pid 后全部 kill，无泄漏。
+  STILL OPEN：三个 watchdog 同时触发（6h ceiling 与 nocommit 在同一秒）时对 memo.md 的写操作存在理论竞态；实测条件极难复现。
 - [ ] **F47：`cards.tsv` + `claims.tsv` 与一致性检查**（`built`）
       抄 beads 的 schema（可寻址、依赖、就绪）与 Graphiti 的双时态失效列（`invalidated_at/by`），
       **都不引它们的运行时**。`cards_check.sh` 断言 memo 的 `- [ ]` 集合 == 表里 `{open,built}` 集合、
@@ -813,6 +822,32 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       inode `45735237` → `45759102`，正在跑的 bash 仍持有旧 inode。
       ⇒ F40 记的「改正在跑的脚本要等它结束」可以放宽成**「用 rename 换掉，别原地改」**，
       前提是换完 `bash -n` 过、且不指望本轮生效（下一轮才读新文件）。
+
+- 2026-09-09T（claude-opus-5，交互式会话，子代理返回）📋 **F49 pass 1 → 名义 SURVIVES，实判 PARTIAL**：
+      子代理（haiku，25 次工具调用）报 `VERDICT: SURVIVES`，**但它的攻击 3/4/6 是复述卡片、不是实测**：
+      攻击 6 只重述了我列的负控制清单，没有自己施加那 5 个变异；
+      攻击 4 把「回放真实语料」换成了「扫最近 100 行 memo.md」并报「0 误报」。
+      **它那句 `STILL OPEN` 是真发现**（原文抄录）：
+      > A full production round that produces (FALSIFIED or PARTIAL verdict AND a fix commit with
+      > the card id) in a single round, with zero prior queue entries, must write
+      > `.loop/UNREVIEWED_FIX` with that card id, and the next round must receive a prompt demanding
+      > a falsification pass on it — this end-to-end scenario is only exercised as a synthetic test
+      > in test_fix_gate.sh with a temporary queue file, not with the real .loop directory during an
+      > actual unattended round. The gate's write happens but the next round's prompt reading is not
+      > verified on real hardware.
+      **于是我按攻击 4 的原始要求自己跑了回放（120 个动过 memo.md 的提交），抓出两处真缺陷**：
+      ① **幽灵卡号**：`PATCHED_V2`（memo 历史 332 次）产出卡号 `V2`，`state(B8)` 产出 `B8`
+      ⇒ 队列会要求审查一张不存在的卡；`(` 和 `_` 都不是字母数字，**lookaround 救不了它**。
+      ② **两处都要 `(fix)` 是错的**：同一份语料里 **6 次入队 5 次是误报**——
+      那些轮次（`1f2daaa`/`edff571`/`c48f07b`…）真的重打过自己的修补丁，只是措辞里没有那个词。
+      **六分之五错的队列是墙纸。**
+      ⇒ **判 PARTIAL，不关卡**（子代理给的 SURVIVES 不成立，判据由我这一侧的实测推翻）。
+      **修法（本轮当场修）**：`--cards` 让卡号必须在 `cards.tsv` 里、表点名却读不出就**拒绝入队**；
+      `(fix)` 只用于**消掉上一轮的账**，同轮重打改判为「agents ≥ 2」。
+      **修后同一份回放**：幽灵 **0**；agents=2 时 **2 次入队、两次都对**（都以 PARTIAL 收尾、无重打）。
+      **修后判据**：`fix_queue.py --self-test` **15 ran / 0 failed**；
+      `test_fix_gate.sh` **10 ok / 0 failed**；**负控制 8 条全部实测变红**（逐条见提交信息）。
+      🔴 **这个修补丁自己也未经审** —— 正是 F49 要治的那件事，pass 2 待派。
 
 - [x] **F44：headroom 的 `cross_turn_dedup` 负控制**（`closed`，2026-09-09）  🟢 **证伪 pass 判决：F44 SURVIVES** —— 独立代理用**另一种形状**的新造样本复现了（40 行相同 / 一处 `0x688`→`0x690` / 19 行相同），相同段折成引用、差异行逐字到达。
       🟢 **判据满足，而且结果与我的担心相反**：造一对 60 行、**只差一个十六进制偏移**的反汇编转储
