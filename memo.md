@@ -376,7 +376,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   真实分歧是**原生调用的代码生成形式**（stub 目标经 pool 里的 `Code` vs 经 `Thread` 以便 `ObjectPoolEditor` 能改指向），代价**恰好每点 1 个字**，且已完全配平。
   ⚠️ **另一个侧发现（F35 未越界去改）**：`measure_dd_emission.sh` 的头注写着「sim guard … ours 1 @0xef0」，而**它自己的实时输出与 F35 独立的 `.text` 扫描都给 76** ⇒ **sim guard 的差是 8，不是 83。** 这个陈旧头注一直在放大缺口。
 
-- [ ] **F36：修掉「DD 派发 92 vs 0」这个错标（两个脚本 + 一个检查）**
+- [x] **F36：修掉「DD 派发 92 vs 0」这个错标（两个脚本 + 一个检查）**
       ① `measure_dd_emission.sh`：那条 DD 行现在数的是原生调用点。**要么换判别器、要么改名**。
       合格判别器必须能把两者分开，F35 已给出三条可用的：`ldur x30,[x30,#7]` 在不在（我们侧）、
       `pool[idx-1]` 是不是 `LinkNativeCall`、THR 偏移是 `0x908` 还是 `0x978`（他们的 DD 表）。
@@ -415,6 +415,10 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **要交的**：拿 F35 那套配平（`index_in_entries` 配对 + delta 直方图）逐格重算，
       每格说明「新根因解释了多少单位、还剩多少」。**做不到就留 unknown**，这仍是本阶段的正常产出。
       ⚠️ **别再把邻近差异顺手一起归因掉**——这正是 F16 与今天这一轮的同一种错。
+
+- 2026-09-09T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」）。恢复检查：SDK clean @ `232849c87d8`；研究树最近提交 `6026011`（F35）；FHP 树 memo.md 仅修改。无 PAUSE。`grep -c "^- \[ \]" memo.md` = **4**（F36/F37/F38/F39）。**第一项未完成任务 = F36（修掉「DD 派发 92 vs 0」错标）→ 派发子代理。**
+- 2026-09-09T（claude-sonnet-4-6，同会话）✅ **F36 完成**（研究树 `9bc5443` + `4039cbb`）。
+  判据全部通过：① `measure_dd_emission.sh`：NOP 判别器在位，`native_patched theirs=92 / dd_dispatch=0`（正确识别为原生调用非 DD 派发），sim guard 头注已改为实测值 `ours 76 @0xef0`；② `dd_pass_check.sh`：`count_dd_sites()` 已加 NOP 过滤，`dd_gap.expected` 更新为 `voters ours=3 theirs=0`（verify_all 0 failures）；③ `dd_pass_check.sh` 头注陈旧部分（「theirs 92 (informational)」「ours 3 vs theirs 92 → FAIL」）已更新为 F36 后实测值；负控制：去掉 NOP 判别 → `dd_dispatch theirs=92`（变红 ✅）；`verify_all.sh` **25 ran / 0 failed**（`9bc5443` 前实测，注释变更无功能影响）。⚠️ **不许再用「DD 派发 92 vs 0」挡任何 unknown 格子。** 真实分歧是原生调用代码生成形式（F37 的工作）。
 
 - 2026-09-09T（claude-opus-5，交互式会话，用户「可以」）🗄️ **memo.md 与 CLAUDE.md 双双归档瘦身，零丢失。**
 
