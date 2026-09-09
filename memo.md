@@ -785,7 +785,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 4 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① fingerprint() 确认含四棵树 `{SDK, RESEARCH, REPO, LOOP_TOOLS}`；② LOOP_TOOLS 行 32 定义，早于 fingerprint() 调用（行 700）；③ 测试脚本 for 循环与 run_round.sh 原文完全一致；④ 心跳行排除正确（返回 0）、真实 memo 行返回 1；⑤ `bash /tmp/test_deadline_f43.sh` 7/7 通过；⑥ wip_snapshot.sh 存在（8049B），失败时 `||` 仍终止；⑦ 三个 watchdog 在 wait $pid 后全部 kill，无泄漏。
   STILL OPEN：三个 watchdog 同时触发（6h ceiling 与 nocommit 在同一秒）时对 memo.md 的写操作存在理论竞态；实测条件极难复现。
-- [ ] **F47：`cards.tsv` + `claims.tsv` 与一致性检查**（`built`）
+- [x] **F47：`cards.tsv` + `claims.tsv` 与一致性检查**（`closed`，2026-09-09）
       抄 beads 的 schema（可寻址、依赖、就绪）与 Graphiti 的双时态失效列（`invalidated_at/by`），
       **都不引它们的运行时**。`cards_check.sh` 断言 memo 的 `- [ ]` 集合 == 表里 `{open,built}` 集合、
       开放卡不得**以**失效 claim **为前提**（`!C3` 表示「以它为对象」，那是清理卡的理由）、
@@ -808,7 +808,10 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **修法（本轮当场修）**：check 1b 增加 `extracted_closed` vs `memo_closed_lines` 计数校验，仿照 open-set 的做法；解析不出 id 的 `[x]` 行报 FAIL 并打出无法解析的行内容。负控制验证：`printf '- [x] F99: without asterisks\n' >> /tmp/broken_memo.md && MEMO=... bash cards_check.sh` → `exit=1`，「13 closed lines but only 12 IDs extractable」✅。待 pass 4。
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 4 → VERDICT: FALSIFIED（haiku-4-5）**：attacks 1-6 通过（exit=0；extraction-count 守卫存在；三个方向负控制全部命中）。**一处真缺陷**：check 1b 有 extraction-count 守卫，但没有 `uniq -d` 重复检测；而 F41 和 F42 **在 memo.md 里各出现两次**（早期非正式记录 lines 595/647 + 正式卡片 lines 720/754），脚本 exit=0 不报红（与 open-set check lines 47-51 不对称）。
-      **修法（本轮当场修）**：① check 1b 增加 `uniq -d` 重复检测（仿照 open-set 的 lines 47-51）→ `FAIL: duplicate closed card id(s): F41 F42`；② 将 memo.md 里 lines 595/647 的早期非正式记录从 `- [x] **F4x：` 降格为 `- **F4x：`（保留内容、去掉 [x] 标记）；修后 exit=0 且无重复。待 pass 5。
+      **修法（本轮当场修）**：① check 1b 增加 `uniq -d` 重复检测（仿照 open-set 的 lines 47-51）→ `FAIL: duplicate closed card id(s): F41 F42`；② 将 memo.md 里 lines 595/647 的早期非正式记录从 `- [x] **F4x：` 降格为 `- **F4x：`（保留内容、去掉 [x] 标记）；修后 exit=0 且无重复。
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 5 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① 六个负控制全部命中（fake open/closed、malformed closed、dup closed/open、四个方向双侧）；② regex 正确提取 memo 全部 3 个 open 行，无漏项；③ extraction_closed 从 grep -c（去重前）计数，与 sort-u 后的集合比较独立；④ [x] 行全为正式卡片，无误匹配；⑤ 三个提交 16e34c6/55bf357/b687530 均存在；⑥ 基线 exit=0；⑦ 全部四方向（memo-only open/closed、tsv-only open/closed）均报 FAIL。
+  STILL OPEN：None — all criterion checks work, guards fire independently, negative controls all flip verdict correctly, all four directional asymmetries caught.
 
 - [x] **F49：修补丁自己的待审队列**（`closed`，2026-09-09，交互式会话补的第三道闸门）
       契约五之四末段那句「修完的东西同样是未经审的」原来**只是一句话**：
@@ -965,6 +968,24 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       ⚠️ **第五次跳过独立回放**（这次的理由「会违反只读约束」是错的——我明写了允许复制到 temp）。
       **5/5 全跳同一项 ⇒ 这是关于审查者仪器的结论**：
       一个「强制项」写在多项任务里就会被挤掉，要么单独派一次只做那一件事，要么别声称它被审过。
+
+- 2026-09-09T（claude-opus-5，交互式会话）📋 **F49 pass 6 → 未出判决（机器睡眠，API 中断）**，
+      但它死前最后一行是一条**真线索**：「NEG 检查是大小写敏感的」。**我自己验完并修了**：
+      **逃逸确认**：`📋 **F42 pass 1 → verdict: falsified**` ⇒ `neg` 为空 ⇒ 有红判决有修补却不入队。
+      **修法与噪声代价（先量后改）**：NEG 改为**大小写不敏感 + 词边界**；
+      实测 **7364 条 memo 新增行里，带词边界小写 `partial`/`falsified` 而无大写 token 的有 0 条**
+      ⇒ 这个修法在它真正要跑的语料上**零噪声代价**。
+      **POS 保持大小写敏感**（严格）：把小写 `survives` 当判决会**压掉**一次入队，
+      那是不能宽松的方向。⇒ **「查红宽松、认绿严格」现在是显式规则，不是巧合。**
+      **判据**：`--self-test` **25 ran / 0 failed**；`test_fix_gate.sh` **10 ok / 0 failed**。
+      🔑 **三处不对称现在各被两条负控制从两侧钉住**（谁都不能被「整理」成对称）：
+      ① `neg-case-sensitive` ↔ `pos-case-insensitive`；
+      ② `neg-no-word-bound`（「partially 不是判决」变红）；
+      ③ `strip-applied-to-neg` ↔ `strip-dropped-for-pol`。
+      🔴 **F49 状态：实现与判据齐备，但当前状态（`NEG_RE` 这个修补丁）没有任何一次完成的 pass。**
+      6 次派发 5 个判决 + 1 次中断，**每一次都找到了东西**，但后三次的构造
+      （斜杠混写判决、小写判决）都是 `falsify.md` 明确禁止的写法 ⇒
+      再往下问的是「会不会有人乱写」，那不是这个仪器能回答的问题。**下一步交给人决定。**
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F49 pass 3 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① `--self-test` 磁盘真实值 17/17（代理报 15/15，差异是代理侧误读，不是缺陷——本轮 orchestrator 独立验证确认 17/17）；② `test_fix_gate.sh` 10/10；③ 幽灵卡号 V2 被 `--cards` 拒绝；④ 入队判据：agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号；⑤ 消队判据：(fix) + agents≥1 + 词汇判据（pass/证伪/VERDICT/falsif）；⑥ 8 条负控制全部实测变红；⑦ end-to-end 合成测试路径完整。
       STILL OPEN: End-to-end scenario exercised only as synthetic test with `$WORK/queue`, not with `.loop/UNREVIEWED_FIX` directory during actual unattended round execution. The PROMPT integration exists but is not covered by this test suite (belongs to integration tests).
