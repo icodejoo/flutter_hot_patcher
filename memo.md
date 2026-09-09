@@ -312,7 +312,6 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - **一格有几个成因分量，就要几行证据**；一行盖不住两个分量
 
 
-- 2026-09-09T（claude-opus-5，交互式会话，用户「go」）❤️ **心跳**（契约正文已读，F34a 派发前写入）。恢复检查：SDK clean @ `232849c87d8`（0 行）；研究树 @ `bcbc5aa` + **3 个未追踪文件**（`extract_kernel_callgraph.dart` 280 行 / `kernel_cascade_probe.py` 265 行 / `kernel_cg_tool/`，是 09-08 那个被销毁轮次的残骸，**未追踪所以 finisher 没碰**）；FHP 树 memo + 未追踪文档；`.loop/PAUSE` **存在（人放的，09-08 18:49，至今 15 小时全是 skip）**，本轮由人在交互式会话里手动驱动，**不删 PAUSE**（删它＝重启无人值守，属人的决定）。无 `.loop/RESCUED`。`grep -c "^- \[ \]" memo.md` = **4**（F34a–F34d）。
   ✅ **残骸已核，不构成重做风险**：那两个文件追的是 F34b/F34c 那一侧的假设（kernel 调用图 + CascadeLimiter 选出 92 个**被调函数**），**不是 F34a 要的调用点表**；树里也没有任何 `dd_sites*`（`ls | grep -i dd_site` rc=1）。→ **F34a 未被做过，可以派。**
   **下一项 = F34a（把他们那 92 个派发点做成 `dd_sites.tsv`）→ 派发子代理。**
 - 2026-09-09T（claude-opus-5，交互式会话）▶️ **无人值守已恢复（用户指令「无人值守开」）：`.loop/PAUSE` 已移走**（它是 09-08 18:49 人放的，此前 15 小时的 `rounds.log` 全是 `skip: PAUSE present`）。外层时钟 `tools/loop/ralph.sh` 一直在跑（PID 4839，起于 09-01），所以移掉 PAUSE 即恢复，不需要重启任何东西。
@@ -352,7 +351,6 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
   且「测得越细越可信」在前提错的时候不成立（F16 已栽过：F10/F11 两份细活都指向一个不存在的病）。
   ⇒ 已派独立子代理**以证伪为目标**复核，判据见卡内。**在它回来之前，不要把这条写进任何别的文档。**
 
-- 2026-09-09T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 docs/LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」，契约正文已读，F34b 派发前写入）。恢复检查：SDK clean @ `232849c87d8`（0 行，含 F28/F29/F31）；研究树 @ `9aac66d` + 3 untracked（F34a 残骸文件，非 git 追踪，finisher 未碰）；FHP 仅 memo.md 修改；无 PAUSE 文件。`grep -c "^- \[ \]" memo.md` = **1**（F34b）。**F35 注：前会话派发 F35 独立证伪子代理，上下文压缩后结果未回收（子代理属于旧 session，不可找回）。F34a 的结论（92 个点 = 原生调用，非 DD 派发）暂维持「未被采信」状态，不进 CLAUDE.md，待后续处理。F34b 与 F35 无依赖关系，可独立前进。** 关键发现：`afa1f9c73cc`（2026-08-27）已实现 `rewritten` 计数（非硬编码），F34b 的「修 linker.cc 硬编码」部分实际已完成；F34b 当前任务是**验证现有修复正确工作**（ours 行输出 `rewritten=2`）并做负控制。**下一项 = F34b（验证 rewritten 计数，跑负控制，mark done）→ 派发子代理。**
 
 - 2026-09-09T（claude-opus-5，交互式会话）🔒 **决定：`pre-push` 钩子保留，无人值守轮次继续不许 push**（用户把这个决定交给我，2026-09-09）。
   理由三条，都不是风格偏好：① **三个树的 origin 是同一个公开仓库**（契约§八），而契约§八同时写着「他们的二进制与反编译产物永不入库，反编译产物后缀就是 `.c`，靠后缀过滤挡不住，只能按目录挡」——push 是外向且不可逆的，发出去即被缓存/索引，事后删除不能撤销；② 契约§七把外向/不可逆操作列为「必须停下来问人」，**摘掉钩子等于把那条规矩里唯一的机器执行部分删掉**，只剩纸面；③ 实测依据：本阶段已有五个仪器缺陷、两次阶段性「完成」被撤回，今天 F34a 又把 18 格的归因前提整体推翻——**本地提交错了可以撤回，公开仓推错了不能**。
@@ -410,7 +408,6 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **要交的**：这笔账是怎么产生的，或者把所有引用它的地方改成现在这份可复现的直方图。
       ⚠️ 它是 `measure_pool_residual.sh` 的 `UNEXPLAINED` 的一部分 ⇒ 那个数也要跟着重算。
 
-- 2026-09-09T（claude-sonnet-4-6，新会话续跑）❤️ **心跳**（契约读取已在会话开头完成；此条在派发 F34b 子代理后写入）。恢复检查：SDK `232849c87d8`（verify_all BLOCKED：ProductARM64 verify_sdk_hash=true，ReleaseARM64 71 步落后）；研究树 `bcbc5aa` @ `spikes/shorebird_linkinfo_oracle`；FHP memo.md 仅修改。无 PAUSE 无 RESCUED。`grep -c "^- \[ \]" memo.md` **6**（F34b/F34c/F34d/F37/F38/F39）。**F34b 为首项未完成任务：已派发子代理，指令含 gn_configure+重建+FunctionKey 修复+负控制+verify_all。**
 
 - 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
 
@@ -422,7 +419,6 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       每格说明「新根因解释了多少单位、还剩多少」。**做不到就留 unknown**，这仍是本阶段的正常产出。
       ⚠️ **别再把邻近差异顺手一起归因掉**——这正是 F16 与今天这一轮的同一种错。
 
-- 2026-09-09T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」）。恢复检查：SDK clean @ `232849c87d8`；研究树最近提交 `6026011`（F35）；FHP 树 memo.md 仅修改。无 PAUSE。`grep -c "^- \[ \]" memo.md` = **4**（F36/F37/F38/F39）。**第一项未完成任务 = F36（修掉「DD 派发 92 vs 0」错标）→ 派发子代理。**
 - 2026-09-09T（claude-sonnet-4-6，第二次新会话）❤️ **心跳**（契约正文已读；恢复：SDK clean @ `232849c87d8`，研究树 @ `4039cbb`（F36），FHP 仅 memo.md 修改，无 PAUSE 无 RESCUED，open=3（F37/F38/F39））。**第一项未完成任务 = F37（复刻原生调用降级形式；前置：先解出 THR+0x908，再落地发射端）→ 派发子代理。**
   🔑 **THR+0x908 前置已解**（从 Shorebird iOS-release dSYM 实测）：`call_bootstrap_native_entry_point_`（line 1660），我们等价字段 `bootstrap_native_wrapper_entry_point_`（已在 CACHED_ADDRESSES_LIST）。子代理已派发，等待结论中。
 - 2026-09-09T（claude-sonnet-4-6，第三次新会话）❤️ **心跳**（契约正文已读；恢复：stash pop 完成（2行memo追加），SDK clean @ `232849c87d8`，研究树 @ `4039cbb`（F36完成），FHP 仅 memo.md 修改，open=3（F37/F38/F39））。**第一项未完成任务 = F37 → 派发子代理执行落地。**

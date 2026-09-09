@@ -75,8 +75,27 @@ if [ "$WIP" -eq 1 ]; then
   trap 'kill $wip_pid 2>/dev/null; exit 143' INT TERM
 fi
 
+STATE=${FHP_LOOP_STATE:-$HERE/../../.loop}
+
 while true; do
   "$HERE/run_round.sh"
+
+  # Once a day, and deliberately here rather than inside a round: memo.md is
+  # what a round writes its conclusions into, so trimming it while one is
+  # running would race the thing it is meant to help. Between rounds nothing
+  # holds it.
+  #
+  # Heartbeats are the largest consumer of the file every round reads in full --
+  # 149 of them were 84KB, 75% of the file, on 2026-09-04 -- and all but the
+  # newest carry no information. The note written that day said "next time they
+  # pile up, keep the last 3 again"; they piled up again within five days,
+  # because that was a rule addressed to whoever happened to notice.
+  today=$(date +%F)
+  if [ "$(cat "$STATE/heartbeat_trim_day" 2>/dev/null)" != "$today" ]; then
+    mkdir -p "$STATE"
+    "$HERE/trim_heartbeats.sh" >>"$STATE/rounds.log" 2>&1
+    printf '%s' "$today" >"$STATE/heartbeat_trim_day"
+  fi
   # A refused round (lock held, dirty tree, PAUSE) costs nothing, so there is no
   # reason to treat it differently from a round that ran: come back either way.
   # That indifference is the property the chain did not have.
