@@ -540,10 +540,25 @@ if [ "$FINISHER" -eq 1 ]; then
   # Path and policy as separate arguments. The colon-delimited form lost its
   # separator in transit here -- "/tmp/x:clean" arrived as "/tmp/xlean" -- and
   # the finisher then skipped every tree while exiting 0.
-  set -- "$SDK" clean "$RESEARCH" clean "$REPO" clean
-  # The engine tree is deliberately absent: its diff is supposed to equal a
-  # recorded patch, so "dirty" is health there and stashing it would remove
-  # instrumentation the verification depends on.
+  set -- "$SDK" clean "$RESEARCH" clean
+  # Two trees are deliberately absent, for opposite reasons.
+  #
+  # The engine tree: its diff is supposed to equal a recorded patch, so "dirty"
+  # is health there and stashing it would remove instrumentation the
+  # verification depends on.
+  #
+  # $REPO, the state tree: a round's conclusions ARE memo.md, so stashing that
+  # file deletes the round's only product. Measured 2026-09-09, three rounds
+  # after the loop resumed: two had their records stashed. Worse, the finisher
+  # runs before the fingerprint comparison below, so the round was then logged
+  # as "round left no trace" -- and at idle 3/3 that pauses the loop. A round
+  # whose product is knowledge was erased and reported as idle in one step.
+  # Recovered from those stashes: F36's closure and the answer to F37's
+  # blocking prerequisite, which had been a day's open question.
+  #
+  # Leaving it dirty is safe and was checked rather than assumed: the
+  # dirty-tree guard above only walks "$SDK" "$RESEARCH", so an uncommitted
+  # memo.md cannot refuse the next round.
   fin_out=$(LOOP_HANDOFF="$HANDOFF" python3 "$LOOP_TOOLS/finisher.py" \
              "round-$$" "$round_finished" "$@" 2>&1)
   printf '%s\n' "$fin_out" | grep -v '^\[' | while IFS= read -r l; do

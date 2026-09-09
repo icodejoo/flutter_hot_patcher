@@ -37,8 +37,17 @@
 #
 # Recovering work:
 #   git -C <tree> show <ref>              # what was in it
-#   git -C <tree> diff HEAD <ref>         # what it changed
+#   git -C <tree> diff '<ref>^' <ref>     # what it changed, against the HEAD it
+#                                         # was taken from
 #   git -C <tree> checkout <ref> -- .     # take all of it back
+#
+# Use <ref>^ and not HEAD as the base. `git stash create` records the HEAD of
+# the moment as the snapshot's first parent, so <ref>^ is the state the work was
+# written against. Diffing against the *current* HEAD instead was measured here
+# once the loop had moved on: it reported 1657 files changed and 1,257,292
+# deletions, all of it the intervening commits, with the actual work invisible
+# inside the noise. A recovery command that is unreadable at the moment it is
+# needed is not a recovery command.
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -119,9 +128,9 @@ case "${1:-}" in
     ref=${2:?usage: --restore <ref> <tree>}
     tree=${3:?usage: --restore <ref> <tree>}
     cat <<EOF
-git -C $tree show $ref            # what was in it
-git -C $tree diff HEAD $ref       # what it changed
-git -C $tree checkout $ref -- .   # take all of it back
+git -C $tree show $ref              # what was in it
+git -C $tree diff '$ref^' $ref      # what it changed, vs the HEAD it was taken from
+git -C $tree checkout $ref -- .     # take all of it back
 EOF
     ;;
   ""|--daemon)
