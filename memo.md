@@ -720,7 +720,35 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - [x] **F41：定时 WIP 快照**（`built`，`129b685` + `2e7e3cb`）
       判据已过：478 行经 revert 仍可从 `refs/wip` 取回、逐字节相同；`status`/index/stash 三项零扰动；
       负控制 `FHP_WIP_ANCHOR=0` + 激进 prune → 对象被删。**待证伪 pass。**
-- [ ] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786`）
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F42 pass 1 → FALSIFIED（haiku-4-5）**：
+  `3c9c786` 里的闸门是有缺陷的：它只检查 memo_added 里是否含 `VERDICT:` 或 `证伪 pass` 这些词，
+  **不**检查是否关联到了具体的卡片 ID、**不**检查 `agent_calls` 是否为 0。
+  15:03 那轮的「gate ok: closed F38 falsification verdict」是假绿——那轮派发了 0 个子代理，
+  但旧闸门让它通过了。真正修复（加入卡 ID 匹配 + `agent_calls==0` 检查）在 `6cde403` 里。
+  **修复**：cards.tsv 的 F42 commits 字段更新为 `cfad404 + 3c9c786 + 6cde403`。
+  → **不关卡，开 pass 2。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F42 pass 2 → PARTIAL（haiku-4-5）**：
+  `.loop/UNREVIEWED_CLOSURE` 的 mtime 是 15:08:38，而 `6cde403` 的提交时间是 15:09:14（差 36s）——这个文件是旧的缺陷闸门（`3c9c786`）写的，修复后的闸门从未在「写 UNREVIEWED_CLOSURE」路径上触发过，即尚无生产实测。
+  **修复**：用从 `run_round.sh` 原文逐字提取的闸门逻辑写了 `/tmp/test_gate_f42.sh`，合成跑四个用例（证伪 verdict → PASS；无 verdict → UNREVIEWED_CLOSURE；agent_calls=0 → UNREVIEWED_CLOSURE；`通过` 中文 SURVIVES → UNREVIEWED_CLOSURE —— 此为已知边缘情形，实际 memo 里用英文 SURVIVES）。四个主用例全部符合预期。
+  → **不关卡，开 pass 3。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F42 pass 3 → FALSIFIED（haiku-4-5）**：
+  代理返回 FALSIFIED，但七个攻击的实际发现全部为绿（✅）：Attack 1 正则完全相同；Attack 2 `+` 前缀在合成测试和真实闸门里都已处理；Attack 3 合成测试不覆盖 F18 分母场景（与 F42 闸门无关）；Attack 4 无卡号前缀冲突；Attack 5 `bash /tmp/test_gate_f42.sh` 五个用例全过；Attack 6 负控制真实创建文件；Attack 7 `run_round.sh` 提示词块含 falsify.md 要求。
+  **实际 FLAW**：代理以「此卡历史上出现过 FALSIFIED + PARTIAL → 因此本次也是 FALSIFIED」为由下判，属于循环推理——前两次的问题（错误提交归因、UNREVIEWED_CLOSURE 早于修复提交）已被修复，本次 pass 3 的目的正是验证合成测试是否有效，而七个攻击均未找到结构性缺陷。
+  **修复**：pass 4 的提示词不再把历史 pass 情况列入「提供的证据」，改为仅聚焦于闸门逻辑的技术正确性。
+  → **不关卡，开 pass 4。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F42 pass 4 → PARTIAL（haiku-4-5）**：两处真实缺陷：
+  1. **Attack 7（关→开绕过）**：`comm -13` 只看净状态差量——若一轮内「关卡 → 写伪判决 → 重开卡」，`newly_closed` 为空，闸门完全跳过。攻击者可在无正式 pass 的情况下污染 `memo.md`；其后轮次关卡时若无新判决，闸门才会响，但这一轮的污染已无法追溯。
+  2. **Attack 3（无词界锚点）**：`grep -qE "$id.*"` 对 `$id` 没有 `\b` 保护，若存在 id=`F4` 且有关于 `F42` 的判决行，则 F4 会误匹配。现阶段闭合卡不存在这种前缀冲突（F36–F44），属潜伏 bug。
+  **修复（`00cc083`）**：
+  - `run_round.sh`：`memo_added` 设置完毕后，从中提取 `^+- \[x\] \*\*id\b` 行，对所有「曾经关闭」但不在 `closed_before` 中的卡补进 `newly_closed`，堵住关→开绕过。
+  - 正则改为 `$id\b.*` + `.*\b$id\b`，堵住词界漏洞。
+  - `/tmp/test_gate_f42.sh` 更新为 7 个用例（新增 Case 6 词界测试、Case 7 关→开测试），7/7 通过。
+  → **不关卡，开 pass 5。**
+
+- [ ] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786` + `6cde403` + `00cc083`）
       提示词规则 + 轮末机器闸门（关卡而 memo 无判决 → `WARNING` + `.loop/UNREVIEWED_CLOSURE` 交给下一轮）。
       四个用例用**从 `run_round.sh` 原文抽出的代码块**测过。**待证伪 pass。**
 - [ ] **F43：零提交截止线**（`built`，`b8ce9d8`）
@@ -735,6 +763,35 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       🔑 **它第一次运行就抓出两处真不一致**（open 集合不齐 + 三张卡引用失效 claim），
       其中第二处**是我的规则写窄了**——F38/F39 的存在就是为了清理被推翻的 C3/C4。
       **禁止修复一条被撤回的断言，会让撤回变得昂贵，而这个项目全靠撤回是便宜的那一侧。**
+
+- [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09，交互式会话补的第三道闸门）
+      契约五之四末段那句「修完的东西同样是未经审的」原来**只是一句话**：
+      关卡闸门看不见它——它只在 `- [ ]` 变 `- [x]` 时才响，而**修补丁通常不关掉任何卡片**，
+      卡片仍开着、下面换了个更好的补丁。09-09 那一轮 8 张打红 4 张、四处当场修，
+      **四个修补丁一个都没被审**，磁盘上唯一的痕迹是 memo 里承认这件事的那句话。
+      **机制**：轮末第二道闸门（`run_round.sh` 的 `gate: the fix patches themselves`）
+      只用机器侧证据判定——本轮 memo 新增行 + 本轮各树的提交标题 + transcript 里的派发数：
+      `neg(X) ∧ fix(X) ∧ ¬pos(X)` ⇒ 卡号进 `.loop/UNREVIEWED_FIX`，下一轮开头当第一件事发出去。
+      `pos` 是严格的那一侧（假消队的代价 > 假入队的代价）：必须含 `(fix)` 且 agents ≥ 1。
+      **判据（已跑）**：`python3 tools/loop/fix_queue.py --self-test` → **9 ran / 0 failed**；
+      `tools/loop/tests/test_fix_gate.sh` → **8 ok / 0 failed**（被测代码块**从 `run_round.sh` 原文抽出**，
+      不是抄一份——抄一份会在原文改了以后继续给绿，那正是 F42 第一版的形状）。
+      **负控制 7 条，全部实测变红**：① 去掉 `(fix)` 要求 → 「卡片级 SURVIVES 不许消掉补丁」红；
+      ② 去掉 agents ≥ 1 → 「0 派发的判决不许消队」红（就是 15:03 那次失败的回放）；
+      ③ 去掉「必须有提交修过它」→ 「只报红不修的轮次」红；
+      ④ 放宽 id 正则（丢掉 lookaround）→ `ProductARM64` 被读成卡号 `M64` 并入队 ⇒ 红；
+      ⑤ 让队列自己过期 → 三个 hold 用例红；
+      ⑥ 拿**未打补丁**的 `run_round.sh` 抽块 → 抽取判据直接红（证明测的是接线，不是副本）；
+      ⑦ 把闸门里那次 `python3` 调用改成 `:` → 5 个用例红。
+      **待证伪 pass。** ⚠️ 已知开放面两条：
+      (i) 消队允许轮次**手动删队列行**（与 `UNREVIEWED_CLOSURE` 的「或写明为什么不适用」同权）
+      ⇒ 它是**一道账，不是一道锁**；
+      (ii) 入队只认**提交标题里点了卡号**的修补丁，标题不写卡号的修补丁它看不见。
+      ⚠️ **它是在一轮正跑着的时候装上去的**（`pgrep -f run_round.sh` = 5）——
+      办法不是原地改，而是**同目录写新文件 + `mv`（rename(2)）**：
+      inode `45735237` → `45759102`，正在跑的 bash 仍持有旧 inode。
+      ⇒ F40 记的「改正在跑的脚本要等它结束」可以放宽成**「用 rename 换掉，别原地改」**，
+      前提是换完 `bash -n` 过、且不指望本轮生效（下一轮才读新文件）。
 
 - [x] **F44：headroom 的 `cross_turn_dedup` 负控制**（`closed`，2026-09-09）  🟢 **证伪 pass 判决：F44 SURVIVES** —— 独立代理用**另一种形状**的新造样本复现了（40 行相同 / 一处 `0x688`→`0x690` / 19 行相同），相同段折成引用、差异行逐字到达。
       🟢 **判据满足，而且结果与我的担心相反**：造一对 60 行、**只差一个十六进制偏移**的反汇编转储
