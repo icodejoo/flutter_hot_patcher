@@ -754,10 +754,11 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - [x] **F42：证伪 pass 接进循环**（`built`，`cfad404` + `3c9c786` + `6cde403` + `00cc083`）
       提示词规则 + 轮末机器闸门（关卡而 memo 无判决 → `WARNING` + `.loop/UNREVIEWED_CLOSURE` 交给下一轮）。
       四个用例用**从 `run_round.sh` 原文抽出的代码块**测过。**待证伪 pass。**
-- [ ] **F43：零提交截止线**（`built`，`b8ce9d8`）
+- [ ] **F43：零提交截止线**（`built`，`b8ce9d8` + `177816d`）
       既有两个看门狗（CPU 停滞 2700s / 6h 上限）都抓不到 09-08 那轮（2h25m、CPU 244s、零提交）。
-      新判据：任一树都没有新提交超过 `NOCOMMIT_TIMEOUT`（默认 5400s）→ **先快照再终止**。
-      两个分支都测过。**待证伪 pass。**
+      判据：`fingerprint()`（= SDK/RESEARCH/REPO 三棵树 HEAD + memo.md 非空非心跳行数）超过 `NOCOMMIT_TIMEOUT`（默认 5400s）未变 → **先 wip_snapshot 再终止**。
+      `fingerprint` 取代原来的「三棵树 HEAD 都没动」有两个原因：① F40 故意让轮次产物留在 uncommitted memo 里，HEAD 不动但 memo 行数增加 → 原判据会误杀这类轮次；② 轮次可能提交到三棵树外的仓库（如 `~/Documents/loop`），fingerprint 的 memo.md 行数部分能兜底。
+      两个分支（`b8ce9d8` / `177816d`）都用从 `run_round.sh` 原文抽出的测试块跑过：deadline=2s，无提交的轮次 → 得到 wip 快照 + KILL_WORKER；有提交先落地的轮次 → deadline 退休、轮次存活。**待证伪 pass。**
 - [ ] **F47：`cards.tsv` + `claims.tsv` 与一致性检查**（`built`）
       抄 beads 的 schema（可寻址、依赖、就绪）与 Graphiti 的双时态失效列（`invalidated_at/by`），
       **都不引它们的运行时**。`cards_check.sh` 断言 memo 的 `- [ ]` 集合 == 表里 `{open,built}` 集合、
