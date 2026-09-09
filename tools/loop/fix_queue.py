@@ -110,6 +110,20 @@ def known_ids(path):
     return out or None
 
 
+# A slash-joined run of verdict tokens is documentation about verdicts, not a
+# verdict: `judgements must read SURVIVES/FALSIFIED/PARTIAL`. Found by F49's
+# pass 4 -- of the 11 both-token lines in memo.md, 2 had their polarity decided
+# by a mention like this rather than by their own verdict, which sits at column
+# 62 while the mention sits at 513. Stripped before either question is asked,
+# because such a mention is not evidence of a red verdict either.
+TOKEN_LIST = re.compile(
+    r"(?:SURVIVES|FALSIFIED|PARTIAL)(?:\s*/\s*(?:SURVIVES|FALSIFIED|PARTIAL))+")
+
+
+def strip_meta(line):
+    return TOKEN_LIST.sub("", line)
+
+
 def polarity(line):
     """Which verdict a line records: +1 SURVIVES, -1 red, 0 neither.
 
@@ -164,9 +178,10 @@ def scan(memo_lines, subjects, agents, known=None):
         # polarity, so a rejected SURVIVES does not read as an approval. A line
         # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
         # it owes nothing only if the round also dispatched twice.
-        if any(tok in line for tok in NEG):
+        line_v = strip_meta(line)
+        if any(tok in line_v for tok in NEG):
             neg |= here
-        if polarity(line) > 0 and PASS_VOCAB.search(line):
+        if polarity(line_v) > 0 and PASS_VOCAB.search(line_v):
             surv |= here
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here
@@ -430,6 +445,31 @@ def self_test():
         [],
         [],
         {"F38"},
+    )
+    # 13d. The two real lines pass 4 found: the verdict is at column 62 and a
+    #      mention of the token list sits hundreds of columns later. Shortened
+    #      here, structure preserved.
+    case(
+        "no enqueue: a mention of the token list is not a verdict",
+        [],
+        ["📋 **F42 pass 5 → VERDICT: SURVIVES（haiku）**：七个攻击全部通过；"
+         "判决格式要求写成 `SURVIVES/FALSIFIED/PARTIAL`"],
+        ["c48f07b fhp F42: close — pass 5 SURVIVES"],
+        2,
+        [],
+        [],
+        {"F42"},
+    )
+    case(
+        "no enqueue: criteria prose naming PARTIAL/FALSIFIED is not a red verdict",
+        [],
+        ["📋 **F49 pass 3 → VERDICT: SURVIVES（haiku）**：入队判据 agents≥2 + "
+         "PARTIAL/FALSIFIED + fix 提交含卡号"],
+        ["9d01b4d research cards: F49 row"],
+        2,
+        [],
+        [],
+        {"F49"},
     )
     # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
     #     used to yield the id "V2"; `_` is not alphanumeric.
