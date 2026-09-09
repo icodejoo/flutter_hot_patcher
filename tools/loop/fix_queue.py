@@ -110,12 +110,25 @@ def known_ids(path):
     return out or None
 
 
-# A slash-joined run of verdict tokens is documentation about verdicts, not a
-# verdict: `judgements must read SURVIVES/FALSIFIED/PARTIAL`. Found by F49's
-# pass 4 -- of the 11 both-token lines in memo.md, 2 had their polarity decided
-# by a mention like this rather than by their own verdict, which sits at column
-# 62 while the mention sits at 513. Stripped before either question is asked,
-# because such a mention is not evidence of a red verdict either.
+# A slash-joined run of verdict tokens is usually documentation about verdicts
+# rather than a verdict: `judgements must read SURVIVES/FALSIFIED/PARTIAL`.
+# Found by F49's pass 4 -- of the 11 both-token lines in memo.md, 2 had their
+# polarity decided by a mention like this, sitting at column 513, rather than by
+# their own verdict at column 62.
+#
+# It is stripped for ONE of the two questions only, and pass 5 is why. The first
+# version stripped it for both, and a verdict written as `VERDICT:
+# FALSIFIED/PARTIAL` then vanished entirely: no red verdict was seen, so a fix
+# with a red verdict behind it escaped the queue. Noise is survivable and an
+# escape is not, so the rule is asymmetric on purpose:
+#
+#   "did a red verdict happen"  -- asked of the RAW line. Erasing evidence that
+#                                  something went red is never safe. A mention
+#                                  in prose costs at worst a false enqueue, and
+#                                  only when no green verdict accompanies it.
+#   "is the final verdict green" -- asked of the STRIPPED line, because here the
+#                                  question is which token came last, and a
+#                                  format note at column 513 answers it wrongly.
 TOKEN_LIST = re.compile(
     r"(?:SURVIVES|FALSIFIED|PARTIAL)(?:\s*/\s*(?:SURVIVES|FALSIFIED|PARTIAL))+")
 
@@ -178,10 +191,9 @@ def scan(memo_lines, subjects, agents, known=None):
         # polarity, so a rejected SURVIVES does not read as an approval. A line
         # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
         # it owes nothing only if the round also dispatched twice.
-        line_v = strip_meta(line)
-        if any(tok in line_v for tok in NEG):
+        if any(tok in line for tok in NEG):
             neg |= here
-        if polarity(line_v) > 0 and PASS_VOCAB.search(line_v):
+        if polarity(strip_meta(line)) > 0 and PASS_VOCAB.search(line):
             surv |= here
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here
@@ -470,6 +482,21 @@ def self_test():
         [],
         [],
         {"F49"},
+    )
+    # 13e. Pass 5's escape: a verdict written as a slash-joined pair. Stripping
+    #      it for both questions erased the red verdict itself, and the fix
+    #      behind it left the queue. The template asks for one token, so this
+    #      form should not occur -- but a form that must not occur is not a
+    #      guarantee, and the failure direction here is the unsurvivable one.
+    case(
+        "enqueue: a verdict written FALSIFIED/PARTIAL is still a red verdict",
+        [],
+        ["📋 **F42 pass 1 → VERDICT: FALSIFIED/PARTIAL（haiku）**"],
+        ["c48f07b fhp F42: fix both findings"],
+        2,
+        ["enqueue F42"],
+        ["F42"],
+        {"F42"},
     )
     # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
     #     used to yield the id "V2"; `_` is not alphanumeric.
