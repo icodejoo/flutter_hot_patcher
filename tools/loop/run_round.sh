@@ -986,7 +986,14 @@ round_subjects=$(for pair in $heads_before; do
     [ "$h" = none ] && continue
     git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
   done)
-if [ -n "$round_subjects" ] || [ -s "$FIX_QUEUE" ]; then
+# Runs every round, including rounds that committed nothing. The first
+# production firing, 2026-09-09 20:16, is why: the gate ran, correctly found
+# nothing owed, and said nothing -- so "it ran and the queue is empty" and "the
+# block never executed" were indistinguishable in the log, with the 0-byte
+# UNREVIEWED_FIX the only trace either way. That is the failure class this file
+# is full of, and it was guarded for the self-test above and not for the gate
+# itself. So the summary line below is unconditional.
+if true; then
   # An id is only an id if the card table lists one. Unfiltered, the pattern
   # reads prose as cards: attack 4's replay over 120 commits touching memo.md
   # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
@@ -996,13 +1003,23 @@ if [ -n "$round_subjects" ] || [ -s "$FIX_QUEUE" ]; then
   fq_memo=$(mktemp) && fq_commits=$(mktemp)
   printf '%s\n' "$memo_added" >"$fq_memo"
   printf '%s\n' "$round_subjects" >"$fq_commits"
-  python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+  fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" \
-      --cards "$CARDS_TSV" 2>&1 |
-    while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
+      --cards "$CARDS_TSV" 2>&1)
+  fq_rc=$?
+  printf '%s\n' "$fq_out" | while IFS= read -r l; do
+    [ -n "$l" ] && say "fix-queue: $l"
+  done
   rm -f "$fq_memo" "$fq_commits"
-  if [ -s "$FIX_QUEUE" ]; then
-    say "WARNING: $(grep -c . "$FIX_QUEUE") fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
+  # NOT `grep -c ... || echo 0`: grep -c already prints 0 and *exits 1* when the
+  # count is zero, so the fallback fired too and $fq_owed became "0\n0" -- the
+  # summary line then arrived split in two. Caught by the case below, which is
+  # the only reason it is not in the log for a week.
+  fq_owed=$(grep -c . "$FIX_QUEUE" 2>/dev/null); fq_owed=${fq_owed:-0}
+  fq_commits_n=$(printf '%s\n' "$round_subjects" | grep -c . || true)
+  say "fix-queue: $fq_owed owed, $fq_commits_n commit(s), $agent_calls dispatch(es), rc=$fq_rc"
+  if [ "$fq_owed" -gt 0 ] 2>/dev/null; then
+    say "WARNING: $fq_owed fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
   fi
 fi
 

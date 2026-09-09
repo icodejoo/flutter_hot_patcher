@@ -135,5 +135,17 @@ out=$(run_round_gate '+state(B8): PATCHED_V2 verified after the PARTIAL verdict'
         'state(B8): PATCHED_V2 second round complete')
 expect "a phantom id from prose is not enqueued" "" "$out"
 
+# 8. The gate has to be audible even when it has nothing to say. Its first
+#    production firing (2026-09-09 20:16) ran, found nothing owed, printed
+#    nothing, and left a 0-byte queue file as the only evidence it had executed
+#    at all -- "ran and found nothing" and "never ran" looked identical.
+rm -f "$WORK/queue"
+out=$(run_round_gate '+- 2026-09-09T ❤️ **心跳**' 3)
+case $out in
+  *"fix-queue: 0 owed"*) note ok "a round with nothing owed still says so" ;;
+  *) note FAIL "silent gate: no summary line when nothing is owed"
+     printf '%s\n' "$out" | sed 's/^/       /' ;;
+esac
+
 printf '%d failure(s)\n' "$fail"
 [ "$fail" -eq 0 ]
