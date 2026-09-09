@@ -417,6 +417,9 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       ⚠️ **别再把邻近差异顺手一起归因掉**——这正是 F16 与今天这一轮的同一种错。
 
 - 2026-09-09T（claude-sonnet-4-6，新会话）❤️ **心跳**（用户指令「先读 LOOP_CONTRACT.md 契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务」）。恢复检查：SDK clean @ `232849c87d8`；研究树最近提交 `6026011`（F35）；FHP 树 memo.md 仅修改。无 PAUSE。`grep -c "^- \[ \]" memo.md` = **4**（F36/F37/F38/F39）。**第一项未完成任务 = F36（修掉「DD 派发 92 vs 0」错标）→ 派发子代理。**
+- 2026-09-09T（claude-sonnet-4-6，第二次新会话）❤️ **心跳**（契约正文已读；恢复：SDK clean @ `232849c87d8`，研究树 @ `4039cbb`（F36），FHP 仅 memo.md 修改，无 PAUSE 无 RESCUED，open=3（F37/F38/F39））。**第一项未完成任务 = F37（复刻原生调用降级形式；前置：先解出 THR+0x908，再落地发射端）→ 派发子代理。**
+  🔑 **THR+0x908 前置已解**（从 Shorebird iOS-release dSYM 实测）：`call_bootstrap_native_entry_point_`（line 1660），我们等价字段 `bootstrap_native_wrapper_entry_point_`（已在 CACHED_ADDRESSES_LIST）。子代理已派发，等待结论中。
+- 2026-09-09T（claude-sonnet-4-6，第三次新会话）❤️ **心跳**（契约正文已读；恢复：stash pop 完成（2行memo追加），SDK clean @ `232849c87d8`，研究树 @ `4039cbb`（F36完成），FHP 仅 memo.md 修改，open=3（F37/F38/F39））。**第一项未完成任务 = F37 → 派发子代理执行落地。**
 - 2026-09-09T（claude-sonnet-4-6，同会话）✅ **F36 完成**（研究树 `9bc5443` + `4039cbb`）。
   判据全部通过：① `measure_dd_emission.sh`：NOP 判别器在位，`native_patched theirs=92 / dd_dispatch=0`（正确识别为原生调用非 DD 派发），sim guard 头注已改为实测值 `ours 76 @0xef0`；② `dd_pass_check.sh`：`count_dd_sites()` 已加 NOP 过滤，`dd_gap.expected` 更新为 `voters ours=3 theirs=0`（verify_all 0 failures）；③ `dd_pass_check.sh` 头注陈旧部分（「theirs 92 (informational)」「ours 3 vs theirs 92 → FAIL」）已更新为 F36 后实测值；负控制：去掉 NOP 判别 → `dd_dispatch theirs=92`（变红 ✅）；`verify_all.sh` **25 ran / 0 failed**（`9bc5443` 前实测，注释变更无功能影响）。⚠️ **不许再用「DD 派发 92 vs 0」挡任何 unknown 格子。** 真实分歧是原生调用代码生成形式（F37 的工作）。
 
