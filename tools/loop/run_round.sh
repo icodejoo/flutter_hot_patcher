@@ -99,7 +99,17 @@ PROMPT="$PROMPT
 它的成功判据是**找出破绽**，不是确认通过。
 - 它报 FALSIFIED 或 PARTIAL：**不许关卡**，把它的结论写进 memo.md 并结束本轮。
 - 它报 SURVIVES：可以关卡，但必须把它那句「STILL OPEN」原文抄进 memo.md。
-不许由做这件事的那个子代理自己跑这一遍，也不许你自己代替它下结论。"
+不许由做这件事的那个子代理自己跑这一遍，也不许你自己代替它下结论。
+
+【派发纪律】每个工具结果都会留在上下文里、被之后每一次调用重发一遍，所以成本是
+N×(入场+收尾)/2，不是调用次数。实测（三个子代理）：入场 ~67k，收尾 120-204k，后半段占 6 成。
+派发时照这五条写提示词：
+① 一个假设一个脚本，跑一次、提交它（探索也要脚本化，不要 20-40 次交互式 grep）
+② 给死路径和行号（cards.tsv 有每张卡的判据与负控制），不要让它去「探索」
+③ 按阶段拆代理：两个 58 次调用的代理 = 一个 116 次的一半价钱
+④ 明确写出「哪些产物只许聚合、不许打印」——我们的产物 400KB-900KB，进一次上下文比十次 grep 还贵
+⑤ 要求严格返回格式（只回状态/文件/判据实测值），并要求它把大读取放到最后
+完整算术与出处：tools/loop/prompts/dispatch.md（**不必每轮去读它**，上面五条就是全部要做的）。"
 
 # A rescued stash that nobody is told about preserves bytes and loses progress:
 # the next round sees a clean tree, starts the same task from zero, and gets cut
