@@ -585,9 +585,76 @@ kill "$watchdog" 2>/dev/null
 kill "$stall_watchdog" 2>/dev/null
 kill "$nocommit_watchdog" 2>/dev/null
 
-if grep -qiE 'spend limit|usage limit|rate.?limit' "$out"; then
-  echo $(( $(date +%s) + BACKOFF )) >"$BLOCKED"
-  say "round BLOCKED on quota; backing off ${BACKOFF}s"
+# ---- quota: read the clock, and do not confuse a timeout with a limit -------
+# What was here matched three phrases and then slept for a fixed hour. Three
+# things wrong with that, and other people's loops have already been bitten by
+# each: a text match on wording nobody controls; no use of the reset time the
+# limit message actually prints; and no way to tell a limit from a round we
+# killed ourselves. ralph-claude-code documents the last one specifically --
+# exit 124 was misread as the five-hour limit -- and claude-auto-retry parses
+# the printed reset instead of guessing, timezone and DST included.
+#
+# Our own kills are the common case here now: the stall watchdog, the ceiling
+# and the no-commit deadline all terminate the worker, and a terminated worker
+# can leave a partial line that trips the phrase match. Backing off an hour
+# because we cut a round short would be the loop punishing itself.
+#
+# Order matters: rc is checked before the text, because rc is ours and the text
+# is theirs.
+quota_hit=0
+case "$rc" in
+  124|143|137)
+    # 124 = coreutils timeout, 143 = SIGTERM (our watchdogs), 137 = SIGKILL.
+    say "round ended rc=$rc (terminated, not a quota block) -- no backoff"
+    ;;
+  *)
+    if grep -qiE 'spend limit|usage limit|rate.?limit|quota' "$out"; then quota_hit=1; fi
+    ;;
+esac
+
+if [ "$quota_hit" -eq 1 ]; then
+  # Record the line verbatim. The one thing every quota discussion in this repo
+  # has lacked is an observation: memo.md still says the hard-block string has
+  # never been seen, so the predicate may simply not match when it matters. The
+  # first real block should teach us the wording rather than scroll past.
+  matched=$(grep -iE -m1 'spend limit|usage limit|rate.?limit|quota' "$out" | cut -c1-200)
+  say "quota line seen: $matched"
+
+  # Prefer the reset the message prints over a fixed hour. Accepted forms, all
+  # anchored to the same day: "resets at 3:45pm", "reset at 15:45", "until 3pm".
+  # A parse that lands in the past is treated as tomorrow, which is what makes
+  # a late-evening reset work without any timezone arithmetic.
+  until_ts=""
+  reset_hhmm=$(grep -ioE '(reset[s]?( at)?|until)[[:space:]]+[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?' "$out" \
+               | head -1 | grep -ioE '[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?' | head -1)
+  if [ -n "$reset_hhmm" ]; then
+    until_ts=$(PARSE="$reset_hhmm" python3 - <<'PY' 2>/dev/null
+import os, re, time, datetime
+s = os.environ.get("PARSE", "").strip().lower().replace(" ", "")
+m = re.match(r'^(\d{1,2})(?::(\d{2}))?(am|pm)?$', s)
+if m:
+    h = int(m.group(1)); mi = int(m.group(2) or 0); ap = m.group(3)
+    if ap == "pm" and h < 12: h += 12
+    if ap == "am" and h == 12: h = 0
+    if 0 <= h <= 23 and 0 <= mi <= 59:
+        now = datetime.datetime.now()
+        t = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if t <= now: t += datetime.timedelta(days=1)
+        print(int(time.mktime(t.timetuple())))
+PY
+)
+  fi
+
+  if [ -n "$until_ts" ]; then
+    # Margin, because a reset time is a boundary and waking exactly on it walks
+    # straight back into the wall.
+    until_ts=$(( until_ts + 120 ))
+    echo "$until_ts" >"$BLOCKED"
+    say "round BLOCKED on quota; message says reset at $reset_hhmm -- waiting until $(date -r "$until_ts" '+%H:%M:%S' 2>/dev/null || echo "$until_ts")"
+  else
+    echo $(( $(date +%s) + BACKOFF )) >"$BLOCKED"
+    say "round BLOCKED on quota; no reset time in the message -- falling back to ${BACKOFF}s"
+  fi
   rm -f "$out"
   exit 2
 fi
