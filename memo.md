@@ -607,3 +607,43 @@ router 里有 `read_protected` 路由），但**如果据此改了，写出来�
 2. **判据类比较（byte diff、指令编码、hash）同理** —— 那是本项目的全部价值所在。
 3. 待做：`headroom evals` 的 compression robustness 负控制（喂一对只差一个十六进制偏移的 dump），
    若会合并就把 Bash/objdump 输出加进 `excluded_tool`（该机制本来就在，router 里已有 340 次命中）。
+
+- [x] **F42：证伪 pass 已建立并**用回放验证过** ✅ `cfad404`（模板）+ 本条（回放结果）
+      `tools/loop/prompts/falsify.md`，七条攻击每条都对应本仓库真出过的一次假结果。
+      **回放输入**：F18 那张「用 `Thread+0x678` 关掉 `disassemble` 三格」的历史错卡（真值：解释了 0 个差异）。
+      **一个新鲜代理的结论：`VERDICT: FALSIFIED`**，攻击 3 如预期命中 ⇒ **模板不是装饰。**
+      ⚠️ **它比历史真值多抓了一个，见下。** 且它与树的现状一致（那三格现在就是 `unknown`，
+      note 写着 `DEMOTED to unknown`）—— 回放**没有推翻当前状态，它验证了工具**。
+      🔴 **仍未接进循环**：要在轮次提示词里挂「关卡前必跑」，那是 `run_round.sh` 的改动，
+      而它正被 11:41 那轮执行中（`pgrep -f run_round.sh` = 5）⇒ **机制存在但没有强制力。**
+
+### 🔴 第八个仪器缺陷：`structural_evidence_check.sh` 接受一个凭空编造的 locus（2026-09-09 实测）
+
+判据（可复跑）：把一条 locus 写成 **`Thread+0xDEAD`** 塞进证据表，检查打印
+`ok disassemble/*: struct_offset Thread+0xDEAD` / **`0 failure(s)`**。
+成因两条叠加：① **证据脚本回显自己的参数**（输出 `LOCUS_OK Thread+0xDEAD+0x678`）；
+② `expect` 用 `grep -qF` 做**子串**匹配 ⇒ **任何格式正确的十六进制都能过**。
+⚠️ 而这个闸门正是 **G-e** 为了「写不出具名结构就只能记 `unknown`」而建的，
+**它自己是原理上不可能失败的那一类**（与第一个缺陷同族：判定被写成常量）。
+另有一条同族的：`parity_matrix.sh:488-489` 把两个工具的运行都套了 `>/dev/null 2>&1 || true`
+⇒ **跑失败会留下陈旧产物，和跑成功长得一模一样。**
+
+**`Thread+0x678` 这条 locus 的真实解释力（同一轮实测）**：
+hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个），
+而那 2 个是 `DumpMetadata` 里**工具发布的关于自身结构布局的字段**，**不是快照内容**
+（`analyze_snapshot_api_impl.cc:658-679`）。
+⚠️ 且**这份产物里根本没有指令字节**（`grep -c 'ldr\|str \|0xd503201f'` → 0，rc=1）
+⇒「ldr 立即数不同」这个机制**在这一格上不可观测**；
+`0x678/8=207` 与 `0x688/8=209` 都落在 12 位缩放立即数内 ⇒ **该偏移不可能改变任何指令尺寸**，
+而实际有 **63 处 `size` 不同**（`CallToRuntime` 156 vs 396、`Map._fromKeyValues` 440 vs 436）。
+
+🔑 **`disassemble` 三格的真实分量清单（F39 直接可用，不必重新侦察）**：
+- **我们自己插进去的 14 个 Shorebird stub**（`runtime/vm/stub_code_list.h:155-175`，在 `V(InitStaticField)` 之前）
+  ⇒ index 9854 起 **50 处 name 差**（ours `TransitionDartToSimulatorIfNeeded` vs theirs `InitStaticField`）
+  + **389 处 offset 差**（约 1200 字节整体位移）
+- **stub body 真的不同** ⇒ 63 处 `size` 差
+- **`"macos"` vs `"ios"`**（object id 3945）+ 四个 `snapshot_data` 地址 ⇒ 目标/构建身份
+- 合规的关闭方式：`diff_units.sh disassemble` 给出 **UNITS 7032**，
+  residual 必须 examine 全部 7032 并逐分量给 locus（**没有一个是 Thread 偏移**）。
+⚠️ 现有的 `evidence_disassemble_residual.sh` 打 `UNEXPLAINED 0` 但**没有 `EXAMINED` 行**
+⇒ 接进闸门会直接被分母判据打红。**别接，重写。**
