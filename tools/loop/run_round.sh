@@ -384,7 +384,12 @@ idle_before=$(fingerprint)
 # Counted here so that "a card was closed this round" is a fact rather than a
 # claim in the round's own report. The gate rule is in the prompt, but a rule in
 # a prompt is a request; this is the part that notices when it was not followed.
-open_before=$(grep -c '^- \[ \]' "$REPO/memo.md" 2>/dev/null || echo 0)
+closed_ids() {
+  # Ids of closed cards, sorted. Counting was not enough: see the gate below.
+  grep '^- \[x\]' "$REPO/memo.md" 2>/dev/null |
+    sed -n 's/^- \[x\] \*\*\([A-Za-z][0-9a-z]*\)[：:].*/\1/p' | sort -u
+}
+closed_before=$(closed_ids)
 memo_rev_before=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none)
 
 # ---- undo point ------------------------------------------------------------
@@ -613,12 +618,21 @@ kill "$nocommit_watchdog" 2>/dev/null
 # is theirs.
 quota_hit=0
 case "$rc" in
-  124|143|137)
+  124|143|137|15|9)
     # 124 = coreutils timeout, 143 = SIGTERM (our watchdogs), 137 = SIGKILL.
+    # 15 and 9 because `script -q /dev/null sh -c 'kill -TERM $$'` was measured
+    # returning the bare signal number rather than 128+n. The production path
+    # does report 143, but the wrapper is not the only thing that can die.
     say "round ended rc=$rc (terminated, not a quota block) -- no backoff"
     ;;
   *)
-    if grep -qiE 'spend limit|usage limit|rate.?limit|quota' "$out"; then quota_hit=1; fi
+    # The phrases must be attached to something only the API says. Matching the
+    # bare words made the predicate fire on our own tree: this file contains 16
+    # of them, memo.md 3, the contract 1 -- and $out is the round's own output,
+    # so a round that quoted the quota code would have blocked the loop for an
+    # hour. Found by review, not by an incident, and only because the reviewer
+    # grepped the repo instead of the log.
+    if grep -qiE '(claude (ai )?)?(usage|spend|rate) limit (reached|exceeded|hit)|limit will reset|rate.?limited|429|quota exceeded' "$out"; then quota_hit=1; fi
     ;;
 esac
 
@@ -627,7 +641,7 @@ if [ "$quota_hit" -eq 1 ]; then
   # has lacked is an observation: memo.md still says the hard-block string has
   # never been seen, so the predicate may simply not match when it matters. The
   # first real block should teach us the wording rather than scroll past.
-  matched=$(grep -iE -m1 'spend limit|usage limit|rate.?limit|quota' "$out" | cut -c1-200)
+  matched=$(grep -iE -m1 '(claude (ai )?)?(usage|spend|rate) limit (reached|exceeded|hit)|limit will reset|rate.?limited|429|quota exceeded' "$out" | cut -c1-200)
   say "quota line seen: $matched"
 
   # Prefer the reset the message prints over a fixed hour. Accepted forms, all
@@ -635,8 +649,20 @@ if [ "$quota_hit" -eq 1 ]; then
   # A parse that lands in the past is treated as tomorrow, which is what makes
   # a late-evening reset work without any timezone arithmetic.
   until_ts=""
-  reset_hhmm=$(grep -ioE '(reset[s]?( at)?|until)[[:space:]]+[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?' "$out" \
-               | head -1 | grep -ioE '[0-9]{1,2}(:[0-9]{2})?[[:space:]]*(am|pm)?' | head -1)
+  # The clock has to look like a clock. The first version accepted a bare
+  # 1-2 digit number after "reset at", so "reset at 2026-09-09 15:00" matched
+  # the "20" of the year and slept until 20:00 -- five hours off, in the
+  # direction that wastes the day. "resets at 3-4pm" took the 3 and waited until
+  # 03:00 tomorrow. Requiring either HH:MM or an am/pm suffix rejects both, and
+  # rejecting is the safe failure here: it falls back to the flat BACKOFF.
+  #
+  # Still not handled, and deliberately left to the fallback rather than guessed
+  # at: "in 30 minutes", "in 5 hours", ISO timestamps with a zone, and any
+  # timezone suffix at all -- a bare "10:00 PM (UTC)" is read as local. The
+  # first real block will show which of these the API actually prints; until
+  # then the logged line is how we find out.
+  reset_hhmm=$(grep -ioE '(reset[s]?( at)?|until)[[:space:]]+([0-9]{1,2}:[0-9]{2}([[:space:]]*(am|pm))?|[0-9]{1,2}[[:space:]]*(am|pm))' "$out" \
+               | head -1 | grep -ioE '[0-9]{1,2}:[0-9]{2}([[:space:]]*(am|pm))?|[0-9]{1,2}[[:space:]]*(am|pm)' | head -1)
   if [ -n "$reset_hhmm" ]; then
     until_ts=$(PARSE="$reset_hhmm" python3 - <<'PY' 2>/dev/null
 import os, re, time, datetime
@@ -746,21 +772,45 @@ fi
 # argument that made the old finisher destroy 478 lines. So it records the fact
 # and hands it to the next round, which can either produce the missing pass or
 # say why it does not apply.
-open_after=$(grep -c '^- \[ \]' "$REPO/memo.md" 2>/dev/null || echo 0)
-if [ "$open_after" -lt "$open_before" ]; then
+# Which cards closed, by id -- not how many.
+#
+# The first version compared counts, and a review replayed it over the last 60
+# memo.md commits: on 12 of them the done count rose while the open count did
+# not fall, because the round closed one card and added another in the same
+# breath. Every one of those would have passed a counting gate silently. The
+# card ids are right there in the line; using their difference costs nothing and
+# cannot be fooled that way.
+closed_after=$(closed_ids)
+newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
+
+if [ -n "$newly_closed" ]; then
   # Everything the round wrote into memo.md this round: committed and not.
   memo_added=$( { git -C "$REPO" diff "$memo_rev_before" -- memo.md 2>/dev/null;
                   git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
-  if printf '%s' "$memo_added" | grep -qE 'VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪 pass|falsif'; then
-    say "gate ok: $(( open_before - open_after )) card(s) closed with a falsification verdict recorded"
+  # The verdict has to be about the card that closed. The bare token was not
+  # enough: memo.md already contains 11 lines carrying it, so any round that
+  # rewrote a region near one of them would have satisfied the gate by
+  # coincidence. Requiring the id and a verdict on the same added line ties the
+  # evidence to the claim.
+  unreviewed=""
+  for id in $newly_closed; do
+    if ! printf '%s' "$memo_added" | grep -qE "$id.*(VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪)|((VERDICT:[[:space:]]*(SURVIVES|FALSIFIED|PARTIAL)|证伪).*$id)"; then
+      unreviewed="$unreviewed $id"
+    fi
+  done
+  if [ -z "$unreviewed" ]; then
+    say "gate ok: closed$(printf ' %s' $newly_closed) with a falsification verdict recorded for each"
+    rm -f "$STATE/UNREVIEWED_CLOSURE"
   else
-    say "WARNING: $(( open_before - open_after )) card(s) closed with NO falsification verdict in memo.md -- next round must supply it or justify"
-    printf 'A card was closed in the previous round (%s) with no falsification verdict\nin memo.md. Before doing anything else: either run the pass now\n(tools/loop/prompts/falsify.md) against that card and record the verdict, or\nwrite in memo.md why the pass does not apply to it. Closing a card is the one\naction a later round does not revisit.\n' \
-      "$(date '+%Y-%m-%d %H:%M')" >"$STATE/UNREVIEWED_CLOSURE"
+    say "WARNING: closed with NO falsification verdict:$unreviewed -- next round must supply it or justify"
+    printf 'The previous round (%s) closed%s with no falsification verdict tied to it\nin memo.md. Before doing anything else: either run the pass now\n(tools/loop/prompts/falsify.md) against that card and record the verdict on a\nline naming the card, or write in memo.md why the pass does not apply. Closing\na card is the one action a later round does not revisit.\n' \
+      "$(date '+%Y-%m-%d %H:%M')" "$unreviewed" >"$STATE/UNREVIEWED_CLOSURE"
   fi
-else
-  rm -f "$STATE/UNREVIEWED_CLOSURE"
 fi
+# The marker is NOT cleared here. It used to be removed by any later round that
+# closed nothing, which meant the demand erased itself while the missing pass
+# was still missing -- a reminder that expires on its own is a reminder nobody
+# has to answer. It is now removed only above, when a verdict actually appears.
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
   idle=$(( $(cat "$IDLE_COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
