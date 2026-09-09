@@ -423,7 +423,24 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 - 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
 
 - 2026-09-09T（claude-sonnet-4-6，交互式会话）❤️ **心跳**（契约正文已读；F38 已关闭（两次证伪 pass：FALSIFIED→修复→SURVIVES，研究树 `1010f43` + `8c38c01`，FHP `1f2daaa`），SDK clean @ `9f740d6104b`，研究树 @ `8c38c01`，FHP memo.md 已提交，无 PAUSE 无 RESCUED，open=7（F39/F41/F42/F43/F45/F46/F47/F48））。**第一项未完成任务 = F39（18 格 unknown 根因重估）→ 已派发子代理。**
-- [ ] **F39：18 格 unknown 的根因重估（旧归因一半已作废）**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话，子代理 `bzqsr2fe4` 返回）📋 **F39 pass 1 → PARTIAL（haiku-4-5）**：
+  Attack 1：`evidence_disassemble_residual.sh` 第 64 行把 `unexpected_meta=0` 写死为字面量字符串（实际计算值在第 47 行），该判据无法变红；f39_analysis.py 只读 `fn_unexplained_size`，跳过了 `unexpected_meta`。
+  Attack 7：disassemble×3 的 `STILL_UNEXPLAINED=0` 声称 Thread+0x678 解释了全部 1018 个 diff units，但残差脚本只检验「同哈希不同尺寸」（构造上永远为空的集合），从未把 1018 个 diff-line 拆解为「元数据行 + 函数行 = 1018」。
+  **FLAW：disassemble×3 的 EXPLAINED=1018 没有被计算证明，仅有 locus 存在证明。**
+  **修复（研究树 `09847f2`）**：① `evidence_disassemble_residual.sh` 改为打印 `len(unexpected_meta)` 而非字面量 `0`；② `f39_analysis.py` 将 disassemble×3 降格：EXPLAINED=0，STILL_UNEXPLAINED=units_now（候选根因保留，但标注「unit decomposition 未实测」）；③ dump_object_pool 那段加 RESIDUAL_OK 标签（other=total-entries-code_infos=0 才是真正的残差测量，与只检验 locus 存在性有区别）。
+  → **不关卡，开第二次证伪 pass。**
+
+- 2026-09-09T（claude-sonnet-4-6，同会话，第二次 haiku-4-5 证伪）✅ **F39 pass 2 → SURVIVES**：
+  七项攻击全部通过：① 无硬编码判据（fix 已生效，`unexpected_meta` 动态打印）；
+  ② ours/theirs dump_object_pool 文件确实不同（cmp 字节 61/62/63 均不同）；
+  ③ 分区完整性验证：entries(196) + code_infos(2254) = full_diff(2450) for hello，base_dd/prog 同；
+  ④ `kResetToBootstrapNative` 仅出现在 dump_object_pool，不波及其他 flag；
+  ⑤ 提交 `09847f2` 在研究树 HEAD，f39_analysis.out 显示 3 格 dump_object_pool×3 STILL_UNEXPLAINED=0；
+  ⑥ locus LOCUS_OK 与分区共同证明（pairs 段双侧 0）；⑦ disassemble×3 已正确降格为 STILL_UNEXPLAINED=1018。
+  **STILL OPEN（原文）**：Could op_subgraph_hash cascade claim (891 functions) proven independently? evidence_thread_offset_pool.sh verifies only 118 self_hash diffs; 891 op_hash-only changes assumed cascade them. test directly proves op_subgraph_hash changes only occur in functions where self_hash also changed would close this.
+
+- [x] **F39：18 格 unknown 的根因重估（旧归因一半已作废）**
       账上写的是「全部 18 格 unknown 的共同根因 = 两个代码 gap：Sim guard + DD dispatch」。
       **DD dispatch 那半已作废**（F35），**Sim guard 那半的量级也错了**（差是 8 不是 83）。
       新的候选根因是 F37 那条（原生调用降级形式，每点 +1 word，92/178 个点）。
