@@ -422,6 +422,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
 
 - 2026-09-09T（claude-sonnet-4-6，同会话，子代理返回）📋 **F34b 结论**。子代理 RESULT=PASS。根本原因并非 GC stale raw ptr（那个仮説被证伪）：实际阻塞是 `verify_sdk_hash=true` 导致 ProductARM64/ReleaseARM64 停建，留下 Sep 8 旧二进制，而 `afa1f9c73cc`（2026-08-27）早已修好计数器。GN 用 `--no-verify-sdk-hash` 重生成再全量重建后 `rewritten=2`。COMMIT_SDK=NONE（代码无需改），COMMIT_RESEARCH=NONE，verify_all **25 ran / 0 failed**，负控制 PASS，dd_gap.expected 钉子维持 `voters ours=3 theirs=92`。**下一项 = F37**（根据 `grep -n "^- \[ \]" memo.md` 排序）。
 
+- 2026-09-09T（claude-sonnet-4-6，交互式会话）❤️ **心跳**（契约正文已读；F38 已关闭（两次证伪 pass：FALSIFIED→修复→SURVIVES，研究树 `1010f43` + `8c38c01`，FHP `1f2daaa`），SDK clean @ `9f740d6104b`，研究树 @ `8c38c01`，FHP memo.md 已提交，无 PAUSE 无 RESCUED，open=7（F39/F41/F42/F43/F45/F46/F47/F48））。**第一项未完成任务 = F39（18 格 unknown 根因重估）→ 已派发子代理。**
 - [ ] **F39：18 格 unknown 的根因重估（旧归因一半已作废）**
       账上写的是「全部 18 格 unknown 的共同根因 = 两个代码 gap：Sim guard + DD dispatch」。
       **DD dispatch 那半已作废**（F35），**Sim guard 那半的量级也错了**（差是 8 不是 83）。
