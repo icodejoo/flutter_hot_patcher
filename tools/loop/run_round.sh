@@ -134,6 +134,39 @@ if [ -s "$STATE/UNREVIEWED_CLOSURE" ]; then
 $(cat "$STATE/UNREVIEWED_CLOSURE")"
 fi
 
+# The fix-patch queue: tools/loop/fix_queue.py holds the rules and their
+# negative controls. Kept separate from the marker above because its trigger is
+# different -- a fix usually closes no card, so the closure gate never looks at
+# it -- and because there can be several at once: on 2026-09-09 one round fixed
+# four cards a batch review had knocked down, and reviewed none of the fixes.
+#
+# The instrument is self-tested here rather than trusted. A gate that is quietly
+# off is this project's most expensive recurring failure, and the next round
+# could not tell "nothing owes a pass" from "the queue script is broken" --
+# both of them print nothing.
+FIX_QUEUE=$STATE/UNREVIEWED_FIX
+if ! python3 "$REPO/tools/loop/fix_queue.py" --self-test >/dev/null 2>&1; then
+  say "WARNING: fix_queue.py --self-test fails -- the fix-patch gate is OFF"
+  PROMPT="$PROMPT
+
+【仪器损坏】tools/loop/fix_queue.py --self-test 不通过 ⇒「修补丁待审队列」这道闸门现在是关的。
+在做别的事之前先修它，并跑通它自己那 9 个用例（含 5 个负控制，见文件头注释）。"
+fi
+if [ -s "$FIX_QUEUE" ]; then
+  PROMPT="$PROMPT
+
+【修补丁尚未经证伪】下面每一项都是：证伪 pass 报了 FALSIFIED/PARTIAL → 有人修了它 →
+但那个修补丁自己没有再过一遍 pass。修补丁不继承被修对象的审查结论（契约五之四末段）。
+在开始新任务之前，对每一项派一个**新鲜的**子代理跑 tools/loop/prompts/falsify.md，
+CLAIM 写成「<id> 的修补丁真的修掉了它自己被报出的那处破绽」。
+判决必须是含 id、SURVIVES 与 (fix) 的一行，例如
+    F41 修补丁 VERDICT: SURVIVES (fix) —— <一句实测依据>
+少了 (fix) 的判决是关于卡片的，不是关于修补丁的，队列不会消。
+若判定某一项不必再审，同样写一行说明为什么（例如它已被别的卡取代），
+再把它那一行从 $FIX_QUEUE 里删掉。
+$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)"
+fi
+
 # And after repeated barren rounds, stop asking for the same thing. Pausing
 # stops the burn but also stops the work -- this loop sat for three days that
 # way. Repeated failure to commit anything is evidence the task does not fit in
@@ -465,6 +498,16 @@ closed_ids() {
 }
 closed_before=$(closed_ids)
 memo_rev_before=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none)
+# Per-tree HEAD, so the round's own commit subjects can be read back at the end.
+# fingerprint() above only answers "did HEAD move"; attributing a fix to a card
+# needs the subjects, because the subject line is where this project writes the
+# card id. Recorded as tree=sha pairs -- and with `=`, not `:`, after a
+# colon-delimited argument lost its separator in transit to the finisher and
+# made it skip every tree while exiting 0.
+heads_before=""
+for t in "$SDK" "$RESEARCH" "$REPO"; do
+  heads_before="$heads_before $t=$(git -C "$t" rev-parse HEAD 2>/dev/null || echo none)"
+done
 
 # ---- undo point ------------------------------------------------------------
 # .claude/hooks/deny-destructive.sh refuses the destructive commands it knows.
@@ -872,10 +915,13 @@ say "round dispatch: $agent_calls subagent(s), $tool_calls tool call(s) (transcr
 closed_after=$(closed_ids)
 newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
 
+# Everything the round wrote into memo.md this round: committed and not. Read
+# here rather than inside the gate below, because the fix-patch gate needs the
+# same lines and neither gate can decide anything without them.
+memo_added=$( { git -C "$REPO" diff "$memo_rev_before" -- memo.md 2>/dev/null;
+                git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
+
 if [ -n "$newly_closed" ]; then
-  # Everything the round wrote into memo.md this round: committed and not.
-  memo_added=$( { git -C "$REPO" diff "$memo_rev_before" -- memo.md 2>/dev/null;
-                  git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
   # The verdict has to be about the card that closed. The bare token was not
   # enough: memo.md already contains 11 lines carrying it, so any round that
   # rewrote a region near one of them would have satisfied the gate by
@@ -908,6 +954,34 @@ fi
 # closed nothing, which meant the demand erased itself while the missing pass
 # was still missing -- a reminder that expires on its own is a reminder nobody
 # has to answer. It is now removed only above, when a verdict actually appears.
+
+# ---- gate: the fix patches themselves ---------------------------------------
+# The gate above asks whether a CLOSURE was reviewed. This one asks the question
+# the contract's own last paragraph raises and nothing enforced: was the PATCH
+# that answered a red verdict ever reviewed itself? On 2026-09-09 the answer was
+# no, four times in one round, and the only record of it was a sentence in
+# memo.md saying so.
+#
+# Same discipline as above: everything here comes from the machine's side of the
+# round -- the added memo lines read above, the commit subjects the round
+# produced, and the dispatch count from its own transcript. Never its report.
+round_subjects=$(for pair in $heads_before; do
+    t=${pair%%=*}; h=${pair#*=}
+    [ "$h" = none ] && continue
+    git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
+  done)
+if [ -n "$round_subjects" ] || [ -s "$FIX_QUEUE" ]; then
+  fq_memo=$(mktemp) && fq_commits=$(mktemp)
+  printf '%s\n' "$memo_added" >"$fq_memo"
+  printf '%s\n' "$round_subjects" >"$fq_commits"
+  python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+      --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" 2>&1 |
+    while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
+  rm -f "$fq_memo" "$fq_commits"
+  if [ -s "$FIX_QUEUE" ]; then
+    say "WARNING: $(grep -c . "$FIX_QUEUE") fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
+  fi
+fi
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
   idle=$(( $(cat "$IDLE_COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
