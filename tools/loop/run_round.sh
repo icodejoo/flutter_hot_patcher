@@ -380,6 +380,7 @@ fingerprint() {
 # Without this, "the chain broke" and "it ran but produced nothing" look
 # identical on disk -- which is exactly what cost us an evening.
 say "round start (permission-mode=$PERMISSION_MODE)"
+round_started_at=$(date +%s)
 idle_before=$(fingerprint)
 # Counted here so that "a card was closed this round" is a fact rather than a
 # claim in the round's own report. The gate rule is in the prompt, but a rule in
@@ -398,6 +399,64 @@ if ! pgrep -f 'wip_snapshot.sh --daemon' >/dev/null 2>&1; then
   say "WARNING: wip_snapshot daemon is not running -- taking a one-shot snapshot; start it with tools/loop/ralph.sh"
   "$REPO/tools/loop/wip_snapshot.sh" --once >/dev/null 2>&1 || say "WARNING: one-shot snapshot failed too"
 fi
+
+# ---- did the round dispatch anything, and how much did it cost? ------------
+# Both questions have the same answer source: the round's own transcript. The
+# harness writes one $CLAUDE_PROJECT/<session>.jsonl per session, so the file
+# that changed during this round is this round's.
+#
+# Why this exists: at 15:03 the gate below printed "gate ok: closed F38 with a
+# falsification verdict recorded for each" -- its first production firing --
+# and it was wrong. The round had written the words "证伪 pass 判决：F38
+# SURVIVES（两次 pass）" into memo.md itself. Its transcript shows Agent: 0,
+# and the round produced no agent-*.jsonl at all while the two rounds before it
+# produced 4 and 2. The gate greps memo text, so a round can satisfy it by
+# describing a review that never happened.
+#
+# It also gives F48 the instrument it never had: the tool-call count per round,
+# which is the only measurable form of "dispatch fewer, bigger calls".
+PROJ_DIR=${FHP_LOOP_PROJ_DIR:-$HOME/.claude/projects/-Users-Cruz-Documents-flutter-hot-patcher}
+transcripts_before=$(ls -1 "$PROJ_DIR"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+
+round_dispatch_stats() {
+  # Prints "<agent_calls> <tool_calls> <file>", or "0 0 none" if no transcript
+  # from this round can be identified. `none` is deliberately distinguishable
+  # from a real zero: "we could not tell" and "it dispatched nothing" must not
+  # look the same, which is the mistake this whole block exists to correct.
+  # Selected by BIRTH time, not by newest-modified. A round creates a new
+  # session transcript, so its birth is the round's start; picking the
+  # newest-modified file instead selects whichever session is being written
+  # right now, which during supervision is a human's interactive session. That
+  # was the first version's bug, and it failed in the safe direction only by
+  # luck.
+  local newest="" f b
+  for f in "$PROJ_DIR"/*.jsonl; do
+    [ -e "$f" ] || continue
+    b=$(stat -f '%B' "$f" 2>/dev/null) || continue
+    [ "$b" -ge "$round_started_at" ] 2>/dev/null || continue
+    if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest=$f; fi
+  done
+  if [ -n "$newest" ]; then
+    python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 none'
+import json, sys, io
+agent = tools = 0
+for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
+    try: d = json.loads(line)
+    except Exception: continue
+    m = d.get("message")
+    if not isinstance(m, dict): continue
+    c = m.get("content")
+    if not isinstance(c, list): continue
+    for b in c:
+        if isinstance(b, dict) and b.get("type") == "tool_use":
+            tools += 1
+            if b.get("name") == "Agent": agent += 1
+print(f"{agent} {tools} {sys.argv[1].split('/')[-1]}")
+PY
+  else
+    printf '0 0 none'
+  fi
+}
 
 closed_ids() {
   # Ids of closed cards, sorted. Counting was not enough: see the gate below.
@@ -807,6 +866,9 @@ fi
 # breath. Every one of those would have passed a counting gate silently. The
 # card ids are right there in the line; using their difference costs nothing and
 # cannot be fooled that way.
+read -r agent_calls tool_calls transcript_seen <<<"$(round_dispatch_stats)"
+say "round dispatch: $agent_calls subagent(s), $tool_calls tool call(s) (transcript: $transcript_seen)"
+
 closed_after=$(closed_ids)
 newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
 
@@ -825,6 +887,14 @@ if [ -n "$newly_closed" ]; then
       unreviewed="$unreviewed $id"
     fi
   done
+  # The text is necessary and not sufficient. A round can write a verdict it
+  # never obtained -- one did, at 15:03, and this gate said "ok". So the second
+  # condition is a dispatch that actually happened, counted from the round's own
+  # transcript rather than from its account of itself.
+  if [ "$agent_calls" -eq 0 ] && [ -n "$newly_closed" ]; then
+    say "gate: closed$(printf ' %s' $newly_closed) but the round dispatched 0 subagents ($transcript_seen) -- a verdict it wrote itself does not count"
+    unreviewed="$newly_closed"
+  fi
   if [ -z "$unreviewed" ]; then
     say "gate ok: closed$(printf ' %s' $newly_closed) with a falsification verdict recorded for each"
     rm -f "$STATE/UNREVIEWED_CLOSURE"
