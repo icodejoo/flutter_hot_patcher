@@ -124,6 +124,29 @@ STILL OPEN: <if SURVIVES: the specific test that could yet overturn this>
 COST OF BEING WRONG: <one line: what downstream work rests on this claim>
 ```
 
+## After the verdict — what the dispatcher does with it
+
+A verdict is not the end of the round. The loop is: do it, review it, fix what
+the review found, review again, and only then close.
+
+- **SURVIVES** — close the card, and copy the reviewer's `STILL OPEN` line into
+  memo.md verbatim. It is the part most likely to matter later.
+- **PARTIAL / FALSIFIED** — **do not close.** Fix each finding in the same round
+  if it can be fixed there, then run the pass again. The context that just did
+  the work knows the most about it; the next round has to rebuild that from
+  memo.md, and rebuilding is how a quota interruption turns into a loop that
+  burns the same hours. Only when a fix is large enough to need its own
+  criterion and negative control does it become a new card instead.
+- **Either way**, the verdict goes into memo.md on a line naming the card. The
+  end-of-round gate looks for exactly that, and a verdict recorded without its
+  card id does not count.
+
+⚠️ **A fix does not inherit the review of the thing it fixed.** On 2026-09-09 a
+pass over eight cards took four of them down — one was silently losing
+snapshots — and all four were fixed the same day. Those four fixes have not
+been reviewed. They are new `built` work, not `closed` work. This is the
+sentence most likely to be skipped.
+
 ## Validating this template
 
 A falsification prompt that never falsifies anything is decoration. Test it by
