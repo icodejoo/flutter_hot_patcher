@@ -78,10 +78,35 @@ snapshot_tree() {
   git -C "$tree" diff --quiet HEAD 2>/dev/null && return 0
 
   sha=$(git -C "$tree" stash create "wip-snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null)
-  [ -n "$sha" ] || return 0
+  if [ -z "$sha" ]; then
+    # Silence here was the second finding of the same review: `stash create`
+    # exits 1 during a conflicted merge ("needs merge"), stderr was discarded,
+    # and the function returned 0 with no log line. A snapshotter that cannot
+    # snapshot has to say so, or its log means "nothing was dirty" and
+    # "everything failed" at the same time.
+    say "$(basename "$tree"): NOT SNAPSHOTTED -- stash create produced nothing (conflicted merge?)"
+    return 0
+  fi
 
   name=$(basename "$tree")
-  ref="refs/wip/$(date -u +%Y%m%dT%H%M%SZ)"
+  # The ref name carries the tree and the object, not just the clock.
+  #
+  # 2026-09-09, found by an adversarial review of this very script: two of the
+  # three trees SHARE ONE REF STORE. `git -C ~/Documents/fhp-research rev-parse
+  # --git-common-dir` prints /Users/Cruz/Documents/flutter_hot_patcher/.git --
+  # the research tree is a linked worktree of this repo, not a separate one. So
+  # a ref named only for the UTC second collided on every pass, the second
+  # update-ref silently orphaned the first, and the loser was always the tree
+  # listed last. Two of the four snapshots taken today were already dangling:
+  # cc7e182 and d7ef02d, the second holding the in-flight round's work, with no
+  # ref, no reflog (refs/wip is outside core.logAllRefUpdates' default set) and
+  # nothing but two log lines claiming success. They were recoverable only
+  # because the review happened before the next gc.
+  #
+  # The guarantee every other guard leans on -- F43 terminates rounds on it,
+  # F40 leaves the round's product uncommitted on it -- was therefore failing
+  # half the time, silently.
+  ref="refs/wip/$name-$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:8}"
   if [ "$ANCHOR" -eq 1 ]; then
     git -C "$tree" update-ref "$ref" "$sha" || return 1
     lines=$(git -C "$tree" diff --shortstat HEAD 2>/dev/null | tr -d '\n')
