@@ -1156,7 +1156,32 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
   **它会在下一次真正恢复无人值守的第一轮自证**（那 2 个 `loop-rescue` stash 仍在）。
   ⇒ **恢复循环后的第一件事：看 `rounds.log` 里有没有那一行、在不在 `round start` 之前。**
 
-- [ ] **F51：`run_round.sh` 在 stash 还欠着的时候删掉描述它的说明**（`open`，2026-09-10 立）
+- [x] **F51：`run_round.sh` 在 stash 还欠着的时候删掉描述它的说明**（`closed`，`bf8e201`，2026-09-10）
+      🟢 **证伪 pass（sonnet 新鲜代理，43 次工具调用）→ VERDICT: SURVIVES，`FLAW: none found`。**
+      它做了三件我没要求的事，每件都提高了这次审查的可信度：
+      ① **把负控制反着做了一遍**：取消 `FHP_TEST_MEMO` 再跑同一个 NC ⇒ 说明**没有**被删
+         ⇒ 证明「note 被删」确实是 fingerprint 前进导致的，**这个控制不是空的**；
+      ② **把守卫喂坏**：让 `REPO=` 那行带上尾随空格破坏行锚 ⇒ `FAIL: rewrote 2 of 3 path constants` 并返回 1
+         ⇒ **它不会退化成对着真实的树跑**；并比对真实 `.loop/` 的列表与 mtime，**跑前跑后逐字节相同**；
+      ③ **用 `bash -x` 跟踪整份脚本**验证 fail-closed：把 `FHP_LOOP_TOOLS` 指到一个打非 JSON 并 exit 1 的 finisher，
+         `owed=-1`、WARNING 打进 `rounds.log`（不是 stdout —— 它自己查出真正的输出通道是 `say()` 写的那份日志）、
+         **说明仍在**。四种坏法（python3 不在 PATH / LOOP_TOOLS 指空 / 警告混进 stdout / 警告只在 stderr）
+         **没有一种误入删除分支**。
+      ④ **逐条对比两个调用点**：`run_round.sh` 的 `owed=` 块与 `runner.py` 的 `rescue_outstanding()`
+         —— 同一个 verb、同样的零值处理、同样的非零 rc 处理、同样的坏 JSON 处理，**无行为漂移**
+         ⇒ 卡片主张的「同一个决定只剩一份实现」成立。
+      **STILL OPEN（原文照抄）**：
+      > no live round has run against the actual $REPO/$SDK/$RESEARCH trees with this commit in place — the loop
+      > is paused and the fix postdates the last real round by ~2.5 hours. The synthetic e2e trees are tiny fresh
+      > git repos; the real trees carry the two live stashes plus whatever else accumulated. The test that would
+      > close this: unpause, let one real round run to completion, and confirm in `.loop/rounds.log` that (a)
+      > `finisher.py --outstanding` succeeds cleanly against the real SDK/RESEARCH/REPO paths (no unexpected rc
+      > from real-world git state), and (b) if a RESCUED note exists at round start describing the two real
+      > stashes and the round shows real progress, the note survives until a real `stash pop`/`stash drop` clears
+      > the debt.
+      🔑 **这条与 F50 两次 pass 的 STILL OPEN 是同一件事**：活路径要等真正恢复无人值守才自证。
+      **恢复后第一轮要看的三样，一次看完**：`un-popped stash(es)` 在不在且在 `round start` 之前、
+      `finisher.py --outstanding` 对真实树的 rc、以及 `RESCUED` 有没有在欠账未清时存活。
       **缺陷 C 的第四个实例，在 F50 修的那个文件之外。**
       `run_round.sh:903-907`：`if [ "$(fingerprint)" != "$idle_before" ]; then rm -f "$HANDOFF"; fi`。
       注释写着「留着它会让后面的轮次一直指向一个已经被处理掉的 stash」——**但判据用的是「本轮有没有进展」，
