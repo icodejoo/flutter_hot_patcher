@@ -1727,3 +1727,11 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   STILL OPEN: N/A（FALSIFIED）
   COST OF BEING WRONG: F60 三格 compute_dd_table 被错标为 structural；同型缺陷会在 F57/F59/F58/F56/F55 复现；phase_gate.expected 数字不实。
   🔴 **F60 修补丁 FALSIFIED（第 4 次，含本次 fix 审查）。UNREVIEWED_FIX 审查已完成——结论为「修补丁未修复 tautology」。从 UNREVIEWED_FIX 删除此行（审查已做，结果为 FALSIFIED，F60 保持 open 状态等待真正修复）。按契约本轮到此结束，不关卡。**
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — 读契约。UNREVIEWED_FIX 有 F60 条目（commit 2d47c4d），git show 确认该提交只改了 memo.md（+16行），是记录 FALSIFIED 结论的文档提交，非代码修复。按契约「判定某一项不必再审时，写明为什么，再把它那一行删掉」：2d47c4d 不是修补丁，删除队列条目。fhp-research stash@{0} 的改动（EXAMINED 5 # FALSIFIED ...）是测试注解，非可接续的修复，保留 stash 不动。下一步：派发 F60 真正修复实现（独立计算 EXAMINED 与 UNITS 消除 tautology）。
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）📋 **F60 证伪 pass（claude-sonnet-4-6，新鲜子代理，commit a5926d1 对应修补丁）→ VERDICT: FALSIFIED（第 5 次）**
+  FLAW（Attack 7）：新修补丁消灭了「A 调 B → EXAMINED = UNITS 靠调用图」的旧 tautology，但引入了「式恒等式 tautology」——`diff_units.sh` 和 `evidence_compute_dd_table_residual.sh` 现在使用完全相同的 Python 表达式 `sum(1 for o, t in zip(ours, theirs) if o['op_subgraph_hash'] != t['op_subgraph_hash'])` 作用于同一 JSON 文件。EXAMINED == UNITS 在数学上必然成立，与 UNEXPLAINED 计算的正确性无关。verify_all 27/0、负控制（EXAMINED=999→FAIL）均通过，但不能检测 EXAMINED 公式本身的 bug——因为任何使 EXAMINED 偏离 UNITS 的 bug 就定义上是「不同公式」，而相同公式的 bug 则会使两侧同步偏离。注：子代理 sandbox 限制导致 Attack 2/4/6 未实际运行（代码检查替代）；Attack 1 通过代码审查确认脚本不再互调；Attack 3 指出 UNEXPLAINED=0 从未经原始字节级别验证。
+  修复需求：让 EXAMINED 使用与 UNITS 不同的计算路径或不同的公式。候选方案：(a) 让 EXAMINED 统计「op_hash 差异**且** self_hash 也差异」的函数数（即被直接归因的部分），UNEXPLAINED 统计「op_hash 差异**且** self_hash 相同」（间接级联但未被直接解释的部分）；但需验证这两项之和等于 UNITS；(b) 让 diff_units.sh 仍从 shorebird JSON 读取，但 evidence 脚本从 binary compute_dd_table artifact 推导 EXAMINED（字节计数除以每个 op_hash_diff 平均字节成本，给出近似分母）。⚠️ 方案(a) 可能导致大量「op_hash diff AND same self_hash」（CascadeLimiter 传递效应导致 op_hash_diff > self_hash_diff，1009 vs 118），UNEXPLAINED 将 >> 0，check 失败 → 需重新设计 UNEXPLAINED 的含义。
+  COST OF BEING WRONG：compute_dd_table 三格被错标 structural，phase_gate structural=9 计数不实，依赖「all structural cells resolved」的后续判断不可信。
+  🔴 **F60 FALSIFIED（第 5 次）。不关卡。按契约本轮到此结束。**
