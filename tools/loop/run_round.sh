@@ -375,10 +375,27 @@ printf '0' >"$REFUSE_COUNT_FILE" 2>/dev/null || true
 # PROT_EXEC fix and sat un-popped for a day because the WARNING scrolled past.
 # A stash nobody pops is indistinguishable from work nobody did, so re-report
 # it every round -- loudly, not via say_once -- until someone pops or drops it.
+#
+# Both labels, because there are two producers and only one of them was ever
+# matched here. The auto-stash above writes `auto-stash-round-<stamp>`;
+# finisher.py writes `loop-rescue <stamp> <round>` (RESCUE_PREFIX,
+# finisher.py:38) every time it has to cut a round off. Matching only the first
+# made the finisher's stashes invisible -- and those are the more valuable half,
+# since they hold work a round was killed holding. 2026-09-09 left two of them
+# and no round ever said a word: not here, and not in finisher.py, which only
+# counted outstanding rescues in the branch where it had just made a new one.
+# A reporter that is silent about half of what it exists to report is worse
+# than no reporter, because it is on the books as covering that half.
+#
+# Two of the three trees share one stash store (fhp-research is a linked
+# worktree of flutter_hot_patcher/.git), so a rescue taken in either shows up
+# in both listings and the count here is per store, not per tree. Walking
+# "$SDK" "$RESEARCH" therefore still covers all three; "$REPO" is left out to
+# avoid reporting the same store twice.
 for tree in "$SDK" "$RESEARCH"; do
-  debt=$(git -C "$tree" stash list 2>/dev/null | grep -c 'auto-stash-round-' || true)
+  debt=$(git -C "$tree" stash list 2>/dev/null | grep -cE 'auto-stash-round-|loop-rescue' || true)
   if [ "${debt:-0}" -gt 0 ]; then
-    say "STASH DEBT: $tree holds $debt un-popped auto-stash(es) -- git -C $tree stash list"
+    say "STASH DEBT: $tree holds $debt un-popped stash(es) -- git -C $tree stash list"
   fi
 done
 
