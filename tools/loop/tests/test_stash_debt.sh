@@ -49,13 +49,25 @@ stash_as() { # stash_as <repo> <label>
 }
 
 # Run the extracted block with SDK/RESEARCH pointed at the repos we built and
-# `say` capturing instead of logging. Prints whatever the block reported.
+# `say` capturing instead of logging. Prints the number of STASH DEBT lines, or
+# ERR(rc=n) if the block did not run to completion.
+#
+# The ERR path is the point. This used to pipe straight into `grep -c`, which
+# answers 0 for a block that crashed, a block that is empty, and a block that
+# ran and correctly said nothing -- so every case expecting 0 was satisfied by
+# any breakage at all. A falsification pass named it: "the zero-expectation
+# cases are vacuous in isolation". Distinguishing silence from failure is the
+# whole difference between a check and a decoration.
 run_block() { # run_block <sdk> <research> [block]
-  SDK=$1 RESEARCH=$2 bash -c '
+  local out rc
+  out=$(SDK=$1 RESEARCH=$2 bash -c '
     say() { printf "%s\n" "$*"; }
     SDK=$SDK; RESEARCH=$RESEARCH
     source "$1"
-  ' _ "${3:-$BLOCK}" 2>/dev/null | grep -c 'STASH DEBT' || true
+  ' _ "${3:-$BLOCK}" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then printf 'ERR(rc=%d)' "$rc"; return; fi
+  printf '%s' "$out" | grep -c 'STASH DEBT'
 }
 
 empty=$(make_repo empty)
@@ -77,6 +89,16 @@ check 'clean tree is NOT reported'           0 "$(run_block "$empty" "$empty")"
 check 'debt in the second tree is reported'  1 "$(run_block "$empty" "$rescue")"
 # 6. One line per store holding debt, both labels counted together.
 check 'two labels in one store: one line'    1 "$(run_block "$both" "$empty")"
+
+# 7. A crashed block must not read as "reported nothing". Without this, cases
+#    3 and 4 above are satisfied by any breakage and prove nothing.
+printf 'this is not shell (\n' >"$WORK/broken.sh"
+check 'a broken block is not silence'        'ERR(rc=1)' "$(run_block "$rescue" "$empty" "$WORK/broken.sh")"
+# 8. A tree that is not a repository: git fails, the reporter stays quiet, and
+#    the block still completes. Documented rather than left ambiguous, because
+#    "silent because there is no debt" and "silent because the path is wrong"
+#    are the pair this file exists to keep apart.
+check 'a non-repo path is silent, not an error' 0 "$(run_block "$WORK/does-not-exist" "$empty")"
 
 # ---- negative controls -----------------------------------------------------
 # Each one puts the defect back and asserts the case that guards it goes red.
