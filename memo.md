@@ -1711,3 +1711,19 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   **STILL OPEN: N/A**（FALSIFIED）
   COST OF BEING WRONG：F60 三格被错标为 structural；phase_gate unknown 从 18→15 的数字不实；该仪器缺陷（第三次复现）若不彻底修复，同型缺陷会在 F57/F59/F58/F56/F55 复现。
   🔴 **F60 FALSIFIED（第三次）。不关卡。修复需求：(a) 为二进制 flag 定义有意义的「unit」（建议：具有不同 op_subgraph_hash 的函数对总数）；(b) `diff_units.sh` 与残差脚本必须独立计算该数字；(c) structural_evidence.tsv 的 compute_dd_table 行数需清理（4→2）。本轮到此结束。**
+
+- 2026-09-10T10:53（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 队列处理：对 F60 修补丁（commits 44b26e5/bdfaab9）派发 haiku-4-5 新鲜子代理执行证伪 pass。
+
+- 2026-09-10T10:53（claude-sonnet-4-6，交互式）📋 **F60 修补丁 UNREVIEWED_FIX 审查（claude-haiku-4-5，新鲜子代理）→ F60 修补丁 VERDICT: FALSIFIED (fix)**
+  ATTACK RESULTS 摘要（7 攻击）：
+  1. 恒等式检测：注入 500 字节 → diff_units.sh UNITS 变化，evidence script EXAMINED 同步变化，structural_evidence_check.sh rc=0（**无法报红**）
+  2. 猴子补丁验证：将 EXAMINED 强制设为 5 → structural_evidence_check.sh 打 FAIL rc=1（证明 check 可以失败，但只在 EXAMINED≠UNITS 时）
+  3. TSV 有两行 residual：两行都调用同一 evidence script，注入字节后两行均 FAIL（对两行都成立）
+  4. 负控制成立（UNEXPLAINED 守卫正常），但 EXAMINED 守卫是恒等式
+  5. fixture 损坏时 evidence script 仍报 UNEXPLAINED 0（读的是 .shorebird JSON 而非二进制文件）
+  6. **git show 44b26e5:evidence_compute_dd_table_residual.sh 与现在相同——修补丁未改动该脚本**
+  7. 44b26e5/bdfaab9 仅修改 TSV 文件（cards.tsv + structural_evidence.tsv），evidence script 完全未动
+  FLAW：`evidence_compute_dd_table_residual.sh` L58-60 仍调用 `diff_units.sh compute_dd_table` 设置 `EXAMINED`；`structural_evidence_check.sh` L78 同样调用 `diff_units.sh`——两侧同源，EXAMINED 恒等于 UNITS，循环恒等式未解除。commits 44b26e5/bdfaab9 未触及 evidence script 源码。
+  STILL OPEN: N/A（FALSIFIED）
+  COST OF BEING WRONG: F60 三格 compute_dd_table 被错标为 structural；同型缺陷会在 F57/F59/F58/F56/F55 复现；phase_gate.expected 数字不实。
+  🔴 **F60 修补丁 FALSIFIED（第 4 次，含本次 fix 审查）。UNREVIEWED_FIX 审查已完成——结论为「修补丁未修复 tautology」。从 UNREVIEWED_FIX 删除此行（审查已做，结果为 FALSIFIED，F60 保持 open 状态等待真正修复）。按契约本轮到此结束，不关卡。**
