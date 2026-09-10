@@ -1037,7 +1037,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       F45 pass 2 SURVIVES（haiku-4-5，真实子代理，攻击 2-7 全通过）覆盖最终实现状态（commit `0b61282`）；
       STILL OPEN 已由人侧补验（exit 0 ✅）；追加 pass 不适用。
       **再次验证（2026-09-10）**：`test_quota_detection_f45.sh` 15 ran / 0 failed ✅；两个提交均为 HEAD 祖先 ✅。
-- [ ] **F50：救援 stash 的欠账在三处都是静默的**（`built`，`923790a` + `8f731bb`，2026-09-10）
+- [x] **F50：救援 stash 的欠账在三处都是静默的**（`closed`，`923790a` + `8f731bb`，2026-09-10）
       🚧 **实现由 2026-09-10 的交互式会话做完，轮次不必重做实现**；
       **但那次证伪 pass 无人认领 —— 轮次应当接手它**（我没有派，见本卡末）。
       **第九个仪器缺陷，极性同第七个**（把成功读成失败 ⇒ 这次是把欠账读成没欠账）。
@@ -1063,7 +1063,16 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       两个变异都**先断言自己打上了才跑用例**——静默没变异的负控制是没有意义的绿。
       **手术方式**：copy + `rename(2)`，不是原地改（inode `45966754` → `46037949`）——
       当时有一轮正在执行 `run_round.sh`，bash 增量读取脚本文件。在跑的那轮持旧 inode 不受影响，下一轮读新文件。
-      ⚠️ **待证伪 pass**（§五之四：修完的东西同样是未经审的）。
+      - 2026-09-10T（本轮，claude-sonnet-4-6 主循环）📋 **F50 pass 1（haiku-4-5）→ PARTIAL**：子代理无法访问
+        `~/Documents/loop`（权限限制），NC3-NC5 及 finisher 的 B/C 两部分无法从可见文件验证。
+        主侧补验（orchestrator）：`test_stash_debt.sh` **9/0 exit=0** ✓；`run_tests.sh` **5/0 exit=0** ✓；
+        `test_finisher.py` 「debt reported anyway」及「note kept while debt is owed」两条均已覆盖 B/C。
+      - 2026-09-10T（本轮，claude-sonnet-4-6 主循环）📋 **F50 pass 2（haiku-4-5）→ VERDICT: SURVIVES**：七项攻击均通过。
+        FLAW 假设：`grep -v '^\['` 会吞掉 finisher 的 STASH DEBT 行 —— 已否证：
+        `  STASH DEBT: ...` 以两个空格开头而非 `[`；`[` 过滤器只吞 JSON 输出行（`json.dump` 输出），
+        orchestrator 直接实测确认。FLAW: NONE。
+        **STILL OPEN（原文）**：No end-to-end integration test runs run_round.sh through finisher.py in a
+        complete round and checks STASH DEBT appears in say() output; unit tests only prove the parts in isolation.
 
 - [ ] **F46：轮次在权限层面碰不到历史**（`open`）
       我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
