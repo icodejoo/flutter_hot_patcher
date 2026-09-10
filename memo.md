@@ -807,6 +807,132 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 5 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① 六个负控制全部命中（fake open/closed、malformed closed、dup closed/open、四个方向双侧）；② regex 正确提取 memo 全部 3 个 open 行，无漏项；③ extraction_closed 从 grep -c（去重前）计数，与 sort-u 后的集合比较独立；④ [x] 行全为正式卡片，无误匹配；⑤ 三个提交 16e34c6/55bf357/b687530 均存在；⑥ 基线 exit=0；⑦ 全部四方向（memo-only open/closed、tsv-only open/closed）均报 FAIL。
   STILL OPEN：None — all criterion checks work, guards fire independently, negative controls all flip verdict correctly, all four directional asymmetries caught.
 
+## 🎯 SDK 复刻：18 格 unknown 拆成六张卡（2026-09-10 立，这是规则 0 的本体工作）
+
+**为什么现在立**：队列里 5 张开放卡（F46 / F49 / F52 / F53 / F54）**全是循环管道**，
+没有一张让「我们的 dart-sdk 更接近他们的」向前走 —— 按规则 0 的落笔自检，那是不该做的那一类。
+而 CLAUDE.md 判据 2（G-c：`unknown == 0`）**是本阶段唯一未满足的那一条**，它的全部内容就是这 18 格。
+⇒ 按 flag 拆成六张，**排在管道卡之前**（轮次取的是 memo 里第一项 `- [ ]`）。
+
+**实测底数（2026-09-10，`parity_matrix.tsv`）**：`59 cells / na=35 / structural=6 / unknown=18 / gap=0`。
+18 格 = 6 个 flag × 3 个输入（`hello` / `prog` / `base_dd`）。
+
+### 六张卡共用的判据形状（G 表已定，不是新规矩，别每张重写）
+
+每一格的出路**只有三条**：
+
+- **`na`** —— 逐字节相同，或指名另一个真 oracle（`cmp_files` 的 `vacuous` 第三值堵住了「空对空」）
+- **`structural`** —— 必须**具名结构 + 偏移**，并附一条 residual 行证明它解释了这一格的**全部** UNITS
+  （`Thread+0x678` 曾三次关掉一批格子，最弱的一次解释了 3656 个差异对象里的 **0** 个）
+- **留 `unknown`** —— 把测量如实写下来。**这仍是本阶段的正常产出，不是失败。**
+  「测清楚了但归不了类」不是第三种状态，它就是 `unknown` 的定义（2026-09-07 已拍板，别再问）。
+
+**每张卡都必须交出的三样**：
+
+1. **`EXAMINED <n>` 行，且 `n` == 该 flag 当前的 `diff_units.sh` UNITS。**
+   没有分母的残差不许接进闸门 —— `evidence_disassemble_residual.sh` 打 `UNEXPLAINED 0`
+   却**没有 `EXAMINED` 行**，memo 当时的判决就是「别接，重写」。
+2. **一个成因分量一行证据**（`structural_evidence.tsv`，带 `verify_cmd` / `expect`，
+   进 `structural_evidence_check.sh`）。**一行盖不住两个分量。**
+   ⚠️ 那道检查本身有第八个仪器缺陷的前科：`Thread+0xDEAD` 这种**凭空编造的 locus 能过**
+   （证据脚本回显自己的参数 + `grep -qF` 子串匹配）。写证据行时不要依赖它替你把关。
+3. **负控制**：删掉任一分量 ⇒ 残差不再配平，且**只有该格变红**，不是随便哪一格变红。
+
+🔴 **引用任何数字前先重测 —— 这一节自己就抓到一个过期数。**
+`memo.md` 第 677 行写「`diff_units.sh disassemble` 给出 **UNITS 7032**」，
+2026-09-10 实测 **5946**（F37 的原生调用降级形式落地后，差异本来就变少了）。
+⇒ 下面每张卡的 UNITS 都标了测量日期，**它们会随 SDK 提交移动，用之前自己跑一遍**。
+同理 `f39_analysis.out` 是**写于 F39 那轮的产物快照**，不是当前真值。
+
+⚠️ **别再把邻近差异顺手一起归因掉** —— F16 与 09-09 那轮栽的是同一种错。
+**一个真成因不会解释掉所有现象**；F35 已经把「DD 派发 92 vs 0」整条作废，
+**不许再用它挡任何格子**。
+
+---
+
+- [ ] **F60：`compute_dd_table` ×3 —— 12 units，最小的一格，先做这张**（`open`，2026-09-10 立）
+      **为什么排第一**：12 个 units 是 18 格里最小的，一张卡就能把「分母 → 逐分量 → 负控制」
+      整套流程走完一遍，**后面五张照抄**。在这张上做不出来，说明流程有问题，不是数据太大。
+      **已知（2026-09-10 读自 `parity_matrix.tsv` 的 note，未复核）**：
+      `ours 3968 B / theirs 3969 B`，delta −1；`evidence_compute_dd_thread_offset.sh` 打
+      `Thread+0x678::isolate_ ours=0x678 theirs=688` 与
+      `1009/1380 functions have different op_subgraph_hash`。
+      per-fixture units（F39 那轮读数，**先重测**）：`hello 2 / base_dd 2 / prog 8`。
+      🛑 **note 里那句「downstream of Thread+0x678」是要被检验的东西，不是可引用的前提。**
+      同一个偏移在 `disassemble` 那格上，4328 个差异叶子里只解释了 **2 个**，
+      而那 2 个还是 `DumpMetadata` 里**工具发布的关于自身布局的字段**，不是快照内容。
+      **判据**：`diff_units.sh compute_dd_table` 得到当前 UNITS ⇒ `EXAMINED` 等于它；
+      每个 unit 归到具名分量，每个分量一行 `structural_evidence.tsv`。
+      **负控制**：删掉任一分量 ⇒ 该格残差不配平且**只有这一格**变红。
+
+- [ ] **F57：`dump_object_pool_link_data` ×3 —— 1472 units**（`open`，2026-09-10 立）
+      **已知（同上，未复核）**：binary CodeInfo 格式；`ours 193352 B / theirs 193312 B`，delta **40**。
+      note 记它与 `dump_object_pool` 同源：per-process pool entries
+      （`kResetToBootstrapNative` / `kResetToSwitchableCallMissEntryPoint`）。
+      per-fixture units（F39 那轮）：`hello 382 / base_dd 382 / prog 708`。
+      🔑 **它和 F56 共用成因 ⇒ 两张卡要么一起做，要么后做的那张必须复用前一张的证据行**，
+      不许各写一份判据（「同一个决定的两份实现必然漂移」，本仓库已栽两次）。
+      **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
+
+- [ ] **F59：`disassemble` ×3 —— 5946 units（2026-09-10 实测，不是 memo:677 的 7032）**（`open`，2026-09-10 立）
+      per-fixture（2026-09-10 实测）：`hello 1018 / base_dd 1018 / prog 3910`。
+      🔑 **分量清单已有，但写于 F37 之前，必须重测后再用**（memo 第 671-680 行）：
+      · 我们自己插进去的 **14 个 Shorebird stub**（`stub_code_list.h` 第 **160–173** 行，
+        紧接在 `V(InitStaticField)`（第 174 行）之前；**2026-09-10 逐条核实**：
+        `TransitionDartToSimulatorIfNeeded` / `TransitionDartToCpuIfNeeded` / `ResumeOnCPU` /
+        `CallSimulatorFromFfiTrampoline` / `SimulatorCall{BootstrapNative,AutoScopeNative,NoScopeNative,ToRuntime}` /
+        `ResumeOnSimulator` / `SimulatorCallNativeThroughSafepoint` / `CallClangCodeWithSimulatorArgs` /
+        `SimulatorEnter/ExitSafepoint` / `RunDartOnCPU`。
+        它前面那 5 条 `EnterSafepoint`…`FfiCallbackTrampoline` **是上游的，不算**）
+        ⇒ index 9854 起 **50 处 name 差** + **389 处 offset 差**（约 1200 字节整体位移）
+      · **stub body 真的不同** ⇒ **63 处 `size` 差**
+      · **`"macos"` vs `"ios"`**（object id 3945）+ 四个 `snapshot_data` 地址 ⇒ 目标/构建身份
+      🛑 **这一格上 `Thread+0x678` 已被实测排除**：产物里**根本没有指令字节**
+      （`grep -c 'ldr\|str \|0xd503201f'` → 0，rc=1），所以「ldr 立即数不同」这个机制**不可观测**；
+      且 `0x678/8=207` 与 `0x688/8=209` 都在 12 位缩放立即数内 ⇒ **该偏移不可能改变任何指令尺寸**。
+      **不许再用它关这三格。**
+      **判据**：`EXAMINED 5946`（自己重测），逐分量归因，**没有一个分量是 Thread 偏移**。
+      **负控制**：拿掉 14 个 stub 那一分量 ⇒ 50+389 那部分残差立刻不配平。
+
+- [ ] **F58：`dump_blobs` ×3 —— 6882 units**（`open`，2026-09-10 立）
+      **已知（未复核）**：`ours 668184 / theirs 669622`，而两侧 `.so` **同为 889032 字节**；
+      note 明写**交叉测试已做**（他们的工具读我们的 `.so` vs 我们的工具读我们的 `.so`）
+      ⇒ **实现缺口已关闭**，剩下的是产物内容差。
+      `evidence_dump_blobs_residual.sh`（F39 那轮）：`1380 functions / hash_diff=118 / size_diff=1 /
+      blob_delta=1438 B / unexplained_size=0`；prog `3216 / 176 / 4 / 1534 B / 0`。
+      🛑 **`unexplained_size=0` 不等于这一格已解释** —— 它只覆盖 size 一个维度，
+      而 UNITS 是 6882。**这正是「分母判据」要抓的形状**：分子归零、分母没露面。
+      **判据**：`EXAMINED 6882`（重测），把 6882 拆成「hash 差 / size 差 / 其他」三段并各自给 locus，
+      三段之和必须等于 UNITS。
+      **负控制**：把 `hash_diff` 那段扣掉 ⇒ 三段之和不再等于 UNITS。
+
+- [ ] **F56：`dump_object_pool` ×3 —— 10782 units**（`open`，2026-09-10 立）
+      **已知（未复核）**：note 记两个结构性分量 —— (1) **98 个 per-process pool entries**
+      （92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`）；
+      过滤掉之后 **1323 entries / 385 pairs**……
+      F39 pass 2 验过**分区完整性**：`entries(196) + code_infos(2254) = full_diff(2450)`（hello），
+      `base_dd` / `prog` 同 ⇒ **这一格已经有一半是配平的**，把它做完。
+      `measure_pool_residual.sh` 当前打 `UNEXPLAINED (hello unique-name word-level): 3`，
+      且**已进 `verify_all`**（`_MAX_UNEXPLAINED=3`，超过就 exit 1）。
+      ⚠️ **那 3 个的构成要写清**（F38 记的是 size-differ=1 + UNCLASSIFIED=2），
+      并且 **87 vs 92 的对账**（unique-name filter 排掉 5 个重名函数）**至今没有逐个点名那 5 个**
+      —— F38 自己的 STILL OPEN 就是这条，**这张卡顺带把它关掉**。
+      **判据 / 负控制**：同通用形状；分区完整性等式必须对三个输入都成立。
+
+- [ ] **F55：`shorebird` ×3 —— 75042 units，最大的一格，最后做**（`open`，2026-09-10 立）
+      per-fixture（F39 那轮）：`hello 10279 / base_dd 10279 / prog 54484`。
+      **已知（未复核）**：note 写「per-function key schema 一致、entry 数一致（1380），字节仍不同」，
+      且该格**曾被声明为 `structural` 又被自动降级**（locus 不合规 ⇒ `structural_class()` 打回 unknown）。
+      `evidence_shorebird_residual.sh` 打 `EXAMINED 75042` / `UNEXPLAINED 85`，
+      并**自己写明**「`Thread+0x678` 解释不了这些；offset + subgraph 级联还会加更多未解释单位」。
+      🔑 **这张已经有 `EXAMINED` 行了**（六张里唯一一张），所以缺的是**把 85 拆成具名分量**，
+      以及**证明那 85 是全部**（note 自己说是 lower bound ⇒ 目前连它是不是全部都没定）。
+      🛑 **「lower bound」这三个字就是这张卡的真实状态**：不许把一个下界当成残差交上去。
+      **判据**：`UNEXPLAINED` 从下界变成**闭合值**（有上界论证），再逐分量给 locus。
+      **负控制**：删掉任一分量 ⇒ `UNEXPLAINED` 上升且只在这一格。
+
+---
+
 - [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09/10）
       🔴 **2026-09-10 10:5x 第二次撤回关卡**：10:42 那一轮（`1ed112c` + `26f3d9f`）关它，
       依据是本文件第 997/1000 行那两条「pass 7 PARTIAL / pass 8 SURVIVES（haiku-4-5）」，
