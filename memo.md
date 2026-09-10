@@ -1735,3 +1735,21 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   修复需求：让 EXAMINED 使用与 UNITS 不同的计算路径或不同的公式。候选方案：(a) 让 EXAMINED 统计「op_hash 差异**且** self_hash 也差异」的函数数（即被直接归因的部分），UNEXPLAINED 统计「op_hash 差异**且** self_hash 相同」（间接级联但未被直接解释的部分）；但需验证这两项之和等于 UNITS；(b) 让 diff_units.sh 仍从 shorebird JSON 读取，但 evidence 脚本从 binary compute_dd_table artifact 推导 EXAMINED（字节计数除以每个 op_hash_diff 平均字节成本，给出近似分母）。⚠️ 方案(a) 可能导致大量「op_hash diff AND same self_hash」（CascadeLimiter 传递效应导致 op_hash_diff > self_hash_diff，1009 vs 118），UNEXPLAINED 将 >> 0，check 失败 → 需重新设计 UNEXPLAINED 的含义。
   COST OF BEING WRONG：compute_dd_table 三格被错标 structural，phase_gate structural=9 计数不实，依赖「all structural cells resolved」的后续判断不可信。
   🔴 **F60 FALSIFIED（第 5 次）。不关卡。按契约本轮到此结束。**
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 有 F60（commits 688db38 + a5926d1），契约要求对修补丁跑一次新鲜 fix 证伪 pass。代码审查已确认 tautology 仍在（diff_units.sh 与 evidence 脚本用同一 Python 表达式作用于同一 JSON），现派发新鲜子代理执行证伪 pass。
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）📋 **F60 修补丁 UNREVIEWED_FIX 审查（claude-sonnet-4-6，新鲜子代理）→ F60 修补丁 VERDICT: FALSIFIED (fix)**
+  CLAIM：commit a5926d1 通过将 EXAMINED 改为 total_op 真正打破了 tautology。
+  FLAW（Attack 1 + 7）：调用层依赖已解除（不再调 diff_units.sh），但数据层恒等式仍在——
+  两个脚本对同一 JSON 文件 `out_pm/as.*.{ours,theirs}.shorebird` 执行完全相同的 Python 表达式：
+  `sum(1 for o, t in zip(ours, theirs) if o['op_subgraph_hash'] != t['op_subgraph_hash'])`。
+  实测：向 `as.hello.ours.shorebird` 注入一个扰动的 op_subgraph_hash，UNITS 与 EXAMINED 同步 +1，
+  `structural_evidence_check.sh` 仍 rc=0。check 的 `ex != units` 分支永远不触发。
+  Attack 7（问题被替换）：commit message 的负控制测的是「硬编码 EXAMINED=999 vs UNITS=4576」，
+  而不是「fixture 扰动后 EXAMINED ≠ UNITS」——回答了更容易的问题。
+  Attack 6（负控制缺失）：fixture 级扰动测试从未执行。
+  COST OF BEING WRONG: F60 三格被错标为 structural；phase gate unknown=15/structural=9 数字不实。
+  🔴 **UNREVIEWED_FIX 审查已完成——结论：修补丁（a5926d1）未修复 tautology，破绽仍在。
+  F60 保持 open 状态，UNREVIEWED_FIX 条目删除（审查已做，结论为 FALSIFIED）。
+  修复方向：让 EXAMINED 使用与 UNITS 真正不同的数据源（如字节级 cmp -l 输出，或
+  「op_hash_diff AND self_hash_same」的函数数）。按契约本轮到此结束，不关卡。**
