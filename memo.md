@@ -1268,6 +1268,34 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
          **负控制**：把「有进展」判据改成恒真 ⇒ 第一条用例变红。
       ⚠️ 判定「有没有进展」要用 F53 的那条权威源，不要在这里再写第三遍。
 
+## ✅ 通用版四张卡已实现（2026-09-10，`built`，各欠一次证伪 pass）
+
+| 卡 | 提交 | 做了什么 |
+|---|---|---|
+| **F52** | `9c48b18` | 新增 `wip.py`：`git stash create` + `refs/wip/<树名>-<utc>-<sha8>`。挂在轮次主循环（通用版没有长命时钟可挂守护进程），**周期性 + 被杀前各一次** —— 后者是重点，`kill_worker` 返回后没人可问 |
+| **F53** | `598a651` | `bool(tools)` 不再决定两件事：删不删交接说明改问 `finisher.py --outstanding`（写标签的人拥有那个事实），空转改问项目提供的 `progress_command` |
+| **F54** | `b965c24` | 轮次开头报 stash 欠账（**两个标签**）、轮末写 `dispatch_stats.tsv`、零进展截止线（stall 与 ceiling 之间那道缝） |
+| **F51** | `bf8e201` | bash 那一半也改成问同一个 verb ⇒ **同一个决定现在只有一份实现** |
+| （附带） | `316ced3` | `config.toml` 里状态树 `clean` → `ignore` —— **那是 F40 的实例随通用化偷渡过来了**：memo.md 是轮次的产物，`clean` 会让 finisher 把它 stash 走、轮次再被判为无痕迹。`ignore` 不拒轮次、不被 stash，**但 wip 仍锚定它、finisher 仍数它的救援 stash** |
+
+**判据（实测）**：`~/Documents/loop/run_tests.sh` **6 ran / 0 failed，49 秒，连跑三次稳定**；
+`test_stash_debt.sh` **11/0**；`test_stash_debt_e2e.sh` **16/0**。
+**负控制 8 条**，每条只让它该守的那格变红（清单见各提交信息）。
+
+🔑 **四次「测试是绿的、但绿得没有意义」，全部由负控制揪出**（这比任何一处实现都值得记）：
+1. **锚定负控制没打响** —— 两次快照取自同样内容、同一秒 ⇒ `git stash create` 产出**同一个 commit**，
+   锚定与未锚定是同一个 sha，prune 分不出来。**现在先断言两者 sha 不同才下结论。**
+2. **假 worker 用错事件格式** ⇒ `events.py` 数出的 `tools` 恒为 0 ⇒ F53 两个正面用例**都靠错误的原因绿着**。
+3. **`"STASH DEBT" in stdout` 有歧义** ⇒ 被 finisher 自己那行满足。判别子串：runner 打 `un-popped stash(es)`，
+   finisher 打 `un-popped **rescue** stash(es)`。
+4. **`make_config` 按 worker 名派生 state 目录** ⇒ 成本负控制读到上一轮的旧行。
+⚠️ 还有一个 off-by-one：`--outstanding` 写成 `argv[1]` 而 `main(sys.argv[1:])`
+⇒ 落到 usage 分支返回 2，**而调用方 fail-closed 会把它读成「问不出来，保留说明」**——安全、但永远错，且没人会去查。
+⚠️ 以及一条：chatty 用例原本各跑满 60 秒，**把套件顶过 harness 超时** —— 慢到不会被跑的测试不是测试，已缩短。
+
+🔴 **四张都是 `built`，不许当成 closed**：三个新鲜代理的证伪 pass 已派（F52 一个、F53+F54 一个、F51 一个），
+**判决未回**。契约五之四：只有重跑后 SURVIVES 才允许标 `[x]`。
+
 - [ ] **F46：轮次在权限层面碰不到历史**（`open`）
       我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
       判据：**用 python 调 git 绕过按命令名的拦截，它仍然必须失败。**
