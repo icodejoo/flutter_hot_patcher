@@ -1526,8 +1526,18 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
 
 ### 🔴 三笔未结账（交给人，不由 agent 处置）
 
-1. **4 个未 pop 的 rescue stash**，两棵树各 2 个（今天 11:13 / 13:00 两轮被中断时救援的）。
+1. **2 个未 pop 的 rescue stash**（11:13 / 13:00 两轮被中断时救援的）。
    是**真工作**不是残渣 —— finisher 按设计只 stash 不判断。
+   🔴 **订正（2026-09-10 实测）：原文写「4 个，两棵树各 2 个」是重复计数，真值是 2 个。**
+   `~/Documents/fhp-research` 是本仓的 linked worktree（`rev-parse --git-common-dir` →
+   `/Users/Cruz/Documents/flutter_hot_patcher/.git`）⇒ **两棵树共用同一个 stash store**，
+   两侧 `git stash list` 打出的是同一对：`refs/stash` = `e448766f700d`、
+   `refs/stash@{1}` = `b1cd8c34161f`，**两棵树 `rev-parse` 出的 sha 逐字相同**。
+   ⚠️ **这件事本文件第 1414 行已经记过一次**（「不是压缩问题，是它们本来共用一个 stash」，
+   F41 那轮实测），而写这条账时没有引用它 ⇒ **同一个共享 ref store 的坑在本文件里骗过两次**：
+   第一次让 F41 的快照被静默挤掉（ref 名只带 UTC 秒），第二次让欠账被数成两倍。
+   🔑 **判别法（下次直接用）**：跨树数任何 ref（`stash` / `refs/wip` / `refs/rescue`）之前，
+   先 `rev-parse --git-common-dir` 或**比 sha**；「两棵树各有 N 个」在共享 ref store 下**永远是假的**。
 2. **`.loop/UNREVIEWED_CLOSURE`（367 字节）**：F45 那次 0 派发关卡，等下一轮补 pass 或写明豁免。
 3. **F49 / F45 两张卡已按上面的理由退回**，`cards.tsv` 同步；`cards_check.sh` 复跑为 0 failure。
 

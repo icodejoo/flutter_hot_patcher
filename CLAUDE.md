@@ -56,7 +56,9 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 ⏸️ **无人值守循环已按指令停机（2026-09-09 20:2x）**：`.loop/PAUSE` 已放（终局，只有人能删），
 `ralph.sh` 与 `wip_snapshot.sh --daemon` 均已停。恢复：删 `PAUSE` 后在**终端里**跑
 `./tools/loop/ralph.sh`（launchd 不带 TCC 授权，实测读不了 `~/Documents`）。
-⚠️ 恢复前先看三笔未结账：4 个未 pop 的 `loop-rescue` stash（两棵树各 2）、
+⚠️ 恢复前先看三笔未结账：**2 个**未 pop 的 `loop-rescue` stash
+（2026-09-10 订正，原文写「4 个，两棵树各 2」是重复计数：research 树是本仓的 linked worktree，
+**两棵树共用同一个 stash store**，两侧 sha 逐字相同；判据与教训见 `memo.md` 第 1529 行起）、
 `.loop/UNREVIEWED_CLOSURE`（F45 欠一次 pass）、以及 F49 欠一次针对最新补丁的 pass。
 **不需要真机**：判据全在宿主上。真机通路已打通并验证过一次（B5–B8，`PATCHED_V2 ✅`）。
 
