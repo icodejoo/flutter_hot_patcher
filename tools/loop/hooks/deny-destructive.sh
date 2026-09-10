@@ -14,7 +14,7 @@
 # Rounds under `--permission-mode bypassPermissions` have no approval prompt
 # left, so this hook is the only thing standing between a bad command and the
 # disk. It runs regardless of permission mode -- that is the property being
-# relied on, and it is verified by .claude/hooks/verify-deny.sh.
+# relied on, and it is verified by tools/loop/hooks/verify-deny.sh.
 #
 # To run one of these deliberately, do it yourself in your own terminal. There
 # is intentionally no override env var: an override is the first thing a
@@ -25,7 +25,7 @@
 # "force-deletes" -- and, because the refusal took the whole command with it,
 # the very edit that was meant to fix the pattern never ran while appearing to.
 # So: anchor each pattern on the shape the thing takes as an argument
-# (" -delete", not "-delete"), and run .claude/hooks/verify-deny.sh after any
+# (" -delete", not "-delete"), and run tools/loop/hooks/verify-deny.sh after any
 # change -- its ALLOW half exists to catch exactly this.
 set -uo pipefail
 command -v jq >/dev/null 2>&1 || exit 0          # fail open, same as the rtk hook
@@ -64,15 +64,86 @@ case $CMD in
     deny "blocked: raw disk or destructive-write operation." ;;
 esac
 
-# Deleting or moving a worktree root outright.
-case $CMD in
-  *"rm "*|*"mv "*)
-    case $CMD in
-      *"/dart-3122/sdk "*|*"/dart-3122/sdk\""*|*"/fhp-research "*|*"/flutter_hot_patcher "*|*"xcodebuild"*)
-        case $CMD in
-          *"rm "*|*"mv "*) deny "blocked: targets a worktree root or a build tree." ;;
-        esac ;;
-    esac ;;
-esac
+# Deleting or moving a worktree root or a build tree.
+#
+# POSITIONAL, NOT SUBSTRING -- and that distinction is the whole rule. The
+# first version asked two independent questions of the whole command string:
+# does it contain "rm "/"mv " anywhere, and does it contain a protected path
+# anywhere. Both were true of
+#
+#     cd /Users/Cruz/Documents/flutter_hot_patcher && rm -f .loop/PAUSE
+#
+# which deletes one 0-byte file inside the tree. Measured 2026-09-10: that
+# shape was refused four times in one session, once as
+# `git -C /Users/Cruz/dart-3122/sdk log -1 && rm -f /tmp/scratch`, which is an
+# ordinary round shape and has nothing to do with deleting a worktree. This
+# file's own header says false positives cost as much as false negatives and
+# that a refusal takes the whole command with it; this block was the standing
+# counter-example.
+#
+# Worse, "rm " is a substring of ordinary English. Measured on the same day:
+#
+#     git commit -m 'confirm /Users/Cruz/dart-3122/sdk parity is unchanged'
+#     echo "perform a diff against /Users/Cruz/Documents/fhp-research and stop"
+#
+# were both REFUSED, on the "rm " inside `confirm ` and `perform `. That is the
+# exact accident this file's header already describes -- the first draft
+# refusing a commit message containing "force-deletes" -- recurring in a
+# different pattern in the same file. Matching tokens instead of substrings is
+# what actually retires that family; `reform.py` only escaped because no space
+# follows its "rm".
+#
+# The same substring test was also porous in the other direction, because it
+# needed the path to be followed by a space or a quote:
+#
+#     rm -f /Users/Cruz/Documents/flutter_hot_patcher      (end of string)
+#     mv /Users/Cruz/dart-3122/sdk/ /tmp/parked            (trailing slash)
+#
+# were both ALLOWED. The second one moves the entire SDK worktree, and one
+# added slash was the whole bypass. So this rewrite closes a real hole; it is
+# not only a false-positive fix.
+#
+# What it does instead: walk the tokens, remember whether we are inside the
+# argument list of an rm/mv, reset that at every shell separator, and refuse
+# only when an argument *is* a protected root -- not when it merely contains
+# one, and not when some other command in the line mentions it.
+#
+# Deliberately unchanged: an rm/mv argument anywhere under a build tree is
+# still refused (`rm -f xcodebuild/ReleaseARM64` stays DENY). Narrowing that to
+# the tree root would let single files inside it be deleted, which is a
+# separate decision about how much rope a round gets, not part of fixing a
+# matcher. Widening a guard's holes while fixing its false positives is how
+# both would go unnoticed.
+_protected_target() {
+  _t=$1
+  # Strip one layer of surrounding quotes and any trailing slashes.
+  _t=${_t#\"}; _t=${_t%\"}; _t=${_t#\'}; _t=${_t%\'}
+  while :; do case $_t in */) _t=${_t%/} ;; *) break ;; esac; done
+  case $_t in
+    "$HOME/dart-3122/sdk"|"$HOME/Documents/fhp-research"|"$HOME/Documents/flutter_hot_patcher") return 0 ;;
+    "~/dart-3122/sdk"|"~/Documents/fhp-research"|"~/Documents/flutter_hot_patcher") return 0 ;;
+    xcodebuild|xcodebuild/*|*/xcodebuild|*/xcodebuild/*) return 0 ;;
+  esac
+  return 1
+}
+
+# `set -f` matters: the loop word-splits $CMD, and without it a token like
+# *.o would be glob-expanded against whatever directory the hook happens to be
+# in, so the decision would depend on the cwd.
+set -f
+_in_args=
+for _tok in $CMD; do
+  case $_tok in
+    ";"|"&&"|"||"|"|"|"&"|";;"|"|&") _in_args= ; continue ;;
+  esac
+  if [ -n "$_in_args" ] && _protected_target "$_tok"; then
+    set +f
+    deny "blocked: targets a worktree root or a build tree."
+  fi
+  case $_tok in
+    rm|mv|/bin/rm|/bin/mv) _in_args=1 ;;
+  esac
+done
+set +f
 
 exit 0
