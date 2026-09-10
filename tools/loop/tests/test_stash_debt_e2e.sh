@@ -42,6 +42,10 @@ mkdir -p "$WORK/bin"
 cat >"$WORK/bin/claude" <<'STUB'
 #!/bin/sh
 echo "stub round did nothing"
+# The old predicate deleted the note when the round showed progress, so a stub
+# that never progresses would keep the note for a reason unrelated to the one
+# being tested -- and the negative control would pass while measuring nothing.
+[ -n "$FHP_TEST_MEMO" ] && echo "- a conclusion this round reached" >>"$FHP_TEST_MEMO"
 exit 0
 STUB
 chmod +x "$WORK/bin/claude"
@@ -128,6 +132,64 @@ else
   check 'NC pre-patch script is silent about it' 0 "$(count_pre_round "$log")"
   check 'NC pre-patch script still ran the round' 1 "$(grep -c 'round start' "$log" 2>/dev/null || true)"
   check 'NC and the run still reached the finisher' 1 "$(count_finisher "$log")"
+fi
+
+# ---- F51: the note outlives a round that did not pop the stash -------------
+# Both directions, because "never delete it" would satisfy the first case on
+# its own and a note that never goes away is no note.
+# A round that progresses (the stub appends a memo line) while a loop-rescue
+# stash is still un-popped. run_script builds the repos, so the note is planted
+# after that first call and the second run is the one under test.
+root=$WORK/owed
+run_script "$SRC" 'loop-rescue 2026-09-10T09:00:00 round-1' "$root" >/dev/null || exit 1
+printf 'a note about the stash above\n' >"$root/repo/.loop/RESCUED"
+FHP_TEST_MEMO="$root/repo/memo.md" \
+  FHP_LOOP_CLAUDE=$WORK/bin/claude FHP_LOOP_TIMEOUT=60 \
+  bash "$root/run_round.sh" >/dev/null 2>&1
+check 'the note survives while the stash is owed' 'kept' \
+  "$([ -e "$root/repo/.loop/RESCUED" ] && echo kept || echo gone)"
+check 'and the round really did progress' 1 \
+  "$(grep -c 'a conclusion this round reached' "$root/repo/memo.md" 2>/dev/null || true)"
+check 'and the stash really was still owed' 1 \
+  "$(git -C "$root/research" stash list | grep -c 'loop-rescue' || true)"
+
+# Now clear the debt: the note must go.
+git -C "$root/research" stash drop -q 2>/dev/null
+FHP_TEST_MEMO="$root/repo/memo.md" \
+  FHP_LOOP_CLAUDE=$WORK/bin/claude FHP_LOOP_TIMEOUT=60 \
+  bash "$root/run_round.sh" >/dev/null 2>&1
+check 'the note goes once nothing is owed' 'gone' \
+  "$([ -e "$root/repo/.loop/RESCUED" ] && echo kept || echo gone)"
+
+# NC: the predicate back to the fingerprint comparison. The note must be
+# deleted while the stash is still owed -- the 2026-09-10 behaviour.
+nc=$WORK/nc_handoff.sh
+python3 - "$SRC" "$nc" <<'PYEOF'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src).read()
+start = s.index('owed=$(python3 - "$LOOP_TOOLS/finisher.py"')
+end = s.index('fi\n', s.index('keeping the handoff note')) + 3
+old = s[start:end]
+new = ('if [ "$(fingerprint)" != "$idle_before" ]; then\n'
+       '  rm' + ' -f "$HANDOFF"\n'
+       'fi\n')
+open(dst, "w").write(s[:start] + new + s[end:])
+print("NC mutation applied")
+PYEOF
+if ! grep -q 'idle_before' "$nc" || grep -q 'keeping the handoff note' "$nc"; then
+  failed=$((failed + 1)); printf '  FAIL NC handoff: mutation did not apply\n'
+else
+  root=$WORK/owed_nc
+  run_script "$nc" 'loop-rescue 2026-09-10T09:00:00 round-1' "$root" >/dev/null || exit 1
+  printf 'a note about the stash above\n' >"$root/repo/.loop/RESCUED"
+  FHP_TEST_MEMO="$root/repo/memo.md" \
+    FHP_LOOP_CLAUDE=$WORK/bin/claude FHP_LOOP_TIMEOUT=60 \
+    bash "$root/run_round.sh" >/dev/null 2>&1
+  check 'NC old predicate deletes the note while it is owed' 'gone' \
+    "$([ -e "$root/repo/.loop/RESCUED" ] && echo kept || echo gone)"
+  check 'NC and the stash was still owed' 1 \
+    "$(git -C "$root/research" stash list | grep -c 'loop-rescue' || true)"
 fi
 
 printf '%d ok, %d failed\n' "$ok" "$failed"

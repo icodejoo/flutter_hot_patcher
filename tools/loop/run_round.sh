@@ -900,10 +900,37 @@ if [ "$FINISHER" -eq 1 ]; then
   done
 fi
 
-if [ "$(fingerprint)" != "$idle_before" ]; then
-  # Only useful until someone acts on it; leaving it would keep pointing later
-  # rounds at a stash that has already been dealt with.
+# Whether the note is still needed is a fact about the stash list, and
+# finisher.py is what writes those labels, so it is asked rather than
+# re-derived here. The predicate used to be "did this round's fingerprint
+# change", which is a question about the round and not about the stash: on
+# 2026-09-10 a round committed something, the note describing two un-popped
+# `loop-rescue` stashes was deleted, and both stashes were still sitting there.
+#
+# runner.py asks the identical question through the identical verb. One
+# decision with two implementations is how these two came to disagree, and this
+# repo has that failure on record twice already.
+#
+# $REPO and $RESEARCH share a stash store, so the total double-counts. Harmless:
+# the only comparison made of it is against zero.
+owed=$(python3 - "$LOOP_TOOLS/finisher.py" "$SDK" "$RESEARCH" "$REPO" <<'PYEOF'
+import json, subprocess, sys
+fin, *paths = sys.argv[1:]
+p = subprocess.run([sys.executable, fin, "--outstanding", *paths],
+                   capture_output=True, text=True)
+try:
+    print(sum(json.loads(p.stdout).values()) if p.returncode == 0 else -1)
+except Exception:
+    print(-1)
+PYEOF
+)
+if [ "${owed:--1}" = "0" ]; then
   rm -f "$HANDOFF"
+elif [ "${owed:--1}" = "-1" ]; then
+  # Fail closed. A wrongly kept note costs a confusing paragraph in one prompt;
+  # a wrongly deleted one costs the only description of work nobody will find
+  # again.
+  say "WARNING: could not ask the finisher about rescue stashes -- keeping the handoff note"
 fi
 
 # ---- gate: a card was closed, was it reviewed? ------------------------------
