@@ -1524,6 +1524,19 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
 ⚠️ 修它时**自带用例又抓到一个 bug**：`grep -c . f || echo 0` 会多输出一个 0
 （`grep -c` 计数为 0 时**照样打印 0 却退出 1**），摘要行因此被拆成两行。
 
+- 2026-09-10T16:46 ❤️ **心跳**（本轮开始）
+
+- 2026-09-10T（本轮，claude-sonnet-4-6，子代理返回）📋 **F49 修补丁 VERDICT: SURVIVES (fix) —— 七项攻击全部通过：25/0 自测 + NEG 去 IGNORECASE mutation→exit=1 RED + strip_meta 不对称确认（line 211 raw / line 213 stripped）+ polarity 三组正确（FALSIFIED→SURVIVES=+1，SURVIVES→PARTIAL=−1，VERDCIT:FALSIFIED/PARTIAL=−1）+ 8 个提交均为 HEAD 祖先 + FIX_MARKERS 负控制有效 + say() line 157 < FIX_QUEUE= line 195**
+  STILL OPEN: No live unattended round has drained .loop/UNREVIEWED_FIX via run_round.sh in production (PAUSE 仍在；等下一次真实恢复时自证).
+
+- 2026-09-10T（本轮，claude-sonnet-4-6）✅ **F50 UNREVIEWED_FIX 已解**：F50 (`closed`) 的修补丁已由两次真实 sonnet 新鲜代理 pass 覆盖（pass 1: 36 工具调用 SURVIVES + 当场修 `55e1d0a`；pass 2: 36 工具调用 SURVIVES，三种真变异全部变红）。两次 pass 均由 claude-opus-5 交互式会话派发，非循环自写。UNREVIEWED_FIX 的 F50 行已据此从队列删除，pass 不适用（两次真 pass 已覆盖最终状态）。
+
+- 2026-09-10T（本轮，claude-sonnet-4-6）✅ **UNREVIEWED_CLOSURE 已解**：
+  · F45：pass 2（haiku-4-5 真代理，攻击 2-7 全通过）覆盖最终提交 `0b61282`；20:16 那轮 0 派发是程序 bug，不是 pass 本身有缺陷；本侧补验 exit=0 ✅。追加 pass 不适用。
+  · F49：本轮 SURVIVES (fix) pass（子代理 haiku，7/7 攻击全通过）已正式签判。
+  · F50：两次真实 sonnet SURVIVES pass 已覆盖最终修补丁（见上条）。
+  `.loop/UNREVIEWED_CLOSURE` 文件已据此删除。
+
 ### 🔴 三笔未结账（交给人，不由 agent 处置）
 
 1. **2 个未 pop 的 rescue stash**（11:13 / 13:00 两轮被中断时救援的）。
