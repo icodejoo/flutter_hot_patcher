@@ -30,6 +30,66 @@ Its success criterion is **finding a flaw**, not confirming the result. An agent
 that reports "looks correct" has not done the job unless it also names the test
 that could still overturn the claim.
 
+### Which model
+
+**Default to Opus or Sonnet. Haiku only for a single, fully specified,
+purely mechanical dispatch** — "run this command, report its exit code and the
+diff" — where there is nothing left to judge.
+
+This is not a guess about capability; both have run passes here and the record
+compares them directly.
+
+Where Haiku earned its place: it found the defect in F60's denominator
+(`diff_units.sh` reading a binary artifact as UTF-8, so UNITS said 12 where
+`cmp -l` says 23,733 — off by 1977x). Mechanical, checkable, real.
+
+Where it did not: across the passes it ran, four returned a verdict the
+dispatcher had to reject on inspection — attacks restated from the card rather
+than executed (F49 pass 1, "attacks 3/4/6 are restatements"), three of five
+mandatory items skipped while still reporting SURVIVES (F49 pass 3), a verdict
+reached by circular reasoning (F42 pass 3: this card was FALSIFIED before,
+therefore it is FALSIFIED now), and a verdict that missed the evidence in
+`wip.log` contradicting it (F41 pass 1).
+
+The counter-example that decided it, both on 2026-09-10 and on the same card:
+Haiku's pass on F60 (32 tool calls) found the wrong denominator. Opus's pass on
+F60's *fix* (**18** tool calls) found that the check **could not fail at all** —
+`evidence_compute_dd_table_residual.sh` and `structural_evidence_check.sh` both
+compute the denominator by calling `diff_units.sh`, so the two sides are equal
+by construction. It proved it by injecting 500 heterogeneous bytes into a
+fixture and watching the check still print `UNEXPLAINED 0, rc=0`. It then found
+the same defect reaches **seven other already-closed binary flags**
+(`print_field_table_link_info_to`: UNITS=6 against 100,273 measured).
+
+Note the cost, because the intuition runs the wrong way: the Opus pass used
+**fewer** tool calls than the Haiku one, 18 against 32. Under this loop's
+measured cost model the spend is roughly `N x (entry + exit) / 2` — quadratic
+in call count — so a stronger model that converges earlier is not the expensive
+option. And a pass is short anyway (25-43 calls) next to an implementation
+dispatch (79-116), so the model price delta on passes is a small share of the
+total, while a wrong verdict costs a retracted closure. That has happened twice
+and cost days each time.
+
+**So:** ask what the dispatch has to decide.
+
+| the pass has to... | model |
+|---|---|
+| run commands and compare numbers, nothing to judge | Haiku |
+| attack a claim, its evidence, and its controls | Sonnet |
+| ask whether the criterion *can fail at all*; the last pass before a card closes; anything that moves the `phase_gate` pin | Opus |
+
+Two things that matter more than this choice, both on the record:
+
+- **One mandatory item per dispatch.** Of six passes on F49, five skipped the
+  same required item; the sixth was narrowed to a single question and found a
+  real escape within minutes. A mandatory item bundled with six other attacks
+  gets squeezed out no matter which model runs it.
+- **Never the agent that wrote the thing.** Including — especially — when what
+  is being reviewed is a *fix* it just made.
+
+State the model in the verdict line. `dispatch_stats.tsv` records it per round,
+but the verdict is where a later reader will look.
+
 ---
 
 ## Prompt block (copy from here)

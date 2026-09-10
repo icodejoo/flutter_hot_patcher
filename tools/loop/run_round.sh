@@ -487,9 +487,10 @@ round_dispatch_stats() {
     if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest=$f; fi
   done
   if [ -n "$newest" ]; then
-    python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 none'
+    python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 - none'
 import json, sys, io
 agent = tools = 0
+models = []
 for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
     try: d = json.loads(line)
     except Exception: continue
@@ -500,11 +501,19 @@ for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
     for b in c:
         if isinstance(b, dict) and b.get("type") == "tool_use":
             tools += 1
-            if b.get("name") == "Agent": agent += 1
-print(f"{agent} {tools} {sys.argv[1].split('/')[-1]}")
+            if b.get("name") == "Agent":
+                agent += 1
+                mdl = (b.get("input") or {}).get("model")
+                if mdl: models.append(str(mdl))
+# Distinct models, in first-use order. A round that dispatches twice with two
+# models is exactly the case worth seeing, so this is not collapsed to one.
+seen = []
+for m in models:
+    if m not in seen: seen.append(m)
+print(f"{agent} {tools} {'+'.join(seen) or '-'} {sys.argv[1].split('/')[-1]}")
 PY
   else
-    printf '0 0 none'
+    printf '0 0 - none'
   fi
 }
 
@@ -953,9 +962,9 @@ fi
 # breath. Every one of those would have passed a counting gate silently. The
 # card ids are right there in the line; using their difference costs nothing and
 # cannot be fooled that way.
-read -r agent_calls tool_calls transcript_seen <<<"$(round_dispatch_stats)"
-say "round dispatch: $agent_calls subagent(s), $tool_calls tool call(s) (transcript: $transcript_seen)"
-printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent_calls" "$tool_calls" "$transcript_seen" >>"$STATE/dispatch_stats.tsv"
+read -r agent_calls tool_calls dispatch_models transcript_seen <<<"$(round_dispatch_stats)"
+say "round dispatch: $agent_calls subagent(s) [$dispatch_models], $tool_calls tool call(s) (transcript: $transcript_seen)"
+printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent_calls" "$tool_calls" "$dispatch_models" "$transcript_seen" >>"$STATE/dispatch_stats.tsv"
 
 closed_after=$(closed_ids)
 newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
