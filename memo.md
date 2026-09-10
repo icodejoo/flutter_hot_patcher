@@ -1168,6 +1168,17 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       「两份并存必然漂移」（`CLAUDE.md` 规则 0 在两棵树里内容不同）。
       正确形状是让 `run_round.sh` 问 `finisher.py` 同一个问题（`outstanding()`），
       而不是自己再写一遍判据。
+      🔴 **范围是两处，不是一处（2026-09-10 实测扩充）**：`~/Documents/loop` 是把这套无人值守**通用化**的那一份
+      （人给的口径；README 也写着 `config.toml` 是唯一项目相关文件），而**它带着同一个缺陷、判据还更弱**：
+      `runner.py:449-454` 的 `did_work = bool(summary.get("tools"))` ⇒ `self.handoff.unlink(missing_ok=True)`,
+      注释与 `run_round.sh:903-907` **一字不差**，但它**连「树有没有变」都不问**——
+      一轮只要发生过一次工具调用、什么都没 pop，说明就没了。
+      ⇒ **只修 bash 那一处 = 只修了正在被淘汰的那一份。**
+      🔑 **顺带量出了那道接缝的价值（正面证据，记下来）**：F50 的 B 与 C 改在 `finisher.py`，
+      而 `runner.py:429` 是 subprocess 调它 ⇒ **两处一次修好、通用版自动继承**；
+      A 与 F51 因为在两边**各写了一遍判据**，就得各修一遍。
+      实测通用版缺 A：`runner.py`/`guards.py`/`events.py` 里 `STASH DEBT|outstanding|stash list` 命中数 **0/0/0**
+      ⇒ **通用版目前根本没有「轮次开头报 stash 欠账」这件事。**
       **判据**：造一个 `loop-rescue` stash + 让一轮产生进展 ⇒ 轮末 `HANDOFF` **仍在**；
       把那个 stash pop 掉再跑一轮 ⇒ `HANDOFF` **被删**。两个方向都要有。
       **负控制**：把判据换回 `fingerprint` 比较 ⇒ 第一条用例变红。
