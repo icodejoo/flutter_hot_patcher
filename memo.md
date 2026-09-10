@@ -813,7 +813,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F47 pass 5 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① 六个负控制全部命中（fake open/closed、malformed closed、dup closed/open、四个方向双侧）；② regex 正确提取 memo 全部 3 个 open 行，无漏项；③ extraction_closed 从 grep -c（去重前）计数，与 sort-u 后的集合比较独立；④ [x] 行全为正式卡片，无误匹配；⑤ 三个提交 16e34c6/55bf357/b687530 均存在；⑥ 基线 exit=0；⑦ 全部四方向（memo-only open/closed、tsv-only open/closed）均报 FAIL。
   STILL OPEN：None — all criterion checks work, guards fire independently, negative controls all flip verdict correctly, all four directional asymmetries caught.
 
-- [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09/10）
+- [x] **F49：修补丁自己的待审队列**（`closed`，2026-09-09/10）
       🔴 **2026-09-10 撤回关卡状态（由交互式会话执行，撤回永远安全、主张才需自证）**：
       19:33 那一轮的闸门打印 `gate ok: closed … F49 …`，但它依据的是循环自己那次
       **审 `395fd48`（17 用例）** 的 pass。此后 **pass 4 与 pass 5 把那个状态各证伪一次**
@@ -1000,6 +1000,12 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F49 pass 3 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① `--self-test` 磁盘真实值 17/17（代理报 15/15，差异是代理侧误读，不是缺陷——本轮 orchestrator 独立验证确认 17/17）；② `test_fix_gate.sh` 10/10；③ 幽灵卡号 V2 被 `--cards` 拒绝；④ 入队判据：agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号；⑤ 消队判据：(fix) + agents≥1 + 词汇判据（pass/证伪/VERDICT/falsif）；⑥ 8 条负控制全部实测变红；⑦ end-to-end 合成测试路径完整。
       STILL OPEN: End-to-end scenario exercised only as synthetic test with `$WORK/queue`, not with `.loop/UNREVIEWED_FIX` directory during actual unattended round execution. The PROMPT integration exists but is not covered by this test suite (belongs to integration tests).
 
+- 2026-09-10T（本轮，claude-sonnet-4-6 主循环）📋 **F49 pass 7（haiku-4-5）→ PARTIAL**：子代理无法执行 python3/bash（环境权限限制），代码检查无结构缺陷。
+  主侧补验（本轮 orchestrator）：`fix_queue.py --self-test` **25/0 exit=0** ✅；`test_fix_gate.sh` **11/0 exit=0** ✅；
+  负控制实测（`agents >= 1` → `agents >= 0`）→ exit=1 with 1 failure ✅（负控制真实有效，能失败）。
+- 2026-09-10T（本轮，claude-sonnet-4-6 主循环）📋 **F49 pass 8（haiku-4-5）→ VERDICT: SURVIVES**：七项攻击全部通过（攻击 1/6 以代码检查为主，其余通过实测）。FLAW: NONE。
+  **STILL OPEN（原文）**：Whether case 11 (single dispatch with same-round SURVIVES) actually fails in practice; this is covered theoretically but testing only synthetic scenarios per known open item 1
+
 - [x] **F44：headroom 的 `cross_turn_dedup` 负控制**（`closed`，2026-09-09）  🟢 **证伪 pass 判决：F44 SURVIVES** —— 独立代理用**另一种形状**的新造样本复现了（40 行相同 / 一处 `0x688`→`0x690` / 19 行相同），相同段折成引用、差异行逐字到达。
       🟢 **判据满足，而且结果与我的担心相反**：造一对 60 行、**只差一个十六进制偏移**的反汇编转储
       （`#0x678` vs `#0x688`，`diff` 恰好 2 行），分两次工具调用打进上下文——
@@ -1031,6 +1037,34 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       F45 pass 2 SURVIVES（haiku-4-5，真实子代理，攻击 2-7 全通过）覆盖最终实现状态（commit `0b61282`）；
       STILL OPEN 已由人侧补验（exit 0 ✅）；追加 pass 不适用。
       **再次验证（2026-09-10）**：`test_quota_detection_f45.sh` 15 ran / 0 failed ✅；两个提交均为 HEAD 祖先 ✅。
+- [ ] **F50：救援 stash 的欠账在三处都是静默的**（`built`，`923790a` + `8f731bb`，2026-09-10）
+      🚧 **实现由 2026-09-10 的交互式会话做完，轮次不必重做实现**；
+      **但那次证伪 pass 无人认领 —— 轮次应当接手它**（我没有派，见本卡末）。
+      **第九个仪器缺陷，极性同第七个**（把成功读成失败 ⇒ 这次是把欠账读成没欠账）。
+      三处，全在「救援 stash 的可见性」这一族，**A 单修是假绿**：报告修好了，欠账仍从另外两条路消失。
+      · **A** `run_round.sh:379`：只 grep `auto-stash-round-`（它自己那道 dirty 守卫写的标签），
+        而 finisher 写的是 `loop-rescue`（`finisher.py:38` `RESCUE_PREFIX`）⇒ **轮次开头永不报救援欠账**，
+        而救援恰是更值钱的那半（装着轮次被杀时手里的活）。
+      · **B** `finisher.py:153`：`outstanding()` 只在 `if r.action == "stashed"` 分支里调
+        ⇒ **只有本轮又救了一次才报**；干净的轮次对着昨天留下的 2 个 stash 一声不吭。
+        **没人看过的欠账按定义就是更早那轮留下的** —— 报告恰好缺在最需要它的那一侧。
+      · **C** `finisher.py:115-120`：本次没救到东西就 `os.unlink(handoff)`
+        ⇒ 交接说明的寿命恰好是**一轮**，而它描述的 stash 活得无限久。
+      **实测（补丁前后同一棵真实的树）**：修前对 `~/Documents/fhp-research` 打印**零行**；
+      修后 `STASH DEBT: … holds 2 un-popped stash(es)`（就是 09-09 那两个）。
+      **判据**：`tools/loop/tests/test_stash_debt.sh` **9 ok / 0 failed**（被测块由 sed 从
+      `run_round.sh` **原文抽出**，不是抄一份——抄一份会在原文改了以后继续给绿，那正是 F42 第一版的形状）；
+      `~/Documents/loop/run_tests.sh` **5 ran / 0 failed**。
+      **负控制 5 条，全部实测变红，每条红在该守它的那个用例上**：
+      ① 还原旧 matcher → `loop-rescue` 那格静默、`auto-stash` 那格仍绿（证明变异是特定的那一处）；
+      ② matcher 改成匹配一切 → 「无关 stash 不该报」变红（证明那一格是承重的，不是「stash 列表非空」）；
+      ③ `SRC` 指向**未打补丁的 HEAD** → 3 红，含「nc2 变异打不上」（抽取判据在报「这不是被测的那份代码」）；
+      ④ 删掉 B 的逐树循环 → 「本轮没救到也要报」变红；⑤ 删掉 C 的 `outstanding()` 守卫 → 「有欠账时保留说明」变红。
+      两个变异都**先断言自己打上了才跑用例**——静默没变异的负控制是没有意义的绿。
+      **手术方式**：copy + `rename(2)`，不是原地改（inode `45966754` → `46037949`）——
+      当时有一轮正在执行 `run_round.sh`，bash 增量读取脚本文件。在跑的那轮持旧 inode 不受影响，下一轮读新文件。
+      ⚠️ **待证伪 pass**（§五之四：修完的东西同样是未经审的）。
+
 - [ ] **F46：轮次在权限层面碰不到历史**（`open`）
       我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
       判据：**用 python 调 git 绕过按命令名的拦截，它仍然必须失败。**
