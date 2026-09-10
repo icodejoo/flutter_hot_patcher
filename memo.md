@@ -1753,3 +1753,5 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   F60 保持 open 状态，UNREVIEWED_FIX 条目删除（审查已做，结论为 FALSIFIED）。
   修复方向：让 EXAMINED 使用与 UNITS 真正不同的数据源（如字节级 cmp -l 输出，或
   「op_hash_diff AND self_hash_same」的函数数）。按契约本轮到此结束，不关卡。**
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — 读契约。UNREVIEWED_FIX 有 F60（fix commit f07c089）。代码审查确认：f07c089 是纯 memo 提交（仅改 memo.md +18 行），标题含「修补丁 VERDICT FALSIFIED」使 gate 误判为修补丁入队。实际代码修补丁 a5926d1 已被独立子代理 5+ 次 FALSIFIED——evidence 脚本 EXAMINED 与 diff_units.sh UNITS 用同一公式计算同一 JSON，fixture 扰动同步改变两者，check 永不报红。救援 stash（round-69213，fhp-research stash@{0}）是 a5926d1 前旧版本调试痕迹，已丢弃。UNREVIEWED_FIX 条目删除（gate 误判）。F60 保持 open。派发子代理实现真正修复：EXAMINED 改从二进制产物独立读取，消灭数据层恒等式。
