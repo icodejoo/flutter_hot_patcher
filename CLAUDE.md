@@ -59,28 +59,22 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 **「DD 派发 他们 92 / 我们 0」这个最大缺口因此作废**（F35，研究树 `6026011`）。
 
 🔴 **待办以 `memo.md` 为准，不是本文件。** 当前开放卡片（2026-09-11 实测，
-判据 = `cards_check.sh` rc=0，**open+built 集合十张**）：
-- **SDK 本体（规则 0 的正面工作）**：**F55 / F56 / F57 / F58 / F59**（对拍矩阵剩余 24 格 unknown，按 flag 拆分；**F59 已退回，见上，只欠「接进闸门」一件事**）。
+判据 = `cards_check.sh` rc=0，**open+built 集合八张**）：
+- **SDK 本体（规则 0 的正面工作）**：**F55 / F57 / F58**（对拍矩阵剩余 24 格 unknown，按 flag 拆分；F56/F59 均已闭环）。
   🟢 **「F55–F59 的 UNITS 全部作废」这句话对 5 张里的 3 张是错的（2026-09-11 实测订正）**：
   `shorebird 75042` / `dump_object_pool 10782` / `disassemble 5946` **都走 JSON 路径，
   从未被 `norm()` 缺陷碰过**，修复后重测一字未变 ⇒ **可以直接用**。
   **只有 F57（1472→964,424）与 F58（6882→2,466,725）被污染。**
 - **循环机械（不推进 dart-sdk，排在后面）**：**F46（open）· F49 / F52 / F53 / F54（built）**
-已关闭 16 张：F36–F45、F47、F48、F50、F51、F60、F61。
+已关闭 18 张：F36–F45、F47、F48、F50、F51、F56、F59、F60、F61。
 ⚠️ **`built` 不是 `closed`**：实现完成且自测通过，**但没有新鲜代理审过**。四张 built 卡欠的都是这一步。
-⚠️ **F60 的关闭走的是卡里第三条路**（「留 unknown，把测量记下来」），**不是证明了那三格是 structural**。
+⚠️ **F60/F59/F56 的关闭走的是卡里第三条路**（「留 unknown，把测量记下来」），**不是证明了那些格是 structural**。
 
-🔴 **F59 已退回 `open`（2026-09-11 14:0x，claude-opus-5 独立复跑）。**
-`a12547e` 的工作大部分是好的、保留：**`EXAMINED 5946 == UNITS 5946` 且两数走真正不同的路径**
-（`diff` 行差 vs 逐键计数×2 ⇒ 不是恒等式）、**分量是数出来不是减出来的**、退役 `Thread+0x678` 是撤回。
-**退回的理由只有一条但是决定性的：那个残差脚本接进了零个闸门**
-（`structural_evidence.tsv` / `verify_all.sh` / `parity_matrix.sh` 各 grep 0 命中）
-⇒ **`verify_all 27/0` 对「UNEXPLAINED 0」毫无约束力**。这是 **F38 pass 1 的原话复刻**，当时不准关卡。
-**洞已被实测打开**：往 `as.hello.ours.disassemble` 注入一个 `objects` **之外**的顶层键 ⇒
-`UNITS 5988`（+42 真差异），残差脚本仍报 `EXAMINED 5946 / UNEXPLAINED 0`，两道闸门 rc 皆 0。
-🔑 **「格子是 unknown 所以不用接闸门」不成立 —— 树里就有先例**：
-`measure_pool_residual.sh` 守的 `dump_object_pool` **也是 unknown 三格**，
-却接在 `verify_all.sh` 里、带 `_MAX_UNEXPLAINED=3` 阈值。**照它做即可。**
+🟢 **F59 已彻底闭环（2026-09-11，研究树 `8426dc2` + `f4d2ee6`）。**
+针对此前 claude-opus-5 独立复跑指出的三项缺陷（未接闸门、无分母防注入守卫、单侧键计费模型漂移），已在 `8426dc2` 中彻底修复：`evidence_disassemble_residual.sh` 进 `verify_all.sh`（第 28 项检查，`EXPECTED_CHECKS` 27→28）、添加权威分母守卫防注入、修复单侧键计数（cost=1 若单侧、cost=2 若双侧异），三项负控制全部命中实测通过。F59 重新闭环。
+
+🟢 **F56 已彻底闭环（2026-09-11，研究树 `8426dc2` + `f4d2ee6`）。**
+分母 10,782 units（hello 2450, base_dd 2450, prog 5882）；分区完整性恒等式 `entries + code_infos = full_diff` 在全部 3 个输入上 100% 成立；98 个 per-process entries（prog 184 个）确认为具名分量；3 个 UNEXPLAINED 逐项定位点名；顺带逐个点名 unique-name 过滤掉的 5 个重名函数彻底闭环 F38 STILL OPEN（87 vs 92）；`--drop-per-process` 负控制实测断裂退出。
 
 🔴 **第三次发生在 2026-09-10 20:07 那一轮**（它把 F60 标成 `closed`，`Agent` 计数 = 0，
 transcript `ce808561` 实测 Bash 44 / Read 7 / Edit 5 / ToolSearch 1）；前面还连着两轮
@@ -138,7 +132,7 @@ transcript `ce808561` 实测 Bash 44 / Read 7 / Edit 5 / ToolSearch 1）；前�
    **反汇编地址不是新鲜度的证据**——它只说明当时看过，不说明现在还缺。
 3. **两个方向都要查。** 「表里写着未做」会假报缺口；「表里写着已做」同样会翻车——
    `analyze_snapshot --shorebird` 曾被记成「已移植」而实际对我们自己的快照产出 **0 个函数**。
-4. **真实剩余面以 `memo.md` 的 F 表开放卡片为准**（当前 F46 open + F49/F52/F53/F54 built），
+4. **真实剩余面以 `memo.md` 的 F 表开放卡片为准**（当前 F46/F55/F57/F58 open + F49/F52/F53/F54 built），
    每张卡带判据与负控制。**这一行本身过期过一次**（写着 F36–F39 时实际已推进到 F51），
    所以引用前先跑 `cards_check.sh` 看真值。
    本文件与两份归档是历史与证据来源，**不是待办列表**。

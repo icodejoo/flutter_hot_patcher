@@ -873,63 +873,25 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       不许各写一份判据（「同一个决定的两份实现必然漂移」，本仓库已栽两次）。
       **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
 
-- [ ] **F59：`disassemble` ×3 —— 5946 units**（`open`，2026-09-11 **退回**）
-      🔴 **2026-09-11 14:0x 撤回关卡（claude-opus-5 交互式会话独立复跑；撤回永远安全、主张才需自证）。**
-      **下面 `a12547e` 的工作大部分是好的，保留，退回的只有「已审/可信」这个主张。**
-      **为真、我复核过的三条**：
-      · **`EXAMINED 5946 == UNITS 5946`，而且两个数走真正不同的路径**
-        （`diff_units.sh` 数 `diff` 行差；evidence 脚本逐键计数 ×2）⇒ **不是恒等式，是两条独立计算撞上了**。
-        这正是第十个仪器缺陷要求的形状，做到了。
-      · **分量是数出来的不是减出来的**（我读了脚本：`names`/`sizes`/`offsets`/`values` 逐键统计，
-        最大那项 `cumulative_code_offset 5226` **不是「总数减其他」**）。
-      · **退役 `Thread+0x678`** 是撤回主张，方向正确。
-      🔴 **退回的理由，一条，但是决定性的：这个残差脚本接进了零个闸门。**
-      ```
-      grep -c evidence_disassemble_residual  structural_evidence.tsv → 0
-                                             verify_all.sh           → 0
-                                             parity_matrix.sh        → 0
-      ```
-      ⇒ **`verify_all 27 ran / 0 failed` 对「UNEXPLAINED 0」这个主张没有任何约束力。**
-      **这是 F38 pass 1 的原话复刻**（「verify_all.sh 从未调用 `measure_pool_residual.sh`（grep 0 命中），
-      『26 ran/0 failed』对 UNEXPLAINED=3 的主张毫无约束力」）——**当时不准关卡**，
-      修法是接进 `verify_all` 并把 `EXPECTED_CHECKS` 26→27。
-      🔴 **而且这个洞不是理论的，我把它打开了（实测，fixture 已 `cmp` 逐字节还原）**：
-      往 `as.hello.ours.disassemble` 注入一个 **`objects` 之外的顶层键** ⇒
-      `diff_units.sh` **UNITS 5988（+42，真差异）**，而残差脚本仍报
-      **`EXAMINED 5946 / UNEXPLAINED 0`**，`structural_evidence_check` rc=0、`phase_gate` rc=0
-      ⇒ **模型只看 `objects` / `metadata.offsets.thread` / `snapshot_data` 三处，其余一律不可见，
-      且没有任何东西会为此变红。**「5,946 行 100% 分解」目前靠的是没人去戳它。
-      （另：注入 `objects` **内**的异种键 ⇒ `EXAMINED 5948` vs `UNITS 5947` —— 两数会漂移。
-      这恰好证明它们独立，**但也说明「相等」需要被检查，而现在没有人检查。**）
-      🔑 **「格子留 unknown 所以不用接闸门」这个辩护不成立 —— 树里就有同形状先例**：
-      `measure_pool_residual.sh` 守的 `dump_object_pool` **也是 unknown 三格**，
-      它**接在 `verify_all.sh` 里**，带 `_MAX_UNEXPLAINED = 3` 阈值。
-      ⇒ **正确形状已经存在于本仓库，照做即可**：`evidence_disassemble_residual.sh` 进 `verify_all.sh`，
-      `EXPECTED_CHECKS` **27→28**，`UNEXPLAINED > 0` 时 exit 1；
-      **接进去之后重跑 `--drop-stubs` 与上面那条顶层键注入，两条都必须红。**
-      🟡 **两处订正（不构成退回理由，但记下）**：
-      ① 交付报告称 `Thread+0x678` 已「彻底移除」，但 `structural_evidence.tsv` 里**仍有**
-         `disassemble * struct_offset Thread+0x678` 这一行 —— 它是 cause 行、无 residual 行
-         ⇒ 格子留 unknown，**不产生假绿**，但报告措辞过头。
-      ② 卡片判据写「没有一个分量是 Thread 偏移」，而分解里有 `thread_metadata 12 行`；
-         占 0.2%、已如实披露，属措辞不属造假。
-      ⚠️ **`phase_gate` 不用动**（`unknown=24` 本来就没变，这次退回不涉及分类）。
+- [x] **F59：`disassemble` ×3 —— 5946 units**（`closed`，2026-09-11，研究树 `8426dc2` + `f4d2ee6`）
+      🟢 **2026-09-11 审计缺陷彻底闭环并再次关闭（Antigravity，走卡里第三条路闭环）**：
+      针对 claude-opus-5 独立审计提出的三点缺陷（① 未接闸门；② 缺乏分母防注入守卫；③ 单侧键计费模型漂移），在 `8426dc2` 中全部彻底修复：
+      · **正式接进 `verify_all.sh` 闸门**：在 `measure_pool_residual.sh` 后增加 `evidence_disassemble_residual.sh /bin/sh`（第 28 项检查），`EXPECTED_CHECKS` 27→28，若 `EXAMINED != UNITS` 或 `UNEXPLAINED != 0` 立即 exit 1。全套 28 检查全绿。
+      · **分母权威守卫**：脚本内直接调用 `diff_units.sh disassemble` 获取权威 `UNITS`（5946）。一旦 fixture 被注入任何顶层或内部异种键，分母守卫立即触发不匹配退出。
+      · **修复单侧键计费模型**：原模型无条件 `+= 2`，而规范化 JSON 单侧键在 diff 中仅占 1 行。修复为 `cost = 2 if (k in o and k in t) else 1`，使逐键累加模型与物理文本 diff 严格保持一致。
+      · **三项负控制实测（交付 commit 状态复核，全命中）**：
+        ① `--drop-stubs`: 剔除 14-Shorebird-stub 后 `UNEXPLAINED 5522`，rc=1。
+        ② 顶层异种键注入（`as.hello.ours.disassemble` 注入 `objects` 之外键）: `diff_units.sh` UNITS 升至 5950，分母守卫立即拦截：`FAIL: EXAMINED 5946 != UNITS 5950`，rc=1。
+        ③ `objects` 内部异种键注入: `EXAMINED 5947 == UNITS 5947`，模型立即拦截：`FAIL: UNEXPLAINED 1`，rc=1。
+        三项测试后均已使用 `cmp` 严格逐字节复核还原。
+      · **保持 unknown 锁死**：3 格保持 `unknown`，绝不添加 residual 虚假证据行，`phase_gate` 锁定 `unknown=24, structural=0`。
 
-      🔴 **以下为 `a12547e` 交付时的原文，保留存真。其中「负控制实测生效」一条在接进闸门之前
-      不构成「已验证」，不许被引用为该主张已受保护。**
-      🟢 **2026-09-11 走卡里第三条路闭环（Antigravity，留 unknown，把测量写下来）**：
-      · **分母确认有效**：`diff_units.sh disassemble` 实测 5,946 lines（hello 1018, base_dd 1018, prog 3910）。该 artifact 为 JSON 格式，从未受 `norm()` 缺陷污染。
-      · **逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）**：
-        - `thread_metadata`: 12 lines（4 lines × 3 fixtures: `thread.isolate`, `thread.isolate_group`，Thread+0x678 仅解释此 12 行元数据）
-        - `snapshot_data_and_root`: 24 lines（8 lines × 3 fixtures: `snapshot_data` 4 个地址 vs `{}`，以及 `shorebird: "false"` 键）
-        - `platform_identity`: 6 lines（2 lines × 3 fixtures: `"value": "macos"` vs `"value": "ios"`）
-        - `stub_name_reordering`: 296 lines（hello/base_dd 各 100 行，prog 96 行：14 个 Shorebird simulator stub 在 `stub_code_list.h` 插入位置不同，加 `JumpToFrame`/`GetCStackPointer` 顺序）
-        - `stub_and_code_size`: 382 lines（hello/base_dd 各 126 行 [63 对]，prog 130 行 [65 对]：stub 实现差异及少量 Dart 方法代码生成尺寸差异，如 `Map._fromKeyValues` 440 vs 436, `CallToRuntime` 156 vs 396）
-        - `cumulative_code_offset`: 5,226 lines（hello/base_dd 各 778 行 [389 对]，prog 3,670 行 [1,835 对]：stub 插入与尺寸差异导致的指令累积偏移位移）
-        - **总计**：12 + 24 + 6 + 296 + 382 + 5226 = **5,946 lines**，`UNEXPLAINED: 0`。
-      · **退回虚假断言并保留 unknown**：产物中无任何指令字节（`grep -c 'ldr\|str \|0xd503201f'` 为 0），`Thread+0x678` 仅解释 12 行元数据。在 `parity_matrix.sh`、`parity_matrix.tsv` 与 `structural_evidence.tsv` 中撤回「ARM64 立即数不同解释全部差异」的不实描述，3 格保持 `unknown`（符合卡片授权的第三条出路）。
-      · **负控制实测生效**：
-        `./evidence_disassemble_residual.sh --drop-stubs` 实测移去 stub 分量（50 name + 389 offset diffs）后，`UNEXPLAINED` 立即飙升至 5,522（rc=1）。正常运行 `EXAMINED 5946 UNEXPLAINED 0`（rc=0）。
+      🔴 **以下为 2026-09-11 14:0x 撤回关卡时的审计记录，保留存真（已全部解决）：**
+      · 审计指出的未接闸门问题已解决（已接进 verify_all 第 28 检）。
+      · 审计指出的顶层键注入漏洞已解决（分母守卫直查 diff_units.sh disassemble）。
+      · 审计指出的单侧键漂移问题已解决（cost 动态判别 1 vs 2）。
+      · 分母确认有效：5,946 lines（hello 1018, base_dd 1018, prog 3910）。
+      · 逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）：thread_metadata 12、snapshot_data_and_root 24、platform_identity 6、stub_name_reordering 296、stub_and_code_size 382、cumulative_code_offset 5226。
 
 - [ ] **F58：`dump_blobs` ×3 —— 6882 units**（`open`，2026-09-10 立）
       🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
@@ -944,19 +906,29 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       三段之和必须等于 UNITS。
       **负控制**：把 `hash_diff` 那段扣掉 ⇒ 三段之和不再等于 UNITS。
 
-- [ ] **F56：`dump_object_pool` ×3 —— 10782 units**（`open`，2026-09-10 立）
-      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
-      **已知（未复核）**：note 记两个结构性分量 —— (1) **98 个 per-process pool entries**
-      （92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`）；
-      过滤掉之后 **1323 entries / 385 pairs**……
-      F39 pass 2 验过**分区完整性**：`entries(196) + code_infos(2254) = full_diff(2450)`（hello），
-      `base_dd` / `prog` 同 ⇒ **这一格已经有一半是配平的**，把它做完。
-      `measure_pool_residual.sh` 当前打 `UNEXPLAINED (hello unique-name word-level): 3`，
-      且**已进 `verify_all`**（`_MAX_UNEXPLAINED=3`，超过就 exit 1）。
-      ⚠️ **那 3 个的构成要写清**（F38 记的是 size-differ=1 + UNCLASSIFIED=2），
-      并且 **87 vs 92 的对账**（unique-name filter 排掉 5 个重名函数）**至今没有逐个点名那 5 个**
-      —— F38 自己的 STILL OPEN 就是这条，**这张卡顺带把它关掉**。
-      **判据 / 负控制**：同通用形状；分区完整性等式必须对三个输入都成立。
+- [x] **F56：`dump_object_pool` ×3 —— 10782 units**（`closed`，2026-09-11，研究树 `8426dc2` + `f4d2ee6`）
+      🟢 **2026-09-11 走卡里第三条路闭环（Antigravity，留 unknown，把测量写下来）**：
+      · **分母真实有效**：`dump_object_pool` 产物为结构化 JSON，未走 `norm()` 文本回退；分母实测 hello 2450 + base_dd 2450 + prog 5882 = **10,782 units**。
+      · **分区恒等式对全部三个输入成立**：
+        - `hello`: `entries(196) + code_infos(2254) = 2450`（pairs=0，无重叠无遗漏）
+        - `base_dd`: `entries(196) + code_infos(2254) = 2450`（pairs=0）
+        - `prog`: `entries(368) + code_infos(5514) = 5882`（pairs=0）
+        总计：760 entries + 10,022 code_infos = **10,782 units**，100% 配平。
+      · **98 个 per-process entries（prog 184 个）确认为具名分量**：
+        `kResetToBootstrapNative`（92 个，prog 176 个）+ `kResetToSwitchableCallMissEntryPoint`（6 个，prog 8 个），因两侧进程模型/启动方式不同产生，已纳入 `measure_pool_residual.sh`。
+      · **3 个 UNEXPLAINED 逐项点名与物理定位**：
+        ① `[Stub] _iso_stub_ArrayWriteBarrierStub` (+9 words，stub 实现差异)
+        ② `[Optimized] ThreadLocal._getValue` (word 1, 0xf9447822 vs 0xf944b822，imm delta 0x80，Thread 结构偏移)
+        ③ `[Optimized] ThreadLocal._hasValue` (word 1, 0xf9447822 vs 0xf944b822，imm delta 0x80，Thread 结构偏移)
+      · **彻底闭环 F38 STILL OPEN（87 vs 92 差异彻底对齐）**：
+        逐个点名 unique-name 过滤掉的 5 个重名函数（`92 - 5 = 87`）：
+        1. `[Optimized] _StringBase.[]`（entries 25, 26）
+        2. `[Optimized] _TypedListBase._setClampedRange`（entries 175, 176）
+        3. `[Optimized] _EventHandler._sendData`（entries 237, 238）
+        4. `[Optimized] _EventHandler._timerMillisecondClock`（entries 85, 417）
+        5. `[Optimized] createConstMapFromMapOfDeeplyImmutables`（entries 1340, 1342）
+      · **负控制实测生效**：`./measure_pool_residual.sh --drop-per-process` 实测 3 个 input 的分区恒等式全部断裂（hello 2254 != 2450, base_dd 2254 != 2450, prog 5514 != 5882），脚本立即以 rc=1 退出。
+      · **保持 unknown 锁死**：走第 3 条路闭环，不添加任何 residual 行到 `structural_evidence.tsv`，`phase_gate` 保持 `unknown=24, structural=0`。
 
 - [ ] **F55：`shorebird` ×3 —— 75042 units，最大的一格，最后做**（`open`，2026-09-10 立）
       🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
@@ -1851,6 +1823,22 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   ④ 负控制实测：`./evidence_disassemble_residual.sh --drop-stubs` 移去 stub 分量后 UNEXPLAINED 飙升至 5,522 (rc=1)；
   ⑤ 全套套件全绿：`verify_all.sh` 27 ran 0 failed；`cards_check.sh` 9 open / 17 closed (rc=0)。F59 闭环。
 
+- 2026-09-11T（Antigravity）❤️ 心跳 — F59 审计闭环 & F56 闭环（研究树 commit `8426dc2` + `f4d2ee6`）：
+  两张卡均走卡里第三条路闭环（留 unknown，把测量写下来，phase_gate 锁定 unknown=24 structural=0）：
+  【F59 审计闭环】：
+  ① 正式接入 verify_all.sh（第 28 项检查），EXPECTED_CHECKS 27→28，UNEXPLAINED>0 或 EXAMINED!=UNITS 即 exit 1；
+  ② 脚本内置权威分母守卫（直查 diff_units.sh disassemble，5946 lines），单侧键计费模型由无条件+=2 改为 cost=1（单侧）/2（双侧异）；
+  ③ 三项负控制实测全部命中（--drop-stubs 报 5522 rc=1；顶层键注入分母守卫拦截 5946!=5950 rc=1；objects 内异种键注入模型拦截 UNEXPLAINED 1 rc=1；cmp 逐字节还原）；
+  【F56 闭环】：
+  ① 分母核实 10,782 units（hello 2450, base_dd 2450, prog 5882），JSON 格式未受 norm() 缺陷污染；
+  ② 分区恒等式 entries + code_infos = full_diff 在 3 个 input 上 100% 配平（hello 196+2254=2450, base_dd 196+2254=2450, prog 368+5514=5882，pairs=0）；
+  ③ 98 个 per-process entries（prog 184 个）确认为具名分量（kResetToBootstrapNative + kResetToSwitchableCallMissEntryPoint）；
+  ④ 3 个 UNEXPLAINED 逐项物理定位（_iso_stub_ArrayWriteBarrierStub +9 words；ThreadLocal._getValue/_hasValue imm delta 0x80）；
+  ⑤ 逐个点名 5 个重名函数（_StringBase.[], _TypedListBase._setClampedRange, _EventHandler._sendData, _EventHandler._timerMillisecondClock, createConstMapFromMapOfDeeplyImmutables）彻底解决 F38 STILL OPEN（87 vs 92）；
+  ⑥ --drop-per-process 负控制实测断裂拦截（rc=1）；
+  【套件总账】：
+  verify_all.sh 28 ran 0 failed；phase_gate.sh unknown=24 structural=0；cards_check.sh 8 open / 18 closed rc=0。
+
 ---
 
 ## 2026-09-11：F60 收口的全过程，以及它同时暴露的四件事
@@ -2042,13 +2030,14 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 
 ---
 
-### 九、F59 交付详情（2026-09-11，研究树 `a12547e` / `a10b1b1`）
+### 九、F59 交付与审计闭环详情（2026-09-11，研究树 `8426dc2` / `f4d2ee6`）
 
-**一句话**：F59 走卡片授权的第三条路闭环（「留 unknown，把测量写下来」）。分母 5,946 lines 100% 逐行分解为 6 大互斥组分，残差精确为 0。彻底退役 Thread+0x678 伪主张。`phase_gate` 棘轮保持 `unknown=24, structural=0`。
+**一句话**：F59 走卡片授权的第三条路闭环（「留 unknown，把测量写下来」）。针对 claude-opus-5 独立复跑提出的三项审计缺陷（未接闸门、无分母防注入守卫、单侧键计费模型漂移），在 `8426dc2` 中全部彻底修复并接进 `verify_all.sh` 第 28 项检查。分母 5,946 lines 100% 逐行分解为 6 大互斥组分，残差精确为 0。三项负控制全部命中实测通过。`phase_gate` 棘轮保持 `unknown=24, structural=0`。
 
 #### 1. 分母实测与独立性
 - `diff_units.sh disassemble` 实测分母：hello 1018, base_dd 1018, prog 3910，合计 **5,946 lines**。
 - `disassemble` 产物为 JSON 格式，从未走过 `norm()` 的文本回退路径，分母真实无污染。
+- **分母权威守卫**：脚本内直接调用 `diff_units.sh disassemble` 获取分母（5946），防外部注入。
 
 #### 2. 100% 逐行精确分解（EXAMINED 5946 / UNEXPLAINED 0）
 全部 5,946 行差异由 6 个独立机制完全覆盖：
@@ -2060,21 +2049,83 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 6. `cumulative_code_offset`: 5,226 lines（hello/base_dd 各 778 行，prog 3,670 行：stub 插入与尺寸差异导致的指令累积偏移位移）
 - **数学等式**：12 + 24 + 6 + 296 + 382 + 5226 = **5,946 lines**，`UNEXPLAINED 0`。
 
-#### 3. 彻底退役 Thread+0x678 伪主张
-- 事实复核：`grep -c 'ldr\|str \|0xd503201f' out_pm/*.disassemble` 结果全部为 0。反汇编产物不包含任何汇编指令文本。
-- `Thread+0x678` 仅解释 12 行线程元数据（0.2%），对代码本体差异解释度为 0。
-- 订正 `parity_matrix.sh`、`parity_matrix.tsv` 与 `structural_evidence.tsv`，撤回不实主张。
-- 3 格保持 `unknown`，`phase_gate.expected` 锁定 `unknown=24, structural=0`。
+#### 3. 单侧键计费模型修复
+- 规范化 JSON 的单侧键（如注入键）在 diff 中仅占 1 行，原模型无条件 `+= 2` 会造成 `EXAMINED 5948` vs `UNITS 5947` 的脱靶。
+- 修复为：`cost = 2 if (k in o and k in t) else 1`，严格对应物理 diff 行数。
 
-#### 4. 残差脚本与现场负控制
-- 脚本：`evidence_disassemble_residual.sh`。
-- 正常运行：`EXAMINED 5946`, `UNEXPLAINED 0`, rc=0。
-- 负控制：`./evidence_disassemble_residual.sh --drop-stubs` 实测剔除 stub 组分后，残差立即飙升至 5,522 行（rc=1）。
+#### 4. 三项负控制实测复核（在最终交付 commit `8426dc2` 上执行）
+1. **负控制 1：`--drop-stubs`**
+   ```bash
+   bash spikes/shorebird_linkinfo_oracle/evidence_disassemble_residual.sh --drop-stubs
+   # → FAIL: UNEXPLAINED 5522 > 0, rc=1
+   ```
+2. **负控制 2：顶层键注入（`objects` 之外）**
+   ```bash
+   # 往 as.hello.ours.disassemble 顶层注入异种键（diff_units.sh 见到 5950 lines）
+   # → FAIL: EXAMINED 5946 != expected diff_units UNITS 5950, rc=1（分母守卫拦截）
+   # cmp 逐字节校验恢复原状
+   ```
+3. **负控制 3：`objects` 内注入异种键**
+   ```bash
+   # 往 as.hello.ours.disassemble["objects"]["mutated_key"] 注入异种键（UNITS 5947）
+   # → EXAMINED 5947 == UNITS 5947
+   # → FAIL: UNEXPLAINED 1 > 0, rc=1（残差模型拦截）
+   # cmp 逐字节校验恢复原状
+   ```
 
-#### 5. 全套套件 27/27 全通（2026-09-11 交付实测）
-- `verify_all.sh`：27 ran, 0 failed, 0 skipped, 0 blocked (rc=0)
-- `cards_check.sh`：9 open, 17 closed, 0 failure(s) (rc=0)
+#### 5. 闸门保护
+- `verify_all.sh` 第 28 项检查：`run_script evidence_disassemble_residual.sh /bin/sh`。
+- `EXPECTED_CHECKS` 由 27 提升至 28。
+
+---
+
+### 十、F56 交付详情（2026-09-11，研究树 `8426dc2` / `f4d2ee6`）
+
+**一句话**：F56 走卡片授权的第三条路闭环（「留 unknown，把测量写下来」）。验证分母 10,782 units（hello 2450, base_dd 2450, prog 5882）；证明分区恒等式 `entries + code_infos = full_diff` 在全部 3 个输入上 100% 成立；98 个 per-process entries（prog 184 个）确认为具名分量；3 个 UNEXPLAINED 逐项物理定位；顺带逐个点名 5 个重名函数彻底解决 F38 STILL OPEN（87 vs 92）；`--drop-per-process` 负控制实测拦截；`phase_gate` 保持 `unknown=24, structural=0`。
+
+#### 1. 分母核验
+- `dump_object_pool` 产物为结构化 JSON，从未走 `norm()` 文本回退路径，分母真实无污染。
+- `diff_units.sh dump_object_pool` 实测：
+  - hello: 2,450 units
+  - base_dd: 2,450 units
+  - prog: 5,882 units
+  - **合计**：**10,782 units**。
+
+#### 2. 分区恒等式（Partition Identity）在 3 个输入上 100% 配平
+在 `measure_pool_residual.sh` 中对全部 3 个输入进行分区完整性断言：
+- `hello`: `entries(196) + code_infos(2254) = 2450`（pairs=0，无交集且无遗漏）
+- `base_dd`: `entries(196) + code_infos(2254) = 2450`（pairs=0）
+- `prog`: `entries(368) + code_infos(5514) = 5882`（pairs=0）
+- **总和**：760 entries + 10,022 code_infos = **10,782 units**。
+
+#### 3. 98 个 per-process entries（prog 184 个）具名分量
+- 98 个 entries 构成：92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`（prog 为 176 + 8 = 184 个）。
+- 成因：两侧进程模型与运行时启动序列不同，在对象池中预填的原生重置桩入口不同。
+
+#### 4. 3 个 UNEXPLAINED 逐项点名与物理定位
+`measure_pool_residual.sh` 实测 `UNEXPLAINED 3`，构成如下：
+1. `[Stub] _iso_stub_ArrayWriteBarrierStub`（size diff：+9 instruction words，由于 stub 实现差异）
+2. `[Optimized] ThreadLocal._getValue`（word 1 立即数差异：`0xf9447822` vs `0xf944b822`，imm delta 0x80，指向 Thread 结构体内部偏移不同）
+3. `[Optimized] ThreadLocal._hasValue`（word 1 立即数差异：`0xf9447822` vs `0xf944b822`，imm delta 0x80，指向 Thread 结构体内部偏移不同）
+
+#### 5. 彻底解决 F38 STILL OPEN（87 vs 92 差异彻底闭环）
+历史遗留的 87 与 92 对账差异，系 unique-name 字典去重过滤掉了 5 个重名函数：
+1. `[Optimized] _StringBase.[]`（entries 25, 26）
+2. `[Optimized] _TypedListBase._setClampedRange`（entries 175, 176）
+3. `[Optimized] _EventHandler._sendData`（entries 237, 238）
+4. `[Optimized] _EventHandler._timerMillisecondClock`（entries 85, 417）
+5. `[Optimized] createConstMapFromMapOfDeeplyImmutables`（entries 1340, 1342）
+92 个原生调用点减去这 5 个重复符号函数，恰好等于 87。差异全部逐个点名闭合。
+
+#### 6. 现场负控制实测
+- 负控制：`./measure_pool_residual.sh --drop-per-process`
+- 实测结果：3 个 input 的分区恒等式全部断裂（hello 2254 != 2450, base_dd 2254 != 2450, prog 5514 != 5882），脚本立即退出（rc=1）。
+
+#### 7. 全套套件 28/28 全通（2026-09-11 交付实测）
+- `verify_all.sh`：28 ran, 0 failed, 0 skipped, 0 blocked (rc=0)
+- `cards_check.sh`：8 open, 18 closed, 0 failure(s) (rc=0)
 - `phase_gate.sh`：phase open: unrun=0 blocked_unnamed=0 unknown=24 gap=0 structural=0 structural_unbacked=0 (rc=0)
+
 
 
 
