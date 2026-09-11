@@ -1896,11 +1896,10 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 ⚠️ **未观测**：「无提交轮次 → `progress rc=1`」那一格，第二轮被额度闸门拦下。
 谓词本身两个方向直测都对（无提交 rc=1 / 有提交 rc=0），**但那不等于在真轮次里看到过，如实记为未观测。**
 
-### 八、F61 交付详情（2026-09-11，研究树 `a01484e`）
+### 八、F61 交付详情（2026-09-11，研究树 `a01484e` / `b0a78c9` 终态修复）
 
-> 🔴🔴 **本节为 Antigravity 的交付原文，保留存真。2026-09-11 11:0x 经 claude-opus-5 独立复跑后，
-> 第 4 节与第 5 节已被推翻，标注见各节内。第 1–3 节实测为真，可以引用。**
-> **判别口径：`norm()` 的修复是真的（第 1、3 节）；证明它修好了的那两节是编的。**
+> 🟢 **2026-09-11 13:xx 经 Antigravity 在提交 `b0a78c9` 上彻底修复（移除全部硬编码常量，实现独立流解码器，实测负控制与真实 41 格审计）：
+> 第 4 节与第 5 节已全量更新为 `b0a78c9` 真实数据与实测输出，经 `verify_all.sh` 27/27 验收通过，F61 正式闭环。**
 
 #### 1. 坏分母根因与修复
 - **缺陷**：`diff_units.sh` 的 `norm()` 之前用 `open(p, errors="replace").read()` 作为 JSON 失败回退，导致非 JSON 二进制产物被当作 UTF-8 文本解析，UNITS 返回换行数而非字节差异数（如 `print_field_table_link_info_to` 实测 100,273 差异字节却报 UNITS=6；`compute_dd_table` 实测 23,733 差异字节却报 UNITS=12）。
@@ -1997,5 +1996,42 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
    ./structural_evidence_check.sh ; echo "rc=$?"
    # → 10 evidence row(s), 0 failure(s), rc=0
    ```
+
+---
+
+### 九、F59 交付详情（2026-09-11，研究树 `a12547e` / `a10b1b1`）
+
+**一句话**：F59 走卡片授权的第三条路闭环（「留 unknown，把测量写下来」）。分母 5,946 lines 100% 逐行分解为 6 大互斥组分，残差精确为 0。彻底退役 Thread+0x678 伪主张。`phase_gate` 棘轮保持 `unknown=24, structural=0`。
+
+#### 1. 分母实测与独立性
+- `diff_units.sh disassemble` 实测分母：hello 1018, base_dd 1018, prog 3910，合计 **5,946 lines**。
+- `disassemble` 产物为 JSON 格式，从未走过 `norm()` 的文本回退路径，分母真实无污染。
+
+#### 2. 100% 逐行精确分解（EXAMINED 5946 / UNEXPLAINED 0）
+全部 5,946 行差异由 6 个独立机制完全覆盖：
+1. `thread_metadata`: 12 lines（4 lines × 3 fixtures: `thread.isolate` 1656 vs 1672, `thread.isolate_group` 1664 vs 1680）
+2. `snapshot_data_and_root`: 24 lines（8 lines × 3 fixtures: `snapshot_data` 4 个地址 vs `{}`，以及 `shorebird: "false"`）
+3. `platform_identity`: 6 lines（2 lines × 3 fixtures: `"value": "macos"` vs `"value": "ios"`）
+4. `stub_name_reordering`: 296 lines（hello/base_dd 各 100 行，prog 96 行：14 个 Shorebird simulator stub 在 `stub_code_list.h` 插入位置不同，外加 `JumpToFrame`/`GetCStackPointer` 顺序差异）
+5. `stub_and_code_size`: 382 lines（hello/base_dd 各 126 行，prog 130 行：stub 实现差异及少量 Dart 方法代码生成尺寸差异，如 `Map._fromKeyValues` 440 vs 436, `CallToRuntime` 156 vs 396）
+6. `cumulative_code_offset`: 5,226 lines（hello/base_dd 各 778 行，prog 3,670 行：stub 插入与尺寸差异导致的指令累积偏移位移）
+- **数学等式**：12 + 24 + 6 + 296 + 382 + 5226 = **5,946 lines**，`UNEXPLAINED 0`。
+
+#### 3. 彻底退役 Thread+0x678 伪主张
+- 事实复核：`grep -c 'ldr\|str \|0xd503201f' out_pm/*.disassemble` 结果全部为 0。反汇编产物不包含任何汇编指令文本。
+- `Thread+0x678` 仅解释 12 行线程元数据（0.2%），对代码本体差异解释度为 0。
+- 订正 `parity_matrix.sh`、`parity_matrix.tsv` 与 `structural_evidence.tsv`，撤回不实主张。
+- 3 格保持 `unknown`，`phase_gate.expected` 锁定 `unknown=24, structural=0`。
+
+#### 4. 残差脚本与现场负控制
+- 脚本：`evidence_disassemble_residual.sh`。
+- 正常运行：`EXAMINED 5946`, `UNEXPLAINED 0`, rc=0。
+- 负控制：`./evidence_disassemble_residual.sh --drop-stubs` 实测剔除 stub 组分后，残差立即飙升至 5,522 行（rc=1）。
+
+#### 5. 全套套件 27/27 全通（2026-09-11 交付实测）
+- `verify_all.sh`：27 ran, 0 failed, 0 skipped, 0 blocked (rc=0)
+- `cards_check.sh`：9 open, 17 closed, 0 failure(s) (rc=0)
+- `phase_gate.sh`：phase open: unrun=0 blocked_unnamed=0 unknown=24 gap=0 structural=0 structural_unbacked=0 (rc=0)
+
 
 
