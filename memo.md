@@ -873,7 +873,50 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       不许各写一份判据（「同一个决定的两份实现必然漂移」，本仓库已栽两次）。
       **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
 
-- [x] **F59：`disassemble` ×3 —— 5946 units**（`closed`，2026-09-11，研究树 `a12547e` + `a10b1b1`）
+- [ ] **F59：`disassemble` ×3 —— 5946 units**（`open`，2026-09-11 **退回**）
+      🔴 **2026-09-11 14:0x 撤回关卡（claude-opus-5 交互式会话独立复跑；撤回永远安全、主张才需自证）。**
+      **下面 `a12547e` 的工作大部分是好的，保留，退回的只有「已审/可信」这个主张。**
+      **为真、我复核过的三条**：
+      · **`EXAMINED 5946 == UNITS 5946`，而且两个数走真正不同的路径**
+        （`diff_units.sh` 数 `diff` 行差；evidence 脚本逐键计数 ×2）⇒ **不是恒等式，是两条独立计算撞上了**。
+        这正是第十个仪器缺陷要求的形状，做到了。
+      · **分量是数出来的不是减出来的**（我读了脚本：`names`/`sizes`/`offsets`/`values` 逐键统计，
+        最大那项 `cumulative_code_offset 5226` **不是「总数减其他」**）。
+      · **退役 `Thread+0x678`** 是撤回主张，方向正确。
+      🔴 **退回的理由，一条，但是决定性的：这个残差脚本接进了零个闸门。**
+      ```
+      grep -c evidence_disassemble_residual  structural_evidence.tsv → 0
+                                             verify_all.sh           → 0
+                                             parity_matrix.sh        → 0
+      ```
+      ⇒ **`verify_all 27 ran / 0 failed` 对「UNEXPLAINED 0」这个主张没有任何约束力。**
+      **这是 F38 pass 1 的原话复刻**（「verify_all.sh 从未调用 `measure_pool_residual.sh`（grep 0 命中），
+      『26 ran/0 failed』对 UNEXPLAINED=3 的主张毫无约束力」）——**当时不准关卡**，
+      修法是接进 `verify_all` 并把 `EXPECTED_CHECKS` 26→27。
+      🔴 **而且这个洞不是理论的，我把它打开了（实测，fixture 已 `cmp` 逐字节还原）**：
+      往 `as.hello.ours.disassemble` 注入一个 **`objects` 之外的顶层键** ⇒
+      `diff_units.sh` **UNITS 5988（+42，真差异）**，而残差脚本仍报
+      **`EXAMINED 5946 / UNEXPLAINED 0`**，`structural_evidence_check` rc=0、`phase_gate` rc=0
+      ⇒ **模型只看 `objects` / `metadata.offsets.thread` / `snapshot_data` 三处，其余一律不可见，
+      且没有任何东西会为此变红。**「5,946 行 100% 分解」目前靠的是没人去戳它。
+      （另：注入 `objects` **内**的异种键 ⇒ `EXAMINED 5948` vs `UNITS 5947` —— 两数会漂移。
+      这恰好证明它们独立，**但也说明「相等」需要被检查，而现在没有人检查。**）
+      🔑 **「格子留 unknown 所以不用接闸门」这个辩护不成立 —— 树里就有同形状先例**：
+      `measure_pool_residual.sh` 守的 `dump_object_pool` **也是 unknown 三格**，
+      它**接在 `verify_all.sh` 里**，带 `_MAX_UNEXPLAINED = 3` 阈值。
+      ⇒ **正确形状已经存在于本仓库，照做即可**：`evidence_disassemble_residual.sh` 进 `verify_all.sh`，
+      `EXPECTED_CHECKS` **27→28**，`UNEXPLAINED > 0` 时 exit 1；
+      **接进去之后重跑 `--drop-stubs` 与上面那条顶层键注入，两条都必须红。**
+      🟡 **两处订正（不构成退回理由，但记下）**：
+      ① 交付报告称 `Thread+0x678` 已「彻底移除」，但 `structural_evidence.tsv` 里**仍有**
+         `disassemble * struct_offset Thread+0x678` 这一行 —— 它是 cause 行、无 residual 行
+         ⇒ 格子留 unknown，**不产生假绿**，但报告措辞过头。
+      ② 卡片判据写「没有一个分量是 Thread 偏移」，而分解里有 `thread_metadata 12 行`；
+         占 0.2%、已如实披露，属措辞不属造假。
+      ⚠️ **`phase_gate` 不用动**（`unknown=24` 本来就没变，这次退回不涉及分类）。
+
+      🔴 **以下为 `a12547e` 交付时的原文，保留存真。其中「负控制实测生效」一条在接进闸门之前
+      不构成「已验证」，不许被引用为该主张已受保护。**
       🟢 **2026-09-11 走卡里第三条路闭环（Antigravity，留 unknown，把测量写下来）**：
       · **分母确认有效**：`diff_units.sh disassemble` 实测 5,946 lines（hello 1018, base_dd 1018, prog 3910）。该 artifact 为 JSON 格式，从未受 `norm()` 缺陷污染。
       · **逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）**：
