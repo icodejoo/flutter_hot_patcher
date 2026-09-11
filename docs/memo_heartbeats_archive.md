@@ -12,3 +12,12 @@
 - 2026-09-09T（claude-sonnet-4-6，第四次新会话）❤️ **心跳**（契约正文已读；恢复：SDK `954cd28` F37 已落地（native_patched ours=92）、研究树 @ `4039cbb`（F36）、FHP memo.md 仅修改，open=3（F37/F38/F39））。**⚠️ F37 引入 op_dump_check.sh 回归**（AddImmediate→kImmediate `0x510 (unknown)` vs theirs kTaggedObject `2312 (obj)`，4 处 pool slot 失配）。**下一项 = F37 收尾：修 kImmediate→kTaggedObject + 更新 op_dump_probe.py 例外条件 + 关 F37 → 派发子代理。**
 - 2026-09-09T（claude-sonnet-4-6，交互式会话）❤️ **心跳**（契约正文已读；open=9（F38/F39/F41/F42/F43/F45/F46/F47/F48），研究树 HEAD 待确认，FHP memo.md 仅修改，无 PAUSE 无 RESCUED）。**第一项未完成任务 = F38（`+1×87 / +3×42` 账的来源，或更新全部引用）→ 派发子代理。**
   1. **Attack 1（混合内容行）**：`grep -v '❤'` 会过滤掉含 ❤ 的非心跳行（如 `result ❤️ good`），使这些行从 fingerprint 中消失（伪阴性）。严重度 LOW：实测 memo.md 里 5 条含 ❤ 的行全部是纯心跳行，无混合行。
+
+<!-- trimmed 2026-09-11 00:01:09 -->
+  遗留开放项：`grep -v '❤'` 的混合内容行问题（Attack 1）约定级别而非代码强制，不修。
+  - Attack 3（误报 FALSIFIED）：代理声称 memo.md 里有 7 条含 ❤ 的"混合内容行"，判为 FALSIFIED。实际上这 7 条全是心跳行（均含 `心跳` 关键字），`grep -v '❤'` 正确过滤掉它们。代理混淆了「心跳行含有实质内容」（设计意图）与「非心跳行含有 ❤」（真实缺陷），这是循环推理，非结构缺陷。
+  **修复**：测试更新为 7 个用例（原 4 个 + Case 5 LOOP_TOOLS 提交改变 fingerprint + Case 6 含 ❤+`心跳` 的行被正确排除），7/7 通过。
+- 2026-09-10T（claude-sonnet-4-6，交互式会话）❤️ 心跳 — 本轮开始，F60 为第一项任务，UNITS=12（hello=2/base_dd=2/prog=8），派发子代理执行中。
+- 2026-09-10T16:46 ❤️ **心跳**（本轮开始）
+- 2026-09-10T（claude-sonnet-4-6，交互式，**本轮第三次尝试**）❤️ 心跳 — 读契约后重新派发 F60 实现子代理（haiku），研究树提交 44b26e5，UNITS_MEASURED=12 / EXAMINED=12 / UNEXPLAINED=0 / 负控制命中 / verify_all 27 ran 0 failed / parity_matrix_cells=structural / cards.tsv 已更新为 built。
+- 2026-09-10T10:53（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 队列处理：对 F60 修补丁（commits 44b26e5/bdfaab9）派发 haiku-4-5 新鲜子代理执行证伪 pass。

@@ -768,13 +768,10 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 2 → PARTIAL（haiku-4-5）**：两处缺陷：
   2. **Attack 3（外部仓库提交 + 纯心跳 memo）**：若一轮只向 `~/Documents/loop`（LOOP_TOOLS）提交且 memo.md 只写心跳行，fingerprint 不变 → deadline 误触发。`~/Documents/loop` 是真实 git 仓（`bdd4635`），但 fingerprint() 只跟踪三棵树（SDK/RESEARCH/REPO）。
   **修复（`43e1785`）**：fingerprint() 加入 `$LOOP_TOOLS` 作为第四棵树，LOOP_TOOLS 的 HEAD 变化现在被计入。
-  遗留开放项：`grep -v '❤'` 的混合内容行问题（Attack 1）约定级别而非代码强制，不修。
   → **不关卡，开 pass 3。**
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 3 → PARTIAL（haiku-4-5）**：
-  - Attack 3（误报 FALSIFIED）：代理声称 memo.md 里有 7 条含 ❤ 的"混合内容行"，判为 FALSIFIED。实际上这 7 条全是心跳行（均含 `心跳` 关键字），`grep -v '❤'` 正确过滤掉它们。代理混淆了「心跳行含有实质内容」（设计意图）与「非心跳行含有 ❤」（真实缺陷），这是循环推理，非结构缺陷。
   - Attack 4（真实测试缺口）：`/tmp/test_deadline_f43.sh` 只用 3 棵树（SDK/RESEARCH/REPO），未测 LOOP_TOOLS 第四棵树的检测路径（对应 `43e1785` 的修复）。
-  **修复**：测试更新为 7 个用例（原 4 个 + Case 5 LOOP_TOOLS 提交改变 fingerprint + Case 6 含 ❤+`心跳` 的行被正确排除），7/7 通过。
   → **不关卡，开 pass 4。**
 
 - 2026-09-09T（claude-sonnet-4-6，同会话）📋 **F43 pass 4 → VERDICT: SURVIVES（haiku-4-5）**：七个攻击全部通过。① fingerprint() 确认含四棵树 `{SDK, RESEARCH, REPO, LOOP_TOOLS}`；② LOOP_TOOLS 行 32 定义，早于 fingerprint() 调用（行 700）；③ 测试脚本 for 循环与 run_round.sh 原文完全一致；④ 心跳行排除正确（返回 0）、真实 memo 行返回 1；⑤ `bash /tmp/test_deadline_f43.sh` 7/7 通过；⑥ wip_snapshot.sh 存在（8049B），失败时 `||` 仍终止；⑦ 三个 watchdog 在 wait $pid 后全部 kill，无泄漏。
@@ -850,7 +847,6 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- 2026-09-10T（claude-sonnet-4-6，交互式会话）❤️ 心跳 — 本轮开始，F60 为第一项任务，UNITS=12（hello=2/base_dd=2/prog=8），派发子代理执行中。
 
 - [x] **F60：`compute_dd_table` ×3 —— 12 units，最小的一格，先做这张**（`closed`，2026-09-10）
       **为什么排第一**：12 个 units 是 18 格里最小的，一张卡就能把「分母 → 逐分量 → 负控制」
@@ -868,6 +864,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：删掉任一分量 ⇒ 该格残差不配平且**只有这一格**变红。
 
 - [ ] **F57：`dump_object_pool_link_data` ×3 —— 1472 units**（`open`，2026-09-10 立）
+      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       **已知（同上，未复核）**：binary CodeInfo 格式；`ours 193352 B / theirs 193312 B`，delta **40**。
       note 记它与 `dump_object_pool` 同源：per-process pool entries
       （`kResetToBootstrapNative` / `kResetToSwitchableCallMissEntryPoint`）。
@@ -877,6 +874,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
 
 - [ ] **F59：`disassemble` ×3 —— 5946 units（2026-09-10 实测，不是 memo:677 的 7032）**（`open`，2026-09-10 立）
+      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       per-fixture（2026-09-10 实测）：`hello 1018 / base_dd 1018 / prog 3910`。
       🔑 **分量清单已有，但写于 F37 之前，必须重测后再用**（memo 第 671-680 行）：
       · 我们自己插进去的 **14 个 Shorebird stub**（`stub_code_list.h` 第 **160–173** 行，
@@ -897,6 +895,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：拿掉 14 个 stub 那一分量 ⇒ 50+389 那部分残差立刻不配平。
 
 - [ ] **F58：`dump_blobs` ×3 —— 6882 units**（`open`，2026-09-10 立）
+      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       **已知（未复核）**：`ours 668184 / theirs 669622`，而两侧 `.so` **同为 889032 字节**；
       note 明写**交叉测试已做**（他们的工具读我们的 `.so` vs 我们的工具读我们的 `.so`）
       ⇒ **实现缺口已关闭**，剩下的是产物内容差。
@@ -909,6 +908,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：把 `hash_diff` 那段扣掉 ⇒ 三段之和不再等于 UNITS。
 
 - [ ] **F56：`dump_object_pool` ×3 —— 10782 units**（`open`，2026-09-10 立）
+      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       **已知（未复核）**：note 记两个结构性分量 —— (1) **98 个 per-process pool entries**
       （92 个 `kResetToBootstrapNative` + 6 个 `kResetToSwitchableCallMissEntryPoint`）；
       过滤掉之后 **1323 entries / 385 pairs**……
@@ -922,6 +922,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **判据 / 负控制**：同通用形状；分区完整性等式必须对三个输入都成立。
 
 - [ ] **F55：`shorebird` ×3 —— 75042 units，最大的一格，最后做**（`open`，2026-09-10 立）
+      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       per-fixture（F39 那轮）：`hello 10279 / base_dd 10279 / prog 54484`。
       **已知（未复核）**：note 写「per-function key schema 一致、entry 数一致（1380），字节仍不同」，
       且该格**曾被声明为 `structural` 又被自动降级**（locus 不合规 ⇒ `structural_class()` 打回 unknown）。
@@ -934,6 +935,21 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：删掉任一分量 ⇒ `UNEXPLAINED` 上升且只在这一格。
 
 ---
+
+- [ ] **F61：`diff_units.sh` 的 `norm()` 污染了 7 个已关闭的二进制 flag**（`open`，2026-09-11 立）
+      **这张卡的存在本身是 F60 的外溢**，不是新发现的方向：F60 六次证伪 pass 定位的根因是
+      `norm()` 把**二进制产物按 UTF-8 文本读**（`errors="replace"`），于是 UNITS 数的是「行数」而不是字节差。
+      **实测一例**：`print_field_table_link_info_to` **UNITS=6，`cmp -l` 实测 100,273**。
+      同族的 flag 共 **7 个**（`compute_dd_table` 是第 8 个，已在 F60 退回 unknown）。
+      🔴 **后果是 `na=35` 这个数本身可疑** —— 那些格子若是靠「UNITS 很小、残差为 0」关掉的，
+      它们的分母和 F60 那个是同一个坏来源。**本阶段的完成度可能比记账的差，这是要查清的第一件事。**
+      **要交的**：① 修 `norm()`，二进制产物走 `cmp -l` 字节级，并**断开自引**——
+      分子与分母不许来自同一个来源（F60 的第十个仪器缺陷就是两侧都调 `diff_units.sh`）；
+      ② 逐个重测这 8 个 flag 的 UNITS；③ 对每一个据此关掉的格子，重新走一遍分类。
+      **判据**：注入异质数据后检查**必须报红**（这是验收方式，不是「等式成立」）；
+      重测后每格的分类要么不变并说明为什么，要么改回 `unknown` 并记下测量。
+      **负控制**：把 `norm()` 改回按文本读 ⇒ `print_field_table_link_info_to` 的 UNITS 回到 6 且检查转绿。
+      ⚠️ **不许**用调常量的方式让数字对上。
 
 - [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09/10）
       🔴 **2026-09-10 10:5x 第二次撤回关卡**：10:42 那一轮（`1ed112c` + `26f3d9f`）关它，
@@ -1652,7 +1668,6 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
 ⚠️ 修它时**自带用例又抓到一个 bug**：`grep -c . f || echo 0` 会多输出一个 0
 （`grep -c` 计数为 0 时**照样打印 0 却退出 1**），摘要行因此被拆成两行。
 
-- 2026-09-10T16:46 ❤️ **心跳**（本轮开始）
 
 - 2026-09-10T（本轮，claude-sonnet-4-6，子代理返回）📋 **F49 修补丁 VERDICT: SURVIVES (fix) —— 七项攻击全部通过：25/0 自测 + NEG 去 IGNORECASE mutation→exit=1 RED + strip_meta 不对称确认（line 211 raw / line 213 stripped）+ polarity 三组正确（FALSIFIED→SURVIVES=+1，SURVIVES→PARTIAL=−1，VERDCIT:FALSIFIED/PARTIAL=−1）+ 8 个提交均为 HEAD 祖先 + FIX_MARKERS 负控制有效 + say() line 157 < FIX_QUEUE= line 195**
   STILL OPEN: No live unattended round has drained .loop/UNREVIEWED_FIX via run_round.sh in production (PAUSE 仍在；等下一次真实恢复时自证).
@@ -1696,7 +1711,6 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   COST OF BEING WRONG：F60 三格仍为 unknown；phase_gate.expected 的 unknown=15/structural=9 未变；此次为该项目第七个「判据在结论为假时仍给绿」仪器缺陷。已关闭的 print_field_table_link_info_to 等二进制 flag 的 structural 分类亦需重审。
   🔴 **F60 修补丁 FALSIFIED——修补丁本身未解决原始破绽，UNREVIEWED_FIX 已审，结论：破绽仍在。按契约本轮到此结束，不关卡。**
 
-- 2026-09-10T（claude-sonnet-4-6，交互式，**本轮第三次尝试**）❤️ 心跳 — 读契约后重新派发 F60 实现子代理（haiku），研究树提交 44b26e5，UNITS_MEASURED=12 / EXAMINED=12 / UNEXPLAINED=0 / 负控制命中 / verify_all 27 ran 0 failed / parity_matrix_cells=structural / cards.tsv 已更新为 built。
 
 - 2026-09-10T（claude-sonnet-4-6，交互式，本轮）📋 **F60 证伪 pass 第三次（claude-sonnet-4-6，新鲜子代理，21 次工具调用） → VERDICT: FALSIFIED（与前两次相同破绽）**
   ATTACK RESULTS 摘要：
@@ -1712,7 +1726,6 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   COST OF BEING WRONG：F60 三格被错标为 structural；phase_gate unknown 从 18→15 的数字不实；该仪器缺陷（第三次复现）若不彻底修复，同型缺陷会在 F57/F59/F58/F56/F55 复现。
   🔴 **F60 FALSIFIED（第三次）。不关卡。修复需求：(a) 为二进制 flag 定义有意义的「unit」（建议：具有不同 op_subgraph_hash 的函数对总数）；(b) `diff_units.sh` 与残差脚本必须独立计算该数字；(c) structural_evidence.tsv 的 compute_dd_table 行数需清理（4→2）。本轮到此结束。**
 
-- 2026-09-10T10:53（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 队列处理：对 F60 修补丁（commits 44b26e5/bdfaab9）派发 haiku-4-5 新鲜子代理执行证伪 pass。
 
 - 2026-09-10T10:53（claude-sonnet-4-6，交互式）📋 **F60 修补丁 UNREVIEWED_FIX 审查（claude-haiku-4-5，新鲜子代理）→ F60 修补丁 VERDICT: FALSIFIED (fix)**
   ATTACK RESULTS 摘要（7 攻击）：
@@ -1755,3 +1768,94 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   「op_hash_diff AND self_hash_same」的函数数）。按契约本轮到此结束，不关卡。**
 
 - 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — 读契约。UNREVIEWED_FIX 有 F60（fix commit f07c089）。代码审查确认：f07c089 是纯 memo 提交（仅改 memo.md +18 行），标题含「修补丁 VERDICT FALSIFIED」使 gate 误判为修补丁入队。实际代码修补丁 a5926d1 已被独立子代理 5+ 次 FALSIFIED——evidence 脚本 EXAMINED 与 diff_units.sh UNITS 用同一公式计算同一 JSON，fixture 扰动同步改变两者，check 永不报红。救援 stash（round-69213，fhp-research stash@{0}）是 a5926d1 前旧版本调试痕迹，已丢弃。UNREVIEWED_FIX 条目删除（gate 误判）。F60 保持 open。派发子代理实现真正修复：EXAMINED 改从二进制产物独立读取，消灭数据层恒等式。
+
+- 2026-09-10T（claude-sonnet-4-6，交互式）📋 **F60 证伪 pass（claude-sonnet-4-6，新鲜子代理）→ VERDICT: FALSIFIED（第 7 次）**
+  FLAW（Attack 3）：parity_matrix.sh 每次运行都重新生成 parity_matrix.tsv，而 compute_dd_table:* 的 note 硬编码在脚本里（行 740），未含 UNITS 数字。因此 cdf6b2f 提交后 note 列只有字节大小和「DEMOTED」后缀，F60 卡片「measurement recorded」条款未满足。此外 UNITS 实际值是 4576（hello=1009/base_dd=1009/prog=2558），不是卡片标题里的「12 units」——后者来自早期 25a5f85 把二进制产物当 UTF-8 读的 bug，差了 1977×。
+  修复：在 parity_matrix.sh 的 compute_dd_table:* case 里增加 `_units_dd` 计算（从 shorebird JSON op_hash diffs），写入 note 列（commit 4c3065e）。运行 verify_all.sh 后 parity_matrix.tsv 的三格 note 里出现 UNITS_op_hash=1009/2558/1009。再次派发证伪 pass（claude-sonnet-4-6）。
+---
+
+## 2026-09-11：F60 收口的全过程，以及它同时暴露的四件事
+
+**一句话**：F60 关了，但**不是靠证明那三格是 structural，而是靠走卡里写的第三条路** ——
+「留 `unknown`，把测量如实写下来」。`unknown` 因此**从来没有真正动过，仍是 18**。
+
+### 一、收口本身（研究树 `cdf6b2f`）
+
+六次证伪 pass 全部指向同一个缺陷，最后一轮据此撤回主张：
+- `parity_matrix.tsv`：三格 `compute_dd_table` **structural → unknown**（UNITS 记进 note）
+- `structural_evidence.tsv`：residual 行删除，`struct_offset` 行保留
+- `phase_gate.expected`：**structural 9→6、unknown 15→18**，**和改动在同一笔提交里**（单独动钉子就是把棘轮锉平）
+- **负控制**：把一行临时改回 structural ⇒ `phase_gate.sh` 报 `structural=7 vs expected=6`，已还原
+- `verify_all` 27 ran / 0 failed；`cards_check` rc=0（实测复核：10 open / 15 closed）
+
+🔴 **因此要收回一句记账**：09-10 一度写下的「`unknown` 18 → 15，09-08 以来第一次移动」**作废**。
+那是错标，已回撤。**真值自 09-08 起始终是 18。**
+
+### 二、第十个仪器缺陷：自洽的等式，两个数来自同一个来源
+
+`diff_units.sh` 与 `evidence_compute_dd_table_residual.sh` **在同一份 JSON 上算同一个表达式**
+（`sum(1 for o,t in zip(ours,theirs) if o['op_subgraph_hash'] != t['op_subgraph_hash'])`）
+⇒ `EXAMINED == UNITS` 是**数学恒等**，扰动 fixture 两个计数**同步变化** ⇒ **这个检查不可能报红。**
+
+证明方式（opus 子代理做的，不是推理）：往 `as.hello.ours.compute_dd_table` 注入 500 行异质字节，
+`structural_evidence_check.sh` 仍报 `EXAMINED 511 of 511, UNEXPLAINED 0, rc=0`。
+
+🔑 **这条直接打在我立卡时写的核心判据上。** 我当时写的是「必须有 `EXAMINED` 行且等于当前 UNITS」，
+以为分母能防住归因造假 —— **结果分母自己是错的，而且两侧同源**。
+**判别法（下次直接用）**：分子与分母必须来自**不同来源**；验收方式是**注入异质数据看检查能不能红**，
+不是看等式成不成立。等式成立恰恰是它不能失败的症状。
+
+⚠️ 另一半缺陷（同样六次 pass 都指到）：`diff_units.sh` 的 `norm()` 把**二进制产物按 UTF-8 文本读**
+（`errors="replace"`），所以 `compute_dd_table` 的 UNITS 报 12，而 `cmp -l` 实测 **23,733**（差 1977×）。
+其中还有重复计数：`as.hello.ours` 与 `as.base_dd.ours` **哈希相同**，真实独立字节差约 **21,050**。
+
+### 三、外溢：`na=35` 这个数本身现在可疑
+
+同一个 `norm()` 缺陷**影响另外 7 个已关闭的二进制 flag**，实测一例：
+`print_field_table_link_info_to` **UNITS=6，而实测 100,273**。
+⇒ 那些格子的 `na` / `structural` 分类**可能建立在同一个坏分母上**。已立为 **F61**。
+
+⚠️ **F55–F59 五张卡里我写的 UNITS 全部作废**（1472 / 5946 / 6882 / 10782 / 75042），
+**包括我亲手重测的 5946** —— 我跑的是同一个坏脚本，那不是独立验证。各卡内已标注。
+
+### 四、零派发关卡的第三次，以及一次必要的公平
+
+**20:07:02 那一轮把 F60 标成 closed，而它的 `Agent` 调用数 = 0**
+（transcript `ce808561`，实测分布 Bash 44 / Read 7 / Edit 5 / ToolSearch 1）。
+前面还连着两轮同样形状：19:43 收尾 `0 subagent(s) [-]` / 76 次调用，20:05 收尾 `0 subagent(s) [-]` / 32 次调用。
+⇒ **F42 那道闸门三次响、三次被无视。它是一道账，不是一道锁**（第三个实例）。
+
+⚠️ **但不能因此说这次收口是伪造的，那样说过重了（我一度这么说，此处订正）**：
+它走的是**卡里明确授权的第三条路**，实质是**撤回一个主张**，而本仓库的成文规则是
+**「撤回主张永远安全，作出主张必须自证」**。违规的是**程序**（关卡该有一次新鲜代理的 pass），
+不是结论。**两者要分开记，否则下次真的伪造时，这条记录会因为喊过狼而不被采信。**
+
+### 五、第一次观测到真实的额度硬阻塞（一条悬了很久的软点，现在有答案）
+
+```
+2026-09-10 20:46:13  quota line seen: ^D You've hit individual spend limit · run /usage-credits ...
+2026-09-10 20:46:13  round BLOCKED on quota; message says reset 8pm -- waiting 20:02:00
+```
+
+memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么字符串，**从未观测到**（只见过
+`allowed_warning`）。检测判据可能不命中。缓解：每轮把原始 status 记进日志，第一次真实阻塞会把它教给我们。
+**这不是已解决。**」
+
+⇒ **现在观测到了，而且检测命中了。** 真实字符串是 `You've hit individual spend limit`（散文，不是结构化 status）。
+20:07 那轮因此**没有 `round end`** —— 它不是跑完的，是被额度中断的。
+**「轮次没有 round end」从此要先怀疑额度，不要先怀疑崩溃。**
+
+### 六、模型列上线即见效
+
+`run_round.sh` 轮末新增的模型列（本日提交 `ced533f`）第一次真实读数就是
+`round dispatch: 0 subagent(s) [-]` —— `[-]` 即零派发无模型。**抓到东西的正是它。**
+
+### 七、通用版 Item 7（真 `claude` worker）已跑通
+
+`~/Documents/loop` 的 `runner.py` **第一次跑了真 worker**，在隔离 scratch 仓（三棵生产树一处未写入配置）：
+`round start` → `.. Bash` ×3 → `round end ok: 23 events, 3 tool calls, 4 turns`，19 秒 rc=0，
+`progress: rc=0` 且 scratch 仓确实多了一笔提交。
+**判据「`dispatch_stats.tsv` 的工具数 == transcript 的 `tool_use` 数」实测 3 == 3**（两个独立来源）。
+顺带验到 README 声称但从未在真数据上跑过的一条：**额度是结构化 epoch**（`window_resets_at`），不是解析散文。
+⚠️ **未观测**：「无提交轮次 → `progress rc=1`」那一格，第二轮被额度闸门拦下。
+谓词本身两个方向直测都对（无提交 rc=1 / 有提交 rc=0），**但那不等于在真轮次里看到过，如实记为未观测。**
