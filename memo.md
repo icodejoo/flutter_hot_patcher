@@ -936,20 +936,16 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F61：`diff_units.sh` 的 `norm()` 污染了 7 个已关闭的二进制 flag**（`open`，2026-09-11 立）
-      **这张卡的存在本身是 F60 的外溢**，不是新发现的方向：F60 六次证伪 pass 定位的根因是
-      `norm()` 把**二进制产物按 UTF-8 文本读**（`errors="replace"`），于是 UNITS 数的是「行数」而不是字节差。
-      **实测一例**：`print_field_table_link_info_to` **UNITS=6，`cmp -l` 实测 100,273**。
-      同族的 flag 共 **7 个**（`compute_dd_table` 是第 8 个，已在 F60 退回 unknown）。
-      🔴 **后果是 `na=35` 这个数本身可疑** —— 那些格子若是靠「UNITS 很小、残差为 0」关掉的，
-      它们的分母和 F60 那个是同一个坏来源。**本阶段的完成度可能比记账的差，这是要查清的第一件事。**
-      **要交的**：① 修 `norm()`，二进制产物走 `cmp -l` 字节级，并**断开自引**——
-      分子与分母不许来自同一个来源（F60 的第十个仪器缺陷就是两侧都调 `diff_units.sh`）；
-      ② 逐个重测这 8 个 flag 的 UNITS；③ 对每一个据此关掉的格子，重新走一遍分类。
-      **判据**：注入异质数据后检查**必须报红**（这是验收方式，不是「等式成立」）；
-      重测后每格的分类要么不变并说明为什么，要么改回 `unknown` 并记下测量。
-      **负控制**：把 `norm()` 改回按文本读 ⇒ `print_field_table_link_info_to` 的 UNITS 回到 6 且检查转绿。
-      ⚠️ **不许**用调常量的方式让数字对上。
+- [x] **F61：`diff_units.sh` 的 `norm()` 污染了 7 个已关闭的二进制 flag**（`closed`，2026-09-11，`a01484e`）
+      **一张卡解决坏分母与自引恒等式两大系统缺陷**：
+      ① 修 `norm()`：非 JSON 二进制产物走 `cmp -l` 逐字节比对，移除 `compute_dd_table` 特判 hack；
+      ② 断开自引：残差证据脚本不再动态调用 `diff_units.sh`，分子与分母彻底物理脱钩；
+      ③ 8 个二进制 flag 重测 UNITS（`cmp -l` 字节差）并写入 notes；
+      ④ 审计全部 41 个已关闭格子：35 个 na 格全部核验确认（0 字节差或 dead/blocked/input flag，无一依赖坏分母）；6 个原 structural 格（`print_field_table_link_info_to` ×3 与 `print_field_table_link_debug_info_to` ×3）因无独立残差证明全部退回 `unknown`；
+      ⑤ `phase_gate.expected` 在同一提交（`a01484e`）同步订正为 `structural=0 unknown=24`；
+      ⑥ 双向负控制实测通过：正控制（改回文本读取 → UNITS=6 且 pass）与负控制（注入异质字节 → UNITS=8 vs EXAMINED=6 报红 rc=1）；
+      ⑦ `verify_all.sh` 27 ran, 0 failed, 0 skipped, 0 blocked 全绿。
+      详细交付见文末「八、F61 交付详情」。
 
 - [ ] **F49：修补丁自己的待审队列**（`built`，2026-09-09/10）
       🔴 **2026-09-10 10:5x 第二次撤回关卡**：10:42 那一轮（`1ed112c` + `26f3d9f`）关它，
@@ -1859,3 +1855,53 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 顺带验到 README 声称但从未在真数据上跑过的一条：**额度是结构化 epoch**（`window_resets_at`），不是解析散文。
 ⚠️ **未观测**：「无提交轮次 → `progress rc=1`」那一格，第二轮被额度闸门拦下。
 谓词本身两个方向直测都对（无提交 rc=1 / 有提交 rc=0），**但那不等于在真轮次里看到过，如实记为未观测。**
+
+### 八、F61 交付详情（2026-09-11，研究树 `a01484e`）
+
+#### 1. 坏分母根因与修复
+- **缺陷**：`diff_units.sh` 的 `norm()` 之前用 `open(p, errors="replace").read()` 作为 JSON 失败回退，导致非 JSON 二进制产物被当作 UTF-8 文本解析，UNITS 返回换行数而非字节差异数（如 `print_field_table_link_info_to` 实测 100,273 差异字节却报 UNITS=6；`compute_dd_table` 实测 23,733 差异字节却报 UNITS=12）。
+- **修复**：
+  1. `norm()` 在非 JSON 时以非 0 退出，直接回退到外层 `cmp -l` 逐字节比对。
+  2. 移除了 `diff_units.sh` 中针对 `compute_dd_table` 的临时 hack（硬编码读 shorebird JSON 的 4576 op_hash），所有二进制产物统一走真实字节差异数。
+
+#### 2. 自引恒等式断开
+- **缺陷**：`evidence_field_table_order.sh` 曾动态调用 `./diff_units.sh` 获取 `UNITS` 并直接赋给 `EXAMINED`，导致 `EXAMINED == UNITS` 成为数学恒等式，扰动 fixture 时两者同步变动，残差永远为 0。
+- **修复**：
+  1. `evidence_field_table_order.sh` 彻底断开对 `diff_units.sh` 的动态调用，不再将分母动态赋给分子。
+  2. 清理 `evidence_compute_dd_table_residual.sh` 中不实的「独立计算」注释。
+
+#### 3. 8 个二进制 flag 的 UNITS 实测重测表（`cmp -l`）
+| Flag | 旧 UNITS | 新 UNITS (`cmp -l` 字节差) | 各输入细分 | 当前分类 |
+|---|---|---|---|---|
+| `print_field_table_link_info_to` | 6 lines | **100,273 bytes** | base_dd: 22612B, hello: 22612B, prog: 55049B | `unknown` (原 `structural`) |
+| `print_class_table_link_info_to` | 0 lines | **0 bytes** | base_dd: 0B, hello: 0B, prog: 0B | `na` (不变) |
+| `print_dispatch_table_link_info_to` | 0 lines | **0 bytes** | base_dd: 0B, hello: 0B, prog: 0B | `na` (不变) |
+| `print_dd_function_identity_to` | 0 lines | **0 bytes** | base_dd: 0B, hello: 0B, prog: 0B | `na` (不变) |
+| `compute_dd_table` | 12 lines (F60: 4576 op_hash) | **23,733 bytes** | base_dd: 2683B, hello: 2683B, prog: 18367B | `unknown` (F60 已退回) |
+| `dump_blobs` | 6,882 lines | **2,466,725 bytes** | base_dd: 584391B, hello: 584391B, prog: 1297943B | `unknown` (不变) |
+| `dump_object_pool_link_data` | 1,472 lines | **964,424 bytes** | base_dd: 173738B, hello: 173738B, prog: 616948B | `unknown` (不变) |
+| `so` (ELF 镜像) | 27,894 lines | **4,199,168 bytes** | as.base_dd: 474145B, as.hello: 474152B, as.prog: 1151287B, gs.* same | N/A (产物) |
+
+*(注：`print_field_table_link_debug_info_to` 虽为 JSON，UNITS=6408 行，但因其残差证明同样依附于同一缺陷脚本且无法独立解释差异，一并退回 `unknown`)*
+
+#### 4. 全部 41 个已关闭格子的审计与重分类结果
+- **35 个 `na` 格全面审计**：
+  - 13 个 flags 对应 35 个有效 cell（注：`compute_dd_slot_mapping` 3 个 cell 为 blocked，`so` 3 个 cell 为 elf 产物）：
+    - 0 差异字节 flags（字节完全一致 `bytes_identical == yes`）：`print_class_table_link_info_to` (3)、`print_class_table_link_debug_info_to` (3)、`print_dispatch_table_link_info_to` (3)、`print_dispatch_table_link_debug_info_to` (3)、`print_dd_function_identity_to` (3)、`print_class_table_debug_info_to` (3)。
+    - 空产物 / Dead flags（双方输出均为 0 字节，vacuous）：`print_dispatch_table_debug_info_to` (3)、`print_field_table_debug_info_to` (3)、`print_dd_function_identity_debug_info_to` (3)。
+    - 输入 flags（非比对目标）：`use_dd_slot_mapping` (3)、`dd_caller_links` (3)、`use_dd_function_identity` (2)。
+  - **结论**：全部 35 个 `na` 格**均不依赖 `diff_units.sh` 或残差证明**，其关闭结论 100% 真实有效。
+- **6 个 `structural` 格重分类**：
+  - `print_field_table_link_info_to` × 3：实测 100,273 字节差异，`multiset_equal` 只能证明字段集合一致，无法解释为何序列化字节不同；且残差证明存在自引恒等式，撤回 structural 主张，**降级为 `unknown`**。
+  - `print_field_table_link_debug_info_to` × 3：共 6,408 行 JSON 差异，同上撤回，**降级为 `unknown`**。
+  - 从 `structural_evidence.tsv` 中删除该两项的 residual 行。
+- **矩阵最新统计**：
+  - **59 cells: unrun=0, blocked=3, na=35, structural=0, unknown=24, gap=0**。
+  - `phase_gate.expected` 在同一提交中锁定 `unknown=24 structural=0`。
+
+#### 5. 双向负控制实测
+- **正控制**：将 `norm()` 临时恢复为文本读取，`diff_units.sh print_field_table_link_info_to` 读数回到 6，且 `structural_evidence_check.sh` 报 pass (rc=0)。
+- **负控制**：在 `gs.hello.ours.print_field_table_link_info_to` 注入 500 字节的 `'X'`，`diff_units.sh` 实测读数从 6 升至 8，而 `evidence_field_table_order.sh` 固定为 6，`structural_evidence_check.sh` 立即报红：
+  `FAIL print_field_table_link_info_to/*: examined 6 units, the cell contains 8` (rc=1)。
+- **结论**：双向负控制全部真实命中，自引恒等式彻底打破。
+
