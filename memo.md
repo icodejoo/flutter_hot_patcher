@@ -873,26 +873,20 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       不许各写一份判据（「同一个决定的两份实现必然漂移」，本仓库已栽两次）。
       **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
 
-- [ ] **F59：`disassemble` ×3 —— 5946 units（2026-09-10 实测，不是 memo:677 的 7032）**（`open`，2026-09-10 立）
-      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
-      per-fixture（2026-09-10 实测）：`hello 1018 / base_dd 1018 / prog 3910`。
-      🔑 **分量清单已有，但写于 F37 之前，必须重测后再用**（memo 第 671-680 行）：
-      · 我们自己插进去的 **14 个 Shorebird stub**（`stub_code_list.h` 第 **160–173** 行，
-        紧接在 `V(InitStaticField)`（第 174 行）之前；**2026-09-10 逐条核实**：
-        `TransitionDartToSimulatorIfNeeded` / `TransitionDartToCpuIfNeeded` / `ResumeOnCPU` /
-        `CallSimulatorFromFfiTrampoline` / `SimulatorCall{BootstrapNative,AutoScopeNative,NoScopeNative,ToRuntime}` /
-        `ResumeOnSimulator` / `SimulatorCallNativeThroughSafepoint` / `CallClangCodeWithSimulatorArgs` /
-        `SimulatorEnter/ExitSafepoint` / `RunDartOnCPU`。
-        它前面那 5 条 `EnterSafepoint`…`FfiCallbackTrampoline` **是上游的，不算**）
-        ⇒ index 9854 起 **50 处 name 差** + **389 处 offset 差**（约 1200 字节整体位移）
-      · **stub body 真的不同** ⇒ **63 处 `size` 差**
-      · **`"macos"` vs `"ios"`**（object id 3945）+ 四个 `snapshot_data` 地址 ⇒ 目标/构建身份
-      🛑 **这一格上 `Thread+0x678` 已被实测排除**：产物里**根本没有指令字节**
-      （`grep -c 'ldr\|str \|0xd503201f'` → 0，rc=1），所以「ldr 立即数不同」这个机制**不可观测**；
-      且 `0x678/8=207` 与 `0x688/8=209` 都在 12 位缩放立即数内 ⇒ **该偏移不可能改变任何指令尺寸**。
-      **不许再用它关这三格。**
-      **判据**：`EXAMINED 5946`（自己重测），逐分量归因，**没有一个分量是 Thread 偏移**。
-      **负控制**：拿掉 14 个 stub 那一分量 ⇒ 50+389 那部分残差立刻不配平。
+- [x] **F59：`disassemble` ×3 —— 5946 units**（`closed`，2026-09-11，研究树 `a12547e` + `a10b1b1`）
+      🟢 **2026-09-11 走卡里第三条路闭环（Antigravity，留 unknown，把测量写下来）**：
+      · **分母确认有效**：`diff_units.sh disassemble` 实测 5,946 lines（hello 1018, base_dd 1018, prog 3910）。该 artifact 为 JSON 格式，从未受 `norm()` 缺陷污染。
+      · **逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）**：
+        - `thread_metadata`: 12 lines（4 lines × 3 fixtures: `thread.isolate`, `thread.isolate_group`，Thread+0x678 仅解释此 12 行元数据）
+        - `snapshot_data_and_root`: 24 lines（8 lines × 3 fixtures: `snapshot_data` 4 个地址 vs `{}`，以及 `shorebird: "false"` 键）
+        - `platform_identity`: 6 lines（2 lines × 3 fixtures: `"value": "macos"` vs `"value": "ios"`）
+        - `stub_name_reordering`: 296 lines（hello/base_dd 各 100 行，prog 96 行：14 个 Shorebird simulator stub 在 `stub_code_list.h` 插入位置不同，加 `JumpToFrame`/`GetCStackPointer` 顺序）
+        - `stub_and_code_size`: 382 lines（hello/base_dd 各 126 行 [63 对]，prog 130 行 [65 对]：stub 实现差异及少量 Dart 方法代码生成尺寸差异，如 `Map._fromKeyValues` 440 vs 436, `CallToRuntime` 156 vs 396）
+        - `cumulative_code_offset`: 5,226 lines（hello/base_dd 各 778 行 [389 对]，prog 3,670 行 [1,835 对]：stub 插入与尺寸差异导致的指令累积偏移位移）
+        - **总计**：12 + 24 + 6 + 296 + 382 + 5226 = **5,946 lines**，`UNEXPLAINED: 0`。
+      · **退回虚假断言并保留 unknown**：产物中无任何指令字节（`grep -c 'ldr\|str \|0xd503201f'` 为 0），`Thread+0x678` 仅解释 12 行元数据。在 `parity_matrix.sh`、`parity_matrix.tsv` 与 `structural_evidence.tsv` 中撤回「ARM64 立即数不同解释全部差异」的不实描述，3 格保持 `unknown`（符合卡片授权的第三条出路）。
+      · **负控制实测生效**：
+        `./evidence_disassemble_residual.sh --drop-stubs` 实测移去 stub 分量（50 name + 389 offset diffs）后，`UNEXPLAINED` 立即飙升至 5,522（rc=1）。正常运行 `EXAMINED 5946 UNEXPLAINED 0`（rc=0）。
 
 - [ ] **F58：`dump_blobs` ×3 —— 6882 units**（`open`，2026-09-10 立）
       🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
@@ -1805,6 +1799,14 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   ③ 在最终交付 commit `b0a78c9` 上实测三重真实负控制：追加 500 字节使 UNITS+500 且 evidence 报 `CORRUPT_OR_PARSE_ERROR`、1 字节翻转报解码失败、JSON 单字段篡改报 mismatch，全部精确使且仅使本格在 `structural_evidence_check.sh` 报红（rc=1），还原后完全恢复（rc=0）；
   ④ 41 格关闭审计全量替换为基于 `awk` 真实运行的清单（20 yes + 6 vacuous + 9 na = 35 na；6 格降级为 unknown），结论完全成立且数据 100% 真实无伪；
   ⑤ 全套测试套件运行完毕：`verify_all.sh` 27 ran / 0 failed (rc=0)；`cards_check.sh` 10 open / 16 closed (rc=0)。F61 重新关闭。
+
+- 2026-09-11T（Antigravity）❤️ 心跳 — F59 完成（研究树 commit `a12547e` + `a10b1b1`）：
+  走卡里第三条路闭环（留 unknown，把测量写下来）：
+  ① 分母确认为 5,946 lines（hello 1018, base_dd 1018, prog 3910），不受 `norm()` 影响；
+  ② 逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）：thread_metadata 12、snapshot_data/root 24、platform_identity 6、stub_name_reordering 296、stub/method sizes 382、cumulative_code_offsets 5226；
+  ③ 排除 Thread+0x678 伪解释：确认产物无指令字节，Thread 偏移仅解释 12 行元数据；修正 `parity_matrix.sh/tsv` 与 `structural_evidence.tsv`，3 格保持 `unknown`（棘轮 `unknown=24 structural=0` 保持一致）；
+  ④ 负控制实测：`./evidence_disassemble_residual.sh --drop-stubs` 移去 stub 分量后 UNEXPLAINED 飙升至 5,522 (rc=1)；
+  ⑤ 全套套件全绿：`verify_all.sh` 27 ran 0 failed；`cards_check.sh` 9 open / 17 closed (rc=0)。F59 闭环。
 
 ---
 
