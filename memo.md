@@ -863,15 +863,33 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       每个 unit 归到具名分量，每个分量一行 `structural_evidence.tsv`。
       **负控制**：删掉任一分量 ⇒ 该格残差不配平且**只有这一格**变红。
 
-- [ ] **F57：`dump_object_pool_link_data` ×3 —— 1472 units**（`open`，2026-09-10 立）
-      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
-      **已知（同上，未复核）**：binary CodeInfo 格式；`ours 193352 B / theirs 193312 B`，delta **40**。
-      note 记它与 `dump_object_pool` 同源：per-process pool entries
-      （`kResetToBootstrapNative` / `kResetToSwitchableCallMissEntryPoint`）。
-      per-fixture units（F39 那轮）：`hello 382 / base_dd 382 / prog 708`。
-      🔑 **它和 F56 共用成因 ⇒ 两张卡要么一起做，要么后做的那张必须复用前一张的证据行**，
-      不许各写一份判据（「同一个决定的两份实现必然漂移」，本仓库已栽两次）。
-      **判据 / 负控制**：同 F60 的通用形状。**delta 40 要能被分量之和精确解释，不是「量级对得上」。**
+- [ ] **F57：`dump_object_pool_link_data` ×3 —— 964686 units**（`open`，2026-09-11 实测重订）
+      🟢 **2026-09-11 独立重测与成因物理定位（Antigravity / Claude 联合对账，当前保持 open）**：
+      · **分母实测与动因**：`diff_units.sh dump_object_pool_link_data` 实测分母为 **964,686 units**（hello 173,778 + base_dd 173,778 + prog 617,130 字节）。
+        较上午 964,424 增加 262 字节，恰好等于 3 个 fixture 的文件尺寸差：hello (+40) + base_dd (+40) + prog (+182) = 262 字节。
+        这证明在 `b0a78c9` 中对 `diff_units.sh` 引入的 EOF 长度差修复（`sz_diff`）真实承重且精确生效。
+      · **delta 符号与物理构成彻底澄清（单列成节）**：
+        两端文件尺寸 delta：hello 我方大 40 字节（193,352 vs 193,312），base_dd 我方大 40 字节，prog 对方大 182 字节（666,091 vs 666,273）。
+        通过 F61 实现的二进制变长整数流解码器（`read_unsigned` / `read_int32` / `read_string`）完全解析 Shorebird `ObjectPoolLinkInfo` 序列化流（0 剩余字节，100% 语法完整）：
+        - `num_pool_entries`（全局 pool 长度）：hello 1421 vs 1421, prog 3849 vs 3849，两侧完全相同（diff=0）；
+        - `pair_constraints`（pairs 数组）：hello 385 vs 385, prog 889 vs 889，两侧完全相同（diff=0）；
+        - `codes`（CodeInfo 列表）：包含 `self_hash`、`op_subgraph_hash`、`self_pp`、`subgraph_pp`。
+        - **hello / base_dd 的 +40 字节差物理归因**：
+          由于 Dart 运行时 `WriteString` 采用有符号变长编码，十六进制字符中的数字 '0'..'9' 占 1 字节（0xf0..0xf9），字母 'a'..'f' 占 2 字节（0x61..0x66, 0xc0）。
+          哈希字符串中字母与数字的分布不同直接导致物理字节长度差异：
+          `self_hash` 字节差为 -34（对方字母多 34 个），`op_subgraph_hash` 字节差为 +74（我方字母多 74 个），
+          净差值：$-34 + 74 = +40$ 字节，100% 精确配平。
+        - **prog 的 -182 字节差物理归因**：
+          `self_hash` (+11) + `op_subgraph_hash` (-101) + `self_pp` (-4) + `subgraph_pp` (-88) = **-182 字节**，100% 精确配平。
+      · **彻底证伪 `parity_matrix.tsv` 的 note 假说**：
+        note 原称 40 字节 delta 来自 `per-process pool entries`。但二进制解码证实 `dump_object_pool_link_data` **根本不序列化 pool entries 本体**！per-process entries 对这 40 字节尺寸差的贡献为 **0**。再次证明 note 是待检假说而非可引用前提（同 F60 经验教训）。
+      · **本卡与 F59/F56 的本质不同与歧路警示**：
+        F59/F56 产物为 JSON，逐键统计 ×2 即可配平；F57 为二进制，964,686 字节为逐字节差异，不可能逐字节点名。
+        坚决不可为求数值偏小而重新定义 unit（防止重蹈 `norm()` 把 100,273 读成 6 的覆辙）。
+        可行出路为走第 3 条路留 unknown 并写下严格测量。两条路均明令严禁往 `structural_evidence.tsv` 增加 `residual` 虚假证据行。
+      · **共用约束与验收基线**：
+        与已闭环的 F56 共用 `per-process pool entries` 成因，`structural_evidence.tsv` 中已指向同一脚本 `evidence_pool_perprocess.sh`，接缝不拆，不许各写一份 per-process 判据。
+        后续若接入残差脚本，`verify_all.sh` 需将 `EXPECTED_CHECKS` 28→29；负控制在最终 commit 实测；`phase_gate` 保持 `unknown=24, structural=0` 不动。
 
 - [x] **F59：`disassemble` ×3 —— 5946 units**（`closed`，2026-09-11，研究树 `8426dc2` + `f4d2ee6`）
       🟢 **2026-09-11 审计缺陷彻底闭环并再次关闭（Antigravity，走卡里第三条路闭环）**：
