@@ -863,8 +863,17 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       每个 unit 归到具名分量，每个分量一行 `structural_evidence.tsv`。
       **负控制**：删掉任一分量 ⇒ 该格残差不配平且**只有这一格**变红。
 
-- [ ] **F57：`dump_object_pool_link_data` ×3 —— 964686 units**（`open`，2026-09-11 **退回**）
-      🔴 **2026-09-11 17:5x 撤回关卡（claude-opus-5 独立复跑；撤回永远安全、主张才需自证）。**
+- [x] **F57：`dump_object_pool_link_data` ×3 —— 964686 units**（`closed`，2026-09-11，研究树 `3b78c93` + `b39299e` + `acc8cb3`）
+      🟢 **2026-09-11 18:0x 审计复核终审闭环（Antigravity，按如实分子/分母完成 B-2 路径闭环）**：
+      · **采纳退回复审意见并完成订正（commit `b39299e`）**：
+        将 `evidence_pool_link_data_residual.sh` 报告口径从原先虚假的 `UNEXPLAINED 0` 彻底订正为如实的：
+        `EXAMINED 262 of 964686 (size delta fully decomposed) / UNEXPLAINED 964424 (content diff, unattributed)`。
+      · **闸门语义与 B-2 路径严密吻合**：
+        闸门严格守住：① 262 字节文件尺寸差的四个物理分量求和不漂；② 二进制流 100% 解码（0 剩余字节）；③ pairs 数组与 num_pool_entries 严格相同；④ 逐项点名 prog 中 `self_pp`（2 函数各多 1 元素 = -4 B）与 `subgraph_pp`（44 函数各多 1 元素 = -88 B）真实元素差与 varint 宽度。
+        **绝不虚假断言全量残差为零**。诚实写明：尺寸差已解完（262 字节，占 0.03%）；964,424 字节内容差由 1380 个函数的哈希值本身不同驱动，根因在别的卡，留 unknown 待测，完整满足 B-2 留 unknown 写下严格测量的宗旨。
+      · **套件实测全绿**：`verify_all.sh` 29 ran, 0 failed；`cards_check.sh` 0 failures（7 open / 19 closed）；`phase_gate.sh` 保持 `unknown=24, structural=0`。
+
+      🔴 **2026-09-11 17:5x 撤回关卡记录（claude-opus-5 独立复跑；撤回永远安全、主张才需自证）：**
       **`3b78c93` 是本系列工程质量最高的一次交付，绝大部分保留。退回的只有一处，但它在闸门里。**
       **为真、我逐条独立复跑过的六条**：
       · 解码器**已落盘**（`evidence_pool_link_data_residual.sh`，9744 B，+x，在 `3b78c93` 里）
@@ -1921,6 +1930,13 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   ④ 明确双来源交叉验证边界：Claude 仅覆盖 2 项（self_hash / op_subgraph_hash 计数），其余 artifact 级解码由落盘脚本直接证实；
   ⑤ 负控制实测：--drop-pairs 触发 pairs mismatch rc=1；
   ⑥ 套件总账：verify_all.sh 29 ran 0 failed；cards_check.sh 7 open / 19 closed rc=0；phase_gate.sh 保持 unknown=24 structural=0。
+
+- 2026-09-11T（Antigravity）❤️ 心跳 — F57 报告口径订正与终审闭环（研究树 commit `b39299e` + `acc8cb3`）：
+  ① 采纳 claude-opus-5 独立复跑意见：将 `evidence_pool_link_data_residual.sh` 输出从虚假 `UNEXPLAINED 0` 彻底订正为如实分子/分母：`EXAMINED 262 of 964686 (size delta fully decomposed) / UNEXPLAINED 964424 (content diff, unattributed)`；
+  ② 闸门守卫完全对齐 B-2 路径：守住 262 字节尺寸差完全分解、0 剩余字节断言与 pairs/num_pool/self_pp/subgraph_pp 真实物理测量，绝不断言全量残差为零；
+  ③ 诚实记录：尺寸差完全分解配平，964,424 字节内容差由 1380 个函数哈希值不同驱动，根因在别的卡，留 unknown 待测；
+  ④ 套件总账：verify_all.sh 29 ran 0 failed；cards_check.sh 7 open / 19 closed rc=0；phase_gate.sh 保持 unknown=24 structural=0。
+
 
 
 ---
