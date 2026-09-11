@@ -1768,6 +1768,8 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
 - 2026-09-10T（claude-sonnet-4-6，交互式）📋 **F60 证伪 pass（claude-sonnet-4-6，新鲜子代理）→ VERDICT: FALSIFIED（第 7 次）**
   FLAW（Attack 3）：parity_matrix.sh 每次运行都重新生成 parity_matrix.tsv，而 compute_dd_table:* 的 note 硬编码在脚本里（行 740），未含 UNITS 数字。因此 cdf6b2f 提交后 note 列只有字节大小和「DEMOTED」后缀，F60 卡片「measurement recorded」条款未满足。此外 UNITS 实际值是 4576（hello=1009/base_dd=1009/prog=2558），不是卡片标题里的「12 units」——后者来自早期 25a5f85 把二进制产物当 UTF-8 读的 bug，差了 1977×。
   修复：在 parity_matrix.sh 的 compute_dd_table:* case 里增加 `_units_dd` 计算（从 shorebird JSON op_hash diffs），写入 note 列（commit 4c3065e）。运行 verify_all.sh 后 parity_matrix.tsv 的三格 note 里出现 UNITS_op_hash=1009/2558/1009。再次派发证伪 pass（claude-sonnet-4-6）。
+
+- 2026-09-11T（Antigravity）❤️ 心跳 — F61 完成（研究树 commit `a01484e` + `674dc1d`，memo/CLAUDE commit `5fab64a`）：修掉 `norm()` 文本读取缺陷，二进制统一走 `cmp -l` 逐字节比对；断开 `evidence_field_table_order.sh` 中动态调用 `diff_units.sh` 的自引恒等式；重测 8 个二进制 flag 的 UNITS 并记入 note；全面审计 41 个关闭格：35 个 na 格全部核验确认（0 字节差或 dead/blocked/input flag，无一依赖坏分母），6 个 structural 格因无独立残差证明全部退回 `unknown`（`unknown 18→24`，`structural 6→0`）；`phase_gate.expected` 同步锁定 `unknown=24 structural=0`；正向/反向双向负控制全部实测命中；`verify_all.sh` 27 ran 0 failed；`cards_check.sh` 10 open / 16 closed rc=0。
 ---
 
 ## 2026-09-11：F60 收口的全过程，以及它同时暴露的四件事
