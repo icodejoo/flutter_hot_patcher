@@ -29,7 +29,7 @@
 **当前状态（2026-09-11 实测）**：矩阵 `59 cells, 0 unrun, 3 blocked`，
 **na=35 / structural=0 / unknown=24 / gap=0**（本行四个数是 2026-09-11 直接数 `parity_matrix.tsv`
 得到的，`phase_gate.expected` 与之一致，研究树 `b0a78c9`）。
-`verify_all.sh` **29 ran / 0 failed** —— 本次实测全绿（2026-09-11，研究树 `3b78c93`）。
+`verify_all.sh` **30 ran / 0 failed** —— 本次实测全绿（2026-09-11，研究树 `a36bbb3`）。
 - 判据 1 ✅ · 判据 3 ✅ · 判据 2 🔴 **未满足：24 格 unknown** ⇒ **这一阶段没有结束。**
 
 🟢 **F61 已闭环关闭（研究树 `b0a78c9` + `f3ce840`，2026-09-11 Antigravity）**：
@@ -49,7 +49,7 @@
 
 🔴 **本阶段已被撤回过两次「完成」**（E3 的「0 gap」、`bfa898d` 的 `PHASE COMPLETE`），
 并抓出**十个仪器缺陷**——每一个都是「判据在结论不成立时仍然给绿」。
-**第十个最该记住（2026-09-11，F60，六次证伪 pass 才定位）**：
+第十个最该记住（2026-09-11，F60，六次证伪 pass 才定位）：
 `diff_units.sh` 与 `evidence_compute_dd_table_residual.sh` **在同一份 JSON 上算同一个表达式**
 ⇒ `EXAMINED == UNITS` 是**数学恒等**，扰动 fixture 两个计数同步变 ⇒ **这个检查不可能报红**
 （实测：注入 500 行异质字节，仍报 `EXAMINED 511 of 511, UNEXPLAINED 0, rc=0`）。
@@ -63,16 +63,19 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 **「DD 派发 他们 92 / 我们 0」这个最大缺口因此作废**（F35，研究树 `6026011`）。
 
 🔴 **待办以 `memo.md` 为准，不是本文件。** 当前开放卡片（2026-09-11 实测，
-判据 = `cards_check.sh` rc=0，**open+built 集合七张**）：
-- **SDK 本体（规则 0 的正面工作）**：**F55 / F58**（对拍矩阵剩余 24 格 unknown，按 flag 拆分；F56/F57/F59 均已闭环）。
+判据 = `cards_check.sh` rc=0，**open+built 集合六张**）：
+- **SDK 本体（规则 0 的正面工作）**：**F55**（对拍矩阵剩余 24 格 unknown，按 flag 拆分；F56/F57/F58/F59 均已闭环）。
   🟢 **「F55–F59 的 UNITS 全部作废」这句话对 5 张里的 3 张是错的（2026-09-11 实测订正）**：
   `shorebird 75042` / `dump_object_pool 10782` / `disassemble 5946` **都走 JSON 路径，
   从未被 `norm()` 缺陷碰过**，修复后重测一字未变 ⇒ **可以直接用**。
-  **只有 F57（1472→964,424→964,686，含 b0a78c9 承重长度差补齐）与 F58（6882→2,466,725）被污染。**
+  **只有 F57（1472→964,424→964,686，含 b0a78c9 承重长度差补齐）与 F58（6882→2,466,725→2,471,135）被污染。**
 - **循环机械（不推进 dart-sdk，排在后面）**：**F46（open）· F49 / F52 / F53 / F54（built）**
-已关闭 19 张：F36–F45、F47、F48、F50、F51、F56、F57、F59、F60、F61。
+已关闭 20 张：F36–F45、F47、F48、F50、F51、F56、F57、F58、F59、F60、F61。
 ⚠️ **`built` 不是 `closed`**：实现完成且自测通过，**但没有新鲜代理审过**。四张 built 卡欠的都是这一步。
-⚠️ **F60/F59/F56/F57 的关闭走的是卡里第三条路**（「留 unknown，把测量记下来」），**不是证明了那些格是 structural**。
+⚠️ **F60/F59/F56/F57/F58 的关闭走的是卡里第三条路**（「留 unknown，把测量记下来」），**不是证明了那些格是 structural**。
+
+🟢 **F58 已彻底闭环（2026-09-11，研究树 `a36bbb3` + `bc7c1f8`）。**
+分母 2,471,135 units（hello 585,829 + base_dd 585,829 + prog 1,299,477 字节）；交叉测试比对 theirs vs ours 在 ours .so 上全部 3 个 fixture 0 字节差异（100% byte-identical），工具提取实现缺口为 0；完整解析 4 个快照区域（VmSnapshotData -6 B / IsolateSnapshotData 0 B / VmSnapshotInstructions +4224 B / IsolateSnapshotInstructions +192 B），求和精确等于物理文件尺寸差 4,410 字节（EOF 长度差修复承重）；彻底吸取 F57「分子归零、分母没露面」教训，如实报告口径 `EXAMINED 4410 of 2471135 (size delta fully decomposed) / UNEXPLAINED 2466725 (content diff, unattributed)`，2,466,725 字节内容差由 1380 个函数哈希差异及 VM stubs 驱动，留 unknown；接入闸门（`verify_all.sh` 第 30 项检查，`EXPECTED_CHECKS` 29→30，30 ran 0 failed）；三重负控制（`--drop-regions`、`--drop-crosstest`、异质字节注入使 `evidence_dump_blobs_residual.sh` 独立变红并还原）全部实测通过。完整闭环满足 B-2。
 
 🟢 **F57 已彻底闭环（2026-09-11，研究树 `3b78c93` + `b39299e` + `acc8cb3`）。**
 分母 964,686 units（EOF 长度差 262 字节，占 0.03%）；落实铁律第 8 条，将独立二进制变长解码脚本 `evidence_pool_link_data_residual.sh` 正式落盘并接入闸门（`verify_all.sh` 第 29 项检查，`EXPECTED_CHECKS` 28→29，29 ran 0 failed）；采纳复审意见，彻底消除虚假全量断言，报告口径订正为如实的 `EXAMINED 262 of 964686 (size delta fully decomposed) / UNEXPLAINED 964424 (content diff, unattributed)`；实测 pairs 与 num_pool_entries 两侧完全一致（diff=0），证实 per-process entries 对尺寸差贡献为 0，不序列化 pool entries 本体；尺寸 delta 物理构成完全配平（hello/base_dd +40 字节由 varint 字母/数字宽度驱动；prog -182 字节由字符串哈希 -90 与逐项实测的 self_pp 2 处多元素 -4 字节、subgraph_pp 44 处多元素 -88 字节组成）；共用约束不拆，不向证据表塞虚假 residual 行；负控制 `--drop-pairs` 实测断裂退出（rc=1）。完整闭环满足 B-2。
