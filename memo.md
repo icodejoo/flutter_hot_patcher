@@ -1857,6 +1857,13 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
   【套件总账】：
   verify_all.sh 28 ran 0 failed；phase_gate.sh unknown=24 structural=0；cards_check.sh 8 open / 18 closed rc=0。
 
+- 2026-09-11T（Antigravity）❤️ 心跳 — F57 独立重测与底层物理归因（研究树 commit `f137fc3`）：
+  ① 分母重测：964,686 units（较上午 964,424 增加 262 字节，恰为三 fixture 尺寸差 40+40+182），证明 b0a78c9 的 EOF 补齐修复真实承重；
+  ② 二进制解码拆解：复用 F61 变长整数流解码器完整解析 Shorebird 格式（0 残留字节），证明 pairs 与 num_pool_entries 两侧 100% 相同；hello/base_dd 的 +40 字节差完全由 hex 字符中数字（1 字节）与字母（2 字节）分布不同产生（self_hash -34, op_hash +74, 净差 +40）；prog 的 -182 字节差同样完全配平（11 - 101 - 4 - 88 = -182）；
+  ③ 证伪 parity_matrix.tsv note：实测证实产物根本不包含 pool entries 本体，per-process entries 对 40 字节尺寸差贡献为 0，note 仅为待验假说；同步在 parity_matrix.sh/tsv 中订正标注；
+  ④ 明确纪律：二进制 964,686 字节差绝不重新定义 unit、绝不向证据表塞 residual 行，坚守第三条路留 unknown 待测；
+  ⑤ 套件状态：verify_all.sh 28 ran 0 failed；cards_check.sh 8 open / 18 closed；phase_gate.sh 保持 unknown=24 structural=0。
+
 ---
 
 ## 2026-09-11：F60 收口的全过程，以及它同时暴露的四件事
@@ -2143,6 +2150,56 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 - `verify_all.sh`：28 ran, 0 failed, 0 skipped, 0 blocked (rc=0)
 - `cards_check.sh`：8 open, 18 closed, 0 failure(s) (rc=0)
 - `phase_gate.sh`：phase open: unrun=0 blocked_unnamed=0 unknown=24 gap=0 structural=0 structural_unbacked=0 (rc=0)
+
+---
+
+### 十一、F57 独立重测与底层物理归因详情（2026-09-11，研究树 `f137fc3`）
+
+**一句话**：F57 保持 open，进行前置底层测量与成因物理定位。实测权威分母 964,686 units，比对上午测值增加 262 字节，有力证明 `b0a78c9` 的 EOF 长度差补齐逻辑真实承重；通过变长整数流解码器彻底阐明尺寸 delta 符号翻转与物理构成；彻底证伪 `parity_matrix.tsv` 中将 per-process entries 当作 40 字节 delta 来源的旧假说；严守纪律不重定义 unit、不塞 residual 行，`phase_gate` 保持 `unknown=24, structural=0`。
+
+#### 1. 分母实测与承重验证
+- `diff_units.sh dump_object_pool_link_data` 实测权威分母：
+  - `as.base_dd`: 173,778 字节
+  - `as.hello`: 173,778 字节
+  - `as.prog`: 617,130 字节
+  - **合计**：**964,686 units**。
+- **与上午测值对账**：
+  $$964,686 - 964,424 = 262 = 40 (\text{hello}) + 40 (\text{base\_dd}) + 182 (\text{prog})$$
+  差值恰好为 3 个 fixture 两侧产物的文件大小差（hello/base_dd 我方各比对方大 40 字节，prog 对方比我方大 182 字节）。
+  这直接证明在 `b0a78c9` 中向 `diff_units.sh` 引入的 `sz_diff`（两文件长度差追加计数）在此卡上真实承重生效。
+
+#### 2. 文件尺寸 Delta 符号翻转与物理归因（单列独立分析）
+通过 F61 中实现的变长整数流解码器（`read_unsigned` / `read_int32` / `read_string`）严格解析 Shorebird `ObjectPoolLinkInfo` 序列化流（0 剩余字节，100% 语法完整）：
+- `num_pool_entries`（全局 pool 长度）：hello 1421 vs 1421, prog 3849 vs 3849，两侧完全相同（diff=0）；
+- `pair_constraints`（pairs 数组）：hello 385 vs 385, prog 889 vs 889，两侧完全相同（diff=0）；
+- `codes`（CodeInfo 列表）：
+  - **hello / base_dd 的 +40 字节差物理归因**：
+    Dart VM `WriteString` 采用 signed varint 编码单字符：十六进制字符中的**数字 `'0'..'9'` 占 1 字节**（0xf0..0xf9），而**字母 `'a'..'f'` 占 2 字节**（0x61..0x66, 0xc0）。
+    哈希字符串中的字母/数字分布不同，直接产生物理字节长度差异：
+    - `self_hash` 字节长度差：$-34$ 字节（对方哈希中字母比我方多 34 个）
+    - `op_subgraph_hash` 字节长度差：$+74$ 字节（我方哈希中字母比对方多 74 个）
+    - **净差值**：$-34 + 74 = \mathbf{+40}$ **字节**，100% 精确配平。
+  - **prog 的 -182 字节差物理归因**：
+    - `self_hash`: $+11$ 字节
+    - `op_subgraph_hash`: $-101$ 字节
+    - `self_pp`: $-4$ 字节
+    - `subgraph_pp`: $-88$ 字节
+    - **净差值**：$11 - 101 - 4 - 88 = \mathbf{-182}$ **字节**，100% 精确配平。
+
+#### 3. 彻底证伪 `parity_matrix.tsv` 的 note 假说
+- `parity_matrix.tsv` 的 note 原称 40 字节 delta 来自 `per-process pool entries`。
+- 但二进制解码器实测证实：`dump_object_pool_link_data` **根本不序列化 pool entries 本体**！产物中仅记录了全局条目数量（1421，两侧相同）和 pairs 索引，`per-process entries` 对这 40 字节尺寸差的贡献为 **0**。
+- **经验教训**：note 是待检验的假说，绝不能当作可引用的既定事实前提（同 F60 踩过的坑，把 note 当前提实测在 4328 个差异里只解释了 2 个）。已在 `parity_matrix.sh` 和 `parity_matrix.tsv` 中同步订正标注。
+
+#### 4. 本卡与 F59/F56 的本质不同与技术纪律
+- F59/F56 产物为 JSON，逐键统计 ×2 即可配平；F57 产物为 Shorebird 二进制序列化流，964,686 字节为逐字节 `cmp -l` 差异，不可能逐字节点名。
+- 坚决不可为了让数值偏小而重新定义 unit（防止重蹈 `norm()` 把 100,273 读成 6 的覆辙）。
+- 绝不往 `structural_evidence.tsv` 增加 `residual` 虚假证据行，走第 3 条路留 `unknown` 并写下测量。
+
+#### 5. 共用约束与验收基线
+- 与已闭环的 F56 共用 `per-process pool entries`（`kResetToBootstrapNative`）成因，`structural_evidence.tsv` 中已指向同一脚本 `evidence_pool_perprocess.sh`，接缝不拆，不许各写一份 per-process 判据。
+- 验收基线：后续接入残差脚本时 `EXPECTED_CHECKS` 28→29；负控制在最终 commit 实测；`phase_gate` 保持 `unknown=24, structural=0` 不动。
+
 
 
 
