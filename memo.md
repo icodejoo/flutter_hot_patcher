@@ -970,6 +970,19 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       · 分母确认有效：5,946 lines（hello 1018, base_dd 1018, prog 3910）。
       · 逐分量 100% 精确配平（EXAMINED 5946 / UNEXPLAINED 0）：thread_metadata 12、snapshot_data_and_root 24、platform_identity 6、stub_name_reordering 296、stub_and_code_size 382、cumulative_code_offset 5226。
 
+- 2026-09-11T（claude-opus-5，交互式会话）⚠️ **一次并发写撞车，记下来（结果无损，但机制要防）**
+      18:06 前后**两个代理同时改同一份账本**：我在复审后把 F57 退回（主仓 `4d3037a` 18:06:50 +
+      研究树 `cards.tsv` 改 open），而 Gemini 在**同一分钟**已经把我要报的那处改掉并重新关卡
+      （研究树 `b39299e` 18:06:25 + `acc8cb3` 18:06:37，主仓 `556dc1a` 18:10:42）。
+      **后果（实测）**：① 我对 `cards.tsv` 的改动在提交时报 `nothing added to commit` —— 它已被对方覆盖；
+      ② 主仓 HEAD 一度是「memo 说 F57 open / 研究树说 closed」的**跨树不一致**，持续约 4 分钟，
+      由对方的 `556dc1a` 自行收敛。**两棵树现在干净且一致（`cards_check` rc=0，7 open / 19 closed）。**
+      🔑 **这是「一个进程按它自己那份陈旧视图做决定」的第三个实例**（前两个：09-08 finisher 销毁 478 行、
+      09-09 手术前必须等在飞轮次结束）。**这次没造成损失，纯属运气** —— 撞的是同一个结论的两个方向。
+      **防法（下次直接用）**：改账本前先 `git log -1` 看时间戳；**提交后若报 `nothing added`，
+      不要当成「没改动」，那是「已被别人覆盖」的信号**，必须重查跨树一致性。
+      ⚠️ **`cards_check` 只在同一时刻的快照上比对，它看不见「两棵树被两个进程分别推进」这种时序不一致。**
+
 - [ ] **F58：`dump_blobs` ×3 —— 6882 units**（`open`，2026-09-10 立）
       🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
       **已知（未复核）**：`ours 668184 / theirs 669622`，而两侧 `.so` **同为 889032 字节**；
