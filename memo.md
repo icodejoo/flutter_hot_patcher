@@ -2789,3 +2789,5 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 (c) 脚本同时打印 **distinct (field,value) 对数 52** 与 slot 数 2268，并在 VERDICT 行点名
     hello 侧「1379/1380 函数零差异」这个事实 —— 现在的写法把一个函数的一个值读成了 44× 的规模。
 **Pass 9 的 STILL OPEN（原文）**：把 gen_snapshot 与 analyze_snapshot 这两个变量拆开。交叉测试被 snapshot version hash 挡死（实测 rc=255），唯一可行路径是让两侧 gen_snapshot 产出 version-hash 兼容的快照（或用 `-Dsdk_hash` 对齐）后，跑 `THEIR_AS --shorebird ours.so`：若他们的分析器在**我们的**快照上同样只吐出那个小集合，则这 2268 个 slot 是 gen_snapshot 侧的内容差，`--shorebird` 这三格的 `gap` 归因就是错的。
+
+**轮末记账（2026-09-14 本轮）**：任务 = 消 `.loop/UNREVIEWED_FIX` 里 F55 那一项 · 判据结果 = **PARTIAL (fix)，队列不清，卡不关** · 改动文件 = `evidence_shorebird_components.sh` / `cards.tsv`（研究树 6e1ff86，从 stash 救回）+ `memo.md`（4318972）· 派发 = 2 个子代理（haiku 救援 14 次调用 / opus 证伪 pass 21 次调用）· `loop-rescue` stash 由 3 个降为 **2 个**（stash@{0} 已 pop 并提交，剩下的两个是 2026-09-09 的旧账）。
