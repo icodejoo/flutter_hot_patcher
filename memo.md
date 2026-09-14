@@ -1276,7 +1276,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F64：`gap` 判决缺残差要求，且棘轮认类别计数不认格子身份**（`open`，2026-09-14 立）
+- [ ] **F64：`gap` 判决缺残差要求，且棘轮认类别计数不认格子身份**（`built`，2026-09-14 立并当轮实现，未经证伪 pass）
       **来历**：F62 证伪 pass（Opus，审 `98ac73c`）判 PARTIAL 逼出来的两处，逐条见 F62 卡。
       两处都不是「测量错了」，是**判据比它要守的东西弱**，所以棘轮能被锉掉而闸门不响。
 
@@ -1299,6 +1299,39 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       ① 把 residual 要求去掉 ⇒ hello/base_dd 必须重新变回 `gap`（证明这条要求真的在承重）；
       ② `GAP_FLAG=dump_object_pool ./parity_matrix.sh --reuse` ⇒ `phase_gate.sh` 必须 rc≠0
         （今天实测 rc=0，这是它现在的真实行为，不是假设）。
+      🟢 **已实现（研究树 `1970d10` + `27907c7`，2026-09-14，未经证伪 pass）**：
+      新增 `gap_residual.sh` 与 `gap_evidence_check.sh`；`gap_class()` / `gap_note()` 改写；
+      `phase_gate.sh` 新增 G-f；`phase_gate.expected` 改成**每格一行 `cell <flag> <input> <class>`**（59 行）
+      与计数行并存，`comm -3` 双向比较（格子换类 / 消失 / 冒出来都红），且**零格被钉也红**。
+      `verify_all.sh` `EXPECTED_CHECKS` **34→35**（⚠️ 该常量实际是 34，不是本 memo 别处写的 30）。
+
+      🔴 **实测结果比预测更狠：`gap=3 → 0`，不是 1。三格**全部**退回 `unknown`。**
+      `gap_residual.sh` 用 `diff_units.sh` 的同一套方法学**从两边产物重算整格差异**，
+      再与 harness 的 per-input 数**交叉断言相等**（不是照抄——F60 那条教训）；
+      按 `index_in_entries` 配对，list-ness 从数据读（不硬编码字段名）。
+      **实测**：hello / base_dd `EXAMINED 6 of 9470, UNEXPLAINED 9464`；
+      prog `EXAMINED 790 of 51283, UNEXPLAINED 50493` ⇒ **prog 也不达标**。
+      ⚠️ 实现代理自报一处**它自己先犯后改的错**：第一版接受**子多重集包含**，
+      于是 hello 报出 4268 个「缺失」槽；收紧后精确复现卡片写的基底（2 个缺席槽 / 2 个字段，
+      另有 552 对只差重数）。**「同一批 distinct 值、重数不同」是去重指纹，不是缺失**
+      —— 与 `MEMORY.md` 那条「集合包含+数目不等是一侧去重的指纹」同型。
+      ⇒ **被撤回的不是「缺口真实存在」（F55 的观测仍在 `gap_evidence.tsv` 里），
+      而是「这个缺口解释得了这一格」。**
+
+      🔴 **NC2 的字面负控制在改动后变成 rc=0，代理如实上报而没有粉饰**（记在这里因为它是读数）：
+      `gap_class()` 现在拿**该格自己那个 flag 的产物**去跑残差，于是改标签的行在**分类器上游**就被拒，
+      矩阵逐字节不变，闸门无事可抓。⇒ **那条控制不再触及 pin**。
+      代理因此把 pin 单独隔离验了一遍：**旧分类器 + 改标签 + 计数行两侧完全相同**
+      （`unknown=21 gap=3`）⇒ **`phase_gate.sh` rc=1，12 行格子身份不匹配** ——
+      这正是从前 exit 0 的那一种情形。
+      **NC1**：去掉残差要求 ⇒ 三格全部回到 `gap`（`na=35 unknown=21 gap=3`，即改动前状态）、
+      `gap_evidence_check.sh` rc=1（3 failures）、`phase_gate.sh` rc=1；还原后 md5 逐字节相同。
+
+      **改动后全量**：矩阵 `59 cells, 0 unrun, 3 blocked`、`na=35 structural=0 unknown=24 gap=0`、
+      `phase_gate.sh` rc=0（`59 measured, 59 pinned, 0 mismatching`）、`cards_check.sh` 0 failures、
+      `verify_all.sh` **35 ran / 0 failed / 0 skipped / 0 blocked**。
+      其余 56 格未动（整表去掉 3 行 `shorebird` 后与改动前基线 diff 为空；全表 diff 恰好 6 行）。
+
       ⚠️ **这张卡会把 `gap=3` 改小**（很可能到 1，因为 base_dd 是 hello 的继承、
       hello 的基底只有 1 个函数）。**改 pin 必须与分类改动在同一个提交**，
       并在 memo 里写明是本卡把它改回去的 —— 否则下一轮会读成「棘轮倒退了」。
