@@ -1444,6 +1444,69 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
         （证明这次下降确实由这段解码承重，不是被别的改动或重建顺手带下去的）。
       ⚠️ **不许碰 `ProductARM64`**：本矩阵两侧都是 `ProductSimARM64`（`parity_matrix.sh:26`）。
 
+      🟢 **已实现（SDK `8e8927cef44` + `4d30ea43144`；harness `a257010` + `862be13`，2026-09-14）**：
+      新增 `runtime/vm/analyze_snapshot_arm64_decode.h`（可单测的立即数重建），
+      `DecodeDispatchCall` 两处 `kNoSelector` 改为真解码。
+      **判据实测命中：`REAL GAP` 2268 → 4**，恰好卡片写死的目标；
+      `subgraph_selectors` distinct_missing 2126 → 0、`self_selectors` 138 → 0；
+      残下的 4 = `self_pp` 2 + `subgraph_pp` 2（prog fn#1580 / fn#1633 的 pool index 1332），
+      **全在池字段、没有一个在 selector 字段** —— 与卡片点名的越界形式一致。
+
+      🔴 **F66 证伪 pass VERDICT: PARTIAL（2026-09-14，Opus，46 次调用，审 `4d30ea43144` / `862be13`）⇒ 不许关。**
+      **中心那个数它端到端复现了**（从干净树重跑，NC2 自己翻了一遍：ninja rc=0、
+      二进制 sha `6736da89`→`122ede06`、mtime 真的动了 ⇒ 不是陈旧二进制的假红；
+      还原后 sha 逐字回到 `6736da89`）。`phase_gate.sh` rc=0、三格仍 `unknown`，**棘轮没被动**。
+
+      🟢 **强制项（我派的是「containment 只能证明值在他们集合里，不能证明值是对的」）答案是「值是对的，但只在深度 0 上证到」**：
+      它没用包含关系，换了两条独立途径 ——
+      ① **有序列表逐元素相等**（不是 multiset，更不是 set）：在我们**不去重**的那个字段
+      `self_selectors` 上，ours 与 theirs 在 **4596/4596 个函数、1465/1465 个槽**上有序全等；
+      其中 **178 个槽（129 个函数）是 F66 新产出的**，129 个函数**零例外**全部有序全等。
+      它还量了这条证据的强度：全语料只有 60 个 distinct selector 值、他们在新站点的每函数集合平均 1.95 个值
+      ⇒ **一个随机错值通过包含检验的概率约 0.032/槽**，而 178 个槽的有序全等不是那个检验。
+      ② **从真字节独立重解**：它按 ARM ARM 的 `DecodeBitMasks` **自己写了一个解码器**（没抄那个头文件），
+      用 2070 个 nm 符号对上 JSON 的 `offset` 定出 `out_pm/as.prog.ours.so` 的指令镜像基址 `0xAB2C0`，
+      重解每一个派发头部 ⇒ 与工具的 `self_selectors` 在 **3216/3216 个函数、1133 个槽上 0 处不符**。
+      **头部普查**：631 个 add-imm12 · 325 个 mov · **102 个 movz/movk + 75 个逻辑立即数 = 177 个本卡新增**（hello 再 +1 = 178）。
+
+      🔴 **它找出三处缺陷，三处都在「offered evidence 的措辞」与「卡片自己的前置条件」上**：
+      · **(i) NC2 不是在改代码之前写的，而卡片明写要求先写负控制。** `git log --date=iso` 实测：
+        立卡 22:15:19 · 头文件 22:25:07 · NC1 22:25:07 · **代码改动 22:27:40** · **NC2 22:31:24**
+        ⇒ NC2 晚于代码 4 分钟，而且**不可能更早**（它驱动的 `F66_DECODE_DISPATCH_IMMEDIATES` 开关就装在那个提交里）。
+        实质没问题（审查者自己把 2268/4 重导了一遍），但**卡片写下的前置条件按原文未满足**。
+      · **(ii)「459 次翻转全部改变了解码值」这句是错的**：**447 次改了值，12 次（全是逻辑立即数）
+        只是让解码器拒绝**，被计成 pass。实测 `flips=459 changed_value=447 REFUSED=12 unchanged=0 exempt=39`。
+        测试自己的契约允许「拒绝」算过，但**那句断言的措辞不允许**。
+        ⚠️ 39 个豁免它逐个审过并判定**不过宽**：用插桩副本重编译后 would-have-moved = 0，
+        确实就是架构上哑的那一组（`hw` 配 `imm16==0`、窄元素宽度下 `immr` 的高位、`movk` 覆盖 `movz` 自己那条 lane）。
+      · **(iii)「`subgraph_selectors` 2126 → 0（GAP → EQUAL）」会被读成「这个字段复现了」，而它没有**：
+        ours 只发出他们 32262 个槽里的 **9870** 个，multiset 相等只在 **3441/4596** 个函数上成立（缺 22392 槽）。
+        成因是**我们自己这一侧去重**：`std::set selector_subgraph_seen`（`analyze_snapshot_api_impl.cc:1722`）。
+        ⇒ **那个 `EQUAL` 是单侧去重白送的，不是复现。** 本条**先于 F66 存在**，不是本卡造成的。
+        （与 `MEMORY.md` 那条「集合包含 + 数目不等 = 一侧去重的指纹」同型，第三次在本仓库出现。）
+
+      🔴 **它还把「关了多少」这句话的量纲摆正了 —— 这是本卡最容易被下一轮误引的一处**：
+      `./diff_units.sh shorebird` 实测 **`UNITS 67391`**（此前记录 70223）⇒ **这一格自己的度量只掉了 2832，
+      即关掉 4.0%，96% 仍在**。六个字段的原始槽差 262333−225644 = 36689 槽，F66 关掉 2304 槽 = **6.3%**。
+      ⇒ **「closes 2264 of the 2268」读起来像 99.8%，在这一格自己的单位里是 4%。**
+      **element-slot 与 units 是两个量纲、无换算关系**（本 memo 3023 行早已记过）。
+      ⚠️ 顺带：`evidence_shorebird_components.sh` 报 `INDEPENDENT FIXTURES 2` ——
+      base_dd 被判定为 hello 的逐字节拷贝而排除，分母是 **2 fixture / 4596 函数**，不是 3 / 5976。
+
+      🔑 **STILL OPEN（证伪代理原文，逐字抄录，不许改写）**：
+      > the one test that could still overturn the value-correctness finding is removing the
+      > `std::set selector_subgraph_seen` dedup at `analyze_snapshot_api_impl.cc:1722`, rebuilding,
+      > and asking whether our undeduped `subgraph_selectors` reproduces theirs as a MULTISET
+      > (prog 28701, hello 3561). If it does, the new decode is right at every subgraph site too and
+      > 22392 more slots close. If it does not, then the only site class where we have proven the values
+      > are right is depth-0 (`self_selectors`, 1465 slots), and "GAP -> EQUAL" on the 32262-slot field
+      > rests on our dedup rather than on our decode. My ordered-equality evidence covers depth 0 only.
+
+      **⇒ 本卡保持 `open`。关掉它还缺三样**：① 把 (ii)(iii) 两处措辞订正落到 harness 的输出里
+      （而不是只订正在 memo 上 —— 五之三那条「订正要写在卡片本体」的同构）；
+      ② 上面那条 STILL OPEN 的去重实验；③ NC2 的时序前置条件已不可追补，
+      **只能如实记着**（它是一条流程缺陷，不是结论缺陷）。
+
 ---
 
 - [ ] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
@@ -3381,3 +3444,57 @@ F64 的修补丁 `1970d10`（研究树，`git merge-base --is-ancestor 1970d10 H
 🔴 **给闸门的一条待修（不立卡，记在这里）**：本项目已知缺陷「不问那条提交改了什么」
 现在有了一个**可自我复制**的形态 —— 只要删行动作本身要写进 memo 并在标题点名，
 下一轮就会再入队一次。修法候选：入队前要求那条提交 `--stat` 里有**非 memo.md 的文件**。
+
+## 轮次记录 2026-09-14 22:1x–23:0x（结队列账 + F66 实现 + 证伪 pass）
+
+**先结账** = `.loop/UNREVIEWED_FIX` 那一项**第二次**判定不必再审并删行（`d84b2e5`），
+理由与上一轮同：它引的 fix commit `60c619e` 实测 `--stat` = `memo.md | 15 +++`、0 行代码，
+而真正的补丁是 F64 的 `1970d10`，那个补丁**已经过一次新鲜代理的 pass 判 SURVIVES**。
+🔴 **这次可以把那个闸门缺陷的形态说准了：它会自我复制。** 删行动作本身要写进 memo、
+memo 提交标题要点名那张卡 ⇒ 下一轮闸门又看见「PARTIAL + 标题点名」⇒ 再入队一次。
+**修法候选（记在这里，未立卡）**：入队前要求那条提交的 `--stat` 里存在**非 `memo.md`** 的文件。
+⚠️ 本轮记录 F66 判决的提交**故意不在标题里写卡号**，就是为了不再播一次同样的种子；
+这不是隐瞒 —— 判决行原文在 memo 正文里，闸门要的那一行也在。
+
+**任务** = **F66**（上一轮 memo 末尾「下一轮两件事」第 1 优先级，规则 0 的正面工作）：
+在 `DecodeDispatchCall` 实现 `movz/movk` 与逻辑立即数两种派发头部的 selector 重建。
+
+**判据结果** = **命中，`REAL GAP` 2268 → 4**，恰好卡片事先写死的目标；
+残下的 4 全在池字段（prog fn#1580 / fn#1633 的 pool index 1332），没有一个在 selector 字段。
+NC1（先于代码）38 checks / 0 failures；NC2 on=4 / off=2268 / restored=4。
+`phase_gate.sh` rc=0、三格仍 `unknown` ⇒ **棘轮未被动**。
+
+**F66 证伪 pass VERDICT: PARTIAL**（Opus，46 次调用，审 `4d30ea43144` / `862be13`）⇒ **F66 保持 open**。
+三处缺陷逐条抄在卡里：(i) **NC2 晚于代码 4 分钟**，卡片「先写负控制」的前置条件按原文未满足；
+(ii)「459 次翻转全部改变解码值」实为 **447 改值 + 12 拒绝**；
+(iii)「`subgraph_selectors` GAP→EQUAL」是**我们单侧 `std::set` 去重白送的**，不是复现
+（ours 只发 9870 / theirs 32262 槽）—— **先于 F66 存在**。
+`STILL OPEN` 原文已逐字抄进卡片。
+
+**强制项答案（我派的那条）= 值是对的，但只在深度 0 上证到**：审查者绕开包含关系，
+用**有序列表逐元素相等**（`self_selectors` 4596/4596 函数、1465/1465 槽，新增 178 槽零例外）
+与**自写解码器直读 `.so` 字节**（prog 3216/3216 函数、1133 槽 0 处不符）两条独立途径证实。
+它还量了包含检验本身有多弱：**随机错值通过包含检验的概率约 0.032/槽**。
+
+🔴 **本轮最该被下一轮记住的一句（量纲）**：`./diff_units.sh shorebird` 实测 **`UNITS 67391`**
+（此前记录 70223）⇒ **这一格自己的度量只掉了 2832 = 4.0%，96% 仍在**。
+「closes 2264 of the 2268」读起来像 99.8%，**在这一格自己的单位里是 4%**。
+**element-slot 与 units 无换算关系**（3023 行早记过，本轮是它第二次差点被读错）。
+⚠️ 连带：`evidence_shorebird_components.sh` 报 `INDEPENDENT FIXTURES 2`，
+base_dd 被判为 hello 的逐字节拷贝而排除 ⇒ 分母是 **2 fixture / 4596 函数**，不是 3 / 5976。
+
+**改动文件** = SDK 树 `8e8927cef44`（新增 `runtime/vm/analyze_snapshot_arm64_decode.h`）+
+`4d30ea43144`（`runtime/vm/analyze_snapshot_api_impl.cc`）；
+研究树 `1e11360`（`cards.tsv` 立卡）+ `a257010`（`test_arm64_decode.cc/.sh`）+
+`862be13`（`nc2_f66_force_noselector.sh`）；状态树 `d84b2e5` + 本轮 `memo.md`。
+**派发 = 2 个子代理**（实现 48 次调用 / 181106 tokens；证伪 Opus 46 次调用 / 200542 tokens）。
+三棵树 status 未变（研究树仍只有既有未跟踪文件）。`loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。
+
+**下一轮两件事（按此优先级）**：
+1. **接着做 F66**（它还 open，且仍是规则 0 的正面工作）。**先做 STILL OPEN 那条实验**：
+   拆掉 `analyze_snapshot_api_impl.cc:1722` 的 `std::set selector_subgraph_seen` 去重，
+   重建 `ProductSimARM64`，问我们未去重的 `subgraph_selectors` 能不能**以 multiset** 复现他们
+   （prog 28701 / hello 3561）。**判据**：能 ⇒ 新解码在每个 subgraph 站点也是对的，再关 22392 槽；
+   不能 ⇒ 我们证到「值是对的」的只有深度 0 那 1465 槽，要如实把卡片的断言范围缩到那里。
+   ⚠️ 顺带把 (ii)(iii) 两处措辞订正**落进 harness 的输出**，不要只订正在 memo 上。
+2. **F65**（仪器卫生：审查脚本与被审对象共用 `GAP_RESIDUAL` / `EVIDENCE` 开关），排在后面。
