@@ -4338,3 +4338,15 @@ SITE 0x100196b98 SEC=__TEXT,__text OFF=0x57eb98 MOVW9_IMM=none SUBW9=no SKIP_KIN
 3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` / `f69_*` 接进 `verify_all.sh`**
    （`EXPECTED_CHECKS` 随之加）。
 4. **F49**（仍 `built`、从未过 pass）。
+
+---
+
+## 心跳 2026-09-15T03:0x —— 轮次开始
+
+`.loop/UNREVIEWED_FIX` 有 **F69** 一行（`fixed after PARTIAL verdict; fix commit(s) 27ea8ca 898a05d 8c197eb`）。
+**先核账**：那三个提交分别是 ①`898a05d` 量具脚本本体（写在 pass **之前**）、
+②`27ea8ca` memo 记录、③`8c197eb` cards.tsv 增补 —— **没有一个是对 (F1)/(F2)/(F3) 的修补**。
+⇒ 队列这一项是闸门已知缺陷的又一次触发（「只问本轮有没有提交点了卡号」）。
+**不删它、也不空转**：本轮就把那三件增补做掉，做完派新鲜代理对**修补丁**打一遍 pass，
+用一条含 `F69` + `SURVIVES` + `(fix)` 的判决把账结掉。
+三棵树开工前状态：状态树与研究树只有未跟踪文件，SDK 树干净。
