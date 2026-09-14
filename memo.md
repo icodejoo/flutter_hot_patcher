@@ -2827,3 +2827,99 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 `STASH DEBT: N un-popped stash(es)` 的 N 记下来，轮末再数一次，
 **N 减少且本轮没有任何 `stash pop` 成功输出时报警**。
 （判据必须是「数目对不对」，不是「stash list 跑没跑通」。）
+
+**心跳 2026-09-14T20:5x（round 本轮）**：开工前状态 —— `.loop/PAUSE` 不存在（循环在跑）；`.loop/UNREVIEWED_FIX` 仍欠 F55 一项（上一轮的 Pass 9 判 **PARTIAL (fix)**，按契约五之四不清队列）；三棵源码树无已跟踪改动（研究树仅 1 个未跟踪文件 `kernel_cascade_probe.py`）；`loop-rescue` stash 仍 2 个（2026-09-09 旧账，不接着做）。本轮计划 = **Fix Round 11**（memo:2785-2790 的 (a)(b)(c)）+ 派新鲜子代理重打修补丁。
+
+**心跳 2026-09-14T19:53（本轮）**：开工前状态 —— `.loop/PAUSE` 不存在；`.loop/UNREVIEWED_FIX` 仍只欠 F55 一项；三棵源码树无已跟踪改动（研究树 HEAD `dba0841`，仅 1 个未跟踪文件 `kernel_cascade_probe.py`；SDK 树 `03d7efb21e8` 干净）；`loop-rescue` stash 仍 2 个（2026-09-09 旧账，不接着做）。**上一轮的 Fix Round 11 已落盘为 `dba0841`（+418/−94，新增 `perturb_f55_corpus.sh`），但它自己没有过 pass。** 本轮唯一任务 = 派**新鲜** Opus 子代理对 `dba0841` 这个修补丁跑 `falsify.md`，强制项 = 「四条 INV-* 不变量究竟能不能红」。
+
+## F55 Fix Round 11 的证伪 pass（Pass 10，2026-09-14，opus，新鲜代理，17 次调用）
+
+**`F55 修补丁 VERDICT: SURVIVES (fix)`** —— 审的提交是研究树 `dba0841`
+（`git -C ~/Documents/fhp-research merge-base --is-ancestor dba0841 HEAD` rc=0）。
+派发时明确写了「你审的是**修补丁**不是卡片」，所以**这一条只消队列，不关 F55**。
+
+**强制项（四条 INV-* 到底能不能红）的实测结论 —— 三条要点，其中两条是真削弱**：
+
+1. ✅ **(a) 的恒真 assert 确实被换掉了，且新检查真能红。** 复核代理**自己造了**一份
+   保 containment 的扰动（`/tmp/f55rev/dupmult`，给每个非空 ours 列表追加 4 份 `lo[0]`，
+   **他用自己的代码审过：set 违例 0，multiset 违例 11856**），实测 `rc=1 / INV-MULTISET 9384`。
+   这是「不用作者自己写的扰动」这一条第一次被真正执行。
+   落盘的 `perturb_f55_corpus.sh` 也复现了卡片上那三个数 `5203 / 4100 / 4`，且**不是恒等变换**、
+   **确实保 containment**（输出里不出现 CONTAINMENT BROKEN）。
+   ⚠️ 但它**不是单变量探针**：它同时把 dedup 判定翻成 3 个 fixture（triples 27576→35856）。
+2. 🔴 **「四条不变量」实为两条独立信号。** INV-COUNT 被 INV-MULTISET **严格蕴含**
+   （子多重集 ⟹ len≤len），INV-FIELDGAP 又被 INV-COUNT 蕴含（逐 triple len≤len ⟹ 逐 field 求和 ≥0）。
+   实测佐证：`--shuffle-pairing` 下 COUNT 红 6914 而 **FIELDGAP 仍为 0**（置换保和）。
+   ⇒ 后两条**永远不会单独响**，零额外检出力。真正独立的只有
+   **MULTISET⟹COUNT⟹FIELDGAP 这条链** 与 **REPARSE**。
+   （INV-MULTISET 自身的增量也薄：27576 个 triple 里只有 **2031 个（7.4%）** ours 侧真的有重复元素。）
+3. 🔴 **INV-REPARSE 只半满足 F60 那条教训：「不同代码，同一来源」。**
+   第二个解码器确实与第一个**零共享代码**（正则字节扫描，不用 json、不按 index 配对，代理把两份都读了），
+   而且它**真能抓到第一个解码器吞掉的语料故障**：代理造的 `/tmp/f55rev/dupidx`
+   让两个函数共用同一个 `index_in_entries`（解码器 #1 的 dict 推导式会**静默丢掉一个**），
+   实测 `rc=1 / REPARSE SHAPE FAIL: index_in_entries repeats`。
+   **但 INV-REPARSE 的 mismatch 计数器本身只有 `--drop-function` 这个内存注入能碰到**：
+   两个解码器**读同一份字节，且只比列表长度、从不比值** ⇒ 两个正确的解析器按构造必然一致。
+   ⚠️ 顺带一条：`callees` 是第 7 个列表字段但不在 `FIELDS` 里，**INV-REPARSE 从不覆盖它**。
+
+**其余七攻的实测（全部复现，无一处陈旧）**：
+- 攻 2：`cmp out_pm/as.hello.theirs.shorebird out_pm/as.base_dd.theirs.shorebird` **逐字节相同（698828 B）**；
+  ours 侧从第 53 字符起不同，代理逐键 diff 后确认**只有 `snapshot_data` 一个键不同**，
+  1380 个函数的全部 14 个键两侧相等 —— 而两个 `.so` 真的不同（106123 个字节不同）。
+  ⇒ dedup 判定（2 fixtures / 4596 functions）**是从字节算出来的，不是断言的，且偏保守**。
+- 攻 3：`./evidence_shorebird_residual.sh` rc=0，`EXAMINED 0 of 70223 / UNEXPLAINED 70223`。
+  **量纲不匹配没有被糊掉**：脚本任何地方都不主张 slot↔unit 的换算。
+- 攻 4：正则在 hello+prog × ours+theirs 上，6 个 `FIELD_RE` 各命中 1380/3216 次 = 每函数恰一次，
+  非整数元素 0，JSON 转义使串内诱饵不可能 ⇒ 解码器 #2 不多吃也不少吃。
+- 攻 5：`bfdc21e / 8e91b73 / 5c4f2b5 / 6e1ff86 / dba0841` 的 `--is-ancestor` **全 rc=0**；
+  `./verify_all.sh` rc=0，`34 ran, 0 failed, 0 skipped, 0 blocked`，`EXPECTED_CHECKS=34` 在位
+  （本次修补没加 `run_script`，没有在计数背后重编号）。
+- 攻 6：七个负控制**逐个实测全红**：`--break-containment` rc=1(12) ·
+  `--shuffle-pairing` rc=1(MULTISET 9596/COUNT 6914/CONTAINMENT 9588) · `--rotate-pairing` rc=1 ·
+  **`--mutate-fields-check` rc=1 `FIXTURE DEDUP DECISION WRONG`（(b) 确实修掉了，旧版是 exit 0）** ·
+  `--drop-function` rc=1(INV-REPARSE 1) · `WORK=/tmp/identical-corpus` rc=1(CONTAINMENT VACUOUS) ·
+  `WORK=$(./perturb_f55_corpus.sh)` rc=1 且**恰好是卡上的 5203/4100/4**。
+- 攻 7：`grep -nE '2268|\b52\b|1379|1380|43\.6|70223'` 扫两个脚本 **只有 1 处命中（第 79 行，注释）**，
+  没有任何硬编码。VERDICT 行确实同时打印
+  `real_gap=2268 distinct_pairs=52 concentration=hello:1379/1380-zero-diff,prog:2253/3216-zero-diff`，
+  代理从零独立重算**逐位吻合**；换一份语料该行变成 `7866/648/1118/1862` ⇒ **确系运行期计算**。⇒ (c) 达成。
+- 攻 1 的一处诚实残留（**非本次修补引入**）：`gap_confirmed=(not violations) and (real_gap>0)`
+  在它那一行**恒为 True**，因为两个证伪分支都在更早处 exit 1 —— 是算出来的，但**在原地不可证伪**。
+
+🔑 **Pass 10 的 STILL OPEN（原文照抄，不得改写）**：
+> Build /tmp/f55rev/prefix — set every ours list to the same-length PREFIX of the
+> corresponding theirs list. Lengths are preserved exactly, containment and multiset hold,
+> so ALL FOUR invariants stay green and the script exits 0 — yet real_gap moves 2268→7866
+> and distinct_pairs 52→648 (`WORK=/tmp/f55rev/prefix ./evidence_shorebird_components.sh`,
+> rc=0). Nothing in the new machinery constrains the headline number; it detects only
+> multiplicity inflation and parser disagreement, and is blind to any ours-side corruption
+> that keeps per-list lengths. That is precisely the shape of "our collector emits the
+> wrong values". The card discloses it ("gate checks exit code only, not exact value"), so
+> this is scope, not a false claim — but it is the test that could still overturn the
+> 2268 figure, and INV-REPARSE cannot help because it compares lengths, never values.
+
+**COST OF BEING WRONG（代理原文要点）**：F62（把三个 shorebird 格从 `unknown` 翻成 `gap`、
+动相位棘轮与 `parity_matrix.tsv` 的 na/unknown/gap 计数）压在 F55 过证伪上；
+若这次修补只是化妆，F62 就会在一件仍然不能变红的仪器上动棘轮。
+
+### 本轮的处置：只消队列，不关卡
+
+- ✅ `.loop/UNREVIEWED_FIX` 里 F55 那一行**已删**（判决行含 `F55` + `SURVIVES` + `(fix)`，
+  本轮派发 1 个新鲜 opus 子代理，非做这件事的那个代理）。
+- 🔴 **F55 仍是 `open`，F62 仍不许动棘轮。** 理由是程序性的，不是对上面结论的怀疑：
+  **这一 pass 的派发词里白纸黑字写着「你审的是修补丁，不是卡片 F55 本身」**，
+  用一次自我声明不审卡片的 pass 去关那张卡，正是契约五之四点名的那种「一个词同时指两种构造」
+  （F35 让本项目最大缺口作废的同一个坑）。关 F55 需要一次**针对卡片**的 pass。
+- 🔴 **下一轮该做的两件事，优先级排好**：
+  (1) 先把上面第 2、3 点写进 `cards.tsv` 的 F55 判据栏 ——
+      现在那一栏把 INV-COUNT / INV-FIELDGAP 与 INV-MULTISET 并列成四条独立不变量，
+      **实测它们是一条蕴含链**，措辞高估了检出力；INV-REPARSE 只比长度不比值这一点也必须写上。
+  (2) 再派一次**针对卡片 F55** 的 pass，强制项就是上面那条 STILL OPEN 的 prefix 语料
+      —— 它是目前唯一能推翻 2268 的测试，而且代理已经把命令写好了。
+- ⚠️ **Pass 9 那条 STILL OPEN 仍然悬着**（拆开 gen_snapshot 与 analyze_snapshot 两个变量，
+  交叉测试被快照版本 hash 挡死 rc=255）。本轮没有碰它，**不要因为今天这个绿判决就以为它没了**。
+
+**轮末记账（2026-09-14 本轮）**：任务 = 消 `.loop/UNREVIEWED_FIX` 里 F55 那一项 ·
+判据结果 = **SURVIVES (fix)，队列已清，卡片不关** · 改动文件 = `memo.md` + `.loop/UNREVIEWED_FIX` ·
+派发 = **1 个子代理**（opus 证伪 pass，17 次调用，88994 tokens）· 研究树未动（HEAD 仍 `dba0841`，
+`git status --porcelain` 只有既有的未跟踪文件）· `loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。
