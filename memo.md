@@ -3694,6 +3694,10 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
 ### 心跳 2026-09-14T15:53:08Z —— 本轮任务：F67（`pool_seen` 单侧去重 / `self_pp` 有序 multiset）
 
 **本轮结论（F67，2026-09-15）：答案是 NO，卡转 `built`。**
+🔴 **↑ 这一行已被同轮的证伪 pass 判 FALSIFIED，不要引用。** 读数全部属实且可复现，
+**归因是错的**：那 2 个缺口是 **gen_snapshot 的代码生成差异，不是遍历差异**。
+把输入控制住之后读数是 **0 missing / 0 extra / 0 ordered**，即**卡的 YES 一侧**。
+详见本节末「证伪 pass」。**卡仍是 `built`，未关。**
 
 去掉 `ComputeShorebirdCodeFacts` 里的 `pool_seen` 去重之后，`self_pp` 的读数：
 
@@ -3716,9 +3720,79 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
 `phase_gate.sh` rc=0、`cards_check.sh` rc=0、`parity_matrix.sh` 59 cells / 0 unrun / 3 blocked
 （unknown=24 gap=0 structural=0）⇒ **棘轮未被动**。
 
-**下一轮**：
-1. **F67 欠一次新鲜代理的证伪 pass**（`built` ≠ `closed`）。最该攻的是：
-   我们把 `self_pp` 的「有序」量到了，但**没有量 `subgraph_pp`**——
-   `subgraph_pp` 今天仍少 44 槽且从未在去重维度上被拆过，
-   而它才是覆盖整个 subgraph 遍历的那一列。
-2. **F49**（仍 `built`、从未过 pass）。
+---
+
+#### 证伪 pass（F67，2026-09-15，新鲜 Opus，42 次调用）—— **VERDICT: FALSIFIED**
+
+**读数没问题，归因有问题。** 七条攻击里 1 / 5 / 6 全部站住：检查**能**打印 YES
+（把 theirs 复制到两侧，实测 `missing=0 extra=0 ordered_mismatch_fns=0` ⇒ YES 分支可达，
+不是只会报红的坏尺）；四个扰动由 pass **自己重跑**、逐个复现（删→missing 2→3、
+复制→extra 0→1、改值→两个都动、仅换序→ordered 2→3 而 missing/extra 不动）；
+`d9f2db2a646` 那句「默认 1，不改输出」**经独立重建证实**（self_pp 1969/6294 一致，
+JSON 只差 ASLR 地址，而同一个二进制跑两次也差这个）。
+
+🔑 **真缺陷在第 2 条攻击：对拍的两个输入不是同一份代码，而 harness 从不 cmp、也从不披露。**
+
+```
+cmp out_pm/as.prog.ours.so out_pm/as.prog.theirs.so   # DIFFER: 1928488 vs 1928496 字节
+```
+
+⇒ 「ours-vs-theirs」这一格里**同时有两个自变量**（两个 analyze_snapshot ＋ 两份快照），
+所以它**在原理上分不开「走法不同」和「代码不同」**。
+harness 自己写的「为什么这个检查能变红」只点了前一个变量，**把更大的那个漏掉了**。
+
+**把输入控制住之后，结论翻面**：按「两侧被分析的机器码是否逐字节相同」给函数分区
+（用 `index_in_entries`→`offset`+`size` 从两个 `.so` 各切一段比对）——
+
+> **`self_pp` 在 776/776 个「代码逐字节相同」的函数上有序全等**（hello 320 + prog 456），
+> **2 处不等全部落在代码本就不同的函数里**。
+
+那 2 个具名的是 `__Json{String,Utf8}Parser&…&_ChunkedJsonParser.parseNumber`：
+ours 2628/2352 字节 vs theirs 2668/2392，**只共享 32 字节前缀**、58–60 个指令 hunk 不同、
+**他们多 10 条指令**；而 prog 里尺寸有差的函数**总共只有 4 个**，这俩占其二。
+
+**而且单一成因把残差在每个深度上都解释干净、零剩余**：整个短缺就是**池索引 1332（+Infinity）**
+—— 深度 0 少 2 槽，转递到 44 个调用者身上少 44 槽。pass 顺手补上了上一轮没量的那一列：
+
+| 列 | theirs | ours | missing | extra | hello |
+|---|---|---|---|---|---|
+| `subgraph_pp` | 196985 | 196941 | **44** | 0 | **21375/21375 完美** |
+
+**44 个缺失槽全是同一个索引 1332。** 池条目 1332 两侧**完全相同**
+（`{"index":1332,"offset":10672,"code":"0x7ff0000000000000"}`，两池均 3849 条），
+且我们在别处照样输出 1332（prog 1 次、hello 2 次）⇒ **不是解码不了，是那段代码里根本没有它**。
+
+🔴 **因此我们手里其实是一个真缺口，只是它被归错了档**：
+**我们的 gen_snapshot 给 `parseNumber` 生成的代码少了那个 +Infinity 池加载**。
+这是**代码生成**的缺口，现在却以「analyze_snapshot 遍历缺陷」的名义**记在三个地方**——
+SDK 源码注释 `analyze_snapshot_api_impl.cc:1085-1090`、`cards.tsv:63`、以及上面那段结论。
+**下一轮的第一件事是把这三处改对**，不是接着攻遍历。
+
+**未被推翻的两项**（默认翻到去重 OFF 是对的，不要回退）：
+`12170942bad` 的默认值翻转，以及 `diff_units.sh shorebird` **41344 → 39425**（pass 复跑重印过）。
+
+**真正仍未证的东西比上一轮声称的更弱，也更准**：
+`self_pp`/`subgraph_pp` 全等钉住的是**池步**，**钉不住非池步（raw/branch/dispatch）之间的排序**；
+另有 **3818 个代码有差的函数虽然也全等，但它们没有被输入控制**。
+
+⚠️ 顺带证伪一条 harness 注释：**hello 与 base_dd 的 `.so` 并非逐字节相同**
+（相同的是它们的 `.shorebird` 输出，且要除开 `snapshot_data`）。
+「独立 fixture 数 = 2」这个结论**在输出层面成立、在输入层面不成立**，本轮新加的那行措辞要照此限定。
+
+⚠️ `nc3_f66_*` / `nc3_f67_*` **都没有接进 `verify_all.sh`**（`grep -n nc3_f6 verify_all.sh` 无命中）
+⇒ 这两轮的测量**不在任何闸门之下**，下次谁改坏了不会有人知道。
+
+**COST OF BEING WRONG（pass 原文）**：F62（把该格改判 `gap` 并动棘轮）、F55 剩下的限定、
+以及 24 个 `unknown` 格里有没有能关的，**全都压在「这个 NO 到底是走法差异还是代码生成差异」上面**。
+
+---
+
+**下一轮（按此优先级）**：
+1. **把 F67 的归因改对**（三处：SDK 源码注释 `:1085-1090`、`cards.tsv:63`、本节结论），
+   并把「`parseNumber` 少一个 +Infinity 池加载」立成一张**代码生成**的新卡——
+   它是本轮唯一捞到的真缺口，而且它现在挂错了科室。
+2. **F67 仍 `built`**，重新攻的对象是**输入受控之后**的那个 YES：
+   判据要变成「在代码逐字节相同的函数上比」，并把这条写进 harness，
+   否则下一轮还会掉进同一个双自变量的坑。
+3. **把 `nc3_f66_*` / `nc3_f67_*` 接进 `verify_all.sh`**（`EXPECTED_CHECKS` 随之 +2）。
+4. **F49**（仍 `built`、从未过 pass）。
