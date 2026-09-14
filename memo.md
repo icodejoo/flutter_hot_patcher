@@ -2791,3 +2791,39 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 **Pass 9 的 STILL OPEN（原文）**：把 gen_snapshot 与 analyze_snapshot 这两个变量拆开。交叉测试被 snapshot version hash 挡死（实测 rc=255），唯一可行路径是让两侧 gen_snapshot 产出 version-hash 兼容的快照（或用 `-Dsdk_hash` 对齐）后，跑 `THEIR_AS --shorebird ours.so`：若他们的分析器在**我们的**快照上同样只吐出那个小集合，则这 2268 个 slot 是 gen_snapshot 侧的内容差，`--shorebird` 这三格的 `gap` 归因就是错的。
 
 **轮末记账（2026-09-14 本轮）**：任务 = 消 `.loop/UNREVIEWED_FIX` 里 F55 那一项 · 判据结果 = **PARTIAL (fix)，队列不清，卡不关** · 改动文件 = `evidence_shorebird_components.sh` / `cards.tsv`（研究树 6e1ff86，从 stash 救回）+ `memo.md`（4318972）· 派发 = 2 个子代理（haiku 救援 14 次调用 / opus 证伪 pass 21 次调用）· `loop-rescue` stash 由 3 个降为 **2 个**（stash@{0} 已 pop 并提交，剩下的两个是 2026-09-09 的旧账）。
+
+🔴 **本轮撞上一次「救援 stash 被静默清空」（2026-09-14，原因未定，已恢复）。**
+`refs/stash` 连同 `.git/logs/refs/stash` **整个消失**，三条 loop-rescue stash 一次全没。
+**已恢复，没有丢任何东西**：六个 loop-rescue 提交对象全在 odb 里
+（`git cat-file --batch-all-objects` 扫 3093 个 commit 全部找到），用
+`git stash store -m <原 message> <sha>` 把两条未结的按原顺序放回：
+`stash@{0}` = `e448766` loop-rescue 2026-09-09T13:00:19 round-50544（1 file, 15+/15−）·
+`stash@{1}` = `b1cd8c3` loop-rescue 2026-09-09T11:13:01 round-30703（1 file, 8+/9−）。
+第三条 `99f2047`（round-60348）是本轮正常 pop 掉的，已落成 6e1ff86。
+
+**已排除的假设（逐条实测，不是推测）**：
+1. **两个子代理都不是**：救援代理只跑过 `git stash pop 'stash@{0}'` 一条含 stash 的命令
+   （drop/clear/update-ref -d/reflog expire/gc 全 no）；证伪 pass 代理 **一条含 stash 的命令都没跑过**，
+   全部扰动都在 `/tmp` 的副本上做（`git diff --stat` 实测研究树与 HEAD 零差异）。
+2. **`git stash pop` 本身不是**：在 `/tmp` 搭了同构 scratch 仓（主树 + linked worktree，
+   两条 `stash create`+`store`、一条 `git stash`）跑同一条命令，**两种调用形式各跑一次**
+   —— 带 `command` 前缀（绕开 RTK hook）与不带前缀（走 RTK 重写，与救援代理写法逐字相同）
+   —— **两次剩余两条 stash 都完好，`refs/stash` 仍在**（git 2.53.0）。
+3. **不是并发轮次**：`rounds.log` 实测本轮 18:45:01 `round start`，其后每次 tick 都是
+   `skip: round already running (pid 64505)`，没有第二个轮次跑过。
+4. **不是 wip 快照器**：`wip_snapshot.sh` 的 `update-ref -d` 只作用于 `refs/wip/`（:127）。
+5. **不是激进 gc 配置**：`git config --get-regexp '^(gc|core\.logallrefupdates)'` 只有
+   `core.logallrefupdates true`，无任何 `gc.reflogExpire*`；`.git/gc.log` 不存在。
+
+🔑 **时间窗是机器记下来的，不靠回忆**：`rounds.log` 18:45:01 打印
+`STASH DEBT: ... holds 3 un-popped stash(es)` ⇒ 三条在轮次开始时确实都在。
+⇒ **它们死在本轮之内，而本轮跑过的每一条含 stash 的命令都已被复现为无害。原因仍未定。**
+
+⚠️ **为什么这条必须留着**：`stash` 是这个循环**唯一**的未提交工作安全网
+（契约六之二、六之三整两节都压在它上面），而它这次是**无声**消失的 ——
+`git stash list` 返回空与「本来就没有 stash」在磁盘上一模一样，
+正是本项目反复吃亏的那种假绿形状。
+**下一个该做的测试**：给 `run_round.sh` 的轮末闸门加一条 —— 把轮首那句
+`STASH DEBT: N un-popped stash(es)` 的 N 记下来，轮末再数一次，
+**N 减少且本轮没有任何 `stash pop` 成功输出时报警**。
+（判据必须是「数目对不对」，不是「stash list 跑没跑通」。）
