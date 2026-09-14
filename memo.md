@@ -1425,6 +1425,27 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
+- [ ] **F66：`DecodeDispatchCall` 的两种未解码派发头部（`movz/movk` 与逻辑立即数）**
+      （`open`，2026-09-14 立 —— 规则 0 的正面工作，不是循环机械）
+      **来历**：上一轮 memo 末尾「下一轮两件事」第 1 优先级；同时它是**能推翻 `real_gap=2268` 的那个测试**。
+      **现状**：`runtime/vm/analyze_snapshot_api_impl.cc` 的 `DecodeDispatchCall` 认四种派发头部，
+      其中两种（`movz{,+movk} x17 ; add lr,x0,x17` 与 `<logical imm> x17 ; add lr,x0,x17`）
+      的立即数**没有重建**，源码里写着 `*selector_offset = kNoSelector`（即 -1）
+      并注明「reconstructing it is its own change with its own negative control」——**这张卡就是那个 change**。
+      **判据**（实测数，不是估计）：重建 `ProductSimARM64` 后重跑
+      `./parity_matrix.sh --reuse` + `./evidence_shorebird_components.sh` ⇒
+      **`REAL GAP` 恰好落到 4**（今天是 2268；上一轮已点名 2264 有机制、4 没有 ——
+      pool index 1332 缺在 prog 的 fn#1580 / fn#1633 的 `self_pp`/`subgraph_pp`，是第二种未解码的池访问形式）。
+      **落在别处就说明那个 60/60 谓词只是本语料的巧合**，要如实上报落点并说明差额去哪了。
+      **负控制**（⚠️ 卡片明写：涉及 ARM64 立即数重构，**先写负控制再动代码**）：
+      ① 对新解码器的**单元级**控制：给它一组已知 `movz/movk` 与逻辑立即数编码（含 `movk` 的 hw 移位、
+        逻辑立即数的 N/immr/imms 三元组边界），**故意把一位翻错 ⇒ 必须解出不同的值**；
+      ② 端到端控制：把新解码出的 selector **强行改回 `kNoSelector`** ⇒ `REAL GAP` 必须回到 2268
+        （证明这次下降确实由这段解码承重，不是被别的改动或重建顺手带下去的）。
+      ⚠️ **不许碰 `ProductARM64`**：本矩阵两侧都是 `ProductSimARM64`（`parity_matrix.sh:26`）。
+
+---
+
 - [ ] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
       （`built`，2026-09-14 立并当轮实现，未经证伪 pass）
       **背景**：F55 证伪 pass 的缺陷 1 —— `ShorebirdCallGraph` 与 `ShorebirdSubgraphHashes`
@@ -3344,3 +3365,19 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
    先验：我们全语料只发出 58 个 distinct selector 值里的 **33** 个，52 个缺失 (field,value) 对里
    **50** 个是我们在任何地方都没发过的值。
 2. **F65**（仪器卫生，不推进 dart-sdk，排在后面）。
+
+💓 **心跳 2026-09-14 22:1x**（新一轮开始）：先结 `.loop/UNREVIEWED_FIX` 的账，
+再做上一轮 memo 末尾点名的第 1 优先级 = `DecodeDispatchCall` 的 selector 解码（规则 0 正面工作）。
+
+**结账（本轮第一件事）**：`.loop/UNREVIEWED_FIX` 里那一项**第二次**判定为**不必再审并删行**。
+这是上一轮记过的那个新形态误报**原样复发**（本 memo 3300-3302 行）：闸门看见
+「该卡判 PARTIAL」+「本轮有提交在标题里点名它」就推断有补丁，而 `60c619e` 实测
+`--stat` = `memo.md | 15 +++`，**0 行代码**，正是上一轮记录那次删行的 memo 提交本身。
+⇒ 闸门把「上一轮删这一行的动作」当成了「上一轮打了个补丁」，于是把同一项塞回队列。
+**真实情况**：那两处缺陷从未被就地修，而是按契约五之四的例外条款立成了 **F64**；
+F64 的修补丁 `1970d10`（研究树，`git merge-base --is-ancestor 1970d10 HEAD` rc=0）
+已由一个新鲜 Opus 子代理跑过证伪 pass 判 **SURVIVES**（22 次调用，逐字 `STILL OPEN` 已抄进 F64 卡）。
+⇒ 契约给的删除理由「已被别的卡取代」成立，且那张卡的补丁**已经被审过了**。
+🔴 **给闸门的一条待修（不立卡，记在这里）**：本项目已知缺陷「不问那条提交改了什么」
+现在有了一个**可自我复制**的形态 —— 只要删行动作本身要写进 memo 并在标题点名，
+下一轮就会再入队一次。修法候选：入队前要求那条提交 `--stat` 里有**非 memo.md 的文件**。
