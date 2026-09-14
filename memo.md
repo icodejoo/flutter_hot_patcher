@@ -4026,3 +4026,29 @@ OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 
 `nc5_f68_x27_ref_decode.sh` rc=0、`cards_check.sh` rc=0。
 **没有重建、没有跑 `verify_all.sh`、棘轮未动。**
 ⚠️ `nc5` **刻意没有接进 `verify_all.sh`**（那是单独排队的一项，和 `nc3_f66_*`/`nc3_f67_*` 欠的是同一笔）。
+
+**F68 证伪 pass VERDICT: FALSIFIED**（新鲜 Opus，36 次调用，审 `eeb00da` / `105fafc4a1b` / `ed023ba`）
+⇒ **F68 不关**，整张卡按上面的结论改写成「池形式固定跳 3 个字」，仍 `open`。
+**同一处测量已被错归两次**：遍历 → 代码生成 → 遍历（但这次点到了具体的解码器行）。
+第一次错在「两个自变量」，第二次错在「拿一个按代码相等定义的分区去回答走法问题——
+那个分区按构造恰好排除了短缺所在的那两个函数」。
+🔑 **可复用的教训**：**当你为了控制变量而分区时，先问这个分区是不是把现象本身排除掉了。**
+776/776 那个漂亮读数为真，但它**不可能**包含 offender —— 它们正是代码不同的那两个。
+
+**本轮修补丁（`274554f9bb3` / `d2db7ec` / `08af3a2`）自己尚未经审** ——
+它晚于判决 `3ff3ebe`（00:44:42），是契约要的那个对象，已按规则记进 `.loop/UNREVIEWED_FIX`。
+
+**轮末**：轮次 2026-09-15T01:xx / 任务 = 结 F67 队列的账 + 改对归因 + 立 F68 /
+判据 = `nc4_f68_pool_skip_1332.sh` rc=0（两条负控制变红并还原）、`nc5_f68_x27_ref_decode.sh` rc=0、
+`cards_check.sh` rc=0，未重建、未跑 `verify_all.sh`、棘轮未动 /
+改动 = SDK `analyze_snapshot_api_impl.cc`（仅注释）、研究树 `cards.tsv` + `nc4_f68_pool_skip_1332.sh`
+（自 `nc4_f68_codegen_pool_1332.sh` 改名）+ `nc5_f68_x27_ref_decode.sh`、状态树 `memo.md` /
+提交 = `274554f9bb3` · `d2db7ec` · `08af3a2`（前置 `ed023ba` / `eeb00da` / `105fafc4a1b`）。
+
+**下一轮（按此优先级）**：
+1. **F68 修补丁的证伪 pass**（`.loop/UNREVIEWED_FIX` 里那一项，这次是真账不是误报）。
+2. **F68 本体**：改 `analyze_snapshot_api_impl.cc` 的固定 3 字跳，重建 `ProductSimARM64`，
+   判据与负控制已写在卡上。这是规则 0 的正面工作。
+3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` 接进 `verify_all.sh`**（`EXPECTED_CHECKS` 随之加）。
+4. **F49**（「这道闸门」那张卡，仍 `built`、从未过 pass；本轮是它第四次在生产里误报，
+   修法候选已两次写下、两次没人做）。
