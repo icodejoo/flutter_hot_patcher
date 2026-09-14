@@ -29,7 +29,8 @@
 **当前状态（2026-09-11 实测）**：矩阵 `59 cells, 0 unrun, 3 blocked`，
 **na=35 / structural=0 / unknown=24 / gap=0**（本行四个数是 2026-09-11 直接数 `parity_matrix.tsv`
 得到的，`phase_gate.expected` 与之一致，研究树 `b0a78c9`）。
-`verify_all.sh` **30 ran / 0 failed** —— 本次实测全绿（2026-09-11，研究树 `a36bbb3`）。
+`verify_all.sh` **35 ran / 0 failed** —— 本次实测全绿（2026-09-14，研究树 `edc411d`；
+`EXPECTED_CHECKS` 已是 **35**，此前本行写的 30 是 2026-09-11 的读数，已过期）。
 - 判据 1 ✅ · 判据 3 ✅ · 判据 2 🔴 **未满足：24 格 unknown** ⇒ **这一阶段没有结束。**
 
 🟢 **F61 已闭环关闭（研究树 `b0a78c9` + `f3ce840`，2026-09-11 Antigravity）**：
@@ -63,7 +64,7 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 **「DD 派发 他们 92 / 我们 0」这个最大缺口因此作废**（F35，研究树 `6026011`）。
 
 🔴 **待办以 `memo.md` 为准，不是本文件。** 当前开放卡片（2026-09-14 实测，
-判据 = `cards_check.sh` rc=0，**open+built 集合八张**）：
+判据 = `cards_check.sh` rc=0，**open+built 集合 2026-09-14 实测十张**）：
 - **SDK 本体（规则 0 的正面工作）**：**F55**（`shorebird` ×3，2026-09-14 大幅推进）· **F62**（把该格改判 `gap`，动棘轮，依赖 F55 先过证伪 pass）·
   **F63**（`built`，2026-09-14：用 kernel/IL 调用图去答 F55 的独立性反对意见）。
   🟡 **F63 的结论是 DOES-NOT-SETTLE，F55 的限定 (b) 原样保留**：kernel 图映射到
@@ -75,7 +76,14 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
   **该格已实证为 `gap` 不是 `structural`**；`subgraph_hash`+`op_subgraph_hash` 共 18304 units（26.1%）已归约。
   逐项证据、三条自报的削弱、以及两条被今天证伪的旧断言，全在 `memo.md` 的 F55 条目。
 - **循环机械（不推进 dart-sdk，排在后面）**：**F46（open）· F49 / F52 / F53 / F54（built）**
-已关闭 20 张：F36–F45、F47、F48、F50、F51、F56、F57、F58、F59、F60、F61。
+已关闭 22 张：F36–F45、F47、F48、F50、F51、F56、F57、F58、F59、F60、F61、F64、**F66**。
+🟢 **F66 已关闭（2026-09-14，第二次证伪 pass 判 SURVIVES，Opus 63 次调用）**：拆掉我们单侧的
+`selector_subgraph_seen` 去重后，`subgraph_selectors` 与他们**逐槽且有序全等**
+（prog 28701/28701、hello 3561/3561，missing=0 extra=0）⇒ 值正确性从深度 0 扩到每个 subgraph 站点；
+`diff_units.sh shorebird` **67391 → 41344**（−26047 units，38.6%，因果性由「不重建、只在产物上重加去重回到 67391」独立证明）。
+⚠️ **`REAL GAP` 在去重开/关两侧都是 4 是数学恒等**（`real_gap` 是集合差、去重保集合），**不可当佐证**。
+新开 **F67**：第三处单侧去重 `pool_seen`（`analyze_snapshot_api_impl.cc:1266`，喂 `self_pp`）在任何地方都没被披露，
+且 F66 只证了「值对」、没证「遍历走的是同一条路」。
 ⚠️ **`built` 不是 `closed`**：实现完成且自测通过，**但没有新鲜代理审过**。五张 built 卡欠的都是这一步。
 ⚠️ **F60/F59/F56/F57/F58 的关闭走的是卡里第三条路**（「留 unknown，把测量记下来」），**不是证明了那些格是 structural**。
 

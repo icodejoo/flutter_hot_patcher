@@ -1425,7 +1425,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F66：`DecodeDispatchCall` 的两种未解码派发头部（`movz/movk` 与逻辑立即数）**
+- [x] **F66：`DecodeDispatchCall` 的两种未解码派发头部（`movz/movk` 与逻辑立即数）**
       （`open`，2026-09-14 立 —— 规则 0 的正面工作，不是循环机械）
       **来历**：上一轮 memo 末尾「下一轮两件事」第 1 优先级；同时它是**能推翻 `real_gap=2268` 的那个测试**。
       **现状**：`runtime/vm/analyze_snapshot_api_impl.cc` 的 `DecodeDispatchCall` 认四种派发头部，
@@ -1502,10 +1502,98 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       > are right is depth-0 (`self_selectors`, 1465 slots), and "GAP -> EQUAL" on the 32262-slot field
       > rests on our dedup rather than on our decode. My ordered-equality evidence covers depth 0 only.
 
-      **⇒ 本卡保持 `open`。关掉它还缺三样**：① 把 (ii)(iii) 两处措辞订正落到 harness 的输出里
+      **（历史：该 PARTIAL 当时写下「本卡保持 `open`，关掉它还缺三样」）**：① 把 (ii)(iii) 两处措辞订正落到 harness 的输出里
       （而不是只订正在 memo 上 —— 五之三那条「订正要写在卡片本体」的同构）；
       ② 上面那条 STILL OPEN 的去重实验；③ NC2 的时序前置条件已不可追补，
       **只能如实记着**（它是一条流程缺陷，不是结论缺陷）。
+
+      🟢 **三件欠账已全部结清，第二次证伪 pass 判 SURVIVES ⇒ F66 关闭（2026-09-14）。**
+      ① STILL OPEN 那条去重实验**已做并给出肯定答案**：拆掉 `selector_subgraph_seen` 后
+      我们的 `subgraph_selectors` 与他们**逐槽全等**——prog **28701/28701 槽 / 3216/3216 函数**、
+      hello **3561/3561 槽 / 1380/1380 函数**，`missing=0 extra=0`，**有序相等也成立**（不只是 multiset）。
+      去重开着时的对照：prog 只发 8536/28701（2257/3216 函数）、hello 1334/3561（1184/1380）。
+      ⇒ **新解码在每个 subgraph 站点上也是对的**，值正确性不再只到深度 0。
+      默认已翻成不去重（SDK `193cf8e5228` 加开关 + `b5fa6a93497` 翻默认），旧状态仍可由开关到达。
+      **这一格自己的度量：`./diff_units.sh shorebird` UNITS 67391 → 41344**（关掉 26047，38.6%）。
+      ② (ii)(iii) 两处措辞订正**已落进 harness 的输出**（研究树 `e96456f`）：
+      `test_arm64_decode.sh` 现逐字打印 `BITFLIP flips=459 changed_value=447 REFUSED=12 unchanged=0 exempt=39`；
+      `evidence_shorebird_components.sh` 现在对每个 `[EQUAL]` 标记打印它的成立依据
+      （单侧去重白送的会打 `ONE-SIDED ... Do not quote this as an identity`）。
+      ③ NC2 的时序前置条件不可追补，**如实记着**：它是流程缺陷，不是结论缺陷。
+
+      🟢 **F66 第二次证伪 pass VERDICT: SURVIVES（2026-09-14，Opus，63 次调用，审 `b5fa6a93497` / `dcb095e` / `e96456f`）。**
+      **强制项（「让这个比较变红」）它做了八次、全部成功，粒度到 32262 槽里的 1 槽**：
+      删 1 槽 ⇒ `missing=1`；复制 1 槽 ⇒ `extra=1`；改 1 个值 ⇒ `missing=1 extra=1`；
+      **只交换顺序 ⇒ multiset 仍 0/0 而有序检验 3215/3216**（⇒ 有序检验严格更强，且被实证）；
+      真重建的 NC：把 `F66_DECODE_DISPATCH_IMMEDIATES` 置 0、`ninja` rc=0、二进制 sha 真的动
+      ⇒ prog 掉到 22182/28701（missing 6519），还原后 sha 逐字回到 `aa570504`。
+      **因果性它独立验了**：把去重用 python 施加到**同一批** dedup-off 产物上、**不重建**，
+      UNITS 回到 **67391 一字不差** ⇒ 67391→41344 **100% 由去重承重**，不是重建顺手带的。
+
+      🔴 **它报四处次级缺陷（都不推翻主张，但都必须原样记住）**：
+      · **(i) 「三个 fixture」是虚的，真值是 2**：`as.hello.theirs.shorebird` 与
+        `as.base_dd.theirs.shorebird` `shasum` 逐字节相同，harness 自己就印 `fixtures=2`。
+      · **(ii) 「3216/3216 函数」约 55% 是空对空**：prog 1732/3216、hello 950/1380 两侧都是空列表；
+        **非空的是 1484/1484 与 430/430**。**承重的是槽数（28701 / 3561），不是函数数。**
+      · **(iii) F66 新解码在 prog 贡献 6519/28701 槽，在 hello 只贡献 1/3561、base_dd 0**
+        ⇒ 「扩展到每个站点」这半句**实际只压在一个 fixture 上**。
+      · **(iv) 还有第三处单侧去重，本轮没看见**：JSON 的 `self_pp` 走的是
+        `facts.pool_indices`（`analyze_snapshot_api_impl.cc:2347`），而它在 `:1266`
+        `if (pool_seen.insert(index).second)` 处去重 —— 我们 self_pp **任何函数都没有重复槽，他们有 1354 个**。
+        `self_pp` 是 `[GAP]` 字段，而新加的告警**只对 `[EQUAL]` 字段打印**⇒ **这一处在任何地方都没被披露**。
+        它的判词是：留着那两个已点名的 `[EQUAL]` 不修**是诚实的**（告警由仪器在带内打印，不是只写在散文里），
+        **漏掉第三处不是**。⇒ 已立为 **F67**。
+      · 仍可归因于「活着的单侧去重」的槽缺口：`subgraph_field_table` 14398 + `self_pp` 1681
+        + `self_field_table` 213 = **16292 槽**，约当 41344 UNITS 里的 12.7k。
+      **41344 的逐字段分解**（hello+prog）：`subgraph_field_table` ~12742 · `subgraph_hash` ~7134 ·
+      `op_subgraph_hash` ~7134 · `offset` ~3700 · `self_pp` ~1356 · `self_hash` ~588 ·
+      `self_field_table` ~155 · `subgraph_pp` 44。
+
+      🔴 **`REAL GAP` 在去重开/关两侧都是 4，这一条要读准**：`real_gap` 是**集合差**
+      （`missing = set(lt) - set(lo)`，`evidence_shorebird_components.sh:304,327`），
+      而去重是**保集合变换** ⇒ **两侧相等是数学恒等，不是佐证**。
+      证伪代理点名它「与 F60 的 `EXAMINED==UNITS` 同型」，并实测一次保集合扰动让
+      `ours_elements` 248036→248035 而 `REAL GAP` 纹丝不动。**本卡没有拿它当证据，所以是措辞问题不是假结果。**
+      （`ours_elements` 225644 → **248036**，他们 262333。）
+
+      🔑 **STILL OPEN（第二次证伪代理原文，逐字抄录，不许改写）**：
+      > The one test that could yet overturn the "right at every subgraph dispatch site"
+      > reading. What is proven is that our per-function LIST OF SELECTOR VALUES equals theirs; what is
+      > not proven is that our subgraph WALK visits the same steps. 489 functions (130 hello + 359 prog)
+      > have multiset-identical subgraph_selectors while their pool step-streams differ, and our
+      > `self_pp` is silently deduped at line 1266 so we cannot currently see whether that stream
+      > matches at all. The test: gate `pool_seen` at analyze_snapshot_api_impl.cc:1266 exactly as F66
+      > gated the selector dedup, rebuild ProductSimARM64, and ask whether undeduped `self_pp`
+      > reproduces theirs as an ordered multiset (theirs 9619 slots over hello+prog, ours currently
+      > 8263). If it does not, our selectors are correct values sitting at positions in a step stream
+      > that is not theirs — meaning the walk, not the decode, is what still has to be proven, and
+      > subgraph_selectors agreement is agreement on a projection of a differing stream.
+
+      ⚠️ **闸门读数**：`phase_gate.sh` rc=0、`parity_matrix.tsv` 逐字节未变
+      （59 cells / 0 unrun / 3 blocked，na=35 structural=0 unknown=24 gap=0）⇒ **棘轮未被动**。
+      `verify_all.sh` **35 ran / 0 failed**（`EXPECTED_CHECKS` 实测是 **35**，
+      `CLAUDE.md` 里写的 30 已过期）。
+
+---
+
+- [ ] **F67：第三处单侧去重 —— `pool_seen` / `self_pp`，以及「走的是不是同一条路」**
+      （`open`，2026-09-14 立，由 F66 第二次证伪 pass 的缺陷 (iv) + STILL OPEN 逼出来）
+      **来历**：F66 证明的是「我们每个函数的 selector **值列表**与他们相同」，
+      **没有证明我们的 subgraph 遍历走过同样的步**。489 个函数（hello 130 + prog 359）
+      `subgraph_selectors` multiset 全等而**池步流不同**。
+      **判据**：像 F66 给 selector 去重加开关一样，给 `analyze_snapshot_api_impl.cc:1266`
+      的 `pool_seen` 加开关，重建 **`ProductSimARM64`**（不是 `ProductARM64`，`parity_matrix.sh:26`），
+      问未去重的 `self_pp` 能否**以有序 multiset** 复现他们（他们 hello+prog 共 **9619 槽**，我们现在 **8263**）。
+      能 ⇒ 遍历也对，再关一批；**不能 ⇒ 我们的 selector 是「对的值坐在一条不是他们那条的步流上」**，
+      要如实把 F66 的断言范围缩到「值对、路未证」。
+      **负控制**：① 与 F66 同型 —— 扰动 1 个槽（删/复制/改值/仅换序）必须分别让
+      `missing/extra/ordered` 三个读数各自变红；② 开关置回去重 ⇒ 读数必须回到 8263。
+      **顺带必须落地的两处措辞订正（落进 harness 输出，不是只写在 memo）**：
+      · `[GAP]` 字段也要打那条 `ONE-SIDED` 告警 —— 现在只有 `[EQUAL]` 字段打，
+        所以 `self_pp` 这处单侧去重**在任何地方都没被披露**；
+      · `evidence_shorebird_components.sh` 报「所有 fixture」时要同时印出
+        **独立 fixture 数 = 2**（hello/base_dd 两侧皆逐字节相同）与**非空函数分母**
+        （prog 1484/3216、hello 430/1380 非空），免得「3216/3216」被读成 100% 的证据。
 
 ---
 
@@ -3517,3 +3605,56 @@ base_dd 被判为 hello 的逐字节拷贝而排除 ⇒ 分母是 **2 fixture / 
 `git log --format=%cI` **晚于本轮判决行落盘的时间**；负控制是造一轮真补丁（判决之后、点名该卡）必须仍然入队。
 ⚠️ **F49 正是「这道闸门」那张卡，它现在还是 `built`（实现完成、从未过 pass）** ——
 所以这三次误报不是「一个已审设施退化了」，而是**一个从未被审过的设施在生产里表现出来的样子**。
+
+## 轮次记录 2026-09-14 23:0x–23:4x（结队列账 + F66 STILL OPEN 实验 + 第二次证伪 pass ⇒ F66 关闭）
+
+**先结账** = `.loop/UNREVIEWED_FIX` 那一项（F66）判定不必再审并删行（`eb40a19`）。
+**判据是「补丁根本不存在」**：队列引的五个提交实测全部早于判决提交 `7955e2b`（22:48:05），
+三棵树判决之后零提交。**闸门连续第三次误报，第二种形态**（上一次的修法候选「要求 `--stat` 有非 memo 文件」挡不住它，
+因为那两个提交改的是 `cards.tsv`）；判别量是**时间序**，账记在 F49 名下（F49 本身仍是 `built`，从未过 pass）。
+
+**任务** = **F66 的 STILL OPEN 实验**（上一轮 memo 末尾第 1 优先级，规则 0 正面工作）：
+拆掉 `analyze_snapshot_api_impl.cc:1722` 的 `std::set selector_subgraph_seen`，重建 `ProductSimARM64`，
+问未去重的 `subgraph_selectors` 能否以 multiset 复现他们。
+
+**判据结果 = 复现，而且是有序全等**：prog **28701/28701 槽 / 3216/3216 函数**、
+hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 8536/28701 与 1334/3561。
+⇒ **新解码在每个 subgraph 站点上也是对的**。默认已翻成不去重（SDK `193cf8e5228` + `b5fa6a93497`）。
+**这一格自己的度量：`./diff_units.sh shorebird` UNITS 67391 → 41344**（−26047，38.6%）。
+`ours_elements` 225644 → 248036（他们 262333）。
+
+**F66 第二次证伪 pass VERDICT: SURVIVES**（Opus，63 次调用，审 `b5fa6a93497` / `dcb095e` / `e96456f`）
+⇒ **F66 关闭**，`STILL OPEN` 原文已逐字抄进卡片。
+**强制项（「让这个比较变红」）八次全部成功，粒度到 1 槽**；真重建 NC 把解码关掉 ⇒ prog 掉到 22182/28701，
+`ninja` rc=0、sha 真的动、还原后逐字回到 `aa570504`。
+**因果性独立验过**：不重建、只把去重用 python 重加到同一批产物上 ⇒ UNITS 回到 **67391 一字不差**。
+
+🔴 **本轮最该被下一轮记住的两句**：
+1. **`REAL GAP` 去重开/关两侧都是 4 是数学恒等，不是佐证** —— `real_gap` 是集合差、去重是保集合变换
+   （证伪代理点名「与 F60 的 `EXAMINED==UNITS` 同型」，并实测一次保集合扰动让 `ours_elements` 248036→248035
+   而 `REAL GAP` 纹丝不动）。本卡没拿它当证据，所以是措辞问题不是假结果。
+2. **「3216/3216 函数」约 55% 是空对空**（非空只有 1484/1484 与 430/430），
+   **「三个 fixture」真值是 2**（他们的 hello/base_dd 逐字节相同，harness 自己印 `fixtures=2`），
+   **F66 新解码在 hello 只贡献 1 槽、在 prog 贡献 6519 槽** ⇒ 「扩展到每个站点」实际压在一个 fixture 上。
+   **承重的是槽数，不是函数数。**
+
+**新卡 F67**（由缺陷 (iv) + STILL OPEN 逼出来，按契约五之四的例外条款立卡而不是当场修）：
+第三处单侧去重 `pool_seen`（`:1266`，经 `facts.pool_indices` 喂 `self_pp`；我们任何函数都无重复槽，他们有 1354），
+`self_pp` 是 `[GAP]` 字段而新告警只对 `[EQUAL]` 打 ⇒ **这处在任何地方都没被披露**；
+并且 F66 只证了「值对」，**没证「遍历走的是同一条路」**（489 个函数 multiset 全等而池步流不同）。
+
+**改动文件** = SDK 树 `193cf8e5228` + `b5fa6a93497`（`analyze_snapshot_api_impl.cc`）；
+研究树 `dcb095e`（`nc3_f66_dedup_multiset.sh`）+ `e96456f`（`test_arm64_decode.cc` / `evidence_shorebird_components.sh`）
++ `edc411d` + 本轮 `cards.tsv`（F66→closed、新增 F67）；状态树 `eb40a19` + 本轮 `memo.md` / `CLAUDE.md`。
+**派发 = 2 个子代理**（实现 Opus 76 次调用 / 126224 tokens；证伪 Opus 63 次调用 / 123348 tokens）。
+**闸门读数**：`verify_all.sh` **35 ran / 0 failed**（`EXPECTED_CHECKS` 是 **35**，`CLAUDE.md` 里的 30 已过期、本轮已订正）、
+`phase_gate.sh` rc=0、`cards_check.sh` rc=0、`parity_matrix.tsv` 逐字节未变
+（59 cells / 0 unrun / 3 blocked，na=35 structural=0 unknown=24 gap=0）⇒ **棘轮未被动**。
+三棵树 status 未变（研究树仍只有既有未跟踪文件）。`loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。
+
+**下一轮两件事（按此优先级）**：
+1. **F67**（规则 0 的正面工作，直接续 F66）：给 `:1266` 的 `pool_seen` 加开关、重建 `ProductSimARM64`，
+   问未去重的 `self_pp` 能否以**有序 multiset** 复现他们（他们 hello+prog 共 **9619 槽**，我们现在 **8263**）。
+   **不能 ⇒ 必须把 F66 的断言范围缩到「值对、路未证」**，那是本轮结论里唯一可能被推翻的一半。
+   顺带把 `[GAP]` 字段的 `ONE-SIDED` 告警与「独立 fixture 数 = 2 / 非空函数分母」落进 harness 输出。
+2. **F49**（它是「这道闸门」那张卡，仍 `built`、从未过 pass；本轮是它第三次在生产里误报）。
