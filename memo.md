@@ -1156,6 +1156,77 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
+- [ ] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
+      （`built`，2026-09-14 立并当轮实现，未经证伪 pass）
+      **背景**：F55 证伪 pass 的缺陷 1 —— `ShorebirdCallGraph` 与 `ShorebirdSubgraphHashes`
+      走同一个 `ShorebirdEntryContaining`、同一次扫描（`analyze_snapshot_api_impl.cc:1439`
+      的注释写明是**故意共用**），而 `evidence_shorebird_subgraph_hash.sh` 的 ELF 重建
+      **重实现的是同一个谓词** ⇒ 它证明的是 JSON 字段忠实序列化了那些边，不是 hash 走了另一条途径的图。
+      **本卡的做法**：从 `.dill` 的 kernel/IL 取调用图（`StaticInvocation` / `ConstructorInvocation` /
+      `interfaceTarget`，完全不碰机器码），经 `DDFunctionIdentity` 行映射到 `index_in_entries`，
+      跑同一个反向闭包。
+
+      🟡 **结论：DOES-NOT-SETTLE（2026-09-14 实测，脚本 `evidence_kernel_callgraph_independence.sh`，
+      接闸门第 33 项，`EXPECTED_CHECKS` 32→33）。** 独立性反对意见**没有**被答复，F55 的限定 (b) 原样保留。
+
+      · **接手的废弃工装**：`kernel_cg_tool/`（2026-09-08 为 F34 写、被 F35 推翻后弃置，未跟踪）。
+        **两个 bug 必须先修否则它什么也产不出**：① pkg/kernel 的类成员是**惰性读取**的
+        （`_setLazyLoadClass`），等外面碰 `Class.procedures` 时追踪器的「当前库起点」早已走到最后一个库
+        ⇒ hello.dill 上 **2319 个节点里 2158 个 kernel_offset 为负**，与 ddid 只对上 96/1179。
+        改成在 `readLibrary` 覆写里当场 `ensureLoaded()`。② 手写的 ~40 分支表达式 walk 会静默漏边，
+        换成 `RecursiveVisitor`。修完：负偏移 0、键冲突 0、未解析目标 0。
+        `out_f34/kernel_callgraph_v2.json` 实测与修复前的新鲜提取**逐字节相同**（即它是坏版本的产物），
+        因此**全部重新提取**，不用旧 JSON。
+      · **映射（这卡最容易出错的地方，已按要求给分数而不是假设）**：
+        `hello`/`base_dd` **1130/1380 = 81.9%**，`prog` **2575/3216 = 80.1%**。
+        未映射的 **residue = 0**，三类各自点名：无 ddid 行的 VM stub（114 / 176）、
+        alloc stub 行（是 Class 不是函数，87 / 226）、有 ddid 行但无 kernel 成员（49 / 239）。
+        第三类**只出现在两种 Kind**：`ClosureFunction`（46 / 236，`kernel_loader.cc:2300`
+        给闭包的是 `func_node_offset`，不是任何 kernel Member 的偏移）与 `InvokeFieldDispatcher`（3 / 3，VM 合成）。
+        **未映射的函数一律照常计入 obs-only，绝不丢弃**（丢弃恰好会制造被测的那个一致）。
+        ⚠️ **映射是多对一，已如实打印**：hello 1066 个 kernel 键拥有 1130 个 entry
+        （1→1008 / 2→52 / 3→6），prog 2359 拥有 2575（1→2186 / 2→130 / 3→43）；
+        隐式访问器拿的是**字段**的 `kernel_offset`（`kernel_loader.cc:2061/:2093`）。
+        因此一条 kernel 边投影成 |a|×|b| 条 index 边 —— 这会抬高 G1 的边数，是个建模选择，不能不说。
+      · **三条独立前提全部实测而非假设**：P1 ddid 的 index 空间确实是 `index_in_entries`
+        （把他们的 `analyze_snapshot --shorebird` 重跑在产 ddid 的那个 `.so` 上，`functions` 数组逐元素相等）；
+        M3 用**映射键没用到的字段**交叉验证（kernel 侧 class offset == ddid 的 `owner_class_kernel_offset`，
+        1130/1130、2575/2575）；G1 这确实是**另一张图**（mapped×mapped 上 hello 共享 703、
+        kernel-only 508、callees-only 504；prog 共享 2023 / 1554 / 1856）。
+      · **比对结果**：`pred-only 0 / obs-only 815`（hello、base_dd）与 `0 / 2089`（prog）。
+        即 kernel 闭包对该判据是**可靠但不完备**的：它预测的每一个都确实被观测到，
+        但它只够到观测集的一小部分（hello 194/1009，prog 469/2558）。
+        🔑 **单向结果不能替代那个精确匹配** ⇒ 独立性没有被建立。
+      · **那个 0 不是白捡的**：观测集本就覆盖 73–80% 的宇宙，小闭包天然容易落在里面，
+        所以每次都跑**同规模改线基线**（边数与出度不变、头端置换，5 个固定 PRNG 种子）：
+        pred-only 最好的一次也是 2（hello）/ 4（prog），真图是 0。
+      · **缺口的去向已定位、且没有被往一致的方向调**：obs-only 里 hello 76 未映射 /
+        308 映射了但 kernel 无出边 / 431 有出边但够不到种子；prog 317 / 693 / 1079。
+        `.dill` 里没有 stub、没有派发表目标、闭包另有偏移 ⇒ 承载可达性的 AOT 边在 kernel 侧无对应物。
+        **这是 kernel 图的不完备，不是判据的反例**，如实记为实测短缺。
+      · **负控制（三条，全部实跑）**：`--negctl-rewire` 置换 kernel 边头 ⇒ C1 可靠性断裂，
+        rc=1，三个 fixture 分别报 4 / 4 / 15 个预测到 `subgraph_hash` 相等的函数；
+        `--negctl-mapoff` 把映射键偏移 1 ⇒ rc=1、12 条失败，逐 Kind 点名
+        （`RegularFunction 779` 等本应必然映射的 Kind 落进「无 kernel 成员」）。
+        🔴 **这条控制在本脚本里抓到了一个自身的假绿**：偏移后覆盖率归零，
+        M3 变成 `0/0` 而**照样通过**（「`cmp` 对两个空文件答相同」那一型）。
+        已加「必然可映射的 Kind」守卫与非空守卫，控制这才真的红。
+        `--negctl-drop-unmapped`（把宇宙限制到已映射集，即派单点名的那个陷阱）**rc=0，
+        本语料上无判别力**：限制后 obs-only 仍是 739 / 739 / 1772，如实记为无力而不是记为通过。
+      · 🔴 **闸门抓到一个真 flakiness（第 31 种，本轮自产自捉）**：脚本原来把 kernel 图写进
+        **固定路径** `out_kcg/`，于是闸门跑它的同时手跑一条负控制 ⇒ 两个进程互相覆写，
+        **读到半写的 JSON**，`verify_all.sh` 报 `FAILED` 而单独跑该脚本是绿的。
+        「单独跑是绿的」正是这类问题被当成偶然而放过的原因。已改为**每次调用一个
+        `out_kcg/run.$$` 并在 EXIT 时自清**（显式设 `KWORK` 可保留中间产物供查看）。
+        修复后四种模式重测：`(none)` rc=0 · `--negctl-rewire` rc=1 · `--negctl-mapoff` rc=1 ·
+        `--negctl-drop-unmapped` rc=0。
+
+      **结论一句话**：现在可以说的是「一个不用那个谓词的图**从不给出假阳性**，
+      且这不是免费的」；**不能**说的是「`subgraph_hash` 不只是 `callees` 闭包的摘要」。
+      F55 的限定 (b) 不动。
+
+---
+
 - [x] **F61：`diff_units.sh` 的 `norm()` 污染了 7 个已关闭的二进制 flag**（`closed`，2026-09-11，研究树 `b0a78c9` + `f3ce840`）
       🟢 **2026-09-11 交付缺陷修复与闭环（Antigravity）**：
       针对 2026-09-11 11:0x 撤回关卡提出的 3 点缺陷及 1 个新缺口，全部彻底修复并在交付 commit（`b0a78c9`）上实测验证：
