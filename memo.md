@@ -1118,6 +1118,59 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **审查者的 COST OF BEING WRONG（逐字）**：若可达性的真实内容只是 4+4 个近叶子函数,
       未来某一轮会凭八个数据点**停止审视本格最大的那个桶**。
 
+      🟢 **Pass 11 —— 第一次针对【卡片】而非修补丁的证伪 pass：VERDICT SURVIVES**
+      （2026-09-14，opus，38 次调用，审的是 `8da0455`，六个研究树提交 `--is-ancestor` 全 rc=0）。
+      它审的是「这三格是 gap 不是 structural，且 real_gap=2268」这个断言本身。
+      **强制项（prefix 语料）判 (A)**：`WORK=/tmp/f55rev/prefix ./evidence_shorebird_components.sh`
+      rc=0、四条 INV 全绿、`real_gap 2268→7866` `distinct_pairs 52→648` —— 盲区如实存在，
+      **但 2268 被三条脚本之外的东西钉住**：
+      ① 代理自写的一次性聚合（`/tmp/f55rev/indep.py`，零共享代码）逐位复现 `2268 / 52`；
+      ② 52 个 pair = 25 个 selector 值 ×2 字段 + pool index 1332 ×2 字段，而**只从
+      `analyze_snapshot_api_impl.cc` 推出的谓词**（selector offset 能否写成
+      `add/sub lr,x0,#imm12{,lsl12}` 相对 `kOriginElement=4096`）把他们 60 个 selector 值
+      **60/60 分对**，0 处分歧；
+      ③ 直接扫两个 `.so` 的指令流：派发调用点 hello 332/332、prog 1133/1133 两侧相同，
+      而 `movz` / 逻辑立即数头部计数（hello 1、prog 102+75=177）**恰等于实测的
+      `self_selectors` count_gap**（hello 1、prog 177）。
+      · **攻 4 反向证伪了「其实是他们多发」这种读法**：他们的 `self_selectors` 元素总数
+        == `.so` 里真实派发调用点数（332/332、1133/1133），一个站点一个元素，不是 artifact；
+        且 3040/3040 条较短列表是他们那条的**保序子序列**（其中 2567 条至少一侧无序 ⇒
+        不是排序的副产物）—— 这比卡片主张的集合包含**更强**，是欠收集的指纹。
+      · 🟢 **顺带关掉 Pass 9 的 STILL OPEN**（它挂了两轮）：拆不开 gen_snapshot 与
+        analyze_snapshot 两个变量这件事，被**绕过去**了 —— 直接从两个 `.so` 字节流分类派发头部，
+        两侧分布**逐类相同**（hello add_sub 259 / mov 72 / movz 1；prog 631 / 75 / 325 / 102）
+        ⇒ **快照那个变量对本格贡献为零**，collector 变量因此是被隔离的。
+        （跨实现直读仍然 rc=255 `Wrong full snapshot version`，那条挂起池条目不变。）
+      · **七条负控制本轮全部现跑、无一陈旧**，rc 与计数与卡片一致；代理如实指出
+        `perturb_f55_corpus.sh` 是多变量探针，但另外三条（`--drop-function` / `--rotate-pairing`
+        / `--mutate-fields-check`）是单变量，套件整体不塌成一个混杂探针。
+      · **攻 3 的如实记录**：slot↔unit 量纲不匹配确实存在（2268 个 element-slot 对 70223 个 diff 行），
+        且 70223 的 fixture 基底是 hello 9470 + base_dd 9470 + prog 51283 ——
+        **它算进了 components 脚本自己判定为不独立而丢掉的那个 fixture**。
+        但卡片、`cards.tsv` 判据栏、memo 三处**都没有把 2268 记进 70223 的分子**，`EXAMINED` 仍是 0。
+
+      🔑 **Pass 11 的 STILL OPEN（原文照抄，不得改写）**：
+      > the 4 slots (0.18% of 2268) not covered by the dispatch-head mechanism — pool index
+      > 1332 missing from `self_pp`/`subgraph_pp` of exactly two prog functions
+      > (`__JsonStringParser&_JsonParserWithListener&…` fn#1580 and `__JsonUtf8Parser&…` fn#1633,
+      > ours self_pp len 9 vs theirs 15). That is a second, unnamed undecoded pool-access form;
+      > until it is decoded the card's "gap" label rests on 2264/2268 mechanism + 4/2268
+      > unexplained. The test that could yet overturn the headline: **implement the movz/movk and
+      > logical-immediate selector decode, rebuild, re-run, and check real_gap falls to exactly 4.**
+      > If it lands anywhere else, the 60/60 predicate was a coincidence of this corpus and 2268 is
+      > not what the card says it is.
+      > Second-order: the card counts our `std::set` dedup of `subgraph_selectors` (ours_dup 0 vs
+      > dup_theirs 22392) as *not* a gap; if those lists feed a hash, multiplicity loss is a real
+      > divergence that `real_gap` structurally cannot see.
+
+      🔴 **F55 仍然不关，理由是它自己的判据没过，不是对 Pass 11 的怀疑。**
+      本卡判据写的是「`UNEXPLAINED` 从下界变成闭合值，再**逐分量**给 locus」，
+      实测仍是 `EXAMINED 18304 of 70223 / UNEXPLAINED 51919` —— 51919 个单位没有 locus。
+      契约五之三：判据跑了没达标 = 未完成。**Pass 11 SURVIVES 的对象是「gap 不是 structural」
+      这个断言，不是本卡的关闭判据**，两者不要互相背书（这正是 F35 那个「一个词指两种构造」的坑）。
+      ✅ **但 F62 的前置条件到此满足**：它等的是「F55 那几个证据脚本先过一次证伪 pass」，
+      现在过了，而且是针对卡片的那一种。F62 可以在后续轮次动棘轮。
+
       **剩余 51919 units 的去向**：`subgraph_selectors` 28380 + `subgraph_field_table` 15824
       合计 85% —— 两者的 count_gap 大部分是他们的重复，真缺口在 selectors 那两种**未解码的派发头部**。
 
@@ -1170,6 +1223,8 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：喂一份两侧完全相同的语料 ⇒ 该格**不得**判成 `gap`；
       以及把 `phase_gate.expected` 改回 `gap=0` ⇒ `phase_gate.sh` 必须报红。
       ⚠️ 依赖 F55 那三个证据脚本先通过证伪 pass —— 拿一个未审的判决去动棘轮是本仓库撤回过两次的动作。
+      ✅ **2026-09-14：这个前置条件已满足** —— Pass 11（opus，针对卡片，审 `8da0455`）
+      对「gap 不是 structural」判 SURVIVES。F62 自此可做；F55 本身仍 open（判据未达标，见该卡）。
 
 ---
 
@@ -2923,3 +2978,56 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 判据结果 = **SURVIVES (fix)，队列已清，卡片不关** · 改动文件 = `memo.md` + `.loop/UNREVIEWED_FIX` ·
 派发 = **1 个子代理**（opus 证伪 pass，17 次调用，88994 tokens）· 研究树未动（HEAD 仍 `dba0841`，
 `git status --porcelain` 只有既有的未跟踪文件）· `loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。
+
+- 💓 心跳 2026-09-14 20:23：本轮读契约 → F55（cards.tsv 判据栏订正 + 针对卡片的证伪 pass）
+
+---
+
+## 2026-09-14 轮次记录：F55 判据栏订正 + 第一次针对卡片的证伪 pass（Pass 11）
+
+**任务**：上一轮留下的两件事，按它排的优先级做完。
+
+1. ✅ **把 Pass 10 的第 2、3 点写进 `cards.tsv` 的 F55 判据栏**（研究树 `8da0455`）。
+   那一栏原来把 INV-MULTISET / INV-COUNT / INV-FIELDGAP / INV-REPARSE 并列成
+   「四条无条件求值的不变量」，**高估了检出力**。订正后的措辞（新增第 (7) 段）说清三件事：
+   · **(7a) 四条实为两条独立信号**：MULTISET ⟹ COUNT ⟹ FIELDGAP 是一条严格蕴含链，
+     后两条永远不会单独响；实测佐证 `--shuffle-pairing` 下 COUNT 红 6914 而 FIELDGAP 仍为 0。
+     INV-MULTISET 自身的增量也薄：27576 个 triple 里只有 2031 个（7.4%）ours 侧真有重复元素。
+   · **(7b) INV-REPARSE 只比列表长度，从不比元素值**，且两个解码器读**同一份字节**
+     ⇒ 两个正确的解析器按构造必然一致，它的 mismatch 计数器只有 `--drop-function`
+     这个内存注入碰得到；只半满足 F60 那条「不同代码、同一来源」。
+     另记：`callees` 是第 7 个列表字段、不在 `FIELDS` 里，**INV-REPARSE 从不覆盖它**。
+   · **(7c) Pass 10 的 STILL OPEN 原文入栏**（prefix 语料）。
+   判据：`cards_check.sh` 0 failures（8 open / 20 closed）。**脚本一行未动，动的是记账。**
+
+2. ✅ **Pass 11：第一次针对【卡片 F55】而非修补丁的证伪 pass —— SURVIVES**
+   （opus，38 次调用，99640 tokens，审 `8da0455`）。派发词里明确写了
+   「你审的是卡片，不是那个修补丁；Pass 10 的 SURVIVES (fix) 不是对本卡的判决」。
+   强制项就是 Pass 10 那条 prefix 语料，判 **(A)**：盲区真实存在，但 2268 被**三条脚本之外**
+   的证据钉住（独立聚合逐位复现 · 只从源码推出的 imm12 谓词 60/60 分对 · `.so` 指令流计数
+   与 count_gap 逐数相等）。逐项与 STILL OPEN 原文抄在 F55 卡里。
+
+**本轮两个新结论（都不是我下的，是 Pass 11 实测出来的）**：
+- 🟢 **Pass 9 的 STILL OPEN 关掉了**（挂了两轮）：「拆不开 gen_snapshot 与 analyze_snapshot
+  两个变量」被绕过 —— 从两个 `.so` 字节流分类派发头部，两侧分布逐类相同
+  ⇒ 快照变量对本格贡献为零，collector 变量是被隔离的。跨实现直读仍 rc=255，挂起池那条不变。
+- 🔴 **多出一个未具名的缺口形态**：pool index 1332 缺在两个 prog 函数的 `self_pp`/`subgraph_pp`
+  里（fn#1580 / fn#1633，ours self_pp len 9 vs theirs 15）——**第二种未解码的池访问形式**。
+  2268 里 2264 有机制、4 没有。
+
+**下一轮的两件事（按此优先级）**：
+1. **F62 可以做了**（前置条件已满足）：把三格从 `unknown` 改判 `gap`、动 `phase_gate.expected`。
+   它自己的判据与负控制写在卡里，**改 pin 必须与分类改动在同一个提交**。
+2. **规则 0 的正面工作 + 同时是能推翻 2268 的那个测试**：在 `DecodeDispatchCall`
+   （`runtime/vm/analyze_snapshot_api_impl.cc`）实现 `movz/movk` 与逻辑立即数两种派发头部的
+   selector 解码，重建 `ProductSimARM64`（**不是 `ProductARM64`**，`parity_matrix.sh:26`），
+   重跑 ⇒ **判据是 `real_gap` 恰好落到 4**。落在别处就说明那个 60/60 谓词只是本语料的巧合。
+   ⚠️ 涉及 ARM64 立即数重构，**先写负控制再动代码**。
+
+**轮末记账（2026-09-14 20:2x–21:0x）**：任务 = ①cards.tsv F55 判据栏订正 ②针对卡片的 F55 证伪 pass ·
+判据结果 = `cards_check.sh` 0 failures / **Pass 11 VERDICT SURVIVES**（F55 **仍 open**，
+因为本卡自己的判据 `UNEXPLAINED` 逐分量给 locus 未达标：实测 `18304 of 70223 / UNEXPLAINED 51919`）·
+改动文件 = `spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `8da0455`）+ `memo.md` ·
+派发 = **1 个子代理**（opus 证伪 pass，38 次调用，99640 tokens）·
+三棵树 status 未变（研究树仍只有既有未跟踪文件，代理全部工作在 `/tmp/f55rev/`）·
+`loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）· `.loop/UNREVIEWED_FIX` 空（本轮无 FALSIFIED/PARTIAL）。
