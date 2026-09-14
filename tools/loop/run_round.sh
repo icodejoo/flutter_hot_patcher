@@ -53,7 +53,21 @@ LOG=$STATE/rounds.log
 # hook and tools/loop/hooks/deny-destructive.sh, neither of which existed when
 # acceptEdits was chosen, plus the snapshot taken below.
 PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
-MODEL=${FHP_LOOP_MODEL:-}
+# Empty here meant "no --model flag", i.e. whatever the CLI happened to default
+# to -- a choice nobody made, on the component with this project's worst measured
+# defect rate (12 instrument defects in the 10 days from 2026-09-04).
+#
+# Opus, because the comparison is on the record rather than assumed. On the same
+# card, F60: a Haiku pass found the wrong denominator in 32 tool calls; an Opus
+# pass found that the check could not fail at all, in 18. Fewer calls, not more
+# -- which matters because this loop's spend is roughly N x (entry + exit) / 2,
+# quadratic in call count, so converging earlier is not the expensive option.
+# See tools/loop/prompts/falsify.md for the full table.
+#
+# Still overridable: FHP_LOOP_MODEL=... wins. Set as a default rather than
+# exported into ralph.sh's environment on purpose -- an export dies at the next
+# restart, and "the setting was lost on restart" is already on this repo's record.
+MODEL=${FHP_LOOP_MODEL:-claude-opus-5}
 
 # Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
 # clear the slowest of them by a wide margin or it becomes the thing that breaks
