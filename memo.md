@@ -4052,3 +4052,164 @@ OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 
 3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` 接进 `verify_all.sh`**（`EXPECTED_CHECKS` 随之加）。
 4. **F49**（「这道闸门」那张卡，仍 `built`、从未过 pass；本轮是它第四次在生产里误报，
    修法候选已两次写下、两次没人做）。
+
+---
+
+## 心跳 2026-09-15T01:32 —— 轮次开始
+
+本轮任务 = `.loop/UNREVIEWED_FIX` 里的 **F68 修补丁证伪 pass**（队列第一项，契约五之四）。
+派发前状态：三棵树干净（仅既有 untracked），`.loop/PAUSE` 不存在，`RESCUED` 两笔是 2026-09-09 遗留、非本轮对象。
+
+#### F68 修补丁的证伪 pass（2026-09-15，新鲜 Opus，29 次调用，94k token）
+
+**F68 修补丁 VERDICT: SURVIVES (fix)** —— 它自己构造了 `nc5` 缺席的扰动控制
+（在 prog/ours 非 offender 函数 `fn#33 _Future.then` 上删掉一条 `self_pp` 条目），
+`REFS IN CODE BUT NOT IN self_pp` 由 2 动到 3、`WITHIN-2-WORDS` 正确地不动，还原后逐字节复现基线
+⇒ 那两个计数器**各自独立、都对输入有反应、都不是常量**。
+
+**它另外跑出来的、上一轮没有的三条实测**（引用请引这里）：
+1. **把「哪一条指令不同」钉死了**：两个 offender 站点的原始指令字
+   ours `b6f80065 fd550f60 14000002 fd54db60 a9458b40 91004000`、
+   theirs `d503201f d503201f 14000004 fd54db60 d503201f d503201f`
+   ⇒ **唯一的差异是 `d503201f`（NOP）**：他们每条池加载都补齐到 3 个字，我们没有
+   （ours 与上一条引用相距 2 个字，theirs 4 个）。**「落在 2 个字以内」是他们补 NOP 的后果，不是相关性。**
+2. **补上了 `nc5` 与 SDK 解码器「不是同一个算法」这一步**（`nc5` 自己实现了一个解码器，
+   SDK 的 `DecodePoolReference`（`:902-975`）还处理 add-hi/lo、movz/movk 寄存器偏移、LDP 与 store）：
+   它**照 SDK 的真实规则**（`i += 1 + (3 - used)`，即跳到 k+3）在我们自己的字节上重放，
+   prog/ours 由 3211/3216 变成 **3213/3216，精确修好那两条，其余三侧一字不动**。
+3. **`nc5` 从没考过判据 (b) 说的那个「精确对上」**：它只打两个各自为 2 的总数。
+   pass 自己做了恒等检查 —— offender 集与 within-2-words 集**是同一对**
+   `{(1580,364),(1633,295)}`、距离恰好 2。
+
+**它复核并确认的**：`274554f9bb3` 确为**只动注释**（`--numstat` 68/12，剔除注释与空行后
+非注释改动行 **0**）；`:1350-1383` 内第 **1377** 行确有 `int32_t ahead = 3 - used;`；
+`--negctl` 两条控制读数与上一轮所报完全一致（(a) 776→775 / 3820→3821；
+(b) `NOT-ORDERED-EQUAL 1` 且 **rc=1**，还原后 776/776、rc=0），且 (b) **不是**恒等变换、
+**确实**碰到了修补丁改动的那部分（`self_pp` 有序比较与新退出码）；
+残差实测为真 0（`self_pp` missing 2 全是 1332、`subgraph_pp` missing 44 全是 1332，`extra` 两侧皆 0），
+`nc5` 复现不掉的 3+3 个函数因 `extra=0` 只可能解出**更少**（远形式／非 x27 基址），**造不出 offender**；
+**不需要重建**已被实测（今日 `ProductSimARM64` 的 `analyze_snapshot` 重跑 `as.prog.ours.so`，
+`functions` 数组与已提交产物逐字节相同，只有 `snapshot_data` 里的 ASLR 地址不同）。
+
+🔴 **STILL OPEN（reviewer 原文，逐字抄录，契约要求）**：
+
+> whether the fixed 3-word charge is **our** defect at all. This file's own comment at :1358-1366
+> says the skip was transcribed from THEIR binary — "0x100197434 `mov w9,#3; sub w9,w9,w14` skips
+> 3-n instructions forward, so the form owns exactly kObjectPoolLoadStoreMinInstructionCount words".
+> If that reading is right, their decoder has the identical skip and never trips it only because
+> their gen_snapshot pads pool loads with NOPs (measured above: `d503201f d503201f`). Then our
+> decoder is faithful, the real divergence is our gen_snapshot's missing padding, and removing the
+> skip to close F68 would make our tool diverge from theirs on identical input while masking a
+> codegen gap. The direct crosstest is blocked (rc=255, measured), but the decisive test is NOT
+> blocked and was not run: statically disassemble `analyze_snapshot_arm64` at 0x100197434 /
+> 0x100196b98 and read whether the `mov w9,#3; sub w9,w9,w14` skip is actually there. The card's
+> caveat understates this — it says "may carry the same skip" while the code comment 200 lines
+> below already asserts it does.
+
+⚠️ **这条 STILL OPEN 不是脚注，它质疑 F68 的修法方向本身** ——
+如果他们的解码器带同一个跳，那么**我们的解码器是忠实的**，真正的分歧在
+**我们的 `gen_snapshot` 不补 NOP**；照 F68 现在的判据去掉那个跳，会让我们的工具
+在同一份输入上**偏离**他们，同时把一个代码生成缺口**盖住**。
+⇒ **已立 F69 作为 F68 的前置**（`cards.tsv` 里 F68 的 deps 改为 `F67,F69`）。
+🔑 **同一处读数已经被归错两次（遍历 → 代码生成 → 解码器），这是第三次归因；
+在 F69 读出他们二进制里那三条指令之前，不许动 `DecodePoolReference`。**
+
+🔴 **pass 抓到的一处记账错误（本文件上一轮写错，此处订正）**：
+`d2db7ec` **不是状态树的提交**（`git merge-base --is-ancestor d2db7ec HEAD` 在
+`flutter_hot_patcher` 里为 NO），它在**研究树** `fhp-research`。
+上一轮「本轮修补丁（`274554f9bb3` / `d2db7ec` / `08af3a2`）」把两棵树的提交混记成一棵树的。
+状态树这边的 memo 提交是 `08af3a2` + `f00cd91`。
+
+🔴 **两处仪器弱点（pass 判定不足以推翻结论，但要还）** —— 已立 **F70**：
+① `nc5` 只用「两个总数都等于 2」断言判据 (b) 的「精确对上」，**从不检验那是不是同一对引用**
+（恒等检查是 pass 自己补的，没有落盘）；
+② **`nc4` 的闸门跟着 `extra` 走，却不跟着 `missing` 走**
+⇒ 它在缺着 2 槽时 rc=0，**在那 2 槽被修好之后同样 rc=0**：
+**这个闸门对它要守的那个缺陷在两个方向上都无反应。**（第 34 种假绿形态，F60 型。）
+
+**COST OF BEING WRONG（reviewer 原话要点）**：F68 是我们与他们出厂 `analyze_snapshot`
+之间**最后一处点得出名字的逐函数 `self_pp` 差异**；`ComputeShorebirdCodeFacts` 喂的是
+`self_pp` / `subgraph_pp` / `self_hash`，改它就改掉了**每一个下游对拍格与未来每张 F 卡的比较基准**。
+
+**队列**：`.loop/UNREVIEWED_FIX` 里的 F68 那一行已消（判决含 `F68` + `SURVIVES` + `(fix)`）。
+**本轮三棵树由 pass 复核为「与它进来时相同」**（扰动全在 `/tmp` 副本上，已移除）。
+
+---
+
+- [ ] **F69：读他们出厂 `analyze_snapshot` 的那三条指令，判定那个固定 3 字跳是不是我们独有的**
+      （`open`，2026-09-15 立；来自 F68 修补丁证伪 pass 的 STILL OPEN，**F68 的前置**）
+      **为什么它在 F68 前面**：F68 要去掉 `DecodePoolReference` 的固定 3 字跳。
+      但那个跳**是从他们的二进制抄来的** —— `analyze_snapshot_api_impl.cc:1358-1366` 自己写着
+      「`0x100197434` `mov w9,#3; sub w9,w9,w14` 向前跳 3-n 条指令」。
+      若属实，**他们的解码器带同一个跳**，只是他们的 `gen_snapshot` 给池加载补了 NOP
+      （实测：他们 `d503201f d503201f`，我们没有）所以从不触发它。
+      那么**我们的解码器是忠实的**，真分歧在**我们的代码生成不补 NOP**，
+      而按 F68 现在的判据去掉那个跳，会让我们的工具在同一输入上**偏离**他们、
+      并且**盖住**一个代码生成缺口。
+      **断言（待证伪）**：他们的 `analyze_snapshot_arm64` 在 `0x100197434`（以及 `0x100196b98`）
+      处**确实**有 `mov w9,#3; sub w9,w9,w14` 这个固定 3 字跳。
+      **判据**：静态反汇编他们的 `analyze_snapshot_arm64`，在这两个地址各取一段，
+      落盘一个脚本打印**实际指令助记符与立即数**，并给出三选一的判决：
+      (A) **有同一个跳** ⇒ F68 的修法反向：不动解码器，改判为
+          「我们的 `gen_snapshot` 不补 NOP」的代码生成卡；
+      (B) **没有那个跳**（他们按实际消耗前进）⇒ F68 的修法成立，照卡上原判据做；
+      (C) **读不出来**（地址不落在代码里 / 该函数被内联掉）⇒ 写明读不出来，
+          F68 停在 `open` 并把这条限定升级成卡片正文，**不许默认 (B)**。
+      **这三条必须各自可达**：写判据时先自问「(A) 和 (B) 我都能观测到吗」——
+      只有 (B) 可达的判据就是同义反复。
+      **负控制**：① **量具能读别的**：对同一个二进制里一处**已知**含 `mov w9,#3` 的地址
+      （或反过来，一处已知**不含**它的地址）跑同一个脚本，必须给出相反读数
+      —— 证明它读的是那个地址的真实字节，不是在复述我们自己的注释；
+      ② **地址不是凭空的**：`0x100197434` 必须落在该二进制的可执行段内，
+      且脚本要打印它所属的段名与文件偏移；落在段外 ⇒ 判 (C)，不许猜；
+      ③ **反自引**：脚本不许 `grep` 我们自己的源码或注释，
+      判决只许来自反汇编输出 —— 那条注释正是被审的对象，拿它当证据是循环论证。
+      ⚠️ **他们的二进制与反编译产物永不入库**（三棵树的 origin 是公开仓）：
+      脚本读它、只提交脚本与聚合读数，不提交任何字节。
+      **为什么它服务规则 0**：它决定 F68 这处差异该归到**我们的分析器**还是**我们的代码生成**。
+      归错一次的代价已经量过：同一处读数至今被归错两次（遍历 → 代码生成 → 解码器）。
+
+---
+
+- [ ] **F70：`nc4` 的闸门对它要守的那个缺陷在两个方向上都无反应；`nc5` 用总数冒充恒等**
+      （`open`，2026-09-15 立；来自 F68 修补丁证伪 pass 的两处仪器弱点）
+      **缺陷①（F60 型，第 34 种假绿）**：`nc4_f68_pool_skip_1332.sh` 的退出码跟着
+      `extra` 与「代码逐字节相同分区里的 `NOT-ORDERED-EQUAL`」走，**却不跟着 `missing` 走**。
+      后果：**缺着那 2 槽时 rc=0，那 2 槽被修好之后同样 rc=0** ——
+      它对 F68 的整个标的**在两个方向上都不会响**。
+      **缺陷②**：`nc5_f68_x27_ref_decode.sh` 用「`REFS IN CODE BUT NOT IN self_pp` = 2」
+      与「`WITHIN-2-WORDS-OF-PREVIOUS-REF` = 2」两个**各自独立的总数**
+      去断言 F68 判据 (b) 的「精确对上」，**从不检验它们是不是同一对引用**。
+      证伪 pass 自己补了那个恒等检查（是同一对 `{(1580,364),(1633,295)}`），**但没有落盘**
+      —— 违反铁律第 8 条：报告里的每个数字都要有一条落盘命令能重打它。
+      **判据**：① `nc4` 增加一个跟着 `missing` 走的闸门，并证明它**两个方向**都能响：
+      `missing` 由 2 变 0 时 rc 必须变化、由 2 变 3 时 rc 必须变化；
+      ② `nc5` 打印 offender 集与 within-2-words 集的**交集与对称差**，
+      而不是两个总数；判据变成「对称差为空」。
+      **负控制**：① 对 `nc4` —— 在副本里把某个函数的 `self_pp` **删掉**一条
+      （造 `missing+1`、`extra` 不动），旧闸门 rc=0、新闸门必须 rc≠0；还原后回到基线；
+      ② 对 `nc5` —— 在副本里制造一对**总数相同但不是同一对**的引用
+      （把一个 offender 挪走、另造一条 within-2-words 的），旧判据仍打 2/2 给绿、
+      新判据必须报对称差非空。**这条负控制就是缺陷②存在的证明，必须实测。**
+      ⚠️ **不要顺手把 `nc5` 的解码器改成 SDK 的解码器**：证伪 pass 已实测二者**不是同一个算法**
+      （SDK 的 `DecodePoolReference` 还处理 add-hi/lo、movz/movk 寄存器偏移、LDP、store）。
+      `nc5` 是**独立**第二实现，这正是它的价值（分子分母必须来自不同来源）；
+      把它对齐成 SDK 的那一份，就制造出第十个仪器缺陷那种数学恒等。
+      **为什么它服务规则 0**：F68/F69 的判决全靠这两把尺子读数，尺子对标的无反应就没有判据。
+
+**轮末**：轮次 2026-09-15T01:32–01:4x / 任务 = `.loop/UNREVIEWED_FIX` 里 F68 修补丁的证伪 pass /
+判据 = **F68 修补丁 VERDICT: SURVIVES (fix)**（新鲜 Opus，29 次调用，7 条攻击逐条实测；
+它自建了 `nc5` 缺席的扰动控制，并照 SDK 真实规则 `i += 1 + (3 - used)` 在我们自己的字节上重放，
+prog/ours 3211/3216 → **3213/3216**、其余三侧不动）、`cards_check.sh` rc=0（13 open/built、22 closed）/
+**未重建、未跑 `verify_all.sh`、棘轮未动、矩阵未动** /
+改动 = 研究树 `cards.tsv`（F68 deps `F67`→`F67,F69`，新增 F69/F70）、状态树 `memo.md`、`.loop/UNREVIEWED_FIX` 清空 /
+提交 = 研究树 `fb2e87e` · 状态树见本提交。
+
+**下一轮（按此优先级，第 1 项与上一轮不同 —— F68 已被它自己的 pass 挡在 F69 后面）**：
+1. **F69**：反汇编他们的 `analyze_snapshot_arm64` 读 `0x100197434` / `0x100196b98`。
+   这是本轮唯一新开的正面工作，**F68 的前置**，判据与三条负控制已在卡上。
+   ⚠️ 三个判决 (A)/(B)/(C) 必须都可达；只有 (B) 可达就是同义反复。
+2. **F70**：两把尺子的缺陷（`nc4` 闸门不跟 `missing`、`nc5` 用总数冒充恒等）。
+   它服务 1 —— F69 之后无论走哪条路，都要靠这两把尺子读数。
+3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` 接进 `verify_all.sh`**（`EXPECTED_CHECKS` 随之加）。
+4. **F49**（「这道闸门」那张卡，仍 `built`、从未过 pass；已四次在生产里误报）。
