@@ -1032,18 +1032,106 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       · **负控制实测生效**：`./measure_pool_residual.sh --drop-per-process` 实测 3 个 input 的分区恒等式全部断裂（hello 2254 != 2450, base_dd 2254 != 2450, prog 5514 != 5882），脚本立即以 rc=1 退出。
       · **保持 unknown 锁死**：走第 3 条路闭环，不添加任何 residual 行到 `structural_evidence.tsv`，`phase_gate` 保持 `unknown=24, structural=0`。
 
-- [ ] **F55：`shorebird` ×3 —— 75042 units，最大的一格，最后做**（`open`，2026-09-10 立）
-      🔴 **本卡标题里的 UNITS 数已作废（2026-09-11）**：它来自 `diff_units.sh`，而该脚本的 `norm()` 把二进制产物按 UTF-8 文本读（`errors="replace"`），`compute_dd_table` 因此报 12 而 `cmp -l` 实测 23,733。**开工第一件事是修 `norm()` 并重测**，不要引用这一行的数字；`f39_analysis.out` 同样作废。
-      per-fixture（F39 那轮）：`hello 10279 / base_dd 10279 / prog 54484`。
-      **已知（未复核）**：note 写「per-function key schema 一致、entry 数一致（1380），字节仍不同」，
-      且该格**曾被声明为 `structural` 又被自动降级**（locus 不合规 ⇒ `structural_class()` 打回 unknown）。
-      `evidence_shorebird_residual.sh` 打 `EXAMINED 75042` / `UNEXPLAINED 85`，
-      并**自己写明**「`Thread+0x678` 解释不了这些；offset + subgraph 级联还会加更多未解释单位」。
-      🔑 **这张已经有 `EXAMINED` 行了**（六张里唯一一张），所以缺的是**把 85 拆成具名分量**，
-      以及**证明那 85 是全部**（note 自己说是 lower bound ⇒ 目前连它是不是全部都没定）。
-      🛑 **「lower bound」这三个字就是这张卡的真实状态**：不许把一个下界当成残差交上去。
+- [ ] **F55：`shorebird` ×3 —— 70223 units**（`open`，2026-09-10 立；2026-09-14 大幅推进）
       **判据**：`UNEXPLAINED` 从下界变成**闭合值**（有上界论证），再逐分量给 locus。
       **负控制**：删掉任一分量 ⇒ `UNEXPLAINED` 上升且只在这一格。
+
+      🟢 **2026-09-14 进展（研究树 `6f72546` `7fa9e86` `f024777` `b2ce141`，SDK `03d7efb21e8`）**
+
+      判据前半段**已满足**：`UNEXPLAINED` 不再是下界。旧的
+      `EXAMINED 75042 / UNEXPLAINED 85` 是假的 —— `evidence_shorebird_residual.sh`
+      把 `diff_units.sh` 的输出**直接抄进 `EXAMINED`**（F60 第十号缺陷，唯独这个脚本没被修），
+      于是闸门的 `EXAMINED == UNITS` 对本格是恒等式；而 `UNEXPLAINED 85` 只数了 size 不同的函数，
+      **75042 里有 74,949 个单位从没被看过**。脚本已重写：分子独立计算并与 harness 交叉断言、
+      按 `index_in_entries` 配对、每个差异行归到它所属的 JSON 键，全量分解精确配平。
+
+      ⚠️ **同时修掉一个新的仪器缺陷（第 30 种）**：`diff_units.sh` 的分母**随 shell 调用形式漂移**
+      （同一份字节：真文件 10309 / 进程替换 10279 / stdin 10309）。闸门要求严格相等 ⇒
+      **用真文件老实算分子的脚本必然被判 FAIL**，唯一过关方式是复制这个 artifact。
+      `diff -d` 强制最小编辑脚本后三种形式一致。`shorebird` 分母 75042 → 75034。
+
+      **当前分解（`evidence_shorebird_residual.sh`，70223 units 全部落桶）**：
+      `subgraph_selectors` 28380 · `subgraph_field_table` 15824 · `op_subgraph_hash` 9152 ·
+      `subgraph_hash` 9152 · `offset` 4104 · `self_pp` 1921 · `self_hash` 824 ·
+      `self_selectors` 363 · `self_field_table` 281 · `functions` 136 · `subgraph_pp` 44 ·
+      `size` 12 · `snapshot_data` 10 个字段各 3。
+
+      🔴 **本格是 `gap`，不是 `structural`**（`evidence_shorebird_components.sh`，接闸门第 31 项）。
+      判据是一个**会被打破的关系**：对每个函数（按 `index_in_entries` 配）、每个字段、每个 fixture，
+      我们的元素集是他们的**子集**，3216/3216 零例外 ⇒ 排除「值不同 / 顺序不同 / 哈希不同」三种读法。
+      ⚠️ **`7fa9e86` 据此判的缺口大小是错的，已由 `f024777` 撤回**：第四种读法是**多重性**——
+      他们不去重、我们过 `std::set`。拆开后 `subgraph_field_table` 的 14398 个「缺失」
+      **一个都不是缺口**（distinct_missing = 0，集合逐函数相等）。真缺口是 5179 而非 46457，
+      修复后降到 **2270**，且 99% 在 selectors。
+
+      🟢 **`subgraph_hash` + `op_subgraph_hash` = 18304 units（26.1%）已归约**
+      （`evidence_shorebird_subgraph_hash.sh`，接闸门第 32 项，`b2ce141`）。
+      两者的差异集**逐函数相同 ⇒ 是一个机制不是两个**。判据：
+      *一个函数的 `subgraph_hash` 不同 ⟺ 它能沿 `callees` 到达某个 `self_hash` 不同的函数*。
+      hello 118 种子 → 预测 1009 = 观测 1009；prog 176 → 2558 = 2558，**对称差为 0**。
+      空洞性三问全过：覆盖率 73.1%/79.5%（超 99% 即失败）、空预测器偏差 371/658、
+      五次随机种子最好一次仍偏 247。独立性：`callees` 与遍历在
+      `analyze_snapshot_api_impl.cc:1457/:1515` **同源**（F60 形状），故**从 `.so` 的 ARM64 机器码
+      重建调用图**（手解 ELF64、解码 `b/bl`），3629/3629 与 10807/10807 条边逐条复现。
+      🛑 **这是归约不是终结**：18304 个单位不携带 `self_hash` 之外的信息，残差**转移**到
+      412 个函数的 824 个单位，格子仍是 `unknown`。`EXAMINED 18304 of 70223 / UNEXPLAINED 51919`。
+      ⚠️ **三条自报的削弱**：控制 3 按规格**无判别力**（两侧调用图逐边相同）；
+      控制 1/2 力度减半（只有 75/118、76/176 个种子承重）；且 `predicted` 按构造调用者闭合 ⇒
+      精确匹配里真正关于 `self_hash` 的部分只压在 **75 + 76** 个函数上，不是 1009 + 2558。
+      ⏳ **未经证伪 pass ⇒ 是 `built` 不是 `closed`。**
+
+      **剩余 51919 units 的去向**：`subgraph_selectors` 28380 + `subgraph_field_table` 15824
+      合计 85% —— 两者的 count_gap 大部分是他们的重复，真缺口在 selectors 那两种**未解码的派发头部**。
+
+      🟢 **SDK 侧已修掉两个 bug（`03d7efb21e8`，规则 0 的正面工作）**。
+      `DecodeDispatchCall`（`runtime/vm/analyze_snapshot_api_impl.cc`）认**四种**派发头部，
+      **只给其中一种算 selector**，另三种写死 0；而遍历那边 `if (step.value != 0)` 把 0 当「没有 selector」丢掉。
+      · **Bug ①**：`mov lr, x0` 是「行号无调整」⇒ selector 应为 `kOriginElement`（arm64 = 4096），写成 0。
+        实测他们 **898** 个函数有 4096，我们 0 个。
+      · **Bug ②**：**拿合法值当哨兵**。`selector == 0` 即 `sub lr,x0,#4096`，第四种形式解得对，
+        却被过滤掉。实测他们 **803** 个函数有 0，我们在原理上发不出。
+        （同型坑仓库记过：`0x00` 是延续字节不能当哨兵。）
+      哨兵改为 `kNoSelector = -1`。`movz/movk` 与逻辑立即数两种头部**仍未解码**，
+      但现在显式标记而不再与合法值相撞 —— 重建那两个立即数是**下一个可修目标**，
+      涉及 ARM64 立即数重构，要单独一轮并先写负控制。
+      **实测效果**：我们的 distinct selector 值 31 → 33（4096 与 0 出现）；
+      `subgraph_selectors` 真缺 4572 → 2127；`self_selectors` 603 → 139；
+      真缺口合计 5179 → **2270**；分母 75034 → **70223**。
+      包含关系仍 3216/3216 ⇒ 没有开始发出他们没有的东西。
+      **控制**：第一次建错了二进制（建了 `ProductARM64`，而 `parity_matrix.sh:26` 用的是
+      `ProductSimARM64`），用它重跑矩阵得到**与修复前逐字节相同**的数字；建对之后全部变动 ——
+      二进制是唯一变量。`verify_all.sh` 31 ran / 0 failed（含重建后 152/152 单测，
+      staleness guard 第一次正确拦下）。
+
+      🔴 **顺带作废一条会误导人的记账**：CLAUDE.md 第 25 种记着
+      `subgraph_pp` / `subgraph_field_table` / `self_selectors` / `subgraph_selectors`
+      是「**我们从不发出**的字段」。**他们那边的四个数（21375/2816/332/3561）今天依然准确，
+      但我们那边不是零了** —— `subgraph_pp` 在 hello/base_dd 上与他们**逐元素相同**。
+      照那条记账去「实现」它，会重写一个已经存在的东西。
+
+      🔴 **还发现一个未开卡的真 gap**：`--shorebird` 的 `snapshot_data` 块两侧
+      **零个共同键**（三个 fixture 皆然）。我们发运行期指针
+      （`vm_data` / `vm_instructions` / `isolate_data` / `isolate_instructions`），
+      他们发快照身份（`dart_version` / `snapshot_version` / `vm_data_hash` / `vm_data_length` /
+      `adjusted_vm_instructions_hash` / `adjusted_vm_instructions_length`）。
+      这是没实现的功能，不是结构性不变量，而且正是 `--shorebird` 存在的理由
+      （updater 要靠快照身份判断补丁能不能贴）。
+
+---
+
+- [ ] **F62：把 `shorebird` ×3 从 `unknown` 改判 `gap`，并动本阶段的棘轮**（`open`，2026-09-14 立）
+      F55 已用 `evidence_shorebird_components.sh` 实证这三格是真缺口而非结构性不变量
+      （包含关系 3216/3216 零例外 ⇒ 排除值/顺序/哈希三种读法；拆掉多重性后真缺口 2270 个去重值）。
+      但**分类本身还没改**：`parity_matrix.tsv` 仍写 `unknown`，`phase_gate.expected` 仍钉着
+      `unknown=24 gap=0`。这会是矩阵里**第一个 `gap`**。
+      🛑 **单独立卡而不是并进 F55，因为它动的是棘轮**：`phase_gate.expected` 是本阶段的
+      完成判据之一，改它必须有自己的判据与负控制，且不该在无人看管的轮次里发生。
+      **判据**：`gap` 判定由 `parity_matrix.sh` **从数据算出来**，不是写死的 case 分支
+      （第 25 种：硬编码 `structural` 藏住过 4 个缺字段）；`phase_gate.expected` 在**同一个提交**里更新
+      （文件自己的注释：孤立地改 pin 就是把棘轮锉掉）；三格读作 `gap` 且其余 56 格不动。
+      **负控制**：喂一份两侧完全相同的语料 ⇒ 该格**不得**判成 `gap`；
+      以及把 `phase_gate.expected` 改回 `gap=0` ⇒ `phase_gate.sh` 必须报红。
+      ⚠️ 依赖 F55 那三个证据脚本先通过证伪 pass —— 拿一个未审的判决去动棘轮是本仓库撤回过两次的动作。
 
 ---
 
