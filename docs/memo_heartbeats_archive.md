@@ -21,3 +21,13 @@
 - 2026-09-10T16:46 ❤️ **心跳**（本轮开始）
 - 2026-09-10T（claude-sonnet-4-6，交互式，**本轮第三次尝试**）❤️ 心跳 — 读契约后重新派发 F60 实现子代理（haiku），研究树提交 44b26e5，UNITS_MEASURED=12 / EXAMINED=12 / UNEXPLAINED=0 / 负控制命中 / verify_all 27 ran 0 failed / parity_matrix_cells=structural / cards.tsv 已更新为 built。
 - 2026-09-10T10:53（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 队列处理：对 F60 修补丁（commits 44b26e5/bdfaab9）派发 haiku-4-5 新鲜子代理执行证伪 pass。
+
+<!-- trimmed 2026-09-12 00:03:36 -->
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — 读契约。UNREVIEWED_FIX 有 F60 条目（commit 2d47c4d），git show 确认该提交只改了 memo.md（+16行），是记录 FALSIFIED 结论的文档提交，非代码修复。按契约「判定某一项不必再审时，写明为什么，再把它那一行删掉」：2d47c4d 不是修补丁，删除队列条目。fhp-research stash@{0} 的改动（EXAMINED 5 # FALSIFIED ...）是测试注解，非可接续的修复，保留 stash 不动。下一步：派发 F60 真正修复实现（独立计算 EXAMINED 与 UNITS 消除 tautology）。
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — UNREVIEWED_FIX 有 F60（commits 688db38 + a5926d1），契约要求对修补丁跑一次新鲜 fix 证伪 pass。代码审查已确认 tautology 仍在（diff_units.sh 与 evidence 脚本用同一 Python 表达式作用于同一 JSON），现派发新鲜子代理执行证伪 pass。
+- 2026-09-10T（claude-sonnet-4-6，交互式）❤️ 心跳 — 读契约。UNREVIEWED_FIX 有 F60（fix commit f07c089）。代码审查确认：f07c089 是纯 memo 提交（仅改 memo.md +18 行），标题含「修补丁 VERDICT FALSIFIED」使 gate 误判为修补丁入队。实际代码修补丁 a5926d1 已被独立子代理 5+ 次 FALSIFIED——evidence 脚本 EXAMINED 与 diff_units.sh UNITS 用同一公式计算同一 JSON，fixture 扰动同步改变两者，check 永不报红。救援 stash（round-69213，fhp-research stash@{0}）是 a5926d1 前旧版本调试痕迹，已丢弃。UNREVIEWED_FIX 条目删除（gate 误判）。F60 保持 open。派发子代理实现真正修复：EXAMINED 改从二进制产物独立读取，消灭数据层恒等式。
+- 2026-09-11T（Antigravity）❤️ 心跳 — F61 完成（研究树 commit `a01484e` + `674dc1d`，memo/CLAUDE commit `5fab64a`）：修掉 `norm()` 文本读取缺陷，二进制统一走 `cmp -l` 逐字节比对；断开 `evidence_field_table_order.sh` 中动态调用 `diff_units.sh` 的自引恒等式；重测 8 个二进制 flag 的 UNITS 并记入 note；全面审计 41 个关闭格：35 个 na 格全部核验确认（0 字节差或 dead/blocked/input flag，无一依赖坏分母），6 个 structural 格因无独立残差证明全部退回 `unknown`（`unknown 18→24`，`structural 6→0`）；`phase_gate.expected` 同步锁定 `unknown=24 structural=0`；正向/反向双向负控制全部实测命中；`verify_all.sh` 27 ran 0 failed；`cards_check.sh` 10 open / 16 closed rc=0。
+- 2026-09-11T（Antigravity）❤️ 心跳 — F61 缺陷修复并完成二次闭环（研究树 commit `b0a78c9` + `f3ce840`）：
+- 2026-09-11T（Antigravity）❤️ 心跳 — F59 完成（研究树 commit `a12547e` + `a10b1b1`）：
+- 2026-09-11T（Antigravity）❤️ 心跳 — F59 审计闭环 & F56 闭环（研究树 commit `8426dc2` + `f4d2ee6`）：
+- 2026-09-11T（Antigravity）❤️ 心跳 — F57 独立重测与底层物理归因（研究树 commit `f137fc3`）：
