@@ -4213,3 +4213,128 @@ prog/ours 3211/3216 → **3213/3216**、其余三侧不动）、`cards_check.sh`
    它服务 1 —— F69 之后无论走哪条路，都要靠这两把尺子读数。
 3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` 接进 `verify_all.sh`**（`EXPECTED_CHECKS` 随之加）。
 4. **F49**（「这道闸门」那张卡，仍 `built`、从未过 pass；已四次在生产里误报）。
+
+---
+
+## 心跳 2026-09-15T02:0x —— 轮次开始
+
+`.loop/UNREVIEWED_FIX` 为空（上一轮已结 F68 修补丁的账，`SURVIVES (fix)`）。
+本轮任务 = **F69**（memo「下一轮」优先级第 1 项）：静态反汇编他们出厂的
+`analyze_snapshot_arm64`，在 `0x100197434` / `0x100196b98` 两处读实际指令，
+判 (A) 他们也有同一个固定 3 字跳 / (B) 没有 / (C) 读不出来。
+三棵树开工前状态：状态树与研究树只有未跟踪文件，SDK 树干净。
+
+### 本轮结论：**F69 VERDICT: PARTIAL —— 不关卡，F69 仍 `open`**
+
+**做了什么**：派 Opus（25 次调用）按 F69 卡上的判据静态反汇编他们出厂的
+`analyze_snapshot_arm64`，落盘 `spikes/shorebird_linkinfo_oracle/f69_their_pool_skip_disasm.sh`
+（研究树 `898a05d`）。它报 **VERDICT: A**，读数：
+
+```
+SITE 0x100197434 SEC=__TEXT,__text OFF=0x57f434 MOVW9_IMM=3 SUBW9=yes SKIP_KIND=fixed3
+SITE 0x100196b98 SEC=__TEXT,__text OFF=0x57eb98 MOVW9_IMM=none SUBW9=no SKIP_KIND=unreadable
+```
+
+**然后派了一个新鲜 Opus 跑证伪 pass（40 次调用），判决 PARTIAL。**
+它的原话：「三处缺陷，两处对**推理**是致命的，对**结论**都不致命。」
+
+#### 三处缺陷
+
+- **(F1) 量具唯一的语义闸门不可能失败 —— 第 34 种假绿当天第二次复发。**
+  把倒计时检测器改坏（`#0x1` → `#0x999`）后脚本打印
+  `countdown sites: 0 / ADVANCE_TRACED=False / F69 VERDICT: A`，**exit 0**，
+  而 REASON 那句照样断言「一个驱动 4 字节指令指针前进的倒计时」。
+  **退出码只看那两条指令的形状，与「那个常量是否支配前进」正交** ——
+  与 `nc4` 的缺陷同型（F70 缺陷①）。
+  ⚠️ 合成站点探针确实三档可达（`0x100003e44` → B / `0x900000000` → C，exit 3），
+  **所以它不是形式上的同义反复**；但**在真正要紧的那个地址上 B 不可达**，
+  而 NC1b 正是提示词怀疑的那样：分类器对一个无关地址打了 `consumed`，
+  **不是 B 在 `0x100197434` 上可观测**。
+- **(F2) 次要结论是在反驳一个没人说过的话。** 卡上「`0x100196b98` 是第二处跳点」
+  这个说法是判据自己发明的：`grep -n '100196b98' analyze_snapshot_api_impl.cc` 只在
+  **886 / 906 行**命中，那段注释说的是它是被转写区间的**起点**
+  （「A transcription of 0x100196b98-0x1001975a0. Seven shapes…」）；
+  1355-1359 行的注释引的是 `0x100197440/0x10019744c/0x100197458/0x100197434`，
+  **从未提过 `0x100196b98`**。脚本读出的 `ldr w0,[x22]` + 掩码分类，正是我们源码已经写着的东西。
+  更要紧：CFG 显示 `0x100196b98` 是**起于 `0x100196964` 的那条级联的耗尽出口**，
+  两个地址是**同一个机制的两端**，被丢掉的那一半正是让机制成立的那一半。
+- **(F3) 卡上陈述的机制是错的。** 在整个函数体（`SubgraphHasher::AccumulateRecursive`，
+  `0x100196694-0x10019764c`，1006 条指令）里 `x22` **只有 6 处定义**
+  （spill 的 stp/ldp、`mov x22,x0`、`mov x22,x20`、`cmp`、以及 `0x100196930` 那条
+  `add x22,x22,#0x4`），**没有任何变步长前进**⇒ **常量 3 不可能移动指令指针**。
+
+#### 幸存下来的结论（靠的是这一 pass 自己产出的证据，不是卡上的）
+
+- **`w14` 确实是「已消耗字数」**：`0x100197440-0x100197458` 的
+  `subs w9,w14,#0x2 / mvn / lsl #3 / add x10,[x26,#0x80],x9 / str` = `end -= (w14-1)*8`，
+  即从 `x26+0x78` 那个 vector 上 pop 掉 `used-1` 个 8 字节 Entry ——
+  正是我们的 `back = used-1; pop_back()`。⇒ **卡的自报限定 (i) 朝卡有利的方向解决了。**
+- **常量 3 支配的是「解码器再入」，不是指令指针**：`[sp,#0x60]` 是**四级级联的第 1 级**
+  （`0x100196964` `[sp,#0x60]` → `0x100196990` `w19` → `0x1001969c4` `[sp,#0x64]`
+  → `0x100196b28` `[sp,#0x44]` → `0x100196b98`；最后一跳 `0x5400034b` 手工解码
+  cond=LT imm19=26，`0x100196b30+0x68` 精确等于 `0x100196b98`）。
+  穷举前向可达性（从 `0x100196930` 出发、屏蔽 `0x100196b98`）显示：
+  池匹配块 `0x100197240` 与置位点 `0x100197434` **只能经由 `0x100196b98` 到达** ⇒
+  预算为正时，后面的字**不会被交给多字解码器**。
+  **这确实是池形式的一个固定 3 字抑制窗口，所以 A 的结论站得住**，
+  但它是「不许再解码」的窗口，**不是 IP 跳**。
+- ⚠️ **他们的级联里同时存在 B 的形状**：`[sp,#0x44]` 由寄存器喂
+  （`0x1001974e4` `str w25,[sp,#0x44]`），是真正的「按实际消耗计」预算。
+  ⇒ 他们的循环**固定预算与消耗预算混用**，而卡只看了 4 级中的 1 级、2 个非平凡 setter 中的 1 个。
+- ⚠️ **与我们的 `i += 1 + ahead` 仍有实质差别**：他们被跳过的字**照样走廉价链**
+  （例如 `0x100196950-0x100196960` 为 BR/BLR 字压入 tag 7 的 Entry），
+  **而我们对被跳过的字什么都不发**。这个残差是否改变 `classified`/`self_pp`
+  **正是 F68 的问题，本轮没有定论**。
+
+#### 其它实测订正
+
+- **卡上那条二进制路径不存在**：`~/.shorebird/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64`
+  `ls` 报 No such file。真路径在 `~/.shorebird/bin/cache/flutter/<rev>/bin/cache/artifacts/engine/ios-release/`。
+- **两个缓存 rev 字节相同**（`cmp` BYTE_IDENTICAL，sha256 前缀 `669423717d6208d2`）⇒
+  「两个 rev 读数一致」**是同一次测量报了两遍，不是佐证**。
+- **形状普查**：627,510 条 arm64 指令里 `mov w9,#0x3`（`0x52800069`）有 **117 处**，
+  单看毫无信息量；但 `mov wD,#3` 紧跟 `sub wD,wD,wS` 这个**指令对全二进制只出现一次**，
+  就在 `0x100197434`。⇒ 攻击 4 没能推翻读数，只确认了**读数离开语义链接就不承重**。
+- **NC3 不是闸门**：把 `F_FILE` 改成字面名后脚本打印 `NC3 FAIL: the script references our own source`，
+  **却仍然 exit 0**（`exit $PYRC` 在 NC3 结果被读之前就执行了）。
+  实质上脚本运行期确实没读我们的树（python heredoc 只打开 BIN 与 otool 输出），
+  但那个「把 token 拆成字符串片段」的写法躲的是字面 grep，不是问题本身。
+
+#### STILL OPEN（原文抄录，来自 PARTIAL 的判决）
+
+> during the 3-used suppression window, do their cheap-chain classifications still push
+> Entries into the same vector our `facts.classified` corresponds to? Their cheap chain
+> pushes to x26+0x40 in the BR/BLR case but the pool/field path pushes to x26+0x78, and my
+> reachability set for the cheap chain over-approximates (it falls through past the cascade).
+> The decisive test: determine the vector identity of x26+0x40 vs x26+0x78 vs x26+0xb0
+> (three vectors, 8-byte Entry) and then enumerate, for a suppressed word, every push_back
+> reachable from 0x100196930 without passing 0x100196b98, per vector. If a suppressed word
+> still yields an entry in the 0x78 vector, their "skip" is NOT our skip (we emit nothing),
+> F68's shortfall may be ours after all, and verdict A flips to PARTIAL-at-best.
+> Second open test: NOP-padding is asserted on the card ("theirs emits d503201f d503201f")
+> but was measured by a different pass, not by this one — reprint it before relying on it.
+
+#### F69 卡的判据据此增补（下一轮做这三件，做完重跑 pass）
+
+1. **修 (F1)**：脚本的退出码必须**跟着 `ADVANCE_TRACED` 走**，并且**两个方向都能响**
+   （语义链接成立时 rc 与不成立时 rc 必须不同）；把倒计时检测器改坏必须**变红**。
+2. **修 (F2)/(F3)**：判决文案改成实测的机制（「固定 3 字**抑制窗口**，门控解码器再入」），
+   删掉「驱动指令指针前进」与「`0x100196b98` 是第二处跳点」两处不实陈述；
+   把 `0x100196b98` 记为**同一条级联的耗尽出口**。
+3. **答 STILL OPEN 的第一条**：三个 vector（`x26+0x40` / `+0x78` / `+0xb0`）的身份，
+   以及被抑制的字在每个 vector 上还压不压 Entry。**这一条决定 A 是否降级**。
+   ⚠️ 只有它答完，F68 的方向才真正定下来；在那之前**仍然不许动 `DecodePoolReference`**。
+
+**轮末**：轮次 2026-09-15T02:0x–02:4x / 任务 = **F69**（memo 上一轮排的第 1 项）/
+判据 = **F69 VERDICT: PARTIAL（新鲜 Opus，40 次调用）⇒ 不关卡，F69 仍 `open`** /
+派发 = 2 个子代理（Opus 实现 25 次调用 + Opus 证伪 40 次调用）/
+**未重建、未跑 `verify_all.sh`、棘轮未动、矩阵未动** /
+改动 = 研究树 `f69_their_pool_skip_disasm.sh`（新，`898a05d`）+ `cards.tsv`、状态树 `memo.md` /
+提交 = 研究树 `898a05d` + 本轮 `cards.tsv` 提交、状态树见本提交。
+
+**下一轮（按此优先级）**：
+1. **F69 的三件增补**（上面 1/2/3），做完派新鲜代理重跑 pass。第 3 件是承重的那件。
+2. **F70**：`nc4` 闸门不跟 `missing`、`nc5` 用总数冒充恒等 —— 与 (F1) 同型，可一并处理。
+3. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` / `f69_*` 接进 `verify_all.sh`**
+   （`EXPECTED_CHECKS` 随之加）。
+4. **F49**（仍 `built`、从未过 pass）。
