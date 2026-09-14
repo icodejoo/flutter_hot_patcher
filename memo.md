@@ -2669,3 +2669,58 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 
 
 
+
+2026-09-14T07:43:37Z 心跳 · 本轮任务：F55 证伪 pass（修复 0af616b 后的再审）· 派子代理中
+
+---
+
+### F55 证伪循环进度（2026-09-14 本轮）
+
+**Pass 1（cb50cbd）→ FALSIFIED**（三项：row 34 矛盾、attributed=0 重言、neg control vacuous）
+**Pass 2（cb50cbd）→ PARTIAL**（三项：3216/3216 数错、vacuity claim 不存在、residual 未接闸门）
+**Pass 3（c2cb39e）→ PARTIAL**（三项：cross-check 同源、3 个 fixture 实为 2、rows 30/32 引用已删 shorebird 行）
+
+**Fix Round 3（b744f3c，2026-09-14 本轮）已提交**：
+- `evidence_shorebird_components.sh`：检测 hello==base_dd 并跳过重复，改为 2 个独立 fixture（4596 函数，27576 对）
+- `cards.tsv` F55 criterion：更新分母说明（methodology-consistency check，power over file set not value）；更新 fixture 数量
+- `structural_evidence.tsv` rows 30/32：删除引用已删 shorebird 行的过时文字，保留各自的独立证明（evidence_thread_offset_pool.sh）
+- verify_all.sh：**34 ran, 0 failed**（b744f3c）
+
+**Pass 4（b744f3c）→ PARTIAL**（四项：--drop-pairing-check 非故障注入器；verify_all.sh 注释仍声称 same-source test 是"真证伪"；structural_evidence.tsv 旧注释含"3216/3216"+"F55 proved COLLECTION GAP"；callees mandatory item 未实际运行→已补跑：0/0/0 差异，confirmed）
+
+**Fix Round 5（8e91b73，2026-09-14 本轮）已提交**：
+- `verify_all.sh`：更新注释说明 --drop-pairing-check 是前置条件禁用而非故障注入器；描述正确的 file-set neg control
+- `structural_evidence.tsv`：row-removal comment 修复"3216/3216"→"4596 functions, 2 independent fixtures"；"F55 proved COLLECTION GAP"→"F55 provides evidence; cells stay unknown until F62"；rows 30/32 Note 同步修正
+- `cards.tsv`：neg_control 更新说明 --drop-pairing-check 限制和有效 file-set neg control（需 valid-JSON 文件对）
+- verify_all.sh：**34 ran, 0 failed**（8e91b73）
+
+**Pass 5（8e91b73）→ PARTIAL**（五项：base_dd ours 侧未验证；REAL GAP 2268 未接闸门；components.sh:70 注释错误；70223 未注明 3-fixture 基数；FIELDS 硬编码未披露）
+
+**Fix Round 6（0094609，2026-09-14 本轮）已提交**：
+- `evidence_shorebird_components.sh`：添加 `fields_identical_ours()` 函数，同时检查 theirs 侧字节相等 AND ours 侧 6 个 FIELDS 相同，才跳过 base_dd；修复 :70 注释
+- `cards.tsv`：criterion (1) 注明 70223 是 3-fixture 总数；(2) 注明 REAL GAP 是脚本打印值（闸门只检查退出码）、FIELDS 硬编码 6 元组
+- verify_all.sh：**34 ran, 0 failed**（0094609）
+
+**Pass 6（0094609）→ PARTIAL**（两项：identical corpus 仍返回 exit 0 + "VERDICT gap"；pairing key 从未被扰动验证）
+
+**Fix Round 7（5c4f2b5，2026-09-14 本轮）已提交**：
+- `evidence_shorebird_components.sh`：添加 `real_gap == 0` 守卫（CONTAINMENT VACUOUS → exit 1）；添加 `--rotate-pairing` 负控制（键+1 → PAIRING FAIL → exit 1）
+- `cards.tsv`：neg_control 更新列出三个负控制
+- verify_all.sh：**34 ran, 0 failed**（5c4f2b5）
+- 实测：--break-containment exit 1 ✓；--rotate-pairing exit 1 ✓；identical corpus exit 1 ✓
+
+**Pass 7（5c4f2b5）→ PARTIAL**（三项：--rotate-pairing 在配对检查就退出从未运行 containment；verdict 是硬编码常量；cards.tsv REAL GAP 版本引用过时）
+
+**Fix Round 8（49ecd6c，2026-09-14 本轮）已提交**：
+- `evidence_shorebird_components.sh`：添加 `--shuffle-pairing`（seed-42 键集保留置换，9588 函数违反包含关系，exit 1）；verdict 行嵌入实测值（real_gap/fixtures/functions/ours_elements/theirs_elements）
+- `cards.tsv`：neg_control 添加 --shuffle-pairing 条目（9588 violations）；criterion 更新 REAL GAP 为 "5c4f2b5 printed 2268"
+- verify_all.sh：**34 ran, 0 failed**（49ecd6c）
+
+**Pass 8（49ecd6c）→ PARTIAL**（四项：(a) count_gap = dup + miss 不成立，self_selectors/subgraph_pp 有 ours-side 重复元素；(b) "distinct values" 单位标签错误，实为 per-(fixture,field,function) slot；(c) fields_identical_ours() 无 neg control 触发；(d) classification=gap 是字面量）
+
+**Fix Round 9（当前，49ecd6c 之后）**：
+- `evidence_shorebird_components.sh`：(a) 添加 ours_dup 计算（섭동 전에 계산），修正 totals 格式为 `count_gap = dup_theirs - ours_dup + distinct_missing`，assert 在 violations==[] 时验证恒等式；(b) 单位标签改为 "missing element-slots (|set(theirs)−set(ours)| summed per (fixture,field,function))"；(c) 添加 `--mutate-fields-check` neg control，强制 fields_identical_ours() 返回 False，触发 INDEPENDENT FIXTURES 3，exit 0；(d) classification 由 `(not violations) and (real_gap > 0)` 计算，非硬编码
+- `cards.tsv`：neg_control 添加条目 (5) --mutate-fields-check；criterion 更新单位描述及 classification 计算说明
+- verify_all.sh：**34 ran, 0 failed**（待确认）
+
+**Pass 9（bfdc21e）→ 派遣中（Opus）**
