@@ -4350,3 +4350,152 @@ SITE 0x100196b98 SEC=__TEXT,__text OFF=0x57eb98 MOVW9_IMM=none SUBW9=no SKIP_KIN
 **不删它、也不空转**：本轮就把那三件增补做掉，做完派新鲜代理对**修补丁**打一遍 pass，
 用一条含 `F69` + `SURVIVES` + `(fix)` 的判决把账结掉。
 三棵树开工前状态：状态树与研究树只有未跟踪文件，SDK 树干净。
+
+### 本轮结论：**F69 修补丁 VERDICT: PARTIAL (fix) ×2 —— 不关卡，F69 仍 `open`**
+
+**先说队列**：`.loop/UNREVIEWED_FIX` 里那一行 F69 点名的三个提交
+（`898a05d` 脚本本体 / `27ea8ca` memo / `8c197eb` cards）**没有一个是对 (F1)(F2)(F3) 的修补** ——
+脚本本体写在 pass **之前**。⇒ 又一次闸门已知缺陷触发（「只问本轮有没有提交点了卡号」）。
+**本轮没有删它，而是把欠的那件事真做了**：做增补 → 打 pass → 修 → 再打 pass。
+**两次 pass 都是 PARTIAL，所以这一行仍欠一个 `SURVIVES (fix)`，不删。**
+
+#### 做了什么（5 次派发，全部 Opus）
+
+1. **修 (F1)(F2)(F3)**（研究树 `abdaab7`）：`f69_their_pool_skip_disasm.sh` 的退出码改为
+   **跟着 `SUPPRESSION_TRACED` 走**，判词改成实测机制，`0x100196b98` 改记为
+   **同一条级联的耗尽出口**（`SKIP_KIND=cascade_exit`，不投票）。
+   实测基线 `F69 VERDICT: A (rc=0)`；把倒计时检测器改坏 → `C, rc=3`；NC3 失败 → `rc=4`。
+2. **答 STILL OPEN 第一条**（研究树 `3c147fb`，新脚本 `f69b_vector_identity.sh`）：
+   三个向量身份 `x26+0x40`=`subgraph_hash` / `+0x78`=`op_subgraph_hash` / `+0xb0`=`self_hash`，
+   **他们的 `self_pp`/`subgraph_pp` 在 `this+0xd0`/`this+0xe8`，是另一类 `vector<uint64>`，
+   不是这三个中的任何一个**。判 **NOT-OUR-SKIP**。
+3. **pass 1（新鲜 Opus，43 次调用）判 PARTIAL**：(F1)(F2)(F3) 是真修好了
+   （三种**真实字节**扰动分别把 rc 0→3、NC3→4、判词改正，**三档判决在真实地址 `0x100197434` 上都可达**），
+   但判据 (e) 的「穷举」不成立：窗口内实际可达 **18** 个调用点，脚本只交代 6 个；
+   另 2 个经 `this+0x18` 的**间接虚调用**被 `UNRESOLVED=0` 盖住 ——
+   **那个 0 数的是间接跳转，不是间接调用**（`successors()` 把 `blr` 排除在 `IND` 外）。
+4. **修它**（研究树 `497fc3d`）：`blr` 计入未解析、打印全站点普查、
+   **把那 2 个虚调用真解出来了**（ctor 把 `x1` 存进 `this+0x18`；全二进制 3 个 ctor 站点
+   vptr 同为 `0x1002ef760`；`0x1002ef778` 的 qword = `0x100248a14` =
+   `RealInstructionsTable::FindEntry`，52 条指令的叶子，不含 Entry push）。
+   判词降级为 **`NOT-OUR-SKIP-REACHABLE  [unresolved-calls=0; call-sites=18/18]`**。
+5. **pass 2（新鲜 Opus，41 次调用）仍判 PARTIAL**。
+
+#### pass 2 找到的破绽（第 35 种假绿，一周内第五次同型）
+
+🔴 **`CENSUS COMPLETE` 是数学恒等** —— 它是判据 (b)「不许静默丢站点」的**唯一执行者**，
+而 `call_census` 对每个被计数的站点**恰好 append 一个元素**⇒ `bucketed == total` **由构造成立**。
+实测：nop 掉窗口内 `bl _free`（file `0x57eb7c`），站点数 **18→17**，
+照样打 `CENSUS COMPLETE ... True (17 of 17)`、判决不变、**rc=0**；
+忠实复述该桶逻辑的 **20 万次 fuzz**，`bucketed != total` 出现 **0** 次。
+🔑 **又一次「分子与分母同源」。** 验收方式必须是「nop 掉一个 `bl` 看它变不变红」，
+不是「等式成不成立」——等式成立恰恰是它不能失败的症状。
+
+🔴 **向量身份对判决零影响**：`TARGET_KEY := VEC_ID[0x78]` 之后再用 `idmap[v]==TARGET_KEY` 反查，
+目标恒为 `0x78`。把 `__cstring` 里 `op_subgraph_hash` 改成 `zsbuubgraph_hash`（file `0x6b896e`），
+**判决与 rc 纹丝不动** —— 而它正是 STILL OPEN 指定的「决定性测试」的前一半。
+
+#### pass 2 确认为**真修好**的部分（它自选了 7 处扰动，全部变红）
+
+- 自选三处改成间接调用（自递归 `0x100196928`、`_malloc` `0x100196ae4`、`_memcpy` `0x100196b64`）
+  → 三次都 `UNRESOLVED_CALLS 0→1`、`VERDICT→UNDETERMINED`、rc=4。**闸门不是只对作者那一处响。**
+- 去虚化可被四种方式打断（vtable 槽置 0 / 指向一个含 Entry push 的函数 / 让 vptr 集非单元素 /
+  nop 掉 ctor 里那条 `stp`），**全部降级为 UNDETERMINED，无一例静默保持 `unresolved-calls=0`**。
+- **自写解码器直接解原始指令字**（不读 otool 文本）独立复走：A=195 / B=178 指令、18 个调用站点
+  （16 直接 + 2 间接），与脚本完全一致；去虚化的每一个数字逐项核实通过。
+- 检测式收紧后**未丢掉任何真 push_back**；且整函数对 `x26+0x78/0x80/0x88` 只有 **1 处** store
+  （`0x100197458`，多字解码器的 pop-back，**在窗口外**）⇒ **`+0x78` 不存在被漏计的内联追加**。
+
+#### 一条新的、要紧的结构性读数
+
+**这把量具结构上够不到 F68 的标的**：窗口可达集（178 条指令）内对
+`x26+0xd0..0xf8`（即他们的 `self_pp`/`subgraph_pp`）的引用为 **0 处**，整函数才 3 处、**全在窗口外**。
+⇒ F69 回答的是「被抑制的字还压不压 **Entry**」，**不是**「F68 那 2 个缺失的 `self_pp` 槽」。
+我们这一侧**从未被该仪器测量过**；「我们什么都不发」来自读源码，
+pass 2 实测确认 `analyze_snapshot_api_impl.cc:1377-1386` 对整个 3 字窗口只 push 一个 `kPool` step
+然后 `i += 1 + ahead`，**方向上支持 NOT-OUR-SKIP**。
+
+#### STILL OPEN（pass 2 原文抄录）
+
+> 三条可推翻它的测试。① **把恒等换成异源分母**：普查的分子（各桶之和）必须与一个**独立**来源的分母比
+> —— 例如用另一份解码器（直接解原始指令字，如我上面那个）独立数可达调用站点，再要求两数相等；
+> 判据的验收方式是「nop 掉一个 `bl` 必须变红」，现在它不会。② **解那五条 guard 的路径条件**：
+> 五个 push 全是 CONDITIONAL、0 个 UNCONDITIONAL，`NOT-OUR-SKIP-REACHABLE` 与
+> 「没有任何被抑制的字真的走到 `+0x78`」完全相容；只要证明 `0x100196af8 cbnz w21` 在预算为正时恒假，
+> 结论就翻。且 NECESSARY 与 REACHABLE **rc 都是 0**，只看退出码的下游闸门分不出强弱。
+> ③ **验证 key↔hasher 的配对不是置换**：ctor 里只有一个字面量（`object_pool`），
+> 三个 Hasher 没有可读的名字，现有控制对「三个键互换」完全无反应；需要一条独立证据
+> （例如从 JSON 输出顺序或 `PrintProperty` 的实际实参链）确认 `+0x78` 就是 `op_subgraph_hash`
+> 而不是另外两个。
+
+#### 其它实测订正
+
+- **「`0x100196960` 是 `b.ne @0x100196a04` 的默认臂」在字节上为假** ——
+  `0x100196a04` **根本不支配它**；`0x100196960` 是 `b.ne @0x10019694c` 的 fall-through(EQ) 臂，
+  **仍然是条件的**。⇒ 上一轮那句「`+0x40` 对每个被抑制的字都追加」**撤回**。
+- **五个 push 全部 CONDITIONAL，UNCONDITIONAL 为 0。**
+- **walk A / walk B 不是独立交叉验证**：同一个 `walk()`/`successors()` 换掩码，实测 `B ⊂ A`
+  （|A|=195、|B|=178、`B\A=0`），5 个 push 全在 B ⇒ **B 找到则 A 必同意，AGREE 近乎自动成立。**
+- `bash <相对名>` 曾使 `$SELF` 不可执行 → NC6 子进程 rc=127 → 整脚本 exit 4（**方向是 fail-closed**）；
+  `497fc3d` 已修，三种调用形式 rc 均为 0。
+- **扰动子进程 rc=4 来自 NC3 失败，与 UNDETERMINED 的 rc=3 不可区分** —— 两者共用一个出口，尚未分开。
+
+---
+
+- [ ] **F71：`f69b` 的三处仪器缺陷（`CENSUS COMPLETE` 是恒等式；向量身份不承重；强弱判决共用 rc）**
+      （`open`，2026-09-15 立；来自 F69 修补丁 re-pass，**依赖 F69**）
+      **缺陷 (a)（第 35 种假绿，一周内第五次同型）**：`CENSUS COMPLETE` 是判据「不许静默丢站点」的
+      唯一执行者，而 `call_census` 对每个被计数的站点恰好 append 一个元素 ⇒ `bucketed==total` 由构造成立。
+      实测：nop `bl _free`（file `0x57eb7c`）→ 18→17 静默、打 `True (17 of 17)`、rc=0；
+      20 万次 fuzz 该桶逻辑，不等出现 0 次。
+      **缺陷 (b)**：`TARGET_KEY := VEC_ID[0x78]` 后反查 ⇒ 目标恒为 `0x78`；
+      改坏 `__cstring` 里的 `op_subgraph_hash`（file `0x6b896e`）判决与 rc 不变 ⇒ **向量身份不承重**。
+      **缺陷 (c)**：`NECESSARY` 与 `REACHABLE` 都 exit 0，下游只看 rc 的闸门分不出强弱；
+      且 NC3 失败的 rc=4 与 UNDETERMINED 的 rc=3 目前不可区分。
+      **判据**：(a) 用一个**独立**来源的分母替掉恒等 —— 直接解原始指令字的第二份解码器
+      （re-pass 已写过一份，得 A=195 / B=178 指令、18 站点、16 直接 + 2 间接，与脚本完全一致），
+      要求两数相等；**验收不是「等式成立」，是「nop 掉一个 `bl` 必须变红」**；
+      (b) 改坏 JSON key 字面量必须改变判决或 rc；(c) 给 `NECESSARY` 与 `REACHABLE` 不同退出码。
+      **负控制**：① nop `bl _free`@`0x57eb7c` —— 旧闸门 rc=0 且打 `True (17 of 17)`，新闸门必须非 0，还原后回基线；
+      ② 改坏 `op_subgraph_hash`@`0x6b896e` —— 旧判决/rc 不变，新的必须变；
+      ③ 展示一次挣到 `NECESSARY` 的运行与一次只到 `REACHABLE` 的运行 rc 不同。
+      **为什么它服务规则 0**：F68 改不改 `DecodePoolReference` 全靠这把尺子读数。
+
+---
+
+- [ ] **F72：可达 ≠ 必经 —— 解那五条 guard 的路径条件**
+      （`open`，2026-09-15 立；来自 F69 修补丁 re-pass 的 STILL OPEN ②，**依赖 F69**）
+      **实测事实**：窗口里**五个 Entry push 全部 CONDITIONAL，UNCONDITIONAL 为 0**。
+      `+0x78` 那个（`0x100196b10`）由 `0x100196938 b.hs`、`0x10019694c b.ne`、`0x100196984 b.ne`、
+      `0x100196a1c b.lo`、`0x100196af8 cbnz w21` 共同把守（nop 掉 `b.lo` 判决就翻成 SAME-SKIP
+      —— 那正是脚本自己的 NC6）。
+      ⇒ **`NOT-OUR-SKIP-REACHABLE` 与「没有任何被抑制的字真的走到 `+0x78`」完全相容。**
+      在某条 guard 被判定之前，F69 对 F68 的回答只是「存在一条路径」，**不是「他们的跳与我们的不同」**。
+      **判据**：对**被抑制的字**判定 `0x100196af8 cbnz w21`（以及 `0x100196a1c b.lo`）
+      在预算为正时能否为真 —— 静态解谓词，或动态地用一个落在抑制窗口内的真实字驱动他们出厂的
+      `analyze_snapshot`，观察 `op_subgraph_hash` 的 Entry 流是否真多出一条。
+      若该谓词对被抑制的字恒假，`NOT-OUR-SKIP-REACHABLE` 立刻变成 `SAME-SKIP`，**F68 的方向翻回去**。
+      **负控制**：两个结局都必须可达 —— 证明该量具能在相应形状的输入上分别打出
+      `SAME-SKIP-NECESSARY` 与 `NOT-OUR-SKIP-NECESSARY`。
+      **只能确认现有答案的测试是同义反复 —— F69 前两次 pass 正是栽在这上面。**
+      ⚠️ **在 F72 有结论之前，仍然不许动 `DecodePoolReference`。**
+
+**轮末**：轮次 2026-09-15T03:0x–05:0x / 任务 = `.loop/UNREVIEWED_FIX` 里 F69 的账（做增补 + 审修补丁）/
+判据 = **F69 修补丁 VERDICT: PARTIAL (fix)（新鲜 Opus 43 次调用）→ 当场修 → 再打一遍
+仍 PARTIAL (fix)（新鲜 Opus 41 次调用）⇒ 不关卡，F69 仍 `open`，队列那一行不删** /
+派发 = **5 个子代理**（Opus 修 F1/F2/F3 24 次 + Opus 向量身份 45 次 + Opus pass 43 次 +
+Opus 修普查 68 次 + Opus re-pass 41 次）/
+**未重建、未跑 `verify_all.sh`、棘轮未动、矩阵未动** /
+改动 = 研究树 `f69_their_pool_skip_disasm.sh`（`abdaab7`）、`f69b_vector_identity.sh`
+（新 `3c147fb`，修 `497fc3d`）、`cards.tsv`（新增 F71/F72）、状态树 `memo.md` /
+提交 = 研究树 `abdaab7` `3c147fb` `497fc3d` + cards 提交 · 状态树见本提交。
+**三棵树由 re-pass 逐字复核为「与它进来时相同」**（扰动全在 `/tmp` 副本上，已删）。
+
+**下一轮（按此优先级）**：
+1. **F71**：把 `CENSUS COMPLETE` 的恒等换成异源分母，并让向量身份承重。
+   **它是 F72 的前置** —— F72 要靠这把尺子读数，尺子对标的无反应就没有判据。
+2. **F72**：解 guard 的路径条件。**这一条决定 F68 的方向**，是这条链上唯一还没定的事。
+3. **F70**：`nc4` 闸门不跟 `missing`、`nc5` 用总数冒充恒等 —— 与 F71 同型，可一并处理。
+4. **把 `nc3_f66_*` / `nc3_f67_*` / `nc4_*` / `nc5_*` / `f69_*` / `f69b_*` 接进 `verify_all.sh`**
+   （`EXPECTED_CHECKS` 随之加）。
+5. **F49**（仍 `built`、从未过 pass）。
