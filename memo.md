@@ -1276,7 +1276,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F64：`gap` 判决缺残差要求，且棘轮认类别计数不认格子身份**（`built`，2026-09-14 立并当轮实现，未经证伪 pass）
+- [x] **F64：`gap` 判决缺残差要求，且棘轮认类别计数不认格子身份**（🟢 `closed`，2026-09-14 立、实现、并过证伪 pass）
       **来历**：F62 证伪 pass（Opus，审 `98ac73c`）判 PARTIAL 逼出来的两处，逐条见 F62 卡。
       两处都不是「测量错了」，是**判据比它要守的东西弱**，所以棘轮能被锉掉而闸门不响。
 
@@ -1332,9 +1332,96 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       `verify_all.sh` **35 ran / 0 failed / 0 skipped / 0 blocked**。
       其余 56 格未动（整表去掉 3 行 `shorebird` 后与改动前基线 diff 为空；全表 diff 恰好 6 行）。
 
+      🟢 **F64 证伪 pass VERDICT: SURVIVES**（Opus，22 次调用，审 `1970d10`；
+      `git merge-base --is-ancestor 1970d10 HEAD` rc=0，且 `git status --porcelain` 确认
+      被测的工作树就是被提交的那棵 ⇒ 第十一个仪器缺陷那道检查通过）。
+
+      **强制项（我派的是反方向的风险：新判据会不会严到 `gap` 根本够不着）答案是「够得着」**：
+      它造了 `/tmp/gapcorpus_honest.*` —— 20 个函数按 `index_in_entries` 配对，其中 10 个
+      theirs 的 list 字段有 5 个元素而 ours 只有前 3 个（纯粹、占满、100% 的收集缺口，
+      没有任何 scalar / 顺序 / hash 差异）⇒ `gap_residual.sh` 报
+      `absent element-slots 20 over 10 pairs; EXAMINED 40 of 40; UNEXPLAINED 0`，
+      逐字抄出来的 `gap_class()` 返回 **`gap`**。
+      ⇒ **`gap=0` 是测量结果，不是仪器够不着造成的假象。**
+      ⚠️ **但它顺带钉下一条口径（诚实说明，不算缺陷）**：这道杠是 **100% 归因**
+      （`ex==tot && un==0`），不是「占主导」。在同一份语料里只改一个 scalar
+      （`functions[1].name`）⇒ 42 行里仍解释了 40 行（95.2%）、`UNEXPLAINED 2`、判 `unknown`。
+      **所以本项目的 `gap` 读作「解释了全部」，不是「解释了大部分」** —— 与
+      `structural_class()` 那边已经立的杠一致。
+
+      **七条攻击逐条实跑，三条值得记**：
+      · **攻击 3（F60 那个致命形态不存在）**：分子与分母**不是同一个表达式** ——
+        分母是 `diff -d` 在两份规范化产物上的每一行 `^[<>]`，分子是其中被判为
+        「我方缺元素」的 (function,list-field) 所拥有的**真子集**。证明不是恒等式：
+        注入一处异质差异后 `UNEXPLAINED 0→2` 而分母 `40→42`（两者独立移动）。
+        ⚠️ **但它订正了实现代理的一句话**：所谓「与 `diff_units.sh` 交叉断言、绝不照抄」
+        **比广告的弱** —— `gap_residual.sh` 是**重实现了 `diff_units.sh` 的同一套方法学**
+        （`json.dumps(indent=1,sort_keys=True)` + `diff -d` + 数 `^[<>]`），
+        因此那条 `FAIL: recomputed N ... harness says M` 分支**对任何良构 JSON 都不可达**。
+        判定为**装饰性、无害**：可证伪性来自那个子集关系，不来自这条守卫。
+      · **攻击 6（我最担心的那条，它没有采信替换、自己重跑了 pin）**：
+        在 /tmp 副本上把一个 `na` 格与一个 `unknown` 格**对调类别、计数完全不变**
+        （前后都是 `unknown=24 gap=0`）⇒ 基线 rc=0 `0 mismatching`，对调后
+        **rc=1、`4 mismatching`、`FAIL: cell identities do not match ... (G-f)`**
+        ⇒ **pin 确实钉的是身份。**
+        而字面 NC2 之所以 rc=0 有可核验的原因：`GAP_FLAG` 只存在于 `gap_evidence.sh:39`，
+        它改的是行里的 flag 列，而 `gap_class()` 现在拿**该格自己那个 flag 的产物**跑残差
+        ⇒ 改标签的行在矩阵动之前就被拒、矩阵逐字节不变、闸门无事可抓。
+        **「改标签」不是不再可检测，而是在第 1 层就被拒；万一漏到矩阵，G-f 会抓**（上面已实测）。
+      · **攻击 7（收紧包含规则有没有偷换 `gap` 的定义）**：它用**原来那条松规则**重算了一遍 ——
+        hello `EXAMINED 4780 of 9470, UNEXPLAINED 4690`；prog `EXAMINED 37253 of 51283,
+        UNEXPLAINED 14030` ⇒ **两种读法都关不掉**。
+        **收紧只改了量级（4268→2 个槽），没改判决；`gap=0` 是被分母要求驱动的，不是被重定义驱动的。**
+      · **攻击 2 订正了一处继承**：`gap_evidence.sh:88` **仍然把 hello 的 `slots`/`pairs`
+        直接抄进 base_dd 那行**（它自己的 note 写了），所以分子侧 base_dd 不是独立观测；
+        但**新判据（残差）是逐 fixture 从该 fixture 自己那两份产物重算的**。
+        ⇒ **3 格 ≈ 2 个独立观测这件事仍然为真，但它不承 `gap=0` 的重。**
+      · **攻击 4 点名了这三格为什么关不掉**：hello 的差异桶是
+        `subgraph_selectors 2455 / op_subgraph_hash 2018 / subgraph_hash 2018 /
+        subgraph_field_table 1874 / offset 404` —— **`offset` 的差异永远不可能由收集缺口解释**。
+
+      🔑 **STILL OPEN（证伪代理原文，逐字抄录，不许改写）**：
+      > the "independent" re-derivation is not independent of one knob. `gap_evidence_check.sh`
+      > reads `RESIDUAL=${GAP_RESIDUAL:-./gap_residual.sh}` — the same env var `gap_class()` reads.
+      > A 3-line fake printing `EXAMINED 9470 of 9470 / UNEXPLAINED 0` makes the generator return
+      > `gap` on the real artifacts AND makes the checker report `ok ... residual closed`,
+      > 0 failures, rc=0 (run: `GAP_RESIDUAL=/tmp/fakeres.sh` against out_pm + a TSV row classed gap).
+      > Same shape as `EVIDENCE=` for structural_class, so it is a pre-existing house pattern rather
+      > than new damage, and verify_all.sh invokes the checker with a clean env — but a checker that
+      > shares its subject's override is one variable away from agreeing with a lie. The test that
+      > could yet overturn this card: make gap_evidence_check.sh resolve the residual script by a path
+      > it does not take from the environment, and confirm the fake above then produces rc=1. Second,
+      > weaker test: force a real disagreement between gap_residual.sh's recomputed denominator and
+      > diff_units.sh's, to show that cross-check has any reachable failure at all.
+
+      ⇒ 这条已立为 **F65**（它同时打到 `structural_evidence_check.sh` 的 `EVIDENCE=`，
+      是**全屋共用的一个形态**，不是本卡新造的damage）。
+
       ⚠️ **这张卡会把 `gap=3` 改小**（很可能到 1，因为 base_dd 是 hello 的继承、
       hello 的基底只有 1 个函数）。**改 pin 必须与分类改动在同一个提交**，
       并在 memo 里写明是本卡把它改回去的 —— 否则下一轮会读成「棘轮倒退了」。
+
+      ✅ **它确实把 `gap=3` 改回去了 —— 而且一路改到 `0`，不是预测的 1。这是本卡干的，不是棘轮倒退。**
+      `phase_gate.expected` 与分类改动同在 `1970d10`。矩阵现为
+      `na=35 structural=0 unknown=24 gap=0`，即 F62 动棘轮之前的那个状态。
+
+---
+
+- [ ] **F65：审查脚本与它审的对象共用同一个环境变量开关**（`open`，2026-09-14 立）
+      **来历**：F64 证伪 pass（Opus，审 `1970d10`）判 SURVIVES 时留下的 `STILL OPEN`，原文在 F64 卡。
+      **不是 F64 造成的**，是全屋共用的一个形态：`gap_evidence_check.sh` 读
+      `RESIDUAL=${GAP_RESIDUAL:-./gap_residual.sh}`，而 `gap_class()` 读的是**同一个** `GAP_RESIDUAL`；
+      `structural_evidence_check.sh` 的 `EVIDENCE=` 同形。
+      ⇒ **一个 3 行的假脚本**打印 `EXAMINED 9470 of 9470 / UNEXPLAINED 0`，
+      能让生成方在真产物上判 `gap`，**同时**让审查方报 `ok ... residual closed`、0 failures、rc=0。
+      `verify_all.sh` 目前用干净环境调它，所以不是现行假绿；
+      但**一个与被审对象共用开关的审查者，离「附和一个谎」只差一个变量**。
+      **判据**：审查脚本用一条**不从环境取**的路径解析它要审的脚本。
+      **负控制**：上面那个假脚本 ⇒ `gap_evidence_check.sh` 必须 rc≠0（今天 rc=0）；
+      `EVIDENCE=` 对 `structural_evidence_check.sh` 同样。
+      **第二条（较弱）**：制造一次 `gap_residual.sh` 重算分母与 `diff_units.sh` 的真实分歧，
+      证明那条交叉守卫**存在可达的失败路径** —— 证伪 pass 实测它对任何良构 JSON **不可达**
+      （因为 `gap_residual.sh` 是重实现了 `diff_units.sh` 的同一套方法学，不是调用它）。
 
 ---
 
@@ -3201,3 +3288,59 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 它看见「F62 判 PARTIAL」+「本轮有提交在标题里点了 F62 的名」就推断有补丁，
 而那个提交是**记录判决的 memo 提交**。⚠️ 这是闸门的一个新形态误报，与已知缺陷同源
 （它不问那条提交改了什么）：**标题点名 ≠ 补丁**。
+
+---
+
+## 轮次记录 2026-09-14 21:3x–22:5x（结 F62 队列账 + F64）
+
+**先结账** = `.loop/UNREVIEWED_FIX` 的 F62 一项判定**不必再审**并删行（`60c619e`），
+理由三条全是 `--stat` 实测（全文见上面那条心跳）：那两个「fix commit」一个是**被审对象本身**、
+一个**只动 memo.md 0 行代码**，缺陷从未被修而是立成了 F64 ——
+正是契约给的删除理由「已被别的卡取代」。
+🔴 **顺带记下闸门的一个新形态误报**：它看见「F62 判 PARTIAL」+「本轮有提交在标题里点名 F62」
+就推断有补丁，而那是**记录判决的 memo 提交**。**标题点名 ≠ 补丁** ——
+与已知缺陷（不问那条提交改了什么）同源。
+
+**任务** = **F64**（按上一轮 memo 末尾「下一轮两件事」第 1 优先级；它压着 F62）。
+
+**判据结果** = 两条都达标，**且结果比卡片预测的更彻底：`gap=3 → 0`，不是 1。**
+① `gap_class()` 现在要一条残差行，分母由 harness 从两边产物算 ⇒
+   hello/base_dd `EXAMINED 6 of 9470, UNEXPLAINED 9464`、prog `EXAMINED 790 of 51283,
+   UNEXPLAINED 50493` ⇒ **三格全部退回 `unknown`**（`prog` 也不达标，卡片没预测到这一格）。
+② `phase_gate.expected` 改为每格一行 `cell <flag> <input> <class>`（59 行），`comm -3` 双向比较。
+**全量**：矩阵 `59 cells, 0 unrun, 3 blocked`、`na=35 structural=0 unknown=24 gap=0`、
+`phase_gate.sh` rc=0（`59 measured, 59 pinned, 0 mismatching`）、`cards_check.sh` 0 failures、
+`verify_all.sh` **35 ran / 0 failed / 0 skipped / 0 blocked**。其余 56 格未动。
+⚠️ **订正一个常量**：`EXPECTED_CHECKS` 实际是 **34→35**，本 memo 别处写的 30 已过期。
+
+**F64 证伪 pass VERDICT: SURVIVES**（Opus，22 次调用，审 `1970d10`）⇒ **F64 关闭**。
+`STILL OPEN` 原文已逐字抄进 F64 卡，并立为 **F65**。
+**强制项答案**：`gap` 判决**仍然够得着** —— 代理造了一份 100% 收集缺口的语料，
+`gap_class()` 返回 `gap` ⇒ **`gap=0` 是测量，不是仪器够不着的假象**。
+它同时钉下口径：**本项目的 `gap` 读作「解释了全部」而非「解释了大部分」**
+（95.2% 归因仍判 `unknown`），与 `structural` 那边一致。
+
+**被撤回的是什么，要说准**：撤回的**不是**「缺口真实存在」（F55 的观测仍在 `gap_evidence.tsv`，
+且证伪 pass 用原来的松规则重算也得到 hello 4780/9470、prog 37253/51283，两种读法都关不掉），
+**而是「这个缺口解释得了这一格」**。`offset` 那 404 个差异永远不可能由收集缺口解释。
+
+**改动文件** = 研究树 `1970d10`（`gap_residual.sh` / `gap_evidence_check.sh` 新增 ·
+`parity_matrix.sh` · `parity_matrix.tsv` · `phase_gate.sh` · `phase_gate.expected` ·
+`verify_all.sh`）+ `27907c7` + 本轮 `cards.tsv`（F64→closed，新增 F65）+ 状态树 `memo.md`。
+**派发 = 2 个子代理**（实现 62 次调用 / 247830 tokens；证伪 Opus 22 次调用 / 131988 tokens）。
+`loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。`.loop/UNREVIEWED_FIX` 空。
+
+**🔴 F62 的处境变了，下一轮必须先读这一段**：F62 要的是「把三格判成 `gap`」，
+而 F64 这套判据实测**三格都够不到 `gap`**。⇒ **F62 不能按原文关闭**，
+它要么改写成「记录缺口测量、格子留 `unknown`」，要么等到有证据能把 `offset` 那一类差异也归因掉。
+**在那之前不许再引用「gap=3」。**
+
+**下一轮两件事（按此优先级）**：
+1. **规则 0 的正面工作**（现在没有卡压着它了）：在 `DecodeDispatchCall`
+   （`runtime/vm/analyze_snapshot_api_impl.cc:1097-1119`，两处 `kNoSelector`）实现
+   `movz/movk` 与逻辑立即数两种派发头部的 selector 解码，重建 **`ProductSimARM64`**
+   （**不是 `ProductARM64`**，`parity_matrix.sh:26`）⇒ **判据是 `real_gap` 恰好落到 4**。
+   ⚠️ 涉及 ARM64 立即数重构，**先写负控制再动代码**。
+   先验：我们全语料只发出 58 个 distinct selector 值里的 **33** 个，52 个缺失 (field,value) 对里
+   **50** 个是我们在任何地方都没发过的值。
+2. **F65**（仪器卫生，不推进 dart-sdk，排在后面）。
