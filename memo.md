@@ -1577,7 +1577,37 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 ---
 
 - [ ] **F67：第三处单侧去重 —— `pool_seen` / `self_pp`，以及「走的是不是同一条路」**
-      （`open`，2026-09-14 立，由 F66 第二次证伪 pass 的缺陷 (iv) + STILL OPEN 逼出来）
+      （**`built`**，2026-09-14 立、2026-09-15 实现并实测；欠一次新鲜代理的证伪 pass）
+      🔴 **实测答案是 NO（不是 YES）**：去掉 `pool_seen` 去重后
+      `self_pp` 从 **8263 → 9617 槽**，他们是 **9619**，
+      `missing=2 extra=0 ordered_mismatch_fns=2`
+      ⇒ **有序全等 4594/4596，不是 4596/4596**。
+      **两个缺口被点名**：`prog fn#1580` 与 `fn#1633`，各 14 槽对他们的 15，
+      两处都少同一个池索引 **1332**。
+      ⇒ **按卡的语义，F66 的断言必须缩到「值对、路基本对但未全证」**：
+      这两个站点是 `self_pp` 剩下的全部证据欠账。
+      顺带：`diff_units.sh shorebird` **41344 → 39425**（−1919 units），
+      `REAL GAP` 两侧都是 4（集合差对重数免疫，**不可当佐证**，同 F66 的教训）。
+      **四个扰动负控制全部实测变红**（基线 `missing=2 extra=0 ordered=2`）：
+      删一槽 `missing 3`、复制一槽 `extra 1`、改一个值 `missing 3 + extra 1`、
+      **只换序 `ordered 3` 而 `missing/extra` 不动**（这一条正是「有序」必须与 multiset 分开量的理由）。
+      ② 开关置回 1 ⇒ 读数逐字回到 `8263 / missing 1356 / ordered_mismatch 462`，
+      且 `analyze_snapshot` 的 sha256 逐字节回到提交态（`d3eae4f1cc19659c…`）。
+      ③ **分子分母不同源**：分子是我们这棵树编出来的 `analyze_snapshot` 的 JSON，
+      分母是他们出厂的二进制的 JSON —— **我们改不动分母**，所以相等要靠挣，不是恒等式；
+      并且另有一个不共用代码的字节级正则解码器复算两侧总数（`DECODER2 agrees`）。
+      **命令**：`spikes/shorebird_linkinfo_oracle/nc3_f67_pool_seen_multiset.sh`（default-agnostic，两态都测）。
+      **两处措辞修正已落进 harness 输出**（不是散文）：
+      `evidence_shorebird_components.sh` 现在对 **`[GAP]` 字段也打 `ONE-SIDED`**
+      （`self_pp` 今天就打出「少 1356 槽，GAP 只数 2 个 distinct，说不清是没收集还是单侧去重」），
+      并在 `--- totals over all fixtures` 打出 **`INDEPENDENT FIXTURES 2`** 与
+      **逐字段非空分母**（`self_pp` prog 1841/3216、hello 691/1380；
+      `subgraph_selectors` prog **1484/3216**、hello **430/1380**）
+      ⇒ 「3216/3216」不再能被读成 100% 的证据。
+      **顺带修好一处会假绿的旧检查**：`class_table_dump_check.sh:265` 过去用**集合长度**
+      跟 `self_pp` 比（为了迁就我们自己的去重），现在改成**逐槽有序比**，
+      独立的 `hasher_model.py` 在 1589 个函数上逐槽有序全等。
+      （原始判据如下，保留备查）
       **来历**：F66 证明的是「我们每个函数的 selector **值列表**与他们相同」，
       **没有证明我们的 subgraph 遍历走过同样的步**。489 个函数（hello 130 + prog 359）
       `subgraph_selectors` multiset 全等而**池步流不同**。
@@ -3658,3 +3688,37 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
    **不能 ⇒ 必须把 F66 的断言范围缩到「值对、路未证」**，那是本轮结论里唯一可能被推翻的一半。
    顺带把 `[GAP]` 字段的 `ONE-SIDED` 告警与「独立 fixture 数 = 2 / 非空函数分母」落进 harness 输出。
 2. **F49**（它是「这道闸门」那张卡，仍 `built`、从未过 pass；本轮是它第三次在生产里误报）。
+
+---
+
+### 心跳 2026-09-14T15:53:08Z —— 本轮任务：F67（`pool_seen` 单侧去重 / `self_pp` 有序 multiset）
+
+**本轮结论（F67，2026-09-15）：答案是 NO，卡转 `built`。**
+
+去掉 `ComputeShorebirdCodeFacts` 里的 `pool_seen` 去重之后，`self_pp` 的读数：
+
+| 状态 | ours 槽 | theirs 槽 | missing | extra | 非有序全等函数 |
+|---|---|---|---|---|---|
+| 去重 ON（历史行为） | 8263 | 9619 | 1356 | 0 | 462 |
+| 去重 OFF（新默认） | **9617** | 9619 | **2** | 0 | **2** |
+
+⇒ **不是有序 multiset 复现**。两个缺口有名有姓：`prog fn#1580` / `fn#1633`，
+各 14 槽对 15，两处都少池索引 **1332**。
+**F66 的断言按卡的要求缩窄为「值对、路在这两个站点未证」** —— 不改成 YES。
+
+⚠️ **`REAL GAP` 在去重开/关两侧都是 4**（`real_gap` 是 distinct 集合差，对重数免疫）
+—— 与 F66 同型，**不可当佐证**。真正动的读数是 `diff_units.sh shorebird` **41344 → 39425**。
+
+**改动文件** = SDK 树 `d9f2db2a646`（加开关，默认 1，不改输出）+ `12170942bad`（默认翻到 0）；
+研究树本轮提交（`nc3_f67_pool_seen_multiset.sh` 新增、`evidence_shorebird_components.sh` 两处措辞修正、
+`class_table_dump_check.sh` 改成有序比、`cards.tsv` F67→built）。
+**闸门读数**：`verify_all.sh` **35 ran / 0 failed**（`EXPECTED_CHECKS` 35，未加新检查所以没动它）、
+`phase_gate.sh` rc=0、`cards_check.sh` rc=0、`parity_matrix.sh` 59 cells / 0 unrun / 3 blocked
+（unknown=24 gap=0 structural=0）⇒ **棘轮未被动**。
+
+**下一轮**：
+1. **F67 欠一次新鲜代理的证伪 pass**（`built` ≠ `closed`）。最该攻的是：
+   我们把 `self_pp` 的「有序」量到了，但**没有量 `subgraph_pp`**——
+   `subgraph_pp` 今天仍少 44 槽且从未在去重维度上被拆过，
+   而它才是覆盖整个 subgraph 遍历的那一列。
+2. **F49**（仍 `built`、从未过 pass）。
