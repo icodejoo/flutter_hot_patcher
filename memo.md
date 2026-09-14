@@ -1627,48 +1627,96 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F68：`parseNumber` 少发一条 +Infinity 池加载 —— `gen_snapshot` 的代码生成缺口**
-      （`open`，2026-09-15 立，来自 F67 的证伪 pass）
+- [ ] **F68：我们自己的 `analyze_snapshot` 解码器固定跳 3 个字，吞掉真实的池引用**
+      （`open`，2026-09-15 立、同日重写；来自 F67 的证伪 pass，又被 F68 自己的证伪 pass 翻了一次）
+      🔴 **本卡原来的标题是「`parseNumber` 少发一条 +Infinity 池加载 —— `gen_snapshot` 的代码生成缺口」，
+      那个断言已被实测推翻**（见下「已被推翻的那一版」），整张卡按真机制重写。
       **来历**：F67 量到 `self_pp` 未去重后是 9617 槽对他们的 9619（`missing=2`），
-      当时写成「我们的遍历在两个站点与他们不同」。**那个归因错了**：那次对比有两个未受控变量，
-      两个 `analyze_snapshot` 二进制**与**两份输入快照（`as.prog.ours.so` 1928488 字节
+      当时写成「我们的遍历在两个站点与他们不同」。那次对比有两个未受控变量
+      （两个 `analyze_snapshot` 二进制**与**两份输入快照，`as.prog.ours.so` 1928488 字节
       vs `as.prog.theirs.so` 1928496，`cmp` DIFFER）。把输入控制住之后，
       `self_pp` 在 **776/776** 个机器码逐字节相同的函数上有序全等，
-      两个缺口**全部落在代码本身不同的函数里**。
-      **断言**：我们的 `gen_snapshot` 给
-      `__Json{String,Utf8}Parser&…&_ChunkedJsonParser.parseNumber`
-      少发了他们那条 **+Infinity（池索引 1332）加载**；
-      `self_pp` 少的 2 槽与 `subgraph_pp` 少的 44 槽**全部是这一个原因**
-      （44 = 那 2 个 depth-0 槽传播到 44 个调用者）。
-      **已实测的支撑**（2026-09-15，`nc4_f68_codegen_pool_1332.sh`，不需要重建）：
+      两个缺口**全部落在代码本身不同的函数里** —— 这一步是对的，**下一步错了**：
+      「代码不同」被当成了「那段代码里没有这条引用」，而这句话从来没有被量过。
+      **断言（重写后）**：`runtime/vm/analyze_snapshot_api_impl.cc` 里
+      `ComputeShorebirdCodeFacts` 的 `DecodePoolReference` 分支（本轮加注释后为 `:1350-1383`，
+      之前是 `:1318-1331`）用 `int32_t ahead = 3 - used;` 再 `i += 1 + ahead`，
+      **给池形式记了固定的 3 个字**，不管后面那两个字里装的是什么；
+      当我们的代码生成在这个站点排得比他们紧（**他们那里有 NOP，我们没有**），
+      一条真实的池引用就落进这个窗口里，**永远不会被解码**。
+      hello+prog 上剩下的全部短缺就是它：`self_pp` 2 槽 + `subgraph_pp` 44 槽，
+      **全是池索引 1332**，出在 `prog fn#1580` / `fn#1633`
+      （`__Json{String,Utf8}Parser&…&_ChunkedJsonParser.parseNumber`）；
+      那 44 槽是同样这 2 个 depth-0 槽传播到 44 个调用者。
+      **实测支撑（新，2026-09-15，`nc5_f68_x27_ref_decode.sh`，不需要重建）**：
+      我们的 prog `.so` **确实含有那条 1332 加载**，两个 offender 都有，
+      **与他们在引用流里的位置相同、指令字相同**（`0xfd54db60` 即 `ldr d0,[x27,#10672]`），
+      函数内偏移 ours **1456** / theirs **1480**（fn#1580）、ours **1180** / theirs **1204**（fn#1633）；
+      按函数字节范围解码全部 x27 相对 scaled load 后，两个 offender 在**我们这边**都得到
+      `[1342,1343,1344,1345,1332,1334,1335,1335,1346,15,16,16,16,1346,15]`，
+      与**他们解出来的引用**以及**他们的 `self_pp`** 逐项相同；我们的 `self_pp` 就是这串**去掉那个 1332**。
+      该解码器复现 theirs 的 `self_pp` 于 hello **1377/1380** + prog **3213/3216**，
+      复现 ours 的于 **1377/1380** + **3211/3216**；
+      「代码里有、该侧 `self_pp` 里没有」的引用**总共 2 条、全在我们这边**、种类都是 `(size=3, V=1)`。
+      **把「落在上一条引用 2 个字以内」的引用数出来：prog OURS 2、prog THEIRS 0、hello 两侧 0**
+      —— 与丢掉的那 2 条**精确对上**。
+      **仍然成立、原样保留的读数**（`nc4_f68_pool_skip_1332.sh`，不需要重建）：
       `SELF_PP theirs 9619 ours 9617 missing 2 extra 0`、
       `SUBGRAPH_PP theirs 196985 ours 196941 missing 44 extra 0`、
-      46 个缺槽**全是索引 1332**、池条目 1332 **两侧逐字节相同**（`0x7ff0000000000000`）、
-      **我们在别处照样发 1332**（hello 2 次、prog 1 次）⇒ 不是解码不了；
-      两个 offender 的代码尺寸我们 **2628/2352** 对他们 **2668/2392**，只共享 32 字节前缀。
-      **判据（开工前写，可证伪）**：反汇编两侧的 `parseNumber`，
-      **点名**我们没发出的那一个构造、以及本该发它的**那个 `gen_snapshot` pass**
-      （要具体到 pass 名与某个 IL/常量决策，不能是「代码生成里某处」）；
-      落地后重跑 `nc4_f68_codegen_pool_1332.sh`，必须读到
-      `SELF_PP missing 0`、`SUBGRAPH_PP missing 0`、`CODE-DIFFERS NOT-ORDERED-EQUAL 0`，
-      同时 `BYTE-IDENTICAL-CODE ORDERED-EQUAL` 不许退化、`UNPARTITIONED` 仍为 0，
-      且我们 `parseNumber` 的尺寸必须从 2628/2352 变成 **2668/2392**。
-      **这张卡被证伪（而不是被调参）的三种样子**：① 第三个 fixture 上缺槽不全是 1332；
-      ② 两侧 `parseNumber` 的差异根本不含 +Infinity 池加载（例如是另一处内联/区间分析决策
-      换掉了整条数字解析路径）⇒「一个原因」是错的；
-      ③ 修复落地后计数移动的量不是恰好 −2 / −44。
-      **负控制**：① 量具自己的那条，2026-09-15 已实测变红 ——
-      `./nc4_f68_codegen_pool_1332.sh --negctl` 在**某个 `.so` 的副本**里
-      （`out_pm/` 绝不写入）翻一个字节，`BYTE-IDENTICAL-CODE` 必须 776→**775**、
-      `CODE-DIFFERS` 必须 3820→**3821**，还原后回到 776/3820；
-      一个翻掉的字节若推不动这个分区，说明分区不是从字节算出来的，这张卡上的数全部作废。
-      ② 修复本身：落地后**只**回退代码生成那一处（其余照常重建）再跑，
-      `missing` 必须精确回到 2 与 44 —— 证明读数是被发出的代码推动的，不是被一次重建或重测推动的。
-      ③ 反同义反复：修复**不许**碰 `runtime/vm/analyze_snapshot_api_impl.cc`；
-      要靠改分析器才能关的话，那是在挪量具，不算关闭。
-      **为什么它服务规则 0**：这是第一次把「他们的 dart-sdk 与我们的」之间的一处
-      **具体代码生成分歧**指认到函数级并有可复打的判据 —— 关掉它就是 SDK 本体向前走一步，
-      不是又一轮测量。
+      46 个缺槽全是索引 1332、池条目 1332 两侧逐字节相同、
+      `self_pp` 在 776/776 个代码逐字节相同的函数上有序全等、
+      3820 个代码有差的函数里只有 2 个不全等、
+      两个 offender 的代码尺寸我们 2628/2352 对他们 2668/2392。
+      **判据（可证伪）**：别再给池形式记固定 3 个字 —— 或按实际消耗前进，
+      或照跳但把被跳过的字重新拿去试解码 —— 然后**重建 `xcodebuild/ProductSimARM64`**
+      （**不是 `ProductARM64`**，`parity_matrix.sh:26` 把两侧都钉在模拟器构建上），
+      重生成矩阵，重跑 `./nc4_f68_pool_skip_1332.sh`，必须读到
+      `SELF_PP SLOTS theirs 9619 ours 9619 missing 0 extra 0`、
+      `SUBGRAPH_PP SLOTS theirs 196985 ours 196985 missing 0 extra 0`、
+      `CODE-DIFFERS NOT-ORDERED-EQUAL 0`。
+      **同一次运行里必须不动的**：`BYTE-IDENTICAL-CODE FUNCTIONS 776 ORDERED-EQUAL 776
+      NOT-ORDERED-EQUAL 0`（输入受控那一格不许退化），
+      以及**其余 prog 3213/3216 + hello 1377/1380 个函数的 `self_pp` 流逐槽不变**
+      —— 即 `extra` 必须仍是 0，逐函数 diff 只许点到 fn#1580 与 fn#1633 两个名字。
+      **多赚到 2 槽却顺手动了第三个函数，就是把遍历改到别处去了，不算关闭。**
+      **这张卡被证伪（而不是被调参）的样子**：① 重建后计数移动的量不是恰好 +2 / +44；
+      ② `nc5` 量到的那 2 条「2 个字以内」的引用不是 `self_pp` 缺的那 2 条；
+      ③ 证明他们的分析器也是同一个固定跳、且**不是**他们的布局救了他们
+      ⇒ 那这就还是代码生成的事。
+      **负控制**：① 修复自己的那条 —— 落地后**只**回退这处跳法（其余照常重建）再跑，
+      `missing` 必须精确回到 2 与 44，证明读数是被解码器改动推动的，不是被一次重建推动的；
+      ② 量具自己的两条，`./nc4_f68_pool_skip_1332.sh --negctl` 两条都必须变红（2026-09-15 实测均红）：
+      (a) **分区控制**，在某个 `.so` 的副本里翻一个字节，`BYTE-IDENTICAL-CODE` 776→**775**、
+      `CODE-DIFFERS` 3820→**3821**，还原回 776/3820；
+      (b) **流控制**（本轮新加，旧卡没有，所以 `self_pp` 比较本身从来没被考过）：
+      在 `as.hello.ours.shorebird` 的副本里把一个代码逐字节相同的函数的 `self_pp` 改掉
+      （idx 13 `[Optimized] new Map`，`[703,704]` → `[99999,704]`），
+      必须读到 `BYTE-IDENTICAL-CODE FUNCTIONS 776 ORDERED-EQUAL 775 NOT-ORDERED-EQUAL 1` **且 rc≠0**，
+      还原后 776/776 且 rc=0；
+      ③ 反同义反复，**相对旧卡是反过来的**：旧卡写「修复不许碰
+      `runtime/vm/analyze_snapshot_api_impl.cc`」，而缺陷恰恰就在那个文件里，**那条作废**。
+      换成：修复不许碰 `nc4_f68_pool_skip_1332.sh` 与 `nc5_f68_x27_ref_decode.sh`，
+      分母 9619 / 196985 来自他们出厂的 `analyze_snapshot`、我们做什么都不许让它动；
+      靠挪分母或改量具才能关的，不算关闭。
+      ④ 反假绿（F60 型）：`UNPARTITIONED` 是算术恒等（每个 key 必落进恰好一个分区），
+      **不许当闸门**；`nc4` 的退出码已改成跟着
+      「代码逐字节相同分区里的 `NOT-ORDERED-EQUAL`」与「`self_pp`/`subgraph_pp` 的 `extra`」走，
+      而负控制 (b) 就是证明这个闸门真能响的那条。
+      ⚠️ **必须一起带走的限定**：**他们的分析器也可能有同一个固定跳，只是他们自己的布局从没触发它**。
+      这条**无法直接测**：快照版本 hash 使他们的 `analyze_snapshot` 拒读我们的 `.so`、我们的拒读他们的
+      （`Wrong full snapshot version, expected '8b59e404…' found '839937dd…'`，rc=255）。
+      ⇒ 关掉这张卡证明的是「**我们的**解码器现在能把代码里有的解出来」，
+      **不是**「他们的解码器也是这么走的」。
+      🔴 **已被推翻的那一版（留档，别再引用）**：
+      「我们的 `gen_snapshot` 给 `parseNumber` 少发了那条 +Infinity 池加载」——
+      **实测为假**，代码里有那条加载。当时拿来支撑它的
+      「我们在别处照样发 1332（hello 2 次、prog 1 次）」**也一并撤回**：
+      **池索引标号是按 fixture 各算各的**，`dump_object_pool` 的 1332 在 prog 是
+      `0x7ff0000000000000 (unknown)`、在 hello 却是 `Type: _EventDispatch@5048458 (obj)`，
+      两池在同一索引上只有 1323/1421（hello）与 3665/3849（prog）一致；
+      只有 prog 那 1 次（`double._tryParseDouble`）是同一个东西。
+      **为什么它服务规则 0**：这是一处**我们自己 `analyze_snapshot` 里点得出名字的缺陷**，
+      带可复打的读数；关掉它就抹掉了我们与他们出厂工具之间**已知的最后一处逐函数 `self_pp` 差异**。
 
 ---
 
@@ -3739,12 +3787,17 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
 
 ### 心跳 2026-09-14T15:53:08Z —— 本轮任务：F67（`pool_seen` 单侧去重 / `self_pp` 有序 multiset）
 
-**本轮结论（F67，2026-09-15；归因已于同日订正，见下）：未去重的 `self_pp` 是 9617 槽对他们的 9619，
-`missing=2 extra=0 ordered_mismatch_fns=2`；🔴 那 2 个缺口是 `gen_snapshot` 的**代码生成**差异，
-不是 `analyze_snapshot` 的遍历差异。卡转 `built`。**
+**本轮结论（F67，2026-09-15；归因已于同日订正**两次**，见下）：未去重的 `self_pp` 是 9617 槽对他们的 9619，
+`missing=2 extra=0 ordered_mismatch_fns=2`；🔴 **那 2 个缺口是我们自己 `analyze_snapshot` 解码器的一个具名缺陷**——
+`ComputeShorebirdCodeFacts` 的池分支给池形式记了**固定 3 个字**（`ahead = 3 - used` 再 `i += 1 + ahead`），
+在我们排得比他们紧的站点上把一条**真实存在**的池引用吞掉了。
+**既不是「我们的遍历走法不同」，也不是 `gen_snapshot` 的代码生成差异**——
+这两种归因先后各写过一次、**先后各被实测推翻一次**，详见下面两条订正。卡转 `built`。**
 
-🔴 **订正（2026-09-15，F68）：本轮最初把这 2 个缺口写成「我们的 subgraph 遍历在两个站点与他们不同」，
+🔴 **订正之一（2026-09-15，F68）：本轮最初把这 2 个缺口写成「我们的 subgraph 遍历在两个站点与他们不同」，
 那个归因是错的，已撤回。读数一个都没变，变的是它指向的机制。**
+（⚠️ 这条订正**自己也只对了一半**：它推翻「走法不同」的理由成立，但它换上去的那个机制
+——「`gen_snapshot` 少发了一条池加载」——同日被 F68 的证伪 pass 实测推翻，见下面的**订正之二**。）
 理由是这次对比有**两个未受控变量**，不是一个：两个 `analyze_snapshot` 二进制 **与** 两份输入快照
 （`cmp out_pm/as.prog.ours.so out_pm/as.prog.theirs.so` ⇒ **DIFFER**，1928488 vs 1928496 字节）。
 **把输入控制住**——按「这个函数的机器码在两侧是否逐字节相同」给每个函数分区
@@ -3759,13 +3812,29 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
 两个缺口**全部落在代码本身就不同的函数里**：`__Json{String,Utf8}Parser&…&_ChunkedJsonParser.parseNumber`，
 我们 **2628/2352** 字节对他们的 **2668/2392**，只共享 32 字节前缀。
 池条目 **1332 在两侧逐字节相同**（`{"index":1332,"offset":10672,"code":"0x7ff0000000000000"}` 即 **+Infinity**，
-两侧池都是 3849 条），而且**我们在别处照样发出 1332**（hello 2 次、prog 1 次）
-⇒ **不是我们解不出来，是那段代码里根本没有这条引用**。
+两侧池都是 3849 条）。
+🔴 **到这里为止的数都对，下一句是错的**：当时写的是
+「而且我们在别处照样发出 1332（hello 2 次、prog 1 次）⇒ 不是我们解不出来，是那段代码里根本没有这条引用」。
+**两半都被推翻**：那段代码里**有**这条引用（见订正之二）；
+而「别处照样发 1332」这个佐证**本身无效**——**池索引标号是按 fixture 各算各的**，
+prog 的 1332 是 `0x7ff0000000000000 (unknown)`、hello 的 1332 却是 `Type: _EventDispatch@5048458 (obj)`，
+两池在同一索引上只有 1323/1421（hello）与 3665/3849（prog）一致，
+三次里只有 prog 那 1 次（`double._tryParseDouble`）说的是同一个东西。
 `subgraph_pp` 少的 44 槽是同样这 2 个 depth-0 槽传播到 44 个调用者，不是第二个缺口。
-⇒ **真缺口是我们的 `gen_snapshot` 给 `parseNumber` 少发了那条 +Infinity 池加载**，已立 **F68**。
+🔴 **订正之二（2026-09-15，F68 的证伪 pass）：上一句原文是
+「⇒ 真缺口是我们的 `gen_snapshot` 给 `parseNumber` 少发了那条 +Infinity 池加载」，
+这句话被实测推翻，已撤回。** 它从来没被量过，只是从分区**推**出来的。
+量了之后：**我们的 prog `.so` 里有那条加载**，两个 offender 都有，
+指令字与他们逐位相同（`0xfd54db60` = `ldr d0,[x27,#10672]`），
+在引用流里的**位置也与他们相同**（函数内偏移 ours 1456 / theirs 1480，ours 1180 / theirs 1204）。
+⇒ **真缺口在我们自己的 `analyze_snapshot`**：池形式被记了固定 3 个字，
+一条真引用落进那个跳窗就永远解不出来（「落在上一条引用 2 个字以内」的引用数：
+prog OURS 2 / prog THEIRS 0 / hello 两侧 0，**与丢掉的那 2 条精确对上**）。**F68 已按这个机制重写。**
 并且 **F66 的「值对、路未证」现在只适用于代码不同的函数**——在代码逐字节相同的函数上，
 `self_pp` 这条路是**已证**的（776/776）。
-**复打命令**：`spikes/shorebird_linkinfo_oracle/nc4_f68_codegen_pool_1332.sh`
+**复打命令**：`spikes/shorebird_linkinfo_oracle/nc4_f68_pool_skip_1332.sh`
+（2026-09-15 由 `nc4_f68_codegen_pool_1332.sh` 改名——旧名字把结论写进了文件名，而那个结论是错的）
+与 `nc5_f68_x27_ref_decode.sh`（订正之二那组解码数字的落盘复打命令）
 （`--negctl` 在**某个 `.so` 的副本**里翻一个字节，要求 `BYTE-IDENTICAL-CODE` 776→775、
 `CODE-DIFFERS` 3820→3821，2026-09-15 实测变红并还原）。
 详见本节末「证伪 pass」。**卡仍是 `built`，未关。**
@@ -3779,9 +3848,11 @@ hello **3561/3561 / 1380/1380**，`missing=0 extra=0`；去重开着时只有 85
 
 ⇒ **不是逐槽全等**。两个缺口有名有姓：`prog fn#1580` / `fn#1633`，
 各 14 槽对 15，两处都少池索引 **1332**。
-🔴 **订正（F68，2026-09-15）**：这两处**不是遍历差异**，是 `gen_snapshot` 给 `parseNumber`
-少发了那条 +Infinity（池索引 1332）加载；把输入控制住后 `self_pp` 在 **776/776** 个
-机器码逐字节相同的函数上有序全等。**F66 的断言缩窄为「值对、路未证」只对代码不同的函数成立。**
+🔴 **订正（F68，2026-09-15，含同日的二次订正）**：这两处**不是遍历差异**——
+把输入控制住后 `self_pp` 在 **776/776** 个机器码逐字节相同的函数上有序全等；
+但它**也不是** `gen_snapshot` 少发了那条 +Infinity（池索引 1332）加载（那一版已实测推翻），
+而是**我们自己的 `analyze_snapshot` 给池形式固定跳 3 个字，把代码里真实存在的那条引用吞掉了**。
+**F66 的断言缩窄为「值对、路未证」只对代码不同的函数成立。**
 
 ⚠️ **`REAL GAP` 在去重开/关两侧都是 4**（`real_gap` 是 distinct 集合差，对重数免疫）
 —— 与 F66 同型，**不可当佐证**。真正动的读数是 `diff_units.sh shorebird` **41344 → 39425**。
@@ -3888,3 +3959,70 @@ SDK 源码注释 `analyze_snapshot_api_impl.cc:1085-1090`、`cards.tsv:63`、以
 **没人实现它，于是同一个误报在 22 小时后原样重演**。
 ⚠️ 这条修法候选属于 **F49**（就是「这道闸门」那张卡，仍 `built`、从未过 pass）。
 **连续四次误报 = 这个设施在生产里每一轮都在说谎**，它的优先级应当高于「循环机械」里的其他卡。
+
+#### F68 归因订正（2026-09-15，本轮实际交付）—— **同一处读数被归错了两次**
+
+**结论（引用请引这一段）**：`self_pp` 少的 2 槽、`subgraph_pp` 少的 44 槽，
+**是我们自己 `analyze_snapshot` 的解码器缺陷**：
+`runtime/vm/analyze_snapshot_api_impl.cc` 里 `ComputeShorebirdCodeFacts` 的 `DecodePoolReference` 分支
+（本轮加注释后 `:1350-1383`，之前 `:1318-1331`）用 `int32_t ahead = 3 - used;` 再 `i += 1 + ahead`，
+**给池形式记了固定的 3 个字**，后面那两个字里装什么都照吞。
+他们的布局在那个站点有 NOP，我们的代码生成排得更紧 ⇒ **一条真实的池引用落进跳窗，永远不会被解码**。
+
+🔴 **这个读数至今被归错两次，三种说法只有第三种是量出来的**：
+① 「我们的遍历（walk）与他们不同」（F67 原判，已撤回）→
+② 「我们的 `gen_snapshot` 给 `parseNumber` 少发了那条 +Infinity 池加载」（上一轮的订正，**本轮实测推翻**）→
+③ 「遍历确实有问题，但问题是解码器里一个点得出名字的固定跳」（本轮，带落盘复打命令）。
+**②之所以能站住一整轮，是因为它把「代码不同」当成了「代码里没有那条引用」——推的，不是量的。**
+
+**把它量掉的那条命令（本轮落盘，铁律第 8 条）**：`nc5_f68_x27_ref_decode.sh`
+（按函数字节范围解码全部 x27 相对 scaled load）实测：
+
+```
+DECODED x27 POOL REFS: hello theirs 2288 ours 2288   prog theirs 7319 ours 7319
+DECODER REPRODUCES self_pp:  hello theirs 1377/1380 ours 1377/1380   prog theirs 3213/3216 ours 3211/3216
+REFS IN CODE BUT NOT IN self_pp: hello theirs 0 ours 0   prog theirs 0 ours 2
+THOSE REFS BY KIND (size,V): size=3,V=1 2
+WITHIN-2-WORDS-OF-PREVIOUS-REF: hello theirs 0 ours 0   prog theirs 0 ours 2
+OFFENDER prog ours 1580 ...parseNumber: code refs 15, self_pp 14, missing index 1332 at fn-relative offset 1456
+OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 1332 at fn-relative offset 1180
+```
+
+⇒ 我们的 `.so` **有**那条 1332 加载，指令字 `0xfd54db60`（`ldr d0,[x27,#10672]`）与他们逐位相同，
+在引用流里的位置也与他们相同（ours 1456 / theirs 1480、ours 1180 / theirs 1204）；
+两个 offender 解出来的引用串在我们这边是
+`[1342,1343,1344,1345,1332,1334,1335,1335,1346,15,16,16,16,1346,15]`，
+与**他们解出来的**、以及**他们的 `self_pp`** 逐项相同，我们的 `self_pp` 就是这串去掉那个 1332。
+「落在上一条引用 2 个字以内」的引用：**prog OURS 2 / THEIRS 0，hello 两侧 0** —— 与丢掉的 2 条精确对上。
+
+⚠️ **必须一起带走的限定**：**他们的分析器也可能有同一个固定跳，只是他们的布局从没触发它**。
+无法直接测：快照版本 hash 使双方的 `analyze_snapshot` 互相拒读对方的 `.so`
+（`Wrong full snapshot version, expected '8b59e404…' found '839937dd…'`，rc=255）。
+
+🔴 **一并撤回的佐证**：「我们在别处照样发 1332（hello 2 次、prog 1 次）」**无效**——
+**池索引标号是按 fixture 各算各的**：`dump_object_pool` 的 1332 在 prog 是 `0x7ff0000000000000 (unknown)`、
+在 hello 是 `Type: _EventDispatch@5048458 (obj)`；两池同索引只有 1323/1421（hello）、3665/3849（prog）一致。
+只有 prog 那 1 次（`double._tryParseDouble`）是同一个东西。
+
+**落到哪三处**：① SDK 源码注释（F67 开关上方那块 + 跳点本身加了一条 `KNOWN-SUSPECT` 交叉引用，
+**只动注释、没动代码、没重建**）；② `cards.tsv` 的 F68 行（整张卡改写成「池形式固定跳 3 个字」，
+`open`，判据要求重建 **`xcodebuild/ProductSimARM64`**、读到 `missing 0 / 0`、
+且其余 3213/3216 + 1377/1380 个函数的流逐槽不变）；③ 本文件（F68 卡片 + 上一轮那段结论本身）。
+
+🔴 **顺带修掉一个 F60 型假绿（判据不可能报红）**：`nc4_f68_codegen_pool_1332.sh` 的退出码是
+`sys.exit(1 if unpart else 0)`，而 `unpart = tot - id_n - df_n` 里每个 key 恰好只增一边
+⇒ `UNPARTITIONED 0` 是**算术恒等**，任何输入都不可能让它响。
+**实测过**：扰动一条 `self_pp` 流，打印出的格子变成 `NOT-ORDERED-EQUAL 1`，脚本**照样 rc=0**。
+已改成退出码跟着「代码逐字节相同分区里的 `NOT-ORDERED-EQUAL`」与「`extra`」走；
+`UNPARTITIONED` 仍打印但标注为恒等、不再当闸门。
+**并补上那条一直缺席的负控制**：旧的翻字节控制只证明了「分区是从字节算的」，
+**从来没考过 `self_pp` 比较本身**。新控制在 `as.hello.ours.shorebird` 的副本里
+把 idx 13 `[Optimized] new Map` 的 `self_pp` 由 `[703,704]` 改成 `[99999,704]`，
+实测 `BYTE-IDENTICAL-CODE FUNCTIONS 776 ORDERED-EQUAL 775 NOT-ORDERED-EQUAL 1` **且 rc=1**，
+还原后 776/776、rc=0。脚本同时改名为 `nc4_f68_pool_skip_1332.sh`
+（旧名字把一个后来被推翻的结论写进了文件名）。
+
+**本轮闸门读数**：`nc4_f68_pool_skip_1332.sh` rc=0（两条负控制均变红并还原）、
+`nc5_f68_x27_ref_decode.sh` rc=0、`cards_check.sh` rc=0。
+**没有重建、没有跑 `verify_all.sh`、棘轮未动。**
+⚠️ `nc5` **刻意没有接进 `verify_all.sh`**（那是单独排队的一项，和 `nc3_f66_*`/`nc3_f67_*` 欠的是同一笔）。
