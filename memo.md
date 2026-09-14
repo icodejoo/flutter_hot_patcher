@@ -1226,6 +1226,83 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       ✅ **2026-09-14：这个前置条件已满足** —— Pass 11（opus，针对卡片，审 `8da0455`）
       对「gap 不是 structural」判 SURVIVES。F62 自此可做；F55 本身仍 open（判据未达标，见该卡）。
 
+      🟢 **已实现（研究树 `98ac73c`，2026-09-14）**：新增 `gap_evidence.sh`，`gap_class()` 仿
+      `structural_class()` 的形状写在 `parity_matrix.sh:193-220`，**没有**往 `KNOWN` 数组塞
+      `shorebird:gap` 字面量。实测：矩阵 `59 cells, 0 unrun, 3 blocked`、
+      **`unknown=21 gap=3 structural=0 na=35`**（矩阵里第一个 `gap`）、TSV 恰好 3 行变动、
+      `phase_gate.expected` 同一提交里从 `unknown=24 gap=0` 改到 `unknown=21 gap=3`、
+      `phase_gate.sh` rc=0、`cards_check.sh` 0 failures、`verify_all.sh` **34 ran / 0 failed**。
+
+      🔴 **F62 证伪 pass 判决 PARTIAL（2026-09-14，Opus，37 次调用，审 `98ac73c`）⇒ 不许关。**
+      **我派的强制项被它证伪了，方向与我猜的相反**：我怀疑三条负控制全走「测量没跑成 ⇒ 0 行 ⇒
+      回落 unknown」这一条路，因而分类器测的是「测量跑了没有」而不是「数据说不说 gap」。
+      它构造了 `/tmp/f62m1`（prog 原样，hello/base_dd 的 theirs := 它们自己 ours 的字节拷贝）：
+      测量 **rc=0**、`classification=gap real_gap=2266`、有证据行，而 `gap_evidence.sh` 只发**一行**
+      （prog），逐字抄出来的 `gap_class()` 返回 `hello→unknown, base_dd→unknown, prog→gap`
+      ⇒ **`slots[fx] <= 0 → continue` 是真判别器，逐格生效，我的怀疑不成立。**
+      反向注入（5 个 prog 函数各加一个他们没有的元素）rc=1、`CONTAINMENT BROKEN 5`、0 行。
+      去重假说也被独立打掉：把 ours 换成 `sorted(set(theirs))`（删掉 126,448 个重复槽，集合相等）
+      ⇒ rc=1 `CONTAINMENT VACUOUS`、0 行 ⇒ **单靠去重产不出 `gap`**。
+      它还顺手给出一条比卡片更强的证据：**我们全语料只发出 58 个 distinct selector 值里的 33 个，
+      52 个缺失 (field,value) 对里有 50 个是我们在任何地方都没发过的值** —— 这是值集缺口，
+      不是「walk 走岔了」的站点 artifact。七条攻击逐条实跑，所有上报数字全部复现。
+
+      🔴 **但它找出两个真缺陷，两个都在「棘轮能不能被锉掉」这条线上**：
+      · **缺陷 (a)：`gap_class()` 没有 residual 要求，而 `structural_class()` 有。**
+        一格只要 `slots>0 && pairs>0` 就能离开 `unknown`，**没有分母**。
+        它自己逐键数了一遍：hello 1380 个函数里 **1063 个在某个键上不同**
+        （op_subgraph_hash 1009 / subgraph_hash 1009 / offset 202），
+        而**真正缺元素的只有 1 个函数**（fn#74 `_objectNoSuchMethod`，selector 9728 在两个字段里
+        = 全部 2 个槽的基底）。⇒ **hello/base_dd 这两格是踩着 1/1380 的基底离开 unknown 的**，
+        而且把那 2 个槽补上也关不掉这两格 ⇒ **`gap=3 → 0` 不是 F55 定义的工作能到达的终点。**
+        这正是「五之二」对 structural 立的那条 (b) 残差要求，`gap` 这边漏了。
+      · **缺陷 (b)：证据行的 flag 标签被无条件信任，而 pin 看不见替换。**
+        `GAP_FLAG=dump_object_pool ./parity_matrix.sh --reuse` 把 shorebird 的测量**改个标签**，
+        于是 `dump_object_pool` 的三格变成 `gap`（它们自己没有任何测量），
+        而 **`phase_gate.sh` 照样 rc=0** —— 因为 pin 数的是**类别计数**（`unknown=21 gap=3`），
+        **不是哪几格持有它们**。`gap_class()` 从不检查它读到的那行是不是来自它所命名那个 flag 的测量。
+      · 🔴 **第三件事独立证实了实现代理自报的那条**：hello 与 base_dd 的 `ours`
+        **在全部六个字段、以及其余每一个键上逐元素相同**（两份 `theirs` 更是 md5 逐字节相同
+        `6338a25c…`）⇒ base_dd 的那一行是 hello 数字的继承。
+        **「3 格」只是 2 个独立观测，而棘轮按 3 动。**
+      **审查者的 COST OF BEING WRONG（逐字）**：F62 第一次动本阶段的棘轮，
+      而 F55 的关闭与整个「系统性产物对拍」完成判据都要穿过这道闸门；
+      若这三格被过度圈定，本阶段 `gap=0` 的终态就**不再是 F55 所定义的工作能到达的**，
+      pin 会把一个没有任何测量能退休的状态锁死。
+      ⇒ 两处修复都需要自己的判据与负控制（契约五之四的例外条款），**已立为 F64**。
+      ⏸️ **提交 `98ac73c` 与已移动的 pin 本轮不回退**：卡片仍 `open` 且两处缺陷已具名记账，
+      回退本身是个带风险的决定，不该由一个已经结束的轮次替下一轮做（契约六之三）。
+      **F64 未闭环之前，不许引用「gap=3」去支持任何别的结论。**
+
+---
+
+- [ ] **F64：`gap` 判决缺残差要求，且棘轮认类别计数不认格子身份**（`open`，2026-09-14 立）
+      **来历**：F62 证伪 pass（Opus，审 `98ac73c`）判 PARTIAL 逼出来的两处，逐条见 F62 卡。
+      两处都不是「测量错了」，是**判据比它要守的东西弱**，所以棘轮能被锉掉而闸门不响。
+
+      · **(a) `gap_class()` 只要 `slots>0 && pairs>0` 就放行，没有分母。**
+        `structural_class()`（`parity_matrix.sh:127-169`）要一条 residual 行且 `UNEXPLAINED 0`，
+        `gap` 这边一条都不要。实测后果：hello 1380 个函数里 1063 个在某键上不同，
+        真正缺元素的**只有 1 个**（fn#74，2 个槽）—— 这两格是踩着 1/1380 离开 `unknown` 的。
+      · **(b) 证据行的 flag 标签被无条件信任，pin 只数类别不数格子。**
+        `GAP_FLAG=dump_object_pool ./parity_matrix.sh --reuse` 把同一份测量改个标签，
+        `dump_object_pool` 三格变 `gap`，而 `phase_gate.sh` 仍 rc=0。
+
+      **判据**（两条都要，缺一条不算）：
+      ① `gap_class()` 拿到一条 residual 行才放行：该行的命令要打印这一格里
+        **具名缺口没有解释掉的差异数**，且这个分母**由 harness 从两边产物算**、不由声称方给
+        （五之二 (b) 的同一条要求，方向相同）。按今天的数据 hello/base_dd **应当过不了**
+        （1 个函数 / 1063 个有差异的函数），过了就说明残差被算松了。
+      ② `phase_gate.expected` 钉**格子身份**（flag×fixture），不只是类别计数；
+        `GAP_FLAG=<别的 flag>` 那条替换**必须**让 `phase_gate.sh` 变红。
+      **负控制**（两条，都要实跑）：
+      ① 把 residual 要求去掉 ⇒ hello/base_dd 必须重新变回 `gap`（证明这条要求真的在承重）；
+      ② `GAP_FLAG=dump_object_pool ./parity_matrix.sh --reuse` ⇒ `phase_gate.sh` 必须 rc≠0
+        （今天实测 rc=0，这是它现在的真实行为，不是假设）。
+      ⚠️ **这张卡会把 `gap=3` 改小**（很可能到 1，因为 base_dd 是 hello 的继承、
+      hello 的基底只有 1 个函数）。**改 pin 必须与分类改动在同一个提交**，
+      并在 memo 里写明是本卡把它改回去的 —— 否则下一轮会读成「棘轮倒退了」。
+
 ---
 
 - [ ] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
@@ -3031,3 +3108,48 @@ Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table`
 派发 = **1 个子代理**（opus 证伪 pass，38 次调用，99640 tokens）·
 三棵树 status 未变（研究树仍只有既有未跟踪文件，代理全部工作在 `/tmp/f55rev/`）·
 `loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）· `.loop/UNREVIEWED_FIX` 空（本轮无 FALSIFIED/PARTIAL）。
+
+💓 **心跳 2026-09-14 20:47** —— 本轮任务：**F62**（把 `shorebird` ×3 从 `unknown` 改判 `gap`，同一提交里动 `phase_gate.expected`）。按 memo 末尾「下一轮的两件事」的第 1 优先级。
+
+---
+
+## 轮次记录 2026-09-14 20:47–21:1x（F62）
+
+**任务** = F62：把 `shorebird` ×3 从 `unknown` 改判 `gap`，同一提交里动 `phase_gate.expected`。
+按上一轮 memo 末尾「下一轮的两件事」的第 1 优先级；前置条件（F55 证据脚本过一次针对卡片的
+证伪 pass）由 Pass 11 满足。
+
+**判据结果** = 实现侧全部达标：矩阵 `59 cells, 0 unrun, 3 blocked`、
+`unknown=21 gap=3 structural=0 na=35`（矩阵里**第一个 `gap`**）、TSV 恰好 3 行变动、
+`phase_gate.sh` rc=0、`cards_check.sh` 0 failures、`verify_all.sh` **34 ran / 0 failed**。
+**F62 证伪 pass VERDICT: PARTIAL**（Opus，37 次调用，审 `98ac73c`）⇒ **F62 不关，仍 `open`**。
+
+**两处缺陷**（全文在 F62 卡）：(a) `gap_class()` 没有 residual 要求，hello/base_dd 踩着
+**1/1380** 个函数离开 `unknown`；(b) `GAP_FLAG=<别的 flag>` 能把同一份测量改标签、让三格无测量
+变 `gap`，而 `phase_gate.sh` **仍 rc=0**，因为 pin 数类别不数格子身份。
+两处都需要自己的判据与负控制 ⇒ 按契约五之四的例外条款**立为新卡 F64**，本轮不当场修。
+
+**本轮被证伪的是我自己的怀疑，方向相反**：我给证伪代理设的强制项猜「三条负控制全走
+『测量没跑成 ⇒ 0 行 ⇒ unknown』一条路，所以分类器测的是测量跑没跑」。它构造了一份
+**测量 rc=0、有证据行、而 hello/base_dd honestly 无缺口**的语料，`gap_class()` 逐格返回
+`hello→unknown, base_dd→unknown, prog→gap` ⇒ **`slots[fx] <= 0` 是真判别器，我的怀疑不成立。**
+记在这里是因为「强制项落空」本身是有价值的读数，不是没发生过的事。
+
+**改动文件** = 研究树 `98ac73c`（`gap_evidence.sh` 新增 · `parity_matrix.sh` · `parity_matrix.tsv` ·
+`phase_gate.expected`）+ `cards.tsv`（新增 F64 行）+ 状态树 `memo.md`。
+**派发 = 2 个子代理**（实现 29 次调用 / 94351 tokens；证伪 Opus 37 次调用 / 195251 tokens）。
+三棵树 tracked 改动为 0（证伪代理全部工作在 `/tmp/f62m*`，结束时逐项还原并验字节相同）；
+`loop-rescue` stash 仍 **2 个**（2026-09-09 旧账）。
+
+**下一轮两件事（按此优先级）**：
+1. **F64**（本轮证伪逼出来的，且它压着 F62）：给 `gap_class()` 加 residual 要求、
+   把 `phase_gate.expected` 改成钉格子身份。预期它会把 `gap=3` 改小（很可能到 1）——
+   **那是修正不是倒退**，改 pin 必须与分类改动同一个提交。
+2. **规则 0 的正面工作，同时是能推翻 2268 的那个测试**：在 `DecodeDispatchCall`
+   （`runtime/vm/analyze_snapshot_api_impl.cc:1097-1119`，两处 `kNoSelector` 就是待做的点）
+   实现 `movz/movk` 与逻辑立即数两种派发头部的 selector 解码，重建 **`ProductSimARM64`**
+   （**不是 `ProductARM64`**，`parity_matrix.sh:26`），重跑 ⇒ **判据是 `real_gap` 恰好落到 4**。
+   落在别处就说明那个 60/60 谓词只是本语料的巧合。⚠️ 涉及 ARM64 立即数重构，**先写负控制再动代码**。
+   ✅ 本轮证伪 pass 顺带给了它一个**独立的先验**：我们全语料只发出 58 个 distinct selector 值里的
+   **33** 个，52 个缺失 (field,value) 对里 **50** 个是我们在任何地方都没发过的值 ⇒ 这是值集缺口，
+   与「两种未解码的派发头部」这个诊断同向。
