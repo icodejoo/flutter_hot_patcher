@@ -2724,3 +2724,68 @@ memo 此前记着：「真正被硬阻塞时 `rate_limit_info.status` 是什么�
 - verify_all.sh：**34 ran, 0 failed**（待确认）
 
 **Pass 9（bfdc21e）→ 派遣中（Opus）**
+
+**心跳 2026-09-14 18:46:14（round 本轮）**：开工前状态 —— `.loop/UNREVIEWED_FIX` 欠 F55 修补丁一次 pass；`.loop/RESCUED` 指向 research 树 `stash@{0}`（bfdc21e 之上 2 文件，未提交）。本轮计划：先落地 stash（Fix Round 10），再派新鲜子代理审 F55 修补丁。
+
+**Fix Round 10（6e1ff86，2026-09-14 本轮）已提交**（从 `loop-rescue` stash 救回，round-60348 被中断前未提交）：
+- `evidence_shorebird_components.sh`：新增 `fields_with_gap` / `fields_without_gap` 计数，每个 field 打 `GAP` 或 `EQUAL` 标记
+- `cards.tsv`：F55 措辞收窄为「gap 指全局 ours ⊊ theirs，不是每个 field 各自都是真子集」
+- verify_all.sh：**34 ran / 0 failed / rc=0**（6e1ff86）；VERDICT 行实测
+  `classification=gap basis=containment real_gap=2268 fixtures=2 functions=4596 fields_with_gap=4 ours_elements=223340 theirs_elements=262333`
+- ⚠️ провenance：逼出这次修改的那次 pass **没有记录**（上一轮在写进 memo 之前被中断），所以它等同于未经审的新工作。
+
+**F55 修补丁 VERDICT: PARTIAL (fix)（Pass 9，Opus，审 commit `6e1ff86`，`merge-base --is-ancestor` rc=0，2026-09-14）**
+—— Pass 8 的 (b) 单位标签、(d) classification 计算化确实修掉了；**(a) 只是被换成了另一个恒真式，(c) 那个「负控制」exit 0 因而不是负控制。**
+
+🔴 **第十个仪器缺陷（F60 型）原样复发在 F55 身上**：新恒等式
+`count_gap = dup_theirs − ours_dup + distinct_missing` **在 ours ⊆ theirs 下是代数恒等式**。
+逐 (function, field) 展开，令 a=set(lo)、b=set(lt)，a⊆b 时 |b\a| = |b|−|a|，故
+`(|lt|−|b|) − (|lo|−|a|) + (|b|−|a|) = |lt|−|lo| = count_gap` —— 逐项成立，求和保持。
+且那个 assert 被 `if not violations` 包住，**恰好只在定理前提成立时才求值**，containment 一破就跳过 ⇒ **两条分支都不可能红**。
+实测（复跑命令：`WORK=/tmp/pm_perturb_f55a ./evidence_shorebird_components.sh; echo rc=$?`）：
+对 ours 侧做**保持 containment 的**扰动（hello 删 548 / base_dd 删 575 / prog 删 3710 个元素，
+并各注入 4695/4695/12606 个「theirs 已有的」重复值）后，`self_pp count_gap −7988`、
+`subgraph_pp count_gap −12283`（ours 元素数已多于 theirs，**物理上不可能的状态**），
+EQUAL 字段全部翻成 GAP，real_gap 2268→7102 —— **assert 一次未响，rc=0，classification 仍是 gap**。
+🔑 与 F60 同一句教训：**等式成立恰恰是它不能失败的症状；验收方式是注入异质数据看它能不能红。**
+
+🔴 **`--mutate-fields-check` 不是负控制**：它 `if mutate_fields: return False` 硬绕过 `fields_identical_ours()`，
+只是分支覆盖，**exit 0**。负控制的定义是「故意改坏一处后验证必须变红」。
+pass 补跑了一个真扰动（`/tmp/pm_f55_onefix`：只在 base_dd ours 的一个函数里删 1 个 self_selectors 元素）：
+脚本确实翻到 `INDEPENDENT FIXTURES 3`（分母静默从 fixtures=2/functions=4596 变成 3/5976，real_gap 2268→2271），
+**但两条分支都 exit 0 ⇒ 这个分支判错时没有任何闸门会红。**
+
+🔴 **本轮新查出的三条，都在削弱 F55 这个主张本身（不是修补丁的问题，但必须记下）**：
+1. **「2 个独立 fixture」的真值是「1 个 hello + 1 个 prog」**：`cmp out_verify/hello.dill out_dd/base.dill` **rc=0，
+   逐字节相同**（4387760 B）—— 正是本仓库已登记的 `base.ct`/`patch.ct` 同型坑。脚本靠 fixture-dedup 化解（报 `INDEPENDENT FIXTURES 2`），结论不假，但**「两个独立输入」这个措辞是虚的**。
+2. 🔑 **2268 这个标题数被逐函数重计放大约 44×**：全局只对应 **52 个 distinct (field, value) 对**。
+   hello 那 1380 个函数的**全部**「gap」= **一个函数 `[Optimized] _objectNoSuchMethod` (fn#74) 少一个 selector 值 9728**（2 slot / 1 值，1379/1380 个函数零差异）；
+   prog 的 `subgraph_selectors` 2125 slot 只有 **25 个 distinct 值**散在 962 个函数上。
+   **脚本从不打印缩水后的那个数。**
+3. **两个变量同时在变，且拆不开**：`--shorebird` 比的是「我们的 gen_snapshot 产的快照 × 我们的 analyze_snapshot」
+   对「他们的快照 × 他们的分析器」。交叉测试实测被快照版本 hash 挡死：
+   `THEIR_AS --shorebird out_pm/as.prog.ours.so` → `Wrong full snapshot version`，**rc=255**，反向同样 rc=255。
+   ⇒ **「差异来自 analyze_snapshot 侧」这个归因目前无法证实。**
+   （两侧构建模式与产物年龄已核：同为 Product，mtime 同为 Sep 14 18:58。）
+4. **分母口径没变**：`./evidence_shorebird_residual.sh` 仍是 `EXAMINED 0 of 70223 / UNEXPLAINED 70223`，rc=0
+   ⇒ real_gap 是 element-slot，与 70223 units **量纲不同、无换算关系**，这个「gap」解释了该格 **0 / 70223**。
+
+✅ **扛住的部分**（不要连坐）：五个负控制里四个实测真红 ——
+`--break-containment` rc=1（12 functions）· `--shuffle-pairing` rc=1（9588 violations）·
+`--rotate-pairing` rc=1（PAIRING FAIL hello）· `WORK=/tmp/identical-corpus` rc=1（CONTAINMENT VACUOUS）。
+**去重陷阱本身也扛住了**：`distinct_missing` 用逐函数集合差，纯去重时恒为 0 ——
+实测 `subgraph_pp ours_dup 77460 / dup_theirs 77502` 而 `distinct_missing` 只有 2，确实分开了。
+Round 10 的收窄是**真修正**（`subgraph_field_table` / `self_field_table` 两字段 distinct_missing 确为 0，
+旧的「每个 field 都是真子集」本来就是假的），**但同时也是降档**：CLAUDE.md 那句
+「3216/3216 零例外 ⇒ 收集不全」现在只由 6 个字段里的 4 个支撑。
+卡片引用全部新鲜：`5c4f2b5` 版脚本跑在当前 out_pm 上确实打印 `REAL GAP 2268`；
+`bfdc21e`/`8e91b73`/`49ecd6c`/`5c4f2b5` 的 `merge-base --is-ancestor` 全 rc=0；`EXPECTED_CHECKS=34` 在位。
+
+**⇒ F55 保持 `open`，`.loop/UNREVIEWED_FIX` 不清（PARTIAL 不是 SURVIVES）。F62 不许动棘轮。**
+**Fix Round 11 待办（下一轮，按优先级）**：
+(a) 把那个恒真 assert 换成一个**分子与分母来自不同来源**的检查 —— 判据不是等式成立，
+    而是 `WORK=/tmp/pm_perturb_f55a` 那次保 containment 扰动必须让它 **rc=1**；
+(b) 给 `fields_identical_ours()` 配一个**真会红**的负控制（现有 `--mutate-fields-check` 退场或改成 exit 1）；
+(c) 脚本同时打印 **distinct (field,value) 对数 52** 与 slot 数 2268，并在 VERDICT 行点名
+    hello 侧「1379/1380 函数零差异」这个事实 —— 现在的写法把一个函数的一个值读成了 44× 的规模。
+**Pass 9 的 STILL OPEN（原文）**：把 gen_snapshot 与 analyze_snapshot 这两个变量拆开。交叉测试被 snapshot version hash 挡死（实测 rc=255），唯一可行路径是让两侧 gen_snapshot 产出 version-hash 兼容的快照（或用 `-Dsdk_hash` 对齐）后，跑 `THEIR_AS --shorebird ours.so`：若他们的分析器在**我们的**快照上同样只吐出那个小集合，则这 2268 个 slot 是 gen_snapshot 侧的内容差，`--shorebird` 这三格的 `gap` 归因就是错的。
