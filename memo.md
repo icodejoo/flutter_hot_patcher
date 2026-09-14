@@ -1661,7 +1661,66 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
          **负控制**：把「有进展」判据改成恒真 ⇒ 第一条用例变红。
       ⚠️ 判定「有没有进展」要用 F53 的那条权威源，不要在这里再写第三遍。
 
-## ✅ 通用版四张卡已实现（2026-09-10，`built`，各欠一次证伪 pass）
+## 🔴 F52 / F53 / F54 的证伪 pass 已跑完（2026-09-14，三个全新 Opus，各带一个强制项）
+
+三张卡的判决:**F54 = FALSIFIED · F52 = PARTIAL · F53 = PARTIAL。按协议一张都不许关。**
+派发方式照 `falsify.md`：**一次派发一个强制项**（六次 pass 里五次因为绑了多项而全部跳过），
+强制项取自 `~/Documents/loop` HEAD 交接提交 `d403cdd` 自己点名的三处「built 不是 closed」。
+
+🔑 **三个 pass 从三个方向撞到同一组根因**，这比任何单条发现都重要：
+
+**根因 A —— 状态写是「先截断后写」，没有 temp+rename、没有回读。**
+`_write_state`（`runner.py:667`）是 `path.write_text()` 包在 `except OSError` 里 ⇒
+**它抓住了异常，漏掉了损害**。实测：`idle_count` 从 `b'2'` 变成 `b''`，
+`PAUSE` 与 `dispatch_stats.tsv` 被**建成零字节文件**，而 `main()` 返回 **0**；
+日志说 `PAUSED after 3 idle rounds; expires in 3600s`，随后两轮说
+`skip: pause: hand-made PAUSE, stays until a person removes it`
+⇒ **一个会自己过期的自动暂停，静默变成只有人能解除的永久停机，且没有任何东西报告它。**
+守护线程那个 pass 从完全不同的入口（探针写 PAUSE 途中被杀）得到**同一个零字节 PAUSE**。
+
+**根因 B —— 额度阻塞分支提前返回，没人 join 探针线程。**
+`settle()` 在 `runner.py:535` 早于 `track_idleness()` 返回，`main()` 的 `finally: release()`
+在探针子进程还活着时就删掉 `round.lock`。于是：
+· F52：**连续两轮的 `progress_command` 并发执行**（实测重叠 9.7s，复现两次）——
+  正是那把锁被加进来要保证的性质；现有测试看不见，因为它**只在单个 runner 进程内断言**。
+  ⚠️ 今天危害为零（部署的 `progress_command` 是只读 `git log`，`nocommit_s=5400`）
+  ⇒ **缺陷在保证本身，不在当下的损害。**
+· F54：PAUSE 与 `progress_failures` 两个升级动作**静默丢失**，
+  而 stdout **与一次健康的额度阻塞轮次逐字节相同**。
+
+**F54 被推翻的那一条（两个独立缺陷）**：
+① `record_dispatch` 读 summary 事件，而 `run_round` 在 `kill_worker` 后**立刻 break**
+⇒ **被杀掉的轮次永远记成 `0 tool call(s)`** —— 而那正是这套账本存在的理由；
+② `runner.py:424` 用 `sel.select()` 轮询 fd 而 `readline()` 在用户态缓冲
+⇒ 一串事件里除第一行外全被搁住，同时喂给停滞看门狗一个假的「没有事件」。
+🛑 **卡里的负控制（「把计数改成常量」）抓不到这两条**：那个值是真算出来的，只是**从空气里算出来的**。
+
+**其余实测（每条都跑过，不是推理）**：
+· 额度阻塞中途树留脏、`finish()` 按设计跳过 ⇒ **之后每一轮都 `skip: tree`，永久停摆**。
+  代码里那句「阻塞的轮次没跑过，所以脏东西是它之前就有的」**是假的**——worker 跑了 2.6s 并写了文件。
+· 锁窗口内收到 SIGTERM ⇒ `round.lock` 留下死 pid ⇒ 同样每轮都 skip。
+· 一个不可写的计数文件**永久解除空转护栏**：四轮空转，`idle_count` 冻在 1，PAUSE 从未写出，每轮 rc=0。
+· 状态目录只读 ⇒ 轮次停在锁文件并**退出 0** —— 监管者看到成功，实际什么都没跑。
+· `elog.flush()` 无保护 ⇒ 轮次在 worker 已做过工具调用之后死于 rc=1，`settle()` 从未运行，
+  **finisher 从未抢救那一轮的未提交工作**。
+· 那把锁**让看门狗击杀后的未抢救窗口翻倍**（38.7s vs 20.7s，实测）。
+· F52 的「不扰动 index」**字面为假**：`.git/index` 确实被重写（sha 变、size 209），语义上仍成立。
+
+🔴 **F53 的负控制按卡面写法根本跑不起来**：把判据改回 `bool(summary["tools"])` 之后
+`tests/test_runner.py` **在第 737 行崩溃**，打印零条 FAIL、没有汇总
+—— 正是该仓库自己记的陷阱 #1「**崩溃不是红**」。串行复现两次。
+单独改 handoff 那一半能得到可读的红，**所以那半条主张是承重的**；
+空转那一半要先把最后一处裸 `read_text()` 换成 `read_or` 才看得见红（27 处失败）。
+
+🟢 **顺带结清了交接提交的 Item 0**：`run_tests.sh` 实测 `6 ran, 331 checks, 0 failed` rc=0
+（三个 pass 各自独立跑过一次，结果一致）。⚠️ 但耗时 **128.3s**，不是 `AGENTS.md` 写的 ~95s。
+
+⚠️ **这三张卡的代码在 `~/Documents/loop`，一棵 `ralph.sh` 看不见的树** ——
+本项目的循环**做不了**这些修复，指向它们只会空转。修复清单本身不难，都很局部：
+temp+rename 并回读 · 额度分支别提前返回并 join 探针 · kill 后先读 summary 再 break ·
+逐行读改成不依赖 select 的读法 · 给 `elog` 的写/刷/关加保护。
+
+## ✅ 通用版四张卡已实现（2026-09-10，`built`，各欠一次证伪 pass —— 上方 2026-09-14 已补，结果见该节）
 
 | 卡 | 提交 | 做了什么 |
 |---|---|---|
