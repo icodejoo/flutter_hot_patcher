@@ -93,6 +93,21 @@ MODEL=${FHP_LOOP_MODEL:-claude-sonnet-5}
 # picks per card and this variable does not reach.
 EFFORT=${FHP_LOOP_EFFORT:-medium}
 
+# Hard ceiling on how long one round may talk. Measured over 16 sessions from
+# 2026-09-14/15, assistant turns per session were
+#
+#   4 33 39 42 46 53 58 60 63 65 65 71 75 76 111 | 516
+#
+# -- a median of 64, a normal maximum of 111, and one outlier at 516 that cost
+# 52.5M cache-read tokens on its own and 27.4M more across the seven extra
+# sessions it opened, i.e. 47.5% of a 19-hour spend from a single round. 250 is
+# a little over twice the largest normal round and less than half the outlier,
+# so it bounds the tail without touching anything that has actually happened.
+#
+# ROUND_TIMEOUT does not cover this: a round can burn the ceiling in turns long
+# before the clock, and the cost that matters scales with turns, not seconds.
+MAX_TURNS=${FHP_LOOP_MAX_TURNS:-250}
+
 # The round must not start without an explicit model. Empty here does not mean
 # "use the default" -- it means no --model flag reaches the CLI, and then
 # ~/.claude/settings.json's `env.ANTHROPIC_MODEL` takes over silently. That is
@@ -691,7 +706,7 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
     # live.log line still stamped 14:41:53, while having committed work at
     # 16:26 -- from outside, a working round was indistinguishable from a hung
     # one, which is the one thing this log exists to tell apart.
-    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} &
+    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} ${MAX_TURNS:+--max-turns "$MAX_TURNS"} &
     worker=$!
     echo $worker >"$worker_pid_file"
     wait $worker

@@ -146,4 +146,72 @@ for _tok in $CMD; do
 done
 set +f
 
+# ---- dispatch must go through the Agent tool, not a shell -------------------
+#
+# A different category from everything above: this one guards accounting, not
+# the disk. On 2026-09-14 a round ran eight falsification passes by shelling out
+# to `claude -p` instead of dispatching them. Two things broke at once.
+#
+#   1. The F42 ledger counts `Agent` tool_use blocks in the transcript, so it
+#      printed `round dispatch: 0 subagent(s) [-]` -- the identical reading to
+#      the three rounds on record that really did write their own verdicts. A
+#      gate that cannot tell a real dispatch from a forged one is not a gate.
+#   2. Each shelled-out pass opened its own session and rebuilt its own context.
+#      Measured: that round cost 52.5M cache-read tokens itself plus 27.4M
+#      across the seven extra sessions -- 47.5% of everything spent in the
+#      following 19 hours, from one round.
+#
+# COMMAND POSITION ONLY, and that is the whole point. This hook sees the entire
+# command string with `git commit -m '...'` messages inside it, and word
+# splitting here ignores quotes -- so a commit message containing the words
+# "claude" and "-p" would be refused by any substring test. That accident is
+# already in this file's header twice ("force-deletes", then "confirm"/"perform"
+# matching on "rm "). So `claude` is only recognised as the command of a
+# segment: after a separator, skipping VAR=value assignments and env/command
+# prefixes. `git commit -m 'stop using claude -p'` keeps `git` in command
+# position and is allowed.
+set -f
+_cmdpos=1
+_is_claude=
+_subst=
+for _tok in $CMD; do
+  case $_tok in
+    ";"|"&&"|"||"|"|"|"&"|";;"|"|&") _cmdpos=1; _is_claude= ; _subst= ; continue ;;
+  esac
+  if [ -n "$_subst" ]; then
+    # Inside a command substitution that word splitting tore apart. Stay in
+    # command position until it closes: PROMPT=$(cat /tmp/p.txt) claude --print
+    # is the shape the 2026-09-14 round actually used, and without this the
+    # tokens of the substitution look like an ordinary command and clear it.
+    case $_tok in
+      *')'*) _subst= ;;
+    esac
+    continue
+  fi
+  if [ -n "$_cmdpos" ]; then
+    case $_tok in
+      *=*)                                         # VAR=value, still command position
+        case $_tok in
+          *'$('*)
+            case $_tok in
+              *')'*) ;;
+              *) _subst=1 ;;
+            esac ;;
+        esac
+        continue ;;
+      command|env|nohup|time|exec) continue ;;     # prefixes, still command position
+      claude|*/claude) _is_claude=1; _cmdpos= ; continue ;;
+      *)              _cmdpos= ; _is_claude= ; continue ;;
+    esac
+  fi
+  if [ -n "$_is_claude" ]; then
+    case $_tok in
+      -p|--print)
+        set +f
+        deny "blocked: dispatch a subagent with the Agent tool, not by shelling out to \`claude\`. A shelled-out pass is invisible to the F42 dispatch ledger -- it reports 0 subagents, which is the same reading as a round that forged its own verdict -- and it rebuilds a whole second context (measured 2026-09-14: 47.5% of a 19-hour spend came from one round doing this eight times)." ;;
+    esac
+  fi
+done
+set +f
+
 exit 0
