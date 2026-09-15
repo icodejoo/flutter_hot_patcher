@@ -4882,3 +4882,65 @@ commits 字段挪到 notes 字段的记账提交 —— **没有任何未经审�
 4. **F70**（挂起中，第 5 轮后按契约回头重试）：**不要再把 pin 细一级**，
    先答「F68 的标的是哪个量」；顺带把 `cards.tsv` 第 6 栏补到与实现同步。
 5. **F71**（挂起中）。 6. **F49**（仍 `built`、从未过 pass）。
+
+---
+
+## 心跳 2026-09-15T09:1x round start
+
+队列开局：`.loop/UNREVIEWED_FIX` **3 项**（F70 / F75 / F76）。三棵树实测干净
+（状态树/研究树仅 `?? .serena/` 等未跟踪，SDK 树 0 项）。无 `.loop/PAUSE`。
+
+**队列先结账（两项删除、一项保留），理由全部是实测**：
+
+- **F75 / F76 删除 —— 它们没有修补丁可审**。判据：`git show --stat 3045a50` =
+  **1 file changed, 2 insertions(+)**，且那个文件是 `spikes/shorebird_linkinfo_oracle/cards.tsv`
+  —— 该提交做的是**立卡**，不是修东西。两张卡在 `cards.tsv` 里都是 `open`，
+  本身就是待办队列里的条目，不是「已修但未审」。
+  与 `60c619e` 处理 F62 是同一种情形（当时写的是「no fix patch exists; defects became F64」）。
+  ⚠️ 这不是说闸门误报：闸门问的是「本轮有 PARTIAL 判决 + 有提交点名」，
+  两条都为真；**它分不出「点名是为了立卡」还是「点名是为了修它」**，这是它的已知盲区，
+  代价只是一次人工结账。
+- **F70 保留、本轮不派 pass**。上一轮（4851-4858 行）已用实测写清：最后一个**代码**修补
+  `e5ee85f` 已被新鲜 Opus pass 打过（判 `PARTIAL (fix)`），`ac4a118` 只是记账提交，
+  **没有未经审的修补丁**；F70 在挂起池里，按契约第六条第 5 轮后重试。
+
+### 本轮任务：**F75**（上一轮定的优先级 1）
+
+**实现已落地（研究树 `5665d96` + `d389035`，两个 Opus 子代理，26 + 83 次调用）**，证伪 pass 待派。
+
+- **(iii) 全量扫（`5665d96`）**：新脚本 `exitcode_convention_sweep.sh`，**41 of 41 逐个分类**，
+  枚举来自 `verify_all.sh` 本身（39 条 `^run_script ` + 2 处行内 `ran++`），
+  数目对不上就打 `ENUMERATION MISMATCH` 并非零退出（负控制实测：删一条 run_script ⇒ `enumerated 40, declared 41`, rc=3）。
+  实测 **LIVE2=yes 恰好两个**（`nc4_f68_pool_skip_1332.sh`、`nc5_f68_x27_ref_decode.sh`），
+  BLOCKED2=yes 24 个，**UNDECIDED 3 个并逐个点名**（`nc3_f66:99`、`nc3_f67:102`、`f69b:1560`），
+  另有 7 个把 2 用作 usage/工具失败、13 个根本到不了 2。
+  负控制：在 $TMPDIR 副本里给一个 LIVE2=no 的脚本注入真缺陷路径的 `exit 2`，该行 no→yes，对照行逐字节不变。
+- **(i)+(ii)（`d389035`）**：`blocked_code_for <script>` 案例表逐检查声明「哪个 rc 才算没跑成」——
+  24 个多数派仍是 2，`nc4`/`nc5` 改为 255（nc5 自己的 premise/usage 退出码让位到 255/254），
+  `f69_their_pool_skip_disasm.sh` 声明 `none`（**永远不可能读成 BLOCKED**）。
+  `EXPECTED_BLOCKED` 钉的是**排序后的名字集合**（不是计数），按模式分档（正常 2 个 / `--self-test` 5 个 / `NC3_ALLOW_REBUILD=1` 0 个），
+  失配时打印 newly / no-longer blocked；终局谓词由 `blocked -eq 0` 换成 `blocked_set_ok`。
+- **端到端实测（每次都是真跑 `./verify_all.sh`，约 6 分钟，不是从 rc 推的）**：
+
+| 运行 | 摘要行 | rc |
+|---|---|---|
+| 修前基线 | `39 ran, 0 failed, 0 skipped, 2 blocked (41 of 41)` | 1 |
+| 修前 nc5 控制（x27→x26） | `38 ran, 0 failed, 0 skipped, 3 blocked (41 of 41)` | 1，**无 FAILED 行** ← 缺陷本体 |
+| 修后基线 | `39 ran, 0 failed, 0 skipped, 2 blocked (41 of 41)` | **0**（rc 不再是常数 1） |
+| 修后 nc5 控制 | `39 ran, 1 failed, 0 skipped, 2 blocked` + `FAILED: nc5_f68_x27_ref_decode.sh` | 1 |
+| 修后 nc4 控制（self_pp `extra` 非零，其独立 rc 恰为 2） | `39 ran, 1 failed, 0 skipped, 2 blocked` + `FAILED: nc4_f68_pool_skip_1332.sh` | 1 |
+| blocked 集合控制（f4 变阻塞 + nc3_f66 不再阻塞，**大小仍是 2**） | `... 2 blocked` + `BLOCKED-SET MISMATCH` newly `f4_…` / gone `nc3_f66_…` | 1 ← 计数钉在这里读 2==2 |
+| `none` 档（f69 的 otool arch 弄坏） | `FAILED: f69_their_pool_skip_disasm.sh` | 1 |
+| 还原后基线 | `39 ran, 0 failed, 0 skipped, 2 blocked` | 0 |
+| `--self-test` | `35 ran, 1 failed, 1 skipped, 5 blocked (41 of 41)` `FAILED: dd_runtime_check.sh` | 1 |
+
+  ⚠️ **集合钉而非计数钉是刻意的**：上周五次假绿里最近一次（F70）钉的就是总数，
+  于是「治好一处 + 弄坏另一处」互相抵消读绿。这里的组合控制专门把大小按住不动。
+- **代理自陈的一处削弱（要记）**：集合控制的「解除阻塞」那半是**模拟**的
+  （把 `nc3_f66` 的 `exit 2` 改成 `exit 0`），因为真解除要 `NC3_ALLOW_REBUILD=1` = 三次 ninja + 三次 `parity_matrix.sh --reuse`；
+  「变阻塞」那半是 `f4_name_rendering_check.sh` 真实 premise guard 取反。两半在同一次真实 harness 运行里。
+- **`SKIP_STALENESS_GUARD=1` 全程开着**（`ninja -n` 19 步待建 ⇒ 不开就 exit 2 什么都不跑）。
+  **那是 F76 的卡，本卡不许重建**；已写进脚本头与提交信息。
+- **顺带实测（先于 F75 存在，不是本轮引入）**：`--self-test` 红有两个原因 ——
+  `dd_runtime_check.sh` 在 `--self-test` 下失败，且 `evidence_shorebird_{residual,components,subgraph_hash}.sh` 没有 `--self-test` 模式、遇未知 flag exit 2。
+  **修前的派发器跑 `--self-test` 给出逐字相同的摘要行与相同的五个 blocked 名字** ⇒ 这两件事与本卡无关。
