@@ -86,7 +86,12 @@ MODEL=${FHP_LOOP_MODEL:-claude-sonnet-5}
 # Effort was never set at all, so every round so far ran at the CLI default
 # (measured 2026-09-15: no --effort in the invocation, no effort key in any
 # settings.json, nothing in this tree). `high` by operator instruction.
-EFFORT=${FHP_LOOP_EFFORT:-high}
+# `high` for three hours on 2026-09-15, then `medium`: effort multiplies
+# thinking tokens, and it was raised in the middle of a quota squeeze. The
+# driver schedules, reads verdicts and keeps the ledger; the reasoning that has
+# to be strong happens in the falsification passes, which prompts/falsify.md
+# picks per card and this variable does not reach.
+EFFORT=${FHP_LOOP_EFFORT:-medium}
 
 # The round must not start without an explicit model. Empty here does not mean
 # "use the default" -- it means no --model flag reaches the CLI, and then
@@ -103,7 +108,16 @@ fi
 # Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
 # clear the slowest of them by a wide margin or it becomes the thing that breaks
 # the loop. 3000s used to be the default and would have guillotined task 64.
-ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-21600}
+# 2026-09-15: 21600 (six hours) -> 3600. The ceiling was never the binding
+# constraint and that is exactly the problem: the no-commit deadline retires
+# itself the moment a round commits anything ("deadline retired for this
+# round"), so a productive round had no upper bound in practice. Measured: the
+# round of 2026-09-14 15:39 ran three hours and burned 52.5M cache-read tokens
+# -- 31% of everything spent in the following 19 hours, in one round. Cost is
+# superlinear in round length because every turn re-reads a context that keeps
+# growing; over 28 rounds, 168M read against 11M written, i.e. each round read
+# its own context back about fifteen times.
+ROUND_TIMEOUT=${FHP_LOOP_TIMEOUT:-3600}
 BACKOFF=${FHP_LOOP_BACKOFF:-3600}
 
 # THE SINGLE LINE THAT MAKES UNATTENDED ROUNDS WORK AT ALL.
@@ -378,6 +392,28 @@ if ! /usr/bin/shlock -f "$LOCK" -p $$; then
   exit 1
 fi
 trap 'rm -f "$LOCK"' EXIT
+
+# ---- cooldown between rounds -----------------------------------------------
+# The lock alone paces this loop at essentially 100% duty cycle: the next round
+# starts seconds after the previous one ends. Measured 2026-09-14/15: 28 rounds
+# in 19 hours and 40% of a weekly quota. Spend is close to linear in rounds per
+# hour, so a gap here buys quota back at the cost of latency and nothing else.
+#
+# Deliberately NOT put in ralph.sh. That process has been up for four days;
+# editing a script bash is currently executing, or restarting it from a session
+# that may not outlive the change, are both ways to stop the loop silently.
+# run_round.sh is re-read from disk on every tick, so this takes effect without
+# touching anything that is running.
+COOLDOWN=${FHP_LOOP_COOLDOWN:-7200}
+LAST_END=$STATE/last_round_end
+if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
+  last=$(cat "$LAST_END" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  if [ $(( now - last )) -lt "$COOLDOWN" ]; then
+    say_once "skip: cooldown, next round at $(date -r $(( last + COOLDOWN )) '+%H:%M:%S')"
+    exit 1
+  fi
+fi
 
 # ---- resume guard ----------------------------------------------------------
 # A subagent killed mid-flight can leave a half-applied negative control behind.
@@ -909,6 +945,12 @@ PY
 fi
 
 say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
+# Stamped here rather than in the EXIT trap on purpose: the trap also fires on
+# the early refusals above (dirty tree, resume guard), and those never ran a
+# round, so charging them a cooldown would stall the loop for a reason nobody
+# could see. A round that dies before this line leaves no stamp and the next
+# tick starts immediately -- the safe direction.
+date +%s >"$STATE/last_round_end"
 
 # ---- finisher --------------------------------------------------------------
 # Two rounds in a row (F2, F3) committed the SDK side, announced the task
