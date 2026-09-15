@@ -119,29 +119,30 @@ MAX_TURNS=${FHP_LOOP_MAX_TURNS:-250}
 # see CLAUDE.md's opening section on assertions that expired and generated six
 # phantom tasks. Unset means the flag is not passed and behaviour is unchanged.
 #
-# VERIFIED to fire, 2026-09-15, operator's own terminal:
+# Now set, because there is finally a conversion (see COOLDOWN above) and the
+# earlier objection was only ever about inventing a number.
 #
-#   $ claude -p --max-budget-usd 0.001 --model claude-sonnet-5 'say OK'
-#   Error: Exceeded USD budget (0.001)
+# 50, against a measured $23 for a normal round: 2.2x headroom, so an ordinary
+# round is never at risk, while the 2026-09-14 outlier -- 516 turns, 52.5M
+# cache_read, about $126 for the driver alone before its seven shelled-out
+# passes -- would have been stopped at roughly a third of its damage.
 #
-# So it is honoured on this account and aborts rather than warning. What that
-# does not give is the conversion: the transcripts carry usage token counts but
-# no cost field at all (58 top-level keys checked, no cost/usd/price/spend), so
-# there is no free way to learn what a round costs in dollars.
+# Set high on purpose. Too low kills a round mid-work, which costs a rescue
+# stash plus whatever the next round has to pick up; too high costs nothing at
+# all. This is a backstop for the tail, not a throttle -- COOLDOWN and MAX_TURNS
+# are the throttle.
+# 25. Also arrived at twice: 50 was set against a round that the bad $13.36
+# anchor made look like $23, so 50 read as 2.2x headroom. At the real $5.43 per
+# M eq a normal round is $9.24 and the 2026-09-14 outlier's driver was $51.34 --
+# so a $50 cap would have clipped that round essentially at its end, which is a
+# guard that cannot fire in time. 25 is 2.7x a normal round and stops the outlier
+# at about half its damage.
 #
-# LEFT UNSET, and not because the number is hard to get. Getting it means either
-# guessing a price or bisecting downward over real rounds, and a round killed by
-# the budget is a cut-off round: a rescue stash, and work the next round has to
-# pick up. That is a real cost paid for a guard that is redundant with three
-# already in place and already measured -- MAX_TURNS 250, ROUND_TIMEOUT 3600,
-# COOLDOWN 7200.
-#
-# The condition that would change this: if burn_rate.sh still reports NOT ENOUGH
-# once four or more rounds have run past the cutover. Then the proxies are not
-# holding and it is worth paying to bisect. Bisect DOWNWARD from a generous
-# value, never upward from a tight one -- the failure mode of a too-low budget
-# is a killed round, and the failure mode of a too-high one is nothing at all.
-MAX_BUDGET_USD=${FHP_LOOP_MAX_BUDGET_USD:-}
+# Still a backstop for the tail, not a throttle: COOLDOWN and MAX_TURNS are the
+# throttle. Too low kills a round mid-work (rescue stash, plus work handed to the
+# next round); too high costs nothing. Verified to fire, 2026-09-15, operator's
+# terminal: `claude -p --max-budget-usd 0.001 ...` -> Error: Exceeded USD budget.
+MAX_BUDGET_USD=${FHP_LOOP_MAX_BUDGET_USD:-25}
 
 # The round must not start without an explicit model. Empty here does not mean
 # "use the default" -- it means no --model flag reaches the CLI, and then
@@ -454,6 +455,20 @@ trap 'rm -f "$LOCK"' EXIT
 # that may not outlive the change, are both ways to stop the loop silently.
 # run_round.sh is re-read from disk on every tick, so this takes effect without
 # touching anything that is running.
+# 7200, and it went to 21600 and back within the hour. Worth recording because
+# the round trip was caused by a bad denominator, not by a change of mind.
+#
+# The session's own cost report is authoritative: $239.20 for 277.7k input,
+# 1.0M output, 285.0M cache read, 8.2M cache write = 44.0M input-equivalents,
+# so $5.43 per M eq. The figure taken off the spend dashboard earlier
+# ($556.91 / 42.5M = $13.36) was 2.5x too high -- whatever that 42.5M counts, it
+# is not the same unit. At $13.36 a round looked like $23 and the loop could
+# afford one every 5.8h. At the real $5.43 a round is $9.24.
+#
+# The correct derivation never needed a price at all, which is the lesson: the
+# target is to cut the rate to ~0.36x, and 28 rounds / 19h = 1.47/h scaled by
+# 0.36 is 0.53/h, i.e. one round every 1.9h. Price cancels in a ratio. 7200 was
+# right the first time and the dollar detour produced a value 3x too tight.
 COOLDOWN=${FHP_LOOP_COOLDOWN:-7200}
 LAST_END=$STATE/last_round_end
 if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
