@@ -4912,8 +4912,12 @@ commits 字段挪到 notes 字段的记账提交 —— **没有任何未经审�
   枚举来自 `verify_all.sh` 本身（39 条 `^run_script ` + 2 处行内 `ran++`），
   数目对不上就打 `ENUMERATION MISMATCH` 并非零退出（负控制实测：删一条 run_script ⇒ `enumerated 40, declared 41`, rc=3）。
   实测 **LIVE2=yes 恰好两个**（`nc4_f68_pool_skip_1332.sh`、`nc5_f68_x27_ref_decode.sh`），
-  BLOCKED2=yes 24 个，**UNDECIDED 3 个并逐个点名**（`nc3_f66:99`、`nc3_f67:102`、`f69b:1560`），
-  另有 7 个把 2 用作 usage/工具失败、13 个根本到不了 2。
+  BLOCKED2=yes **23** 个，**UNDECIDED 3 个并逐个点名**（`nc3_f66:99`、`nc3_f67:102`、`f69b:1560`），
+  另有 **6** 个把 2 用作 usage/工具失败、13 个根本到不了 2。
+  🔴 **订正（本轮证伪 pass 抓到，铁律第 8 条）**：本行原写 24 / 7，那是 `5665d96` 当时的读数；
+  `d389035` 把 nc5 的码挪走之后，**committed 的仪器在 HEAD 上重打的是 23 / 6**。
+  判据（我自己复跑过）：`./exitcode_convention_sweep.sh | tail` ⇒ `BLOCKED2=yes n=23` / `OTHER2=yes n=6`；
+  `git archive 5665d96` 抽出来跑才还原 24 / 7。**「当时对」的数字写进文档就会变成「现在错」的数字。**
   负控制：在 $TMPDIR 副本里给一个 LIVE2=no 的脚本注入真缺陷路径的 `exit 2`，该行 no→yes，对照行逐字节不变。
 - **(i)+(ii)（`d389035`）**：`blocked_code_for <script>` 案例表逐检查声明「哪个 rc 才算没跑成」——
   24 个多数派仍是 2，`nc4`/`nc5` 改为 255（nc5 自己的 premise/usage 退出码让位到 255/254），
@@ -4944,3 +4948,79 @@ commits 字段挪到 notes 字段的记账提交 —— **没有任何未经审�
 - **顺带实测（先于 F75 存在，不是本轮引入）**：`--self-test` 红有两个原因 ——
   `dd_runtime_check.sh` 在 `--self-test` 下失败，且 `evidence_shorebird_{residual,components,subgraph_hash}.sh` 没有 `--self-test` 模式、遇未知 flag exit 2。
   **修前的派发器跑 `--self-test` 给出逐字相同的摘要行与相同的五个 blocked 名字** ⇒ 这两件事与本卡无关。
+
+### 本轮结论：F75 **不关卡**，证伪 pass 判 **PARTIAL**；剩下那一半立为 **F77**
+
+**F75 PASS 1 VERDICT: PARTIAL**（新鲜 Opus，77 次调用，审的是研究树 `d389035`）。
+
+**站住了的部分 —— 是 pass 自己复跑出来的，不是转述**：
+- 判据 (i)(ii) **独立复现**：HEAD 上真跑全量 `./verify_all.sh` ⇒
+  `39 ran, 0 failed, 0 skipped, 2 blocked (41 of 41 checks accounted for)` **rc=0**（不再是常数 1）；
+  卡片自己的 x27→x26 控制 ⇒ `ran=1 failed=1 blocked=0`，`failed_checks=[ nc5_f68_x27_ref_decode.sh]`。
+- **集合 pin 被打了两个作者没试过的方向**：2→3（加一个合成 exit-2 脚本）与 2→1（只留 nc3_f66），
+  **两次都红**；且 `EXPECTED_BLOCKED` 是硬编码字面量列表、observed 是派发时累积的，
+  **两侧来源不同 ⇒ 不是数学恒等**（这正是本周五次假绿的共同形状，这次没有踩）。
+- 枚举是真数：`^run_script ` 39 条 + 两处行内 `ran++`（614/671 行；352 行在函数体内不算），
+  与 `EXPECTED_CHECKS=41` 不符就 exit 3；`grep -c 'run_script '` 给 43，多出的 4 条全是注释（173/251/321/749 行）。
+- 3 个 UNDECIDED **经查是良性的**：`nc3_f66:99` / `nc3_f67:102` 在没有 `NC3_ALLOW_REBUILD=1` 时
+  被第 78 行先行退出挡住，`f69b:1560` 是**行内派发且 rc 被 pin**，永远不会被读成 blocked。
+
+**判 PARTIAL 的那一处（判据 iii 只答了 LIVE2 那一栏）**：
+`blocked_code_for()` 对 **23 个 BLOCKED2=yes 的检查仍把 2 路由成 BLOCKED**，
+而其中三个（`evidence_shorebird_{components,residual,subgraph_hash}.sh`）**同时是 OTHER2=yes** ——
+它们的 2 是 **usage 错误**，正是作者用来把 `f69_their_pool_skip_disasm.sh` 判成 `none` 的那条规则，
+**在 f69 上用了、在这三个上没用**；而 `--self-test` 的 `EXPECTED_BLOCKED` 还把这三个名字**列进白名单**
+⇒ 三个真实的 harness 失败被钉成「预期阻塞」。实测两条：
+- `./evidence_shorebird_components.sh --self-test` rc=2 `unknown argument`，
+  经原样抽出的 `run_script` 派发 ⇒ `BLOCKED`，**reason 字段为空**，`failed=0`，名字不在 `failed_checks` 里。
+- **在一个谁都没碰过的检查上**：把 `diff_units.sh` 的 `echo "UNITS $total"` 改成 `echo "UNITS 0"`
+  （本项目 F60/F61 的标准分母回归），`evidence_shorebird_residual.sh` 撞上它自己的 `BAD UNITS; exit 2` 守卫
+  ⇒ 读成 `BLOCKED`，`ran=0 failed=0`，`failed_checks` 空。
+
+**另两处记下、不当场修**：
+- **名字 pin 不 pin 理由**：实测到一行 `BLOCKED evidence_shorebird_components.sh` 的 reason 字段是**空的**，
+  而脚本自己打的是 `unknown argument: --self-test` ⇒ 一个检查换个完全不同的理由开始阻塞，pin 照样绿。
+- **rc 仍然把四种情况压成 1**（`failed>0` / `skipped != expected_skips` / `blocked_set_ok==0` / `MISCOUNTED`）
+  ⇒ rc 只区分「绿 / 不绿」，**并不区分「闸门抓到了」与「闸门没跑」**，做这件区分的只有打印出来的文字，
+  而**没有任何断言读那段文字**。这半条是卡片原话，**只完成了一半**。
+
+**pass 自陈的两点（记下）**：`NC3_ALLOW_REBUILD=1` 这条唯一真解除阻塞的路径上
+`EXPECTED_BLOCKED` 被同一个变量设成空 ⇒ **pin 在那条路径上与它的标的同变、不可能报红**；
+不过被模拟的那一半测的是**没有声明过的那种情况**，也就是要紧的那种。
+以及全程 `SKIP_STALENESS_GUARD=1`（`ninja -n` 19 步待建）⇒ **`rc=0` 这个读数是建立在压掉另一道闸门之上的**（F76）。
+
+- [ ] **F77：`run_script` 的「2 = 没跑成」在另外 23 个检查上原样健在，其中三个的 2 其实是 usage 错误**
+
+  F77 是 F75 的剩余一半，判据与负控制见 `cards.tsv`（依赖 F75）。要点：
+  ① 三个 OTHER2 检查各自要在**真实全量 `--self-test` 运行**里被点到 `FAILED:` 行上（**一个一条控制，不是一条顶三个**）；
+  ② `diff_units.sh` 的 `UNITS` 回归要让下游 residual 检查读成 FAILED 而不是 BLOCKED；
+  ③ `EXPECTED_BLOCKED` 不得再把那三个名字列进白名单；
+  ④ 真正无法拆分的歧义**必须逐个点名**，不许默默走默认 —— 无名残留正是判据 (iii) 当初要挡的东西。
+  ⑤ 反向控制：23 个里那些 2 **真的**是「前提缺失」的，修完必须**仍然**读 BLOCKED，
+  否则只是把错的方向换了一边。
+  🔴 **F70 的教训不许再犯**：钉集合不钉总数；且闸门必须**在它守的那个检查本身上**被两个方向打红，
+  不是在合成替身上。
+
+**轮末**：轮次 2026-09-15T09:1x–11:5x / 任务 = **F75**（上一轮定的优先级 1）/
+判据 = **(i)(ii) 达标并被 pass 独立复现，(iii) 只答了一半 ⇒ VERDICT PARTIAL，不关卡；
+F75 `open` → `built`，新立 F77** /
+派发 = **3 个子代理**（Opus 扫描 26 次 + Opus 实现 83 次 + 新鲜 Opus 证伪 pass 77 次）/
+改动 = 研究树 `exitcode_convention_sweep.sh`（新）、`verify_all.sh`、`nc5_f68_x27_ref_decode.sh`、
+`f75_gate_controls.sh`（新）、`cards.tsv` · 状态树 `memo.md`、`.loop/UNREVIEWED_FIX` /
+提交 = 研究树 `5665d96` + `d389035` + 本轮 cards 提交 · 状态树 `4cbe212` + 本提交 /
+三棵树实测：研究树仅 `?? .serena/`（pass 自己核过，`git diff --stat` 空）；SDK 树未动、0 项；状态树仅既有未跟踪 /
+队列 = 开局 **3 项**（F70 / F75 / F76），**F75/F76 已按实测删除**（`3045a50` 是立卡提交，1 file 2 insertions，无补丁可审），
+收尾 F70 保留。
+
+⚠️ **下一轮注意**：本轮 F75 报了 PARTIAL 且有提交点名它，闸门会把 **F75 重新入队**。
+**那也是一条「没有修补丁可审」的项** —— 本轮没有修它，缺陷被立成了 F77（与 `60c619e` 处理 F62→F64 同型）。
+判据：本轮之后没有任何提交改过 `verify_all.sh` 或 `blocked_code_for`。
+**删它的时候要写明这一条**，不要为它空派一次 pass。
+
+**下一轮（按此优先级）**：
+1. **F77**（F75 的剩余一半；在它修好之前，23 个检查的真红仍然读成「没跑」）。
+2. **F76**（先做 (i) 的重建 —— 本轮每一次 `rc=0` 都压着 `SKIP_STALENESS_GUARD=1`，
+   在 F76 之前那个 0 的含金量是未知数）。
+3. **F72**：解 guard 的路径条件 —— 仍是 F68 这条链上唯一还没定的事。
+4. **F70**（挂起中，第 5 轮后按契约回头重试）：不要再把 pin 细一级。
+5. **F71**（挂起中）。 6. **F49**（仍 `built`、从未过 pass）。
