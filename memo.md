@@ -5472,3 +5472,19 @@ cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./cards_check.sh
 2. **F78**（现已解除阻塞，可以实测其三条判据）。
 3. **F76**：staleness guard 重建债。
 4. **F72**（解 guard 路径条件）。 5. **F70**（挂起中）。 6. **F71**（挂起中）。 7. **F49**（`built`、从未过 pass）。
+
+### `.loop/UNREVIEWED_FIX` 结账：F77 修补丁（2026-09-15，本轮）
+
+队列条目「F77（2026-09-15 20:26）：fixed after PARTIAL verdict; fix commit(s) 05ea3aa 3a66d26;
+no pass on the fix」核对后判定**不需要重新派发**：`3a66d26`（研究树）就是它所指的那个修补丁
+（F77 的 `cards.tsv` commits 列从 ~11KB 叙事散文改成真实 SHA 列表），而这个修补丁**已经**被一个
+新鲜 Haiku 子代理审过——原文见本文件 5454-5457 行「新鲜 Haiku 复核」段：核对了
+`cards_check.sh rc=0`、`git show 3a66d26 -- cards.tsv` 确认只改了 F77 那一行的 commits 字段、
+8 个 SHA 逐一 `git log --oneline -1` 可解析、F77 行字段数未变（schema 未破坏）。
+之前没能让关卡识别，是因为那段话把判决写成了「F79 已标 closed」，没有用契约要求的
+「F77 修补丁 VERDICT: ... (fix)」格式点名 F77。补记为标准格式：
+
+**F77 修补丁 VERDICT: SURVIVES (fix)** —— 新鲜 Haiku（4 项机械命令，非做修补丁的那个代理）
+核验 `3a66d26` 只改了 F77 commits 列且 8 个 SHA 均可解析、`cards_check.sh` 实测 `rc=0`。
+
+`.loop/UNREVIEWED_FIX` 这一行已删除（详见下方提交）。
