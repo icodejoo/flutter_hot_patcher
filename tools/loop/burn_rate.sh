@@ -88,7 +88,14 @@ for p in glob.glob(os.path.join(proj, "*.jsonl")):
     lo, hi = span.get(where, (birth, end))
     span[where] = (min(lo, birth), max(hi, end))
 
-print(f"cutover: {cut:%Y-%m-%d %H:%M}\n")
+now = datetime.datetime.now()
+hours_after = max((now - cut).total_seconds() / 3600, 1e-9)
+# Bounded by the oldest session actually counted, so the baseline is not divided
+# by seven days when only two of them hold traffic.
+oldest = min((v[0] for k, v in span.items() if k.startswith("before")), default=cut)
+hours_before = max((cut - oldest).total_seconds() / 3600, 1e-9)
+print(f"cutover: {cut:%Y-%m-%d %H:%M}   now: {now:%m-%d %H:%M}")
+print(f"windows: before {hours_before:.1f}h   after {hours_after:.1f}h\n")
 rates = {}
 for where in ("before/loop", "before/pass", "before/human",
               "after /loop", "after /pass", "after /human"):
@@ -96,11 +103,27 @@ for where in ("before/loop", "before/pass", "before/human",
     if not c:
         print(f"{where}: no sessions")
         continue
+    # ONE denominator for every bucket, and it is wall-clock, not the bucket's
+    # own extent. The first version divided each bucket by its own first-birth
+    # to last-write span, which on 2026-09-15 13:11 printed
+    #
+    #   burn: combined before 2.08M eq/h   after 85.03M eq/h
+    #   burn: ratio 40.91x
+    #
+    # because a subagent session that lived four seconds (11:17:24 -> 11:17:28)
+    # carried 0.08M eq, and 0.08M / 0.001h is 83.7M eq/h. Summing per-bucket
+    # rates computed over per-bucket spans is not a rate at all. "A denominator
+    # of its own per bucket" is in this repo's catalogue of instrument defects;
+    # this was a fresh instance of it, written the same day.
+    #
+    # What kept it from being believed was the TOO EARLY guard below, which
+    # refused a verdict at two rounds and printed the 40.91x as unusable rather
+    # than as a regression.
     lo, hi = span[where]
-    hours = max((hi - lo).total_seconds() / 3600, 1e-9)
+    hours = hours_after if where.startswith("after ") else hours_before
     eq = sum(c[k] * W[k] for k in W)
     rates[where] = eq / hours
-    print(f"{where}  {lo:%m-%d %H:%M} -> {hi:%m-%d %H:%M}  ({hours:5.1f}h, {c['sessions']:>3} sessions)")
+    print(f"{where}  {lo:%m-%d %H:%M} -> {hi:%m-%d %H:%M}  ({hours:5.1f}h window, {c['sessions']:>3} sessions)")
     for k in ("cache_read", "cache_write", "output", "input"):
         print(f"           {k:<12}{c[k]:>14,}  ->{c[k]*W[k]/1e6:>7.1f}M eq  {100*c[k]*W[k]/eq:>5.1f}%")
     print(f"           {'TOTAL':<12}{'':>14}  ->{eq/1e6:>7.1f}M eq  {eq/hours/1e6:>6.2f}M eq/h\n")
