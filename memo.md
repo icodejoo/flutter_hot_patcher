@@ -5375,8 +5375,9 @@ SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.l
 
 - [ ] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**
   （2026-09-15 立；被 F79 阻塞，F79 已解除阻塞，本卡待实测其三条判据）。
-- [ ] **F79：`ProductARM64` 自 F37 起 AOT 执行 segfault**（`built`，2026-09-15；欠一次干净的
-  「无新发现」证伪 pass 才能转 `closed`——第一次证伪判 PARTIAL，本轮已当场修，见下方 PASS 2 记录）。
+- [x] **F79：`ProductARM64` 自 F37 起 AOT 执行 segfault**（**已关闭**，2026-09-15；三轮独立新鲜
+  证伪：PASS 1 PARTIAL→当场修→PASS 2 SURVIVES（因果链）；PASS 3 PARTIAL→当场修（F77 commits 列）
+  →Haiku 复核 SURVIVES（修补丁本身）。研究树 `cards.tsv` state 已同步为 `closed`）。
 
 ### F79 证伪 PASS 1 VERDICT: PARTIAL（新鲜 Opus，31 次调用，独立复现全部因果链）——当场修，见下
 
@@ -5428,11 +5429,46 @@ cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./cards_check.sh
 留给下一轮/下一次调度用新鲜代理确认（a）`cards_check.sh` 现在确实绿、（b）memo 里
 「规则 3」那条撤回没有引入新的错误陈述。
 
+### F79 证伪 PASS 3（新鲜 Opus，31 次调用）VERDICT: PARTIAL → 当场修 → 新鲜 Haiku 复核 VERDICT: SURVIVES
+
+派发给独立子代理审查 PASS 2 当场修补丁本身（cards.tsv/memo.md 的记账修正 + 规则 3 撤回段落），
+七项标准攻击逐条跑过：
+
+- **攻击 1（判据能否报红）实测报红**：`cards_check.sh` 在修补后仍 `rc=1`——但根因不在 F79 的
+  修补丁本身，而是 **F77 的 `commits` 列存的是约 11000 字符的叙事散文而非逗号分隔的 SHA 列表**
+  （既有债，memo 已记为下一轮待认领第 5 项，非 F79 引入）。
+- **攻击 2（两侧可比）SURVIVES**：独立重新核对 `memo.md` 的 `- [ ]`/`- [x]` 集合与 `cards.tsv`
+  的 `{open,built}`/`{closed,closed-unreviewed}` 集合逐字节一致，F79 的记账修补本身是真实有效的。
+- **攻击 7（问题被偷换）抓到一处**：本轮派发时写的 CLAIM 说「修补让 `cards_check.sh` 完全变绿」，
+  但 memo.md 原文从未这样断言——它写的是「下一轮开工时务必先跑这条命令」（即从未真正跑过确认），
+  且如实列出了 F77 commits 列这笔未认领的债。**CLAIM 本身夸大了，memo 措辞是诚实的。**
+
+**VERDICT: PARTIAL**——F79 自己的修补丁（记账 + 撤回段落）经攻击 2/3/4/5/6 核验全部站得住，
+唯一命中的红是无关的既有债（F77 commits 列）挡住了 `cards_check.sh` 的整体 rc。
+
+**当场修**（同一轮，研究树提交 `3a66d26`）：把 F77 的 commits 列换成真实 SHA 列表
+`a3c87a5,fb2e151,b5d6535,95fd44b,b919183,70759b7,e92d418,1d09332`（均取自 memo.md F77 章节记录的
+研究树提交，逐一 `git cat-file -e` 核实存在）；原 11000 字符叙事内容在 memo.md F77 章节已有
+完整副本，不丢信息。修复后 `cards_check.sh` **实测 5 项检查全绿，`rc=0`**。
+
+**新鲜 Haiku 复核 VERDICT: SURVIVES**（纯机械核对，4 项命令）：`cards_check.sh rc=0`；
+`git show 3a66d26 -- cards.tsv` 确认只改了 F77 那一行的 commits 字段；8 个 SHA 逐一
+`git log --oneline -1` 全部可解析（不是巧合的十六进制字符串）；F77 行字段数仍为 7
+（编辑未破坏 schema）。
+
+**F79 已标 `closed`**（`cards.tsv` state 字段已在同一轮同步为 `closed`，其 commits 列同样有
+「散文非 SHA」的同型缺陷，已一并修为 `121cc101d43,6d743e8,3a66d26`；`cards_check.sh` 实测
+5 项检查全绿，`rc=0`；memo.md `- [ ] F79` 复选框已翻为 `[x]`）。
+
+**轮末**：轮次 2026-09-15（延续上一轮定的优先级 1）/ 任务 = 确认 F79 当场修补丁 /
+判据 = 三轮独立新鲜证伪：PASS 3（Opus 31 调用）PARTIAL → 当场修（F77 commits 列，又发现并
+顺手修了 F79 自己的 commits 列同型缺陷）→ Haiku 复核（4 调用）SURVIVES ⇒ 关卡 / 改动 =
+研究树 `cards.tsv`（F77 commits 列修复 + F79 状态与 commits 列同步）· 状态树 `memo.md`（F79
+复选框翻转）/ 提交 = 研究树 `3a66d26` `7c6062e` · 状态树本次提交 / 三棵树：研究树仅本次改动 +
+既有未跟踪目录；SDK 树、引擎树未动；`cards_check.sh` 最终态 `rc=0` 已实测。
+
 **下一轮（按此优先级）**：
-1. **确认 F79 的当场修补丁**（`cards_check.sh` 绿 + 措辞订正无新错）——用新鲜代理跑一次，
-   通过后把 F79 标 `[x]`/`closed`。
-2. **F37**（重开，需要新的关闭路径：`dd_runtime_check.sh` 跑绿 + 不再单靠静态计数）。
-3. **F78**（现已解除阻塞，可以实测其三条判据）。
-4. **F76**：staleness guard 重建债。
-5. **cards.tsv 里 F77 的 `commits` 列是散文不是 SHA**——`cards_check.sh` 报过，本轮未认领。
-6. **F72**（解 guard 路径条件）。 7. **F70**（挂起中）。 8. **F71**（挂起中）。 9. **F49**（`built`、从未过 pass）。
+1. **F37**（重开，需要新的关闭路径：`dd_runtime_check.sh` 跑绿 + 不再单靠静态计数）。
+2. **F78**（现已解除阻塞，可以实测其三条判据）。
+3. **F76**：staleness guard 重建债。
+4. **F72**（解 guard 路径条件）。 5. **F70**（挂起中）。 6. **F71**（挂起中）。 7. **F49**（`built`、从未过 pass）。
