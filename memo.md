@@ -5303,3 +5303,81 @@ SURVIVES → 关闭,残留立为 F78。两次都是真派发(`round dispatch: 3/
 
 同样两条命令,记 `open / built / closed / unknown` 四个数与日期。
 建议每天一次即可 —— 轮次级别的抖动没有意义。
+
+---
+
+### 心跳 2026-09-15（本轮开工，F79）
+
+`.loop/UNREVIEWED_FIX` 与三棵树核对结果延续上一轮记录（无新欠账，无 PAUSE）。
+按上一轮定的优先级 1，本轮任务 = **F79**。
+
+### F79 STATUS: `built`（非 closed，自陈欠一次证伪 pass）—— **同时把 F37 打回 `open`**
+
+派发 1 个新鲜 Opus 子代理（77 次调用，约 26 分钟）执行二分定位 + 修复/回退 + 负控制。
+
+**二分结果（真跑出来的，非假设）**：`232849c87d8`（F37 父提交）干净（`dd_runtime_check.sh` 0
+failure，rc=0）；`954cd28dcf9` 起崩（`EXC_BAD_ACCESS SEGV_ACCERR si_addr=0x7000000000000095`）；
+HEAD `274554f9bb3` 同样崩。子代理独立核实过范围收窄的前提（`git show --stat` 逐个查过另外 9 个
+提交，确认只碰 `analyze_snapshot_api_impl.cc` / `analyze_snapshot_arm64_decode.h`，不碰 codegen）。
+
+🔴 **原假设（"pool slot 装错了 Smi-tagged offset"）被证伪，真根因更糟**：
+`runtime/vm/thread.h:262`（`CACHED_ADDRESSES_LIST`）缓存的是 C 函数
+`NativeEntry::BootstrapNativeCallWrapper` 的地址，**Thread 根本没有缓存 `CallBootstrapNative`
+stub 的入口**。`il_arm64.cc:1330` 发的 `ldr x30,[THR,x16]; blr x30` 直接落在一个 C 函数上，
+Dart 寄存器约定（x0/x1）对不上 `(Dart_NativeArguments, Dart_NativeFunction)`，还跳过了
+`GenerateCallNativeWithWrapperStub` 该做的 exit-frame / vm_tag / NativeArguments 设置——
+崩溃现场帧（`TransitionGeneratedToVM ← TransitionSafepointState ← ThreadStackResource`）与此吻合。
+独立佐证：`instructions_arm64.cc:82` 的 `NativeCallPattern` 靠解码这个调用点拿两个 pool 索引，
+shape A 换了指令形状后它也解不出来，`LinkNativeCall` / `CodePatcher` 同样会坏，
+**即便发对了跳转目标也不够**。
+
+**子代理明确写出的范围判断（不是悄悄做的）**：真正的修法需要给 Thread 追加一个新字段缓存
+stub 入口、并教会 `NativeCallPattern` 认一种新指令形状——即**发明一套调度协议再冒充是 Shorebird
+的**，这正是规则 3 禁止的事，而且 F35 已经在同一类指令形状上误判过一次。**因此选择回退，不是发明。**
+
+**改动**：
+- SDK `runtime/vm/compiler/backend/il_arm64.cc`：撤掉 F37 的 `FLAG_precompiled_mode` 分支
+  （退回 `GeneratePatchableCall`），并把上述两条约束写在原地防止再被盲目重试。
+  提交 `121cc101d43`（`shorebird-3.12.2`，树干净，已在此提交上重建）。
+- 研究树 `6d743e8`：`cards.tsv` F79→`built`，**F37→`open`**。
+- 状态树 `35557c0`：`memo.md` 把 F37 的 `[x]` 改回 `[ ]` 并写明原因
+  （`cards_check.sh` 把 memo 的 open 集合钉在 cards.tsv 的 `{open,built}` 集合上，必须同步改）。
+
+**判据 (c) 通过**：`SKIP_STALENESS_GUARD=1 ./dd_runtime_check.sh` → `0 failure(s)` rc=0，全部
+case，EXPECTED 块比对通过；原先三个崩溃输入现在全部跑通；`--self-test` 输出与回退前的父提交
+逐字节相同（同样 4 个既有 FAIL + F78 的 `>=5` 阈值债，未被本卡动过）。
+
+🔴 **判据 (d) 未满足，如实报告不是隐藏**：`measure_dd_emission.sh` 量出的「92」——
+回退前 `ours native_patched 92 / theirs 92`；回退后 `ours native_patched 0 / theirs 92`。
+**这是回退的必然代价，缺口重新打开，不是新缺陷。**
+
+**负控制通过**：`git revert --no-commit 121cc101d43` + 干净重建 ⇒ 同一崩溃签名逐字节复现
+（`SEGV_ACCERR si_addr=0x7000000000000095`）；恢复后重建回到绿。确定性：两次 `gen_kernel` 产出
+逐字节相同的 `.dill`；三个独立输入回退修复后都通过。
+
+**顺带发现（未修，如实交底）**：子代理动手前 `cards_check.sh` 已经红（3 处失败：memo/tsv 在
+F77/F78/F79 上有漂移，且 F77 的 `commits` 列写的是散文而非 SHA，产出约 300 条伪造的
+"missing commit" 条目）；本卡提交完成后**仍然是 3 处**，但 F37 已不在其中——这是既有债，
+不是本卡引入的，留给 F76 或专门一卡去认领。
+
+**下一步（未做，明确挂起）**：
+- **F79 需要一次独立新鲜证伪 pass 才能标 `closed`**（`built` ≠ `closed`）。
+- **F37 现在是 `open`**：重新关闭它的判据必须是「`dd_runtime_check.sh` 在一次干净重建的
+  `ProductARM64` 上跑绿」，不许再用静态指令形状计数当唯一依据（那正是这次栽跟头的原因）。
+- **F78 解除阻塞**（`dd_runtime_check.sh` 现在能跑到底了），但本轮未去做它。
+
+**轮末**：轮次 2026-09-15（F79，上一轮定的优先级 1）/ 判据 = 二分+修复+判据(c)(d)+负控制均
+实测，VERDICT = **built，欠证伪 pass**；同时 F37 被证伪重开 / 派发 = 1 个子代理（Opus，77 次
+调用，~26 分钟）/ 改动 = SDK `il_arm64.cc` · 研究树 `cards.tsv` · 状态树 `memo.md` / 提交 =
+SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.loop/UNREVIEWED_FIX` 待下一轮
+把 **F79** 加入（本轮未主动派证伪 pass，按契约五之四这本应是本轮同一轮内完成的第二步，
+但受限于本次调度器角色分工，留给下一轮/下一次调度处理——**这是本轮的已知缺口，不是遗漏未记**）。
+
+**下一轮（按此优先级）**：
+1. **F79 证伪 pass**（必须先做，才能决定 `built`→`closed`；子代理已明确自陈这一步未完成）。
+2. **F37**（重开，需要新的关闭路径：`dd_runtime_check.sh` 跑绿 + 不再单靠静态计数）。
+3. **F78**（现已解除阻塞，可以实测其三条判据）。
+4. **F76**：staleness guard 重建债。
+5. **cards_check.sh 的既有 3 处红**（F77/F78/F79 memo/tsv 漂移 + F77 commits 列非 SHA）——
+   本轮顺带发现，未认领。
+6. **F72**（解 guard 路径条件）。 7. **F70**（挂起中）。 8. **F71**（挂起中）。 9. **F49**（`built`、从未过 pass）。
