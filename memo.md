@@ -452,6 +452,35 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       还是真正不同的逻辑——这一步需要另开一轮，**本轮的证伪 pass 尚未对此结论跑过**，
       按契约「built 不是 closed」，先不当作最终结论使用，下一次调度这张卡前先派证伪 pass。
 
+      🟡 **证伪 pass VERDICT: PARTIAL（2026-09-16，新鲜 Sonnet 子代理，11 次调用，模型 sonnet）**：
+      七项攻击六项 SURVIVES（判据可能报红、双侧可比、`0x0908` 在整个二进制里唯一、
+      我们自己 SDK 没有这个字段、提交与脚本未过期、`0x0298`/`0x0908` 互斥负控制为真）；
+      attack 6/7 抓到缺口：「挂着 `SimulatorCallBootstrapNative`」与「构造时写一次」两句
+      都只是**类比推断**（比照我们自己 SDK 的 `InitVMConstants` 写法），从未反汇编过
+      Shorebird 真正的写入点——`strings` 只证明符号存在，不证明它连到这个偏移的写入路径。
+
+      🔴 **当场追打反汇编，(b) 被反证、(a) 被坐实（2026-09-16，第二个新鲜 Sonnet 子代理，
+      35 次调用）**：反汇编 Shorebird 真机二进制（不是 dSYM——dSYM 无代码段）里的
+      `dart::Thread::InitVMConstants`，在 `0x7e1f38` 找到全函数唯一一条
+      `str x9, [x0, #0x908]`，其值来自 `0x7e1f30: ldr x9,[x8,#0x4c30]` /
+      `0x7e1f34: ldur x9,[x9,#0x7]`——这是与相邻 DWARF 字段
+      `call_no_scope_native_entry_point_`（`+0x910`）/
+      `call_auto_scope_native_entry_point_`（`+0x918`）**完全同型**的「StubCode 表项
+      解引用」写法，不是 `simulator_execute_`（`+0x8f8`）/`simulator_call_from_ffi_`
+      （`+0x900`）那种真正 Simulator 专属字段所用的
+      `adr SimulatorExecute`/`adr SimulatorCallFromFFI` 直接取地址写法。
+      ⇒ **原结论 (b)（"这个字段挂着 Simulator 重定向目标 `SimulatorCallBootstrapNative`"）
+      已被反证**：那次 `strings` 命中的符号与这条写入路径**没有证据表明有关联**，
+      `call_bootstrap_native_entry_point_` 在写入路径上表现为一个**普通、非 Simulator
+      专属**的缓存 stub 入口点。**原结论 (a)（"构造时写一次，不是逐调用/运行期 stub
+      缓存"）被坐实**：全函数只有这一条写指令，写入点周围无分支/条件，不是逐调用路径。
+      证据脚本：研究树 `spikes/shorebird_linkinfo_oracle/evidence_thr0x908_write_site.sh`，
+      提交 `e4df802c745532512b6a76d4274fe8f97c45f390`。
+      ⚠️ **这条反证结论本身尚未过第二轮证伪 pass**——按契约「修完的东西同样是未经审的」，
+      下一次基于它继续 F37 落地前，先派一个新鲜子代理审这条反汇编发现本身
+      （尤其是：读写点的定位方法能否被证伪、`0x4c30` 那个 StubCode 表基址是否真的取自
+      `x8`/Thread 自身而非其他寄存器上下文、有没有可能反汇编工具把地址算错）。
+
       ✅ **F37 判据全通过（2026-09-09）**：
       ① `measure_dd_emission.sh` `ours native_patched=92`（与 theirs 一致）；
       ② `op_dump_check.sh` `exit=0`（pool slot 改用 kTaggedObject Smi，例外条件 `both_smi_thr` 补入 probe）；
@@ -5537,3 +5566,29 @@ memo.md 中有正确格式的判决行，本轮把本地队列文件清空（`.l
 **下一轮**：优先对上面这条 F37 前置结论跑一次证伪 pass；若 SURVIVES，再继续
 「反汇编 `CallBootstrapNative`/`SimulatorCallBootstrapNative` 本体」这一步，
 仍然是 F37 重新落地前的准备工作，卡片本身保持 `open`。
+
+### 轮次 2026-09-16（续）：THR+0x908 结论证伪 pass + 反汇编反证 (b)
+
+任务 = 按上一轮末尾要求，先对「THR+0x908 = call_bootstrap_native_entry_point_」这条结论
+派一个新鲜子代理跑 tools/loop/prompts/falsify.md 证伪 pass / 判据 = 见 F37 卡片内新增两段
+「🟡 证伪 pass VERDICT: PARTIAL」「🔴 当场追打反汇编」/ 派发 = 两个新鲜 Sonnet 子代理
+（第一个证伪 pass 11 次调用 190s；第二个反汇编追打 35 次调用 456s）/ 结论 = 证伪 pass 判 PARTIAL
+（六项 SURVIVES，attack 6/7 抓出「Simulator 挂钩」与「写入时机」两句都是类比推断、未反汇编）；
+当场派第二个子代理反汇编 Shorebird 真机二进制的 Thread::InitVMConstants，(a)（构造时写一次）
+被坐实，(b)（挂着 SimulatorCallBootstrapNative）被反证——真实写入路径是与非 Simulator 字段
+同型的 StubCode 表项解引用，不是 Simulator 专属的 adr 直接取地址写法 / 改动 = 研究树新增
+evidence_thr0x908_write_site.sh / 提交 = 研究树 e4df802c745532512b6a76d4274fe8f97c45f390；
+状态树本次提交（memo.md，F37 卡片）/ 三棵树：SDK 树、引擎树本轮未动。
+
+⚠️ **本轮的反汇编反证结论本身尚未过证伪 pass**（按契约「修完的东西同样是未经审的」）——
+它不是对上一轮结论的简单确认，而是推翻了其中一半，下一轮开工前必须先审这条新结论，
+再决定是否可以把 (a)(b) 当作可信前提去反汇编 CallBootstrapNative/NativeEntry 本体这一步。
+
+**下一轮（延续 2026-09-15 定的优先级，本项插到最前）**：
+1. 对本轮「(b) 被反证」的反汇编结论跑证伪 pass（重点攻击 1/2/6：定位方法、0x4c30 基址来源、
+   反汇编工具本身是否可能算错地址）。若 SURVIVES，再继续反汇编 CallBootstrapNative/
+   NativeEntry::BootstrapNativeCallWrapper 本体这一步，为 F37 重新落地做准备。
+2. F37（重开，等前置问题全部解完）。
+3. F78（已解除阻塞，可实测三条判据）。
+4. F76：staleness guard 重建债。
+5. F72（解 guard 路径条件）。 6. F70（挂起中）。 7. F71（挂起中）。 8. F49（built、从未过 pass）。
