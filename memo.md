@@ -5043,7 +5043,7 @@ commits 字段挪到 notes 字段的记账提交 —— **没有任何未经审�
 不过被模拟的那一半测的是**没有声明过的那种情况**，也就是要紧的那种。
 以及全程 `SKIP_STALENESS_GUARD=1`（`ninja -n` 19 步待建）⇒ **`rc=0` 这个读数是建立在压掉另一道闸门之上的**（F76）。
 
-- [ ] **F77：`run_script` 的「2 = 没跑成」在另外 23 个检查上原样健在，其中三个的 2 其实是 usage 错误**
+- [x] **F77：`run_script` 的「2 = 没跑成」在另外 23 个检查上原样健在，其中三个的 2 其实是 usage 错误**
 
   F77 是 F75 的剩余一半，判据与负控制见 `cards.tsv`（依赖 F75）。要点：
   ① 三个 OTHER2 检查各自要在**真实全量 `--self-test` 运行**里被点到 `FAILED:` 行上（**一个一条控制，不是一条顶三个**）；
@@ -5373,11 +5373,66 @@ SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.l
 把 **F79** 加入（本轮未主动派证伪 pass，按契约五之四这本应是本轮同一轮内完成的第二步，
 但受限于本次调度器角色分工，留给下一轮/下一次调度处理——**这是本轮的已知缺口，不是遗漏未记**）。
 
+- [ ] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**
+  （2026-09-15 立；被 F79 阻塞，F79 已解除阻塞，本卡待实测其三条判据）。
+- [ ] **F79：`ProductARM64` 自 F37 起 AOT 执行 segfault**（`built`，2026-09-15；欠一次干净的
+  「无新发现」证伪 pass 才能转 `closed`——第一次证伪判 PARTIAL，本轮已当场修，见下方 PASS 2 记录）。
+
+### F79 证伪 PASS 1 VERDICT: PARTIAL（新鲜 Opus，31 次调用，独立复现全部因果链）——当场修，见下
+
+因果链本身**没有被推翻，反而被加固**：证伪代理没有信实现者的负控制，自己独立做了一次更严格的
+隔离实验——只把 `il_arm64.c` 从 `954cd28dcf9` 取出扣到 HEAD 上（另外 9 个不碰 codegen 的
+`analyze_snapshot` 提交原样留在 HEAD），重建后崩溃复现；换回 HEAD 版本重建后 `dd_runtime_check.sh`
+回到 `0 failure(s)`。这比实现者原本的「整体切到旧提交」更严格地排除了「408 个陈旧 target 一起
+重建导致的假象」这个替代解释。崩溃现场（`.ips`）自己独立解析过，帧链
+`AOT 代码 → BootstrapNativeCallWrapper → TransitionGeneratedToVM → TransitionSafepointState
+→ ThreadStackResource` 与所述机制吻合，不是编出来的故事。5 处引用行号全部核对无误。
+
+**抓到的两处缺陷（均不动摇因果/修复结论本身）**：
+
+1. **回退理由的第一条腿站不住**：memo 与 SDK 提交信息里写的「正确修法需要发明一套新调度协议，
+   规则 3 不许」——证伪代理 `grep -n CallBootstrapNative runtime/vm/stub_code_list.h` 命中
+   第 86 行，**这个 stub 本来就存在**；`thread.h` 的 `CACHED_VM_STUBS_ADDRESSES_LIST` 已经用同一种
+   形状缓存了 18 个别的 stub（如 `CallNativeThroughSafepoint`），给它加一行
+   `V(uword, call_bootstrap_native_entry_point_, StubCode::CallBootstrapNative().EntryPoint(), 0)`
+   是照抄既有机制的第 19 行，**不是发明协议**。真正撑住「回退而非硬修」这个决定的是**第二条、
+   memo 原文没提的理由**：shape A 的 `blr x30` 能通过 `NativeCallPattern` 构造函数的 opcode
+   ASSERT，但它往回数两条指令想解码 pool 索引时会踩在 `asr x16,x16,#1` 上，**导致
+   `LinkNativeCall` / `CodePatcher::{Get,Patch}NativeCallAt` 解不出两个 pool 索引，
+   与跳转目标对不对无关**——这条经证伪代理独立核实为真、且确实是硬约束。
+   **结论：回退这个决定本身是对的，但先前写的理由（第一条腿）夸大了；真正的理由是第二条腿。**
+2. **`cards_check.sh` 在交付时是红的**：`open in cards.tsv only: F78 F79` + `closed in cards.tsv only: F77`——
+   本轮新立的 F78/F79 从未在 memo.md 里给出对应的 `- [ ] **Fxx：...**` 复选框行，
+   F77 关闭时也没有把它自己的复选框从 `[ ]` 翻成 `[x]`（这半条是既有债，不是本轮引入，但本轮该认领）。
+
+**本轮当场修**：① 上面已把 F77 的复选框翻成 `[x]`、为 F78/F79 各补一条 `- [ ]` 复选框行
+（就是本节这两行）；② 本节这段文字即是对回退理由的订正——**规则 3 的引用撤回，
+真实理由改记为「shape A 让 `NativeCallPattern` 的 pool-index 解码越界，与跳转目标无关」**。
+SDK 提交里遗留的旧措辞不再追加改动（避免修改已提交历史），订正以本节为准。
+
+### F79 证伪 PASS 2（修复后重跑，同一轮，钉集合而非总数）
+
+`cards_check.sh` 修复效果实测：
+
+```
+cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && ./cards_check.sh; echo rc=$?
+```
+
+**下一轮开工时务必先跑这条命令**，把结果记进 memo（本轮写到这里为止未再触发一次新的完整
+`verify_all.sh` 全量重建，判据 (c)(d) 与负控制均沿用证伪代理自己独立复现的实测，不再重跑一遍
+——**证伪代理已经是新鲜代理、已经独立跑过，不需要用第三个代理去确认第二个代理确认过的东西**，
+按契约「收到返回后不要复跑验证」处理）。
+
+**F79 状态**：PASS 1 的因果链结论 SURVIVES（未被推翻），但当场修的是文档措辞与记账两处缺陷，
+**这两处修补丁本身还没有被审过**——按契约「修完的东西同样是未经审」，**先不标 `closed`**，
+留给下一轮/下一次调度用新鲜代理确认（a）`cards_check.sh` 现在确实绿、（b）memo 里
+「规则 3」那条撤回没有引入新的错误陈述。
+
 **下一轮（按此优先级）**：
-1. **F79 证伪 pass**（必须先做，才能决定 `built`→`closed`；子代理已明确自陈这一步未完成）。
+1. **确认 F79 的当场修补丁**（`cards_check.sh` 绿 + 措辞订正无新错）——用新鲜代理跑一次，
+   通过后把 F79 标 `[x]`/`closed`。
 2. **F37**（重开，需要新的关闭路径：`dd_runtime_check.sh` 跑绿 + 不再单靠静态计数）。
 3. **F78**（现已解除阻塞，可以实测其三条判据）。
 4. **F76**：staleness guard 重建债。
-5. **cards_check.sh 的既有 3 处红**（F77/F78/F79 memo/tsv 漂移 + F77 commits 列非 SHA）——
-   本轮顺带发现，未认领。
+5. **cards.tsv 里 F77 的 `commits` 列是散文不是 SHA**——`cards_check.sh` 报过，本轮未认领。
 6. **F72**（解 guard 路径条件）。 7. **F70**（挂起中）。 8. **F71**（挂起中）。 9. **F49**（`built`、从未过 pass）。
