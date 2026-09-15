@@ -108,6 +108,22 @@ EFFORT=${FHP_LOOP_EFFORT:-medium}
 # before the clock, and the cost that matters scales with turns, not seconds.
 MAX_TURNS=${FHP_LOOP_MAX_TURNS:-250}
 
+# The one knob here that limits the thing actually being rationed. Everything
+# else in this block -- model, effort, turns, the round ceiling, the cooldown --
+# is a proxy: it caps some quantity that spend correlates with, and then hopes.
+# `--max-budget-usd` caps spend. It only works with --print, and line 709 is
+# `claude -p`, so the precondition holds.
+#
+# DELIBERATELY EMPTY. A default would be a dollar figure nobody measured, and an
+# invented number that looks like a measurement is this repo's oldest failure --
+# see CLAUDE.md's opening section on assertions that expired and generated six
+# phantom tasks. Unset means the flag is not passed and behaviour is unchanged.
+#
+# To set it, the conversion has to come from somewhere real: either the spend
+# dashboard's own figure, or one round run with a deliberately large value to
+# see what it reports. Until then this is a channel, not a policy.
+MAX_BUDGET_USD=${FHP_LOOP_MAX_BUDGET_USD:-}
+
 # The round must not start without an explicit model. Empty here does not mean
 # "use the default" -- it means no --model flag reaches the CLI, and then
 # ~/.claude/settings.json's `env.ANTHROPIC_MODEL` takes over silently. That is
@@ -706,7 +722,7 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
     # live.log line still stamped 14:41:53, while having committed work at
     # 16:26 -- from outside, a working round was indistinguishable from a hung
     # one, which is the one thing this log exists to tell apart.
-    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} ${MAX_TURNS:+--max-turns "$MAX_TURNS"} &
+    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} ${MAX_TURNS:+--max-turns "$MAX_TURNS"} ${MAX_BUDGET_USD:+--max-budget-usd "$MAX_BUDGET_USD"} &
     worker=$!
     echo $worker >"$worker_pid_file"
     wait $worker
