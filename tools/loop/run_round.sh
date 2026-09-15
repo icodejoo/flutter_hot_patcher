@@ -119,9 +119,28 @@ MAX_TURNS=${FHP_LOOP_MAX_TURNS:-250}
 # see CLAUDE.md's opening section on assertions that expired and generated six
 # phantom tasks. Unset means the flag is not passed and behaviour is unchanged.
 #
-# To set it, the conversion has to come from somewhere real: either the spend
-# dashboard's own figure, or one round run with a deliberately large value to
-# see what it reports. Until then this is a channel, not a policy.
+# VERIFIED to fire, 2026-09-15, operator's own terminal:
+#
+#   $ claude -p --max-budget-usd 0.001 --model claude-sonnet-5 'say OK'
+#   Error: Exceeded USD budget (0.001)
+#
+# So it is honoured on this account and aborts rather than warning. What that
+# does not give is the conversion: the transcripts carry usage token counts but
+# no cost field at all (58 top-level keys checked, no cost/usd/price/spend), so
+# there is no free way to learn what a round costs in dollars.
+#
+# LEFT UNSET, and not because the number is hard to get. Getting it means either
+# guessing a price or bisecting downward over real rounds, and a round killed by
+# the budget is a cut-off round: a rescue stash, and work the next round has to
+# pick up. That is a real cost paid for a guard that is redundant with three
+# already in place and already measured -- MAX_TURNS 250, ROUND_TIMEOUT 3600,
+# COOLDOWN 7200.
+#
+# The condition that would change this: if burn_rate.sh still reports NOT ENOUGH
+# once four or more rounds have run past the cutover. Then the proxies are not
+# holding and it is worth paying to bisect. Bisect DOWNWARD from a generous
+# value, never upward from a tight one -- the failure mode of a too-low budget
+# is a killed round, and the failure mode of a too-high one is nothing at all.
 MAX_BUDGET_USD=${FHP_LOOP_MAX_BUDGET_USD:-}
 
 # The round must not start without an explicit model. Empty here does not mean
