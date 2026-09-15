@@ -401,7 +401,21 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **判据**：三处都改完后，脚本自己能在「把原生调用点冒充成 DD」时报红（负控制：拿掉判别器 → 数字回到 92）。
       ⚠️ **不许**用调常量的方式消红或制红。
 
-- [x] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）**
+- [ ] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）**
+      🔴 **2026-09-15 由 F79 重开**：它当初是靠一个**静态指令形状计数**关掉的
+      （`measure_dd_emission.sh` `native_patched` ours 92 == theirs 92），**而发射出来的代码根本跑不起来**。
+      `dd_runtime_check.sh` 是 `verify_all.sh` 里唯一真正执行一个编译好的 AOT 程序的检查，
+      自 `954cd28dcf9` 之后一直没跑过；重建 ProductARM64 后第一次跑，第一个快照就
+      `SEGV_ACCERR si_addr=0x7000000000000095`。已在 SDK `121cc101d43` 撤回该发射。
+      二分实测：`232849c87d8`（F37 的父提交）`0 failure(s)`，`954cd28dcf9` 同样崩，**首个坏提交就是它**。
+      重新落地前必须先满足的两条硬约束（已写在 `il_arm64.cc` 现场）：
+      ① `Thread` **没有缓存 `CallBootstrapNative` stub 的入口**，`CACHED_ADDRESSES_LIST`
+      （`thread.h:262`）缓存的是 C 函数 `NativeEntry::BootstrapNativeCallWrapper` 的地址
+      ⇒ 现有 Thread 布局里**不存在**任何偏移能让 `ldr x30,[THR,x16]; blr x30` 成为一次合法调用；
+      ② `NativeCallPattern`（`instructions_arm64.cc:82`）靠**解码这个调用点**取回两个 pool 下标，
+      所以就算跳转目标对了，`LinkNativeCall` / `CodePatcher::{Get,Patch}NativeCallAt` 也解不出 shape A。
+      **重关判据必须包含 `dd_runtime_check.sh` 在全新构建的 ProductARM64 上为绿**——
+      形状计数不是「这个形状能工作」的证据（F35 已经误读过这同一个 pattern 一次）。
       形状（F35 已逐条确证）：把上游的 `ldr x30,[PP,#slot]; ldur x30,[x30,#7]; blr x30`
       换成 `ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[x26,x16]; blr x30`，
       补齐到 `kObjectPoolLoadStoreMinInstructionCount = 3`（**本项目已逆出并实现过这个常量**，`f426f46f5b0`）。
