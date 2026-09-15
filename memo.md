@@ -481,6 +481,31 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       （尤其是：读写点的定位方法能否被证伪、`0x4c30` 那个 StubCode 表基址是否真的取自
       `x8`/Thread 自身而非其他寄存器上下文、有没有可能反汇编工具把地址算错）。
 
+      **F37 修补丁 VERDICT: SURVIVES (fix)（2026-09-16，新鲜 Sonnet 子代理，13 次调用，
+      审 `e4df802`）**——七项攻击全部实测跑过：① 判据可能报红（拿一个不存在的偏移/一个已知
+      Simulator 字段喂给同一检测逻辑，行为随之改变）；② `x8` 溯源到函数入口的
+      `adrp x8,0xb55000; add x8,x8,#0xea0`（静态表基址），与 `x0`（真正的 Thread `this`，
+      经 `mov x19,x0` 确认）是两个寄存器，脚本从未声称 `x8`=Thread；③ 全函数扫描
+      `[<any reg>,#0x908]` 只有一处写（行 211），另一处 `0x908` 命中是行 334 的**读**
+      （不同基址寄存器），非第二次写；④ 手动反汇编 `+0x8f8`/`+0x900` 两个真 Simulator 字段，
+      均为 `adr` 直接取地址写法，与 `+0x908` 的 `ldr;ldur;str` 三指令表项解引用写法**不同形**；
+      ⑤ 提交 `e4df802c745532512b6a76d4274fe8f97c45f390` 与 `598a347e0309b2bb7b611c57d6bd4f3e6f28fd92`
+      均存在且内容属实；⑥ `strings -t x` 定位 `SimulatorCallBootstrapNative` 在文件偏移
+      `0xa80678`，落在 `InitVMConstants` 的地址区间 `0x7e1c08`–`0x7e333c` 之外，独立证实
+      两者无关；⑦ 脚本只回答「写入指令形状是否通用」，未越界声称「Simulator 模式下这里会
+      写成什么值」，与 (b) 的限定范围一致。
+      **FLAW（minor，不推翻结论）**：`evidence_thr0x908_write_site.sh` 本身**没有内置负控制**
+      ——上面第④项的「真 Simulator 字段形状不同」是复核者手动做的，脚本没有把它断言进去，
+      未来二进制版本漂移时不会被自动抓到。
+      **STILL OPEN（原文抄录）**：「Add missing automated negative control (assert +0x8f8/+0x900
+      stores preceded by `adr`, not `ldr;ldur`) into script itself so future binary revisions
+      can't silently drift without caught; also, pass only inspected AOT-compiled non-Simulator
+      build path — not itself prove value Shorebird's Simulator-mode build (if one exists
+      separate binary) would write here, since only one binary variant was inspected.」
+      ⇒ **(a)(b) 可以当作可信前提**继续下一步（反汇编 `CallBootstrapNative`/
+      `NativeEntry::BootstrapNativeCallWrapper` 本体），但上面两条负控制缺口仍留着，不阻塞
+      下一步、需要时再补。
+
       ✅ **F37 判据全通过（2026-09-09）**：
       ① `measure_dd_emission.sh` `ours native_patched=92`（与 theirs 一致）；
       ② `op_dump_check.sh` `exit=0`（pool slot 改用 kTaggedObject Smi，例外条件 `both_smi_thr` 补入 probe）；
@@ -5584,10 +5609,24 @@ evidence_thr0x908_write_site.sh / 提交 = 研究树 e4df802c745532512b6a76d4274
 它不是对上一轮结论的简单确认，而是推翻了其中一半，下一轮开工前必须先审这条新结论，
 再决定是否可以把 (a)(b) 当作可信前提去反汇编 CallBootstrapNative/NativeEntry 本体这一步。
 
-**下一轮（延续 2026-09-15 定的优先级，本项插到最前）**：
-1. 对本轮「(b) 被反证」的反汇编结论跑证伪 pass（重点攻击 1/2/6：定位方法、0x4c30 基址来源、
-   反汇编工具本身是否可能算错地址）。若 SURVIVES，再继续反汇编 CallBootstrapNative/
-   NativeEntry::BootstrapNativeCallWrapper 本体这一步，为 F37 重新落地做准备。
+### 轮次 2026-09-16（续二）：THR+0x908 反汇编发现的证伪 pass（结账 `.loop/UNREVIEWED_FIX`）
+
+任务 = 派新鲜 Sonnet 子代理跑 `tools/loop/prompts/falsify.md`，CLAIM 就是上面那条反汇编
+反证结论（`e4df802`），重点攻击 1/2/6 / 判据 = 见上方 F37 卡片内「F37 修补丁 VERDICT: SURVIVES
+(fix)」段 / 派发 = 1 个新鲜子代理（13 次调用，119s）/ 结论 = **VERDICT: SURVIVES**，七项攻击
+全部实测跑过，(a)(b) 可以当作可信前提继续下一步；有一条 minor FLAW（脚本缺自动负控制）
+已按契约把 `STILL OPEN` 原文抄进卡片 / 改动 = 仅 `memo.md`（F37 卡片新增该段）/ 提交 =
+状态树本次提交 / 三棵树：研究树、SDK 树、引擎树本轮未动。
+
+`.loop/UNREVIEWED_FIX` 结账：队列条目「F37（2026-09-16 02:57）：fixed after PARTIAL verdict;
+fix commit(s) 128afff; no pass on the fix」已满足——上面这条判决就是对 `128afff` 所指的那个
+修补丁（`e4df802` 的反汇编反证）的审查，格式含 `F37 修补丁 VERDICT: SURVIVES (fix)`，队列条目
+已从 `.loop/UNREVIEWED_FIX` 删除（该文件被 `.gitignore` 忽略，非受版本控制内容，无需提交）。
+
+**下一轮（延续 2026-09-15/09-16 定的优先级）**：
+1. 反汇编 `CallBootstrapNative`/`NativeEntry::BootstrapNativeCallWrapper` 本体——判断
+   `+0x908` 挂的这个 leaf entry 是对既有 wrapper 的一层薄 trampoline 还是真正不同逻辑，
+   为 F37 重新落地做准备（(a)(b) 已过 pass，可作前提使用）。
 2. F37（重开，等前置问题全部解完）。
 3. F78（已解除阻塞，可实测三条判据）。
 4. F76：staleness guard 重建债。
