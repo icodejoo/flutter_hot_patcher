@@ -4767,3 +4767,118 @@ Opus 修 24 次 + Opus pass 28 次）/
    顺带把 `cards.tsv` 第 6 栏的判据补到与实现同步。
 4. **F71**（挂起中，2026-09-15 起）。
 5. **F49**（仍 `built`、从未过 pass）。
+
+---
+
+## 心跳 2026-09-14T23:07:22Z — round start
+
+队列开局：`.loop/UNREVIEWED_FIX` 1 项（F70）。三棵树实测干净（状态树/研究树仅 `?? .serena/` 等未跟踪，SDK 树 0 项）。无 `.loop/PAUSE`。
+
+### 本轮任务：把六组闸门脚本接进 `verify_all.sh` —— 实现落地，证伪 pass 判 **PARTIAL**
+
+**结论：不关卡**（本任务没有对应卡片，来自上一轮写下的「下一轮优先级 1」）。
+实现提交研究树 `80f7ad9`（`F-wire:`），`EXPECTED_CHECKS` **35 → 41**。
+新鲜 Opus 证伪 pass（47 次调用）**VERDICT: PARTIAL**，据此新立两张卡 **F75 / F76**。
+
+**站住了的部分（pass 自己复跑出来的，不是转述）**：
+- 判据 (a) 逐字复现：`39 ran, 0 failed, 0 skipped, 2 blocked (41 of 41 checks accounted for)`，
+  **无 `MISCOUNTED`**，rc=1。
+- 判据 (b) 逐字复现：`35 ran, 1 failed, 1 skipped, 5 blocked (41 of 41)`，
+  `FAILED: dd_runtime_check.sh`（**先于本轮存在**，不是六个新脚本之一）。
+- **41 是真数不是常数**：`grep -cE '^[[:space:]]*run_script[[:space:]]' verify_all.sh` = **39**，
+  加 f69b 行内 `ran++`（529 行）与 run_vm_tests 块 `ran++`（586 行）= **41**。
+- **四个被改动的脚本是纯加法**：一个 guard + 一个 `--self-test) NEGCTL=1` 分支，
+  pass 逐条核过 —— **没有放宽容差、没有削弱断言、没有默认跳过的逃生门**。
+- 两个负控制在脚本层复现：nc4 `PIN self_pp {1332:2}→{1332:3}` rc **0 → 16**；
+  f69b `instrs {"A":195}→{"A":196}` rc **6 → 4**。两个码都落在 `{0,2}` 之外 ⇒ 确实会 FAILED 并被点名。
+
+**判 PARTIAL 的那一条（第 38 种假绿，与记忆里那一串同根）**：
+
+> 🔑 **`run_script` 无条件把 `rc==2` 读成 BLOCKED，而 nc4 / nc5 把 `2` 当作「真缺陷」的判决位。**
+> ⇒ **真回归被记成「这个检查没跑」**：不计入 `failed`、不进 `failed_checks`、摘要后不点名。
+> 实测：`./nc5_f68_x27_ref_decode.sh --negctl` 打 `… symdiff 2 old PASS new FAIL rc=2`；
+> 把这个 rc 喂进**原样抽出来的** `run_script`（`verify_all.sh` 243-277 行）得到
+> `BLOCKED stub_nc5.sh`（message 字段**空的**）、`TALLY ran=0 failed=0 blocked=1`、`harness_rc=0`。
+> nc4 更是**整个反的**：它自己的 `--codes` 表写着 `2 = self_pp extra 非零[可达]`（真缺陷）、
+> `255 = BLOCKED 前提文件不可读` —— **缺陷码读成 blocked，blocked 码读成 failed**。
+> `80f7ad9` 的注释只论证了「过报而非漏报，是安全方向」，**漏报那一侧从没被考虑过**。
+
+**连带的第二处（它让第一处无法被察觉）**：`blocked` **没有任何 pin**
+（`grep -n 'expected_blocked\|EXPECTED_BLOCK' verify_all.sh` rc=1，只有 `expected_skips`）。
+两个 nc3 永久 blocked ⇒ 末尾谓词 `[ "$blocked" -eq 0 ]` **恒假** ⇒
+🔴 **`verify_all.sh` 的 rc 现在是常数 1**。真回归既不动退出码、也不动 `FAILED:` 尾巴，
+唯一会动的是 `BLOCKED: N check(s)` 里那个数字，而**没有任何断言读它**。
+⚠️ **下一轮读到 rc=1 不要当成新故障** —— 它是本轮已知且已立卡（F75 判据 ii）的状态；
+但也**不要把它当背景噪音**：一个永远红的闸门两轮之后就没人看了，这正是「墙纸」。
+
+**第三处（六分之二根本不执行）**：`nc3_f66_dedup_multiset.sh` / `nc3_f67_pool_seen_multiset.sh`
+是构建实验（改 `analyze_snapshot_api_impl.cc` + 各 3 次 ninja + 3 次 `parity_matrix.sh --reuse`，约 6 分钟），
+`80f7ad9` 给它们加了 `NC3_ALLOW_REBUILD=1` 才跑的 guard，**guard 在任何测量之前**。
+而开启它会重写上面那些检查刚读过的 `out_pm/` ⇒ **它在 harness 里永远开不了**。
+「harness 真的执行它们」对 2/6 为假。（实现方自己披露了，记在这里是因为原始主张的措辞盖过了它。）
+
+**第四、第五处 ⇒ F76**：见下。
+
+- [ ] **F75：`rc==2` 在 `run_script` 里读成 BLOCKED，而 nc4/nc5 用 2 当真缺陷码 —— 真回归读成「没跑」；且 `blocked` 无 pin 使 rc 恒为 1**
+- [ ] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上，且 harness 自己每轮重写 12/112 个 `out_pm/` 输入**
+
+  F76 的两笔实测：① `ninja -n -C ~/dart-3122/sdk/xcodebuild/ReleaseARM64 | grep -c .` = **19**，
+  首步就是 `CXX analyze_snapshot_api_impl.o`；`analyze_snapshot` mtime **09-15 00:10:54**，
+  而 SDK 最新三个提交全在改 `analyze_snapshot_api_impl.cc`，最新的 `274554f9bb3` 是 **01:26:51**
+  「the self_pp shortfall is this file's fixed 3-word pool skip」—— **正是 nc4/F68 的标的**。
+  ⇒ `SKIP_STALENESS_GUARD=1` **不是图省事，它恰好把守卫关在了被测的那个文件上**。
+  ② `out_pm/` 的 sha256 清单在「run 1 前 / run 1 后 / self-test 后」三次里，
+  **同样的 12 个文件每次都变**（`as.*.ours.{shorebird,dump_object_pool,disassemble}`、
+  `as.*.theirs.dump_object_pool`），而 `as.*.ours.shorebird` **是 nc4 的主输入**。
+  重写者是 `verify_all.sh` 自己调的 `parity_matrix.sh --reuse`。
+  ⇒ 🔑 **`80f7ad9` 说的「清单在 `--negctl` 前后不变」是真话，但量在了错的尺度上**：
+  单次运行内不变，**harness 尺度上每跑一次就变**。
+
+**pass 的 STILL OPEN（原文抄录）**：
+> nobody has yet tested whether any of the **33 pre-existing** checks also returns 2 on a genuine
+> failure — `run_script`'s rc==2→BLOCKED rule is global, and this pass only audited the six new ones;
+> a sweep of every check's exit-code convention for a live failure code of 2 is the test that could
+> widen this from two scripts to the whole harness.
+
+（判决是 PARTIAL，模板里 STILL OPEN 本不适用；抄在这里是因为它把本轮的缺陷从 2 个脚本
+推广到了**整个 harness 的 41 个检查**，已写进 F75 判据 (iii)。）
+
+**pass 自陈的两处弱点（不构成翻案，但要记）**：
+- 两个负控制**没有端到端跑完整 `verify_all.sh`**（每次约 9 分钟），
+  `0→1→0` 的 failed 计数迁移是「实测 rc + 原样抽出的派发代码」推出来的，**不是观察到的**。
+- 两个负控制**恰好都挑在失败码避开 2 的脚本上** —— 这正是它自己报出的那个洞的反面。
+
+**队列（`.loop/UNREVIEWED_FIX`）：F70 那一行保留，本轮不派第 4 次 pass。**
+理由是实测而非判断：F70 最后一个**代码**修补 `e5ee85f` **已经被一个新鲜 Opus pass 打过**
+（28 次调用，判 `PARTIAL (fix)`，记在本文件 4666 / 4676 行），`ac4a118` 只是把记录从 TSV 的
+commits 字段挪到 notes 字段的记账提交 —— **没有任何未经审的修补丁**。
+按本文件 3341 行立下的读法（`PARTIAL (fix)，队列不清，卡不关`）那一行应当留着；
+它欠的是一句 `SURVIVES (fix)`，而那要等 F70 出挂起池、有了第 4 个修补丁才可能。
+**下一轮不要把它当误报删掉，也不要为它空派一次 pass 去重新推导一个已经写在 4695-4702 行的结论。**
+
+**未变动**：SDK 树未动（HEAD `274554f9bb3`，0 项改动）、未重建、棘轮未动、矩阵未动、
+`DecodePoolReference` 未动（F72 仍在把门）。
+`out_pm/` **没有被任何人手动改过**（两个代理的扰动全在 `$TMPDIR` 的符号链接树里，只有受害文件是真副本）；
+它变了的那 12 个文件是 harness 自己写的，即 F76 ②。
+⚠️ **卫生（既有，非本轮引入）**：`$TMPDIR` 下 `nc4f68*` 残目录已累积约 150 个，
+本轮又多一个 `nc4p.UZ8bf6AaBt`（删除被安全钩子拦下，未强删）。
+
+**轮末**：轮次 2026-09-15T07:0x–09:0x / 任务 = **把六组脚本接进 `verify_all.sh`**（上一轮定的优先级 1）/
+判据 = **实现达标（41 of 41 accounted、无 MISCOUNTED、两个负控制在脚本层成立），
+但证伪 pass 判 PARTIAL ⇒ 不关卡，新立 F75 / F76** /
+派发 = **2 个子代理**（Opus 实现 40 次 + 新鲜 Opus 证伪 pass 47 次）/
+改动 = 研究树 `verify_all.sh`、`nc3_f66_dedup_multiset.sh`、`nc3_f67_pool_seen_multiset.sh`、
+`nc4_f68_pool_skip_1332.sh`、`nc5_f68_x27_ref_decode.sh`、`cards.tsv` · 状态树 `memo.md` /
+提交 = 研究树 `80f7ad9` + 本轮 cards 提交 · 状态树见本提交 /
+三棵树实测：研究树仅 `?? .serena/`、`git diff --stat` 空；SDK 树 0 项；状态树仅既有未跟踪 /
+队列 = 开局 1 项（F70），**收尾仍 1 项**（理由见上，已就地标注）
+
+**下一轮（按此优先级）**：
+1. **F75**（判据 iii 是那次全量扫）。**它排第一**，因为在它修好之前
+   `verify_all.sh` 的退出码不再区分「闸门抓到了」和「闸门没跑」——
+   本轮新接进去的六个闸门有两个正好落在这个盲区里，**接进去等于没接**。
+2. **F76**（先做 (i) 的重建，它同时解掉「39 个绿值多少钱」这个问题）。
+3. **F72**：解 guard 的路径条件 —— 仍是 F68 这条链上唯一还没定的事。
+4. **F70**（挂起中，第 5 轮后按契约回头重试）：**不要再把 pin 细一级**，
+   先答「F68 的标的是哪个量」；顺带把 `cards.tsv` 第 6 栏补到与实现同步。
+5. **F71**（挂起中）。 6. **F49**（仍 `built`、从未过 pass）。
