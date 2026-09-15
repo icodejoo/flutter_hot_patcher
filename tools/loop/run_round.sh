@@ -983,6 +983,21 @@ say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
 # tick starts immediately -- the safe direction.
 date +%s >"$STATE/last_round_end"
 
+# Burn rate into the log every round. The scheduled reminder that was meant to
+# ask this question lives in a chat session's memory and dies with it, which is
+# not where the only copy of a deadline check belongs. This is local python over
+# transcripts already on disk: no API call, no tokens, about a second of CPU.
+# Whoever reads rounds.log sees the number without having to know the script is
+# there.
+#
+# It prints its own TOO EARLY below four rounds since the cutover, so an early
+# round logs "not yet" instead of a ratio computed from one sample.
+if [ -x "$REPO/tools/loop/burn_rate.sh" ]; then
+  "$REPO/tools/loop/burn_rate.sh" 2>/dev/null \
+    | grep -E '^(combined|ratio|VERDICT)' \
+    | while IFS= read -r l; do say "burn: $l"; done
+fi
+
 # ---- finisher --------------------------------------------------------------
 # Two rounds in a row (F2, F3) committed the SDK side, announced the task
 # closed, and ended with the research tree still dirty. That is not a turn
