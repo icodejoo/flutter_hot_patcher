@@ -1815,8 +1815,26 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 ---
 
 
-- [ ] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
-      （`built`，2026-09-14 立并当轮实现，未经证伪 pass）
+- [x] **F63：用一个不使用「`b/bl` 落在另一个 entry 内」谓词的调用图去测 F55 的独立性**
+      （`closed`，2026-09-14 立并当轮实现；2026-09-16 证伪 pass 通过，研究树 `4506ee8`）
+      🟢 **证伪 pass VERDICT: SURVIVES**（2026-09-16，新鲜 Sonnet 代理，9 次工具调用）。
+      七项攻击全部实测：①`--negctl-rewire`/`--negctl-mapoff` 均使 rc 翻红（真判据，非常量）；
+      ②`hello`/`base_dd` 的 `.so` 非同一文件、`.dill` 逐字节相同符合预期（同源不同构建模式）；
+      ③脚本明确不报 EXAMINED/UNEXPLAINED（如实声明这是可靠性/完备性对比，不是单位记账检查）；
+      ④kernel-key 多对一（最高 1→3）本应偏向制造更多假阳性而非更少，且同规模改线基线
+      （5 种子×3 fixture）最佳仍是 pred-only 2–19，从未到 0 ⇒ 真图的 `pred-only 0` 非平凡；
+      ⑤`git merge-base --is-ancestor 4506ee8 HEAD` 确认未过期；
+      ⑥三条负控制全部实跑：`--negctl-rewire` rc=1（obs-only 815→849）、
+      `--negctl-mapoff` rc=1（映射全部塌缩为 unmapped）、`--negctl-drop-unmapped` rc=0
+      且明确打印「无判别力」，三者均与卡片原述一致；
+      ⑦复核后数字与卡片一致（覆盖率 81.9%/80.1%，pred-only 0/obs-only 815 与 0/2089，
+      改线基线最佳 2/4），脚本自身文本已正确声明这是单向结果、不足以回答 F55 限定 (b)。
+      🔑 **STILL OPEN（原文抄录）**：obs-only 的细分本身尚未再拆解
+      （例如 hello 的「76 unmapped / 308 mapped-but-no-kernel-out-edge / 431
+      mapped-with-kernel-edges-reaching-no-seed」三类），未来一遍可以检查
+      「308 无 kernel 出边」这一桶是否被 ffi trampoline / VM stub 等预期结构类别主导，
+      而非某种可疑成分——这能加强但不能单独推翻 DOES-NOT-SETTLE 的结论。
+      **本卡结论不变**：F55 独立性反对意见仍未被回答，F55 限定 (b) 原样保留。
       **背景**：F55 证伪 pass 的缺陷 1 —— `ShorebirdCallGraph` 与 `ShorebirdSubgraphHashes`
       走同一个 `ShorebirdEntryContaining`、同一次扫描（`analyze_snapshot_api_impl.cc:1439`
       的注释写明是**故意共用**），而 `evidence_shorebird_subgraph_hash.sh` 的 ELF 重建
