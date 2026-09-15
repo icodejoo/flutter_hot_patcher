@@ -67,7 +67,38 @@ PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
 # Still overridable: FHP_LOOP_MODEL=... wins. Set as a default rather than
 # exported into ralph.sh's environment on purpose -- an export dies at the next
 # restart, and "the setting was lost on restart" is already on this repo's record.
-MODEL=${FHP_LOOP_MODEL:-claude-opus-5}
+#
+# 2026-09-15: changed to Sonnet 5 by operator instruction. The Opus argument
+# above is NOT retracted -- it is about the quality of a falsification PASS, and
+# passes are dispatched per-card by tools/loop/prompts/falsify.md, which this
+# variable does not touch. This one sets the round DRIVER: schedule the task,
+# read the verdict, edit a script, keep the ledger.
+#
+# What to watch, because it is measured and unexplained: on 2026-09-14 the one
+# round that ran on Sonnet (4-6, by accident -- see the assert below) did its
+# eight "falsification passes" by shelling out to `claude -p` instead of the
+# Agent tool, and the F42 ledger therefore printed `0 subagent(s) [-]` -- the
+# same reading as the three real forgeries on record. Whether that is a property
+# of the model or of that one round is NOT established; one round is one sample.
+# If `round dispatch: 0 subagent(s)` shows up again now, that is the second.
+MODEL=${FHP_LOOP_MODEL:-claude-sonnet-5}
+
+# Effort was never set at all, so every round so far ran at the CLI default
+# (measured 2026-09-15: no --effort in the invocation, no effort key in any
+# settings.json, nothing in this tree). `high` by operator instruction.
+EFFORT=${FHP_LOOP_EFFORT:-high}
+
+# The round must not start without an explicit model. Empty here does not mean
+# "use the default" -- it means no --model flag reaches the CLI, and then
+# ~/.claude/settings.json's `env.ANTHROPIC_MODEL` takes over silently. That is
+# not hypothetical: on 2026-09-14 a round ran three hours on claude-sonnet-4-6
+# for exactly this reason and nothing anywhere reported it. Refuse instead.
+if [ -z "$MODEL" ]; then
+  echo "run_round.sh: refusing to start -- MODEL resolved empty." >&2
+  echo "  Without --model, env.ANTHROPIC_MODEL in settings.json silently wins." >&2
+  echo "  Set FHP_LOOP_MODEL, or restore the default on the line above." >&2
+  exit 2
+fi
 
 # Rounds run 20-50 minutes (task 63: 22, task 64: 47), so the watchdog has to
 # clear the slowest of them by a wide margin or it becomes the thing that breaks
@@ -501,15 +532,24 @@ round_dispatch_stats() {
     if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest=$f; fi
   done
   if [ -n "$newest" ]; then
-    python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 - none'
+    python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 - - none'
 import json, sys, io
 agent = tools = 0
 models = []
+driver = []
 for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
     try: d = json.loads(line)
     except Exception: continue
     m = d.get("message")
     if not isinstance(m, dict): continue
+    # The driver's own model, as the API reported it back -- not as the flag
+    # asked for it. Checking $MODEL against $MODEL is a tautology and cannot
+    # fail; this repo has that exact defect on record (the tenth one, F60:
+    # numerator and denominator computed from the same expression, so the gate
+    # could not go red at all). So the reading comes from the artifact and the
+    # expectation comes from the config, and they are compared below.
+    if d.get("type") == "assistant" and m.get("model"):
+        driver.append(str(m["model"]))
     c = m.get("content")
     if not isinstance(c, list): continue
     for b in c:
@@ -524,10 +564,14 @@ for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
 seen = []
 for m in models:
     if m not in seen: seen.append(m)
-print(f"{agent} {tools} {'+'.join(seen) or '-'} {sys.argv[1].split('/')[-1]}")
+dseen = []
+for m in driver:
+    if m not in dseen: dseen.append(m)
+print(f"{agent} {tools} {'+'.join(seen) or '-'} {'+'.join(dseen) or '-'} "
+      f"{sys.argv[1].split('/')[-1]}")
 PY
   else
-    printf '0 0 - none'
+    printf '0 0 - - none'
   fi
 }
 
@@ -611,7 +655,7 @@ rc_tmp=$(mktemp "$STATE/round_rc.XXXXXX")
     # live.log line still stamped 14:41:53, while having committed work at
     # 16:26 -- from outside, a working round was indistinguishable from a hung
     # one, which is the one thing this log exists to tell apart.
-    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} &
+    script -q /dev/null       "$CLAUDE" -p "$PROMPT" --permission-mode "$PERMISSION_MODE" ${MODEL:+--model "$MODEL"} ${EFFORT:+--effort "$EFFORT"} &
     worker=$!
     echo $worker >"$worker_pid_file"
     wait $worker
@@ -976,9 +1020,28 @@ fi
 # breath. Every one of those would have passed a counting gate silently. The
 # card ids are right there in the line; using their difference costs nothing and
 # cannot be fooled that way.
-read -r agent_calls tool_calls dispatch_models transcript_seen <<<"$(round_dispatch_stats)"
+read -r agent_calls tool_calls dispatch_models driver_models transcript_seen <<<"$(round_dispatch_stats)"
 say "round dispatch: $agent_calls subagent(s) [$dispatch_models], $tool_calls tool call(s) (transcript: $transcript_seen)"
 printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$agent_calls" "$tool_calls" "$dispatch_models" "$transcript_seen" >>"$STATE/dispatch_stats.tsv"
+
+# Did the round actually run on the model we asked for? The flag says what was
+# requested; `driver_models` is what the API answered with, read out of the
+# round's own transcript. They are different sources on purpose -- see the note
+# in round_dispatch_stats().
+#
+# FHP_LOOP_MODEL_EXPECT exists so this check can be proven to fail: set it to a
+# model the round is not running on and the line below must go red. A gate whose
+# negative control has never been fired is not known to be a gate.
+model_expect=${FHP_LOOP_MODEL_EXPECT:-$MODEL}
+case "$driver_models" in
+  none|-|'')
+    say "round driver: UNVERIFIED -- no transcript to read the model from ($transcript_seen)" ;;
+  "$model_expect")
+    say "round driver: $driver_models (asked for $model_expect)" ;;
+  *)
+    say "🔴 round driver MISMATCH: ran $driver_models, asked for $model_expect" \
+        "-- a silent fallback to settings.json's env.ANTHROPIC_MODEL looks exactly like this" ;;
+esac
 
 closed_after=$(closed_ids)
 newly_closed=$(comm -13 <(printf '%s\n' "$closed_before") <(printf '%s\n' "$closed_after") | grep -v '^$')
