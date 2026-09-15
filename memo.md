@@ -426,6 +426,32 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       再落地发射端。**照抄一个不知道是什么的偏移就是自由发挥。**
       **判据**：我们的 92 个点与他们**同一个 pool 索引集合、同样的 per-function +1**；
       `verify_reproduction.sh` 的逐字节产物不许回归。**负控制**：把补齐从 3 改成 2 → 逐字节对比变红。
+
+      🟢 **前置问题已解（2026-09-16，新鲜子代理，38 次调用，STATUS: resolved）**：
+      `THR+0x908` 是 `dart::Thread::call_bootstrap_native_entry_point_`（`thread.h:1660`），
+      与已存在的 `bootstrap_native_wrapper_entry_point_`（`0x298`，缓存的是原始 C 函数
+      `NativeEntry::BootstrapNativeCallWrapper`）是**两个不同字段**——此前某处笔记把两者混为一谈，
+      本次已证伪那个混淆。`0x908` 有生成的 setter
+      `Thread::set_call_bootstrap_native_entry_point(uword)` 与偏移访问器，形状与
+      `RUNTIME_ENTRY_LIST`/`LEAF_RUNTIME_ENTRY_LIST` 家族其余缓存入口点字段完全一致，
+      并带一个 Simulator 模式重定向符号 `SimulatorCallBootstrapNative`。写入时机：比照我们自己
+      `thread.cc:188-234` 的 `Thread::InitVMConstants()`（`Thread` 构造函数里只调一次）同型写法，
+      **高置信度判定为每个 Thread 构造时写一次**，不是逐调用或运行期 stub 缓存；它是 Shorebird
+      新增的一个独立 leaf runtime entry（`CallBootstrapNative`）的入口点，不是既有 wrapper 的地址。
+      证据：`dwarfdump --name=call_bootstrap_native_entry_point_` 命中 dSYM
+      （`~/.shorebird/bin/cache/flutter/c15ef6379403.../Flutter.framework.dSYM`）给出
+      `decl_line 1660`、`data_member_location 0x0908`；同法查 `bootstrap_native_wrapper_entry_point_`
+      给出 `decl_line 1533`、`0x0298`（证实是两个字段）；`strings Flutter` 里
+      `set_call_bootstrap_native_entry_point` 命中 2 次（mangled+demangled）、
+      `SimulatorCallBootstrapNative` 命中 1 次。脚本：研究树
+      `spikes/shorebird_linkinfo_oracle/evidence_thr0x908_field.sh`，提交
+      `598a347e0309b2bb7b611c57d6bd4f3e6f28fd92`（rc=0）。
+      **仍未解（留给 F37 重新落地前的下一步）**：尚未反汇编这个新 leaf entry
+      （`CallBootstrapNative`/`SimulatorCallBootstrapNative`）本体，不知道它是对
+      `NativeEntry::BootstrapNativeCallWrapper` 的一层薄 trampoline（换调用约定）
+      还是真正不同的逻辑——这一步需要另开一轮，**本轮的证伪 pass 尚未对此结论跑过**，
+      按契约「built 不是 closed」，先不当作最终结论使用，下一次调度这张卡前先派证伪 pass。
+
       ✅ **F37 判据全通过（2026-09-09）**：
       ① `measure_dd_emission.sh` `ours native_patched=92`（与 theirs 一致）；
       ② `op_dump_check.sh` `exit=0`（pool slot 改用 kTaggedObject Smi，例外条件 `both_smi_thr` 补入 probe）；
@@ -5487,4 +5513,27 @@ no pass on the fix」核对后判定**不需要重新派发**：`3a66d26`（研�
 **F77 修补丁 VERDICT: SURVIVES (fix)** —— 新鲜 Haiku（4 项机械命令，非做修补丁的那个代理）
 核验 `3a66d26` 只改了 F77 commits 列且 8 个 SHA 均可解析、`cards_check.sh` 实测 `rc=0`。
 
-`.loop/UNREVIEWED_FIX` 这一行已删除（详见下方提交）。
+`.loop/UNREVIEWED_FIX` 这一行已删除（详见下方提交）。已实测确认该队列条目已在
+memo.md 中有正确格式的判决行，本轮把本地队列文件清空（`.loop/` 被 `.gitignore` 忽略，
+非受版本控制内容，无需提交）。
+
+### 轮次 2026-09-16：F37 前置问题派发（THR+0x908 字段识别）
+
+任务 = 按 F37 卡片要求，先解出「`THR+0x908` 是谁、什么时候写」这一前置问题（运行期设施，
+需去引擎/dSYM 找，不是 gen_snapshot）/ 判据 = 见上方 F37 卡片内新增段落
+「🟢 前置问题已解（2026-09-16）」/ 派发 = 新鲜子代理 1 个（38 次调用，405s）/
+结论 = STATUS: resolved——`THR+0x908` = `Thread::call_bootstrap_native_entry_point_`
+（`thread.h:1660`），与既有 `bootstrap_native_wrapper_entry_point_`（`0x298`）是两个不同字段；
+写入时机是 `Thread::InitVMConstants()`（构造时写一次）/ 改动 = 研究树新增
+`evidence_thr0x908_field.sh` / 提交 = 研究树 `598a347e0309b2bb7b611c57d6bd4f3e6f28fd92`
+（rc=0）；状态树本次提交（memo.md）/ 三棵树：SDK 树、引擎树本轮未动（引擎树按契约保持只读，
+未验证其 diff 是否仍等于 `engine_tree_current_probefree.diff`，因为本轮未touch它）。
+
+⚠️ **本轮结论尚未过证伪 pass**——按契约「一件事做完之后本轮还没结束」，下一轮开工时，
+若要继续推进 F37 重新落地，必须先对本轮这条「THR+0x908 字段识别」的结论派一个新鲜子代理
+跑 `tools/loop/prompts/falsify.md`，SURVIVES 之后才可以把它当作可信前提往下走；
+若判定不必再审（例如证据本身可由下一步反汇编直接验证/推翻），同样要写明理由。
+
+**下一轮**：优先对上面这条 F37 前置结论跑一次证伪 pass；若 SURVIVES，再继续
+「反汇编 `CallBootstrapNative`/`SimulatorCallBootstrapNative` 本体」这一步，
+仍然是 F37 重新落地前的准备工作，卡片本身保持 `open`。
