@@ -5024,3 +5024,163 @@ F75 `open` → `built`，新立 F77** /
 3. **F72**：解 guard 的路径条件 —— 仍是 F68 这条链上唯一还没定的事。
 4. **F70**（挂起中，第 5 轮后按契约回头重试）：不要再把 pin 细一级。
 5. **F71**（挂起中）。 6. **F49**（仍 `built`、从未过 pass）。
+
+
+---
+
+### 心跳 2026-09-15T23:03 —— 本轮开工
+
+`.loop/UNREVIEWED_FIX` 到本轮开工时有 3 项（F70/F75/F77），逐一核验后判定**均不需要新派证伪 pass**，直接清空队列：
+
+- **F70**：核对提交时间戳（`git log` 实测），`e5ee85f`（06:51:06，pass 3 的修补）确实早于
+  `4f035f0`（07:02:53，「F70 three fixes, three PARTIAL」）——即 e5ee85f 已经被一次新鲜 pass
+  审过并判 PARTIAL(fix)，`ac4a118`（06:51:40）只是把这个结论记到卡片上的记账提交。
+  同一种修法已连续三次 PARTIAL，按契约第六条移入挂起池，第 5 轮后再重试。**无未经审的修补丁。**
+- **F75**：队列列出的 5 个提交（`4cbe212 5665d96 61e38da 854943a d389035`）就是**产生本轮 PARTIAL
+  判决本身**的那组提交，判决之后没有任何提交再改过 `verify_all.sh` 或 `blocked_code_for`
+  （memo 5017 行已实测确认）。**没有"修补丁"可审——PARTIAL 剩下的那一半被拆成了新卡 F77，不是被原地修补。**
+- **F77**：`git show --stat 854943a` 实测只改了 `cards.tsv`（立卡），F77 在 `cards.tsv` 里状态为
+  `open`，尚未实现。**开卡提交不是修补丁，没有东西可审。**
+
+三项均按契约「判定不必再审、写明理由、删除队列行」处理，`.loop/UNREVIEWED_FIX` 已清空。
+
+### 本轮任务：**F77**（上一轮定的优先级 1）
+
+派发给独立子代理实现，判据与负控制取自 `cards.tsv` F77 行（研究树
+`/Users/Cruz/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`）。等待子代理返回。
+
+### F77 PASS 1 VERDICT: PARTIAL → 修好 → PASS 2 VERDICT: SURVIVES → **F77 已关闭**
+
+实现（研究树 3 个提交 a3c87a5/fb2e151/b5d6535 + 记账 95fd44b，Opus 72 次调用）落地后，
+**新鲜 Opus pass 1（37 次调用）判 PARTIAL**，抓到两处：
+① 三个新 case arm（`evidence_shorebird_{components,residual,subgraph_hash}.sh` 路由到 FAILED）
+没有配对的 pin——给 `evidence_shorebird_components.sh` 打一个 `--self-test` 空操作分支，
+它就从 `failed_checks` 静默消失，无 MISMATCH、rc 不变（这正是 F70 教训在 FAILED 侧的镜像）；
+② 用作反向控制的 `nc3_f66_dedup_multiset.sh:99` / `nc3_f67_pool_seen_multiset.sh:102`
+本身在 `exitcode_convention_sweep.sh` 里是 `UNDECIDED`，却被代码默默并入「无歧义的 21 个」。
+
+**修补（研究树 b919183/70759b7/e92d418，Opus 60 次调用）**：新增 `EXPECTED_USAGE_ERROR_2`
+第二个 pin 集合（`verify_all.sh` ~435-480/513-520/952-972），任一脚本不再靠 exit 2 表达
+usage error 时打出具名的 `USAGE-ERROR-2 SET MISMATCH`；把 nc3 那两个显式标成 UNDECIDED
+（桶数 21→18），反向控制换成 `SIMBUILD` 门控、经 `grep -rln SIMBUILD` 确认无第二读者的
+`sim_only_tests_check.sh`。
+
+**新鲜 Opus pass 2（27 次调用，全部用自己的独立扰动、不复用实现者的脚本）判 SURVIVES**：
+- 独立复现两侧 pin 互不相交（`bcode=none` vs `bcode!=none` 由构造二选一）；
+- 用自己选的脚本（`evidence_shorebird_subgraph_hash.sh`）而非实现者用过的那个去破坏，
+  确认 MISMATCH 精确点名那一个；
+- **推翻了实现者自己的「LIMIT」自陈**：实现者说 `usage_set_ok` 永远不可能单独决定 rc，
+  pass 2 构造出恰好这种场景（三个 usage-error 检查全修好 + 顺手清掉 `dd_runtime_check.sh`
+  一个无关的既存失败）实测 rc=1 且 `USAGE-ERROR-2 SET MISMATCH` 是唯一原因 ⇒ **这套机制是
+  真承重的，不是装饰**（更精确的表述：只在全量非 self-test 模式下因 `EXPECTED_USAGE_ERROR_2`
+  永远为空而不可达，在 `--self-test` 模式下是决定性的——实现者的原话没做这层区分）；
+- 判定 `f69b_vector_identity.sh`（sweep 第三个 UNDECIDED）**不算 criterion (d) 的未闭合残留**：
+  它走内联派发、有自己更强的 pin（任何 rc 含 2 双向皆红），根本不经过 `blocked_code_for()`。
+
+**PASS 2 STILL OPEN（原文抄录，未删减，按契约必须保留）**：
+> the one test that could overturn this is a --self-test run in which dd_runtime_check.sh
+> passes. Today --self-test rc is a CONSTANT 1 (dd_runtime_check.sh:239 demands >=5 induced
+> failures and the harness only produces 4)... So the mode where usage_set_ok is the only
+> place it can be decisive is a mode whose rc carries no information -- I had to repair
+> dd_runtime_check.sh to expose the fix's own win. If that stale >=5 pin is ever "fixed" by
+> lowering it rather than by restoring the 5th induced failure, --self-test silently stops
+> testing what it claims to. That deserves its own card and is not F77's debt. Secondary:
+> the new pin is on NAMES only, never on REASONS -- the same residue cards.tsv:71 already
+> lists as open item (3) -- so one of the three swapping its exit-2 site for a different
+> exit-2 site is invisible to this set (it still reads FAILED, so it cannot produce a false
+> green, only a false label).
+
+**已按此立卡 F78**（研究树 `cards.tsv`，提交 `1d09332`）：`dd_runtime_check.sh` 的
+`--self-test` 阈值 `fail -ge 5` 是死数，harness 只产生 4 个，导致 `--self-test` 的 rc
+**恒为 1**——判据要求**恢复缺的第 5 个诱发失败**，不许直接把阈值降到 4（降阈值正是本卡要挡的
+那种假绿）。**F77 已在 `cards.tsv` 标 `closed`**（提交 `1d09332`），历史与两轮判决原文
+已整段写入该行第 7 列（evidence），不是只写在提交信息里。
+
+**轮末**：轮次 2026-09-15T23:03–?? / 任务 = **F77**（上一轮定的优先级 1）/
+判据 = **两轮独立新鲜证伪 pass：PASS 1 PARTIAL → 当场修 → PASS 2 SURVIVES ⇒ 关卡** /
+派发 = **4 个子代理**（Opus 实现 72 次 + Opus pass1 37 次 + Opus 修补 60 次 + Opus pass2 27 次，
+均为新鲜、无一由写代码的那个代理自审）/
+改动 = 研究树 `verify_all.sh`、`cards.tsv`（F77 closed + 新立 F78）· 状态树 `memo.md`、
+`.loop/UNREVIEWED_FIX`（已清空并记录三项「无需再审」的理由）/
+提交 = 研究树 `a3c87a5 fb2e151 b5d6535 95fd44b`（实现）+ `b919183 70759b7 e92d418`（修补）+
+`1d09332`（关卡+立卡）· 状态树本次提交 /
+三棵树实测：研究树仅 `?? .serena/` 与既有未跟踪目录（`git status --porcelain` 核对过，
+无遗留改动）；SDK 树未动；状态树仅既有未跟踪 /
+**顺带发现**：`fhp-research` 出现一个新的 `auto-stash-round-20260915T055745`（连同两个
+2026-09-09 遗留的 `loop-rescue` stash 共 3 个），本轮未处理（按契约六之三，处置权不在
+写这一行的进程手上），留给下一轮或人工核对。
+
+**下一轮（按此优先级）**：
+1. **F78**（本轮新立）：修 `dd_runtime_check.sh` 的死阈值，让 `--self-test` 的 rc 摆脱常数。
+2. **F76**：staleness guard 重建——本轮所有 `verify_all.sh` 调用仍在 `SKIP_STALENESS_GUARD=1` 下跑。
+3. **F72**：解 guard 的路径条件。
+4. **F70**（挂起中，第 5 轮后按契约回头重试）：不要再把 pin 细一级。
+5. **F71**（挂起中）。 6. **F49**（仍 `built`、从未过 pass）。
+
+---
+
+### 心跳 2026-09-15T12:54 PST 本轮开工
+
+`.loop/UNREVIEWED_FIX` 与 `.loop/RESCUED` 均只含已结账的历史条目（2026-09-14/09-09 遗留，
+memo 已记账），无新欠账。三棵树核对：状态树仅既有未跟踪杂物 + `memo.md` 本身在改；
+研究树、SDK 树 `git status --porcelain` 均干净。无 `.loop/PAUSE`。
+
+### 本轮任务：**F78**（上一轮定的优先级 1）
+
+`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 目前只稳定产生 4 个
+诱发失败。判据取自 `cards.tsv` F78 行：(a) 补上缺的第 5 个诱发失败（不许把阈值降到 4）；
+(b) 修完后干净树上 `SKIP_STALENESS_GUARD=1 ./verify_all.sh --self-test` 能到 rc=0；
+(c) 负控制：把诱发失败数量再降回 4（或更少），确认 `--self-test` 仍然在 `FAILED:` 行点名
+`dd_runtime_check.sh`。派发给独立子代理执行，等待返回。
+
+### F78 STATUS: `failed`（不是子代理没做到，是撞上了一个更大的、规则 0 正面工作的真回归）
+
+子代理（Opus，40 次调用）按 BUILD ENV 指令重建 `ProductARM64` 时，`ninja` 报了
+**408 个待建 target**——这本身就是 F76 记的 staleness 债的一次实测现形。
+建完之后 `dd_runtime_check.sh --self-test` **在第一步 `gen_kernel` 编译就 segfault**：
+`EXC_BAD_ACCESS SEGV_ACCERR si_addr=0x7000000000000095`，栈顶在
+`dart::NativeEntry::BootstrapNativeCallWrapper`（macOS 崩溃报告
+`~/Library/Logs/DiagnosticReports/dartaotruntime-2026-09-15-130515.ips`，非猜测）。
+三个独立输入（`--help`、全新 hello 快照、`out_verify/hello.dill`）**逐字节相同地崩溃**。
+
+🔴 **子代理的假设（尚未独立坐实，只是静态读代码 + 崩溃现场交叉验证）**：这是
+`954cd28dcf9`（"F37: emit shape A (THR-field dispatch) for link-lazily native calls in
+precompiled mode"，2026-09-09）引入的——F37 让每个 `link_lazily` native call 发
+`ldr x16,[PP,#slot]; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30`（新快照里 92 处，
+与 F37 提交信息自夸「匹配 Shorebird 的 92」是同一个数），但原来装 native target 的
+pool slot 现在装的是 Smi-tagged 的 thread offset，于是 wrapper 拿到一个垃圾
+`target_function`。**`dd_runtime_check.sh` 是 `verify_all.sh` 里唯一真的跑一遍编译产物的检查**，
+而它自 `954cd28dcf9` 之后**从没被跑过**（ProductARM64 一直没重建）——
+⇒ **F37「ours=92 匹配 theirs」这个 parity 结论从未被运行时验证过**，这次重建后第一次跑，
+产物直接 segfault。**这正是 `verify_all.sh` 自己 staleness guard 注释描述的假绿：
+39 个绿检查是在一批跑不了任何 AOT 程序的二进制上量出来的。**
+
+**已按此立卡 F79**（研究树 `cards.tsv`，提交 `c2616f7`；F78 依赖 F79，deps 列已改）。
+F79 判据：(a) 二分定位确切引入 commit，不许凭猜测认定就是 954cd28dcf9；
+(b) 定位后修复或撤回该改动；(c) 修完后 `dd_runtime_check.sh` 全部 case 能跑完并比对输出；
+(d) 用同一套 parity_matrix 工具在修复后二进制上确认「92」这个数没被修复动摇。
+负控制：还原修复后同一崩溃签名必须复现。
+
+**F78 本身**：状态仍是 `open`（未改 `built`，因为三条判据 (a)/(b)/(c) 一条都没能实测——
+在跑不到 `dd_runtime_check.sh` 任何一步的情况下，连它自己判据 (a) 的静态假设
+（死机制是 `--keep-collisions` 全程序案例，168-179 行）都**没有真跑验证过**）。
+未提交任何改动到 `dd_runtime_check.sh`；研究树 `git diff --stat` 为空。
+**本轮不需要证伪 pass**——没有卡片被标 `[x]`，也没有修补丁产生，只立了一张新卡（F79），
+与 `60c619e`/`3045a50` 那两次「立卡不是修补丁」同型，不入 `.loop/UNREVIEWED_FIX` 队列。
+
+**轮末**：轮次 2026-09-15T12:54 PST起 / 任务 = F78（上一轮定的优先级 1）/
+判据 = 三条判据均因 F79 阻塞未能实测，VERDICT = **blocked, not closed** /
+派发 = 1 个子代理（Opus 实现尝试，40 次调用，发现阻塞后正确停手未强行绕过）/
+改动 = 研究树 `cards.tsv`（新立 F79，F78 deps 改为 F79）· 状态树 `memo.md` /
+提交 = 研究树 `c2616f7` · 状态树本次提交 /
+三棵树实测：研究树仅既有未跟踪目录；SDK 树未动、0 项；状态树仅既有未跟踪杂物 /
+队列：`.loop/UNREVIEWED_FIX` 无新增。
+
+**下一轮（按此优先级，F79 替换 F78 成为最高优先——它挡住了唯一真正跑二进制的检查，
+且直接冲击规则 0 主任务 F37 的正面工作结论）**：
+1. **F79**（新立，最高优先）：二分定位 `ProductARM64` 在 AOT 执行阶段 segfault 的引入提交。
+2. **F78**（挂起于 F79）：F79 解除阻塞后才能实测其三条判据。
+3. **F76**：staleness guard 重建债，本轮的 408-target 重建正是这笔债的一次实测利息。
+4. **F72**：解 guard 的路径条件。
+5. **F70**（挂起中，第 5 轮后按契约回头重试）。 6. **F71**（挂起中）。 7. **F49**（仍 `built`、从未过 pass）。
+7. 核对 `fhp-research` 的 3 个未 pop stash（1 新 + 2 旧），不要直接 pop/drop，先看内容。
