@@ -244,6 +244,38 @@ if [ -s "$STATE/UNREVIEWED_CLOSURE" ]; then
 $(cat "$STATE/UNREVIEWED_CLOSURE")"
 fi
 
+# ---- cards that are built and owe a falsification pass ---------------------
+# `built` means implemented and self-tested; `closed` means a fresh agent tried
+# to break it and failed. The distinction is the whole quality mechanism here,
+# and NOTHING was telling a round that the debt existed.
+#
+# Measured 2026-09-15 15:13: fix-queue reported `0 owed` and the round logged
+# `round left no trace`, while eight cards sat at state=built. Those are two
+# different ledgers -- the fix-queue tracks patches written after a red verdict,
+# not cards awaiting their first pass -- and only the first one had a voice. The
+# conclusion drawn from that round ("no card is unattended-doable") was wrong:
+# every one of the eight is a host-only falsification pass, which is the single
+# thing this loop does best.
+#
+# Ordering is rule 0's, not this file's: SDK-body cards first, loop mechanics
+# after. The fix-queue still outranks both -- a patch written after a red
+# verdict is a hotter debt than a card that has never been reviewed.
+CARDS_TSV=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
+built_cards() {
+  [ -r "$CARDS_TSV" ] || return 0
+  awk -F'\t' '!/^#/ && NF>1 && $2=="built" {print $1}' "$CARDS_TSV" | sort | tr '\n' ' '
+}
+BUILT_OWED=$(built_cards)
+BUILT_N=$(printf '%s' "$BUILT_OWED" | wc -w | tr -d ' ')
+if [ "${BUILT_N:-0}" -gt 0 ]; then
+  PROMPT="$PROMPT
+
+【built 卡欠证伪 pass：$BUILT_N 张】$BUILT_OWED
+「built」不是「closed」：实现完成且自测通过，但没有新鲜代理审过。判据全在宿主上，不需要真机。
+派一个新鲜子代理按 tools/loop/prompts/falsify.md 审其中一张，别自己给自己写判决（F42）。
+优先级：低于 .loop/UNREVIEWED_FIX，SDK 本体的卡排在循环机械之前（规则 0）。"
+fi
+
 # And after repeated barren rounds, stop asking for the same thing. Pausing
 # stops the burn but also stops the work -- this loop sat for three days that
 # way. Repeated failure to commit anything is evidence the task does not fit in
@@ -1016,6 +1048,16 @@ say "round end rc=$rc ($(wc -l <"$out" | tr -d ' ') lines of output)"
 # could see. A round that dies before this line leaves no stamp and the next
 # tick starts immediately -- the safe direction.
 date +%s >"$STATE/last_round_end"
+
+# Same ledger, at the end, so rounds.log carries the debt even when nobody reads
+# the prompt. Printed after fix-queue on purpose: that is the priority order.
+owed_now=$(built_cards)
+owed_n=$(printf '%s' "$owed_now" | wc -w | tr -d ' ')
+if [ "${owed_n:-0}" -gt 0 ]; then
+  say "built-queue: $owed_n owed -- $owed_now(no falsification pass yet)"
+else
+  say "built-queue: 0 owed"
+fi
 
 # Burn rate into the log every round. The scheduled reminder that was meant to
 # ask this question lives in a chat session's memory and dies with it, which is
