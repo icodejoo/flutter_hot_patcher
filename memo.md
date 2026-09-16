@@ -6408,6 +6408,56 @@ refs/wip 锚点已被保护」当真，而一条不带混淆的 `git stash clear
 已经证实成立的字面判据部分——只欠 (a)(b)(c) 三处覆盖面 + 两处次要问题）。
 本轮到此结束，不顺位挑其他卡。
 
+**F46 队列处理 + (a)(b)(c)(d)(e) 修补 + 二次证伪 + 新缺陷 + 三次证伪（本轮，2026-09-16T22:3x）**：
+`.loop/UNREVIEWED_FIX` 记着 F46 欠一次「对修补丁本身」的证伪 pass。派实现子代理交付
+`b5b3853`：扩展 `reference-transaction` 覆盖 `refs/stash`/`refs/tags/*`/`refs/wip/*`，
+扩展 `deny-destructive.sh` 覆盖 `reflog expire`/`gc --prune=`/`prune`，
+`install-reference-transaction.sh --check` 加可执行位检查，
+`verify-reference-transaction.sh` 清理阶段加 `trap` 防中途被杀留下不设防窗口。
+自测通过、如实记录剩余口子（非末位 stash drop、detached HEAD reset --hard 结构性难关）。
+
+派**全新**子代理证伪该修补丁：**VERDICT: PARTIAL**——(a)(b)(c) 字面判据成立、
+STILL OPEN 清单属实，但发现修补丁**没测过的新缺陷**：`reference-transaction` 的
+"任何 refs/heads 删除即拒绝"规则会误伤 `git branch -m/-M`（良性改名）的删除半步，
+`rc=128`，"WHAT THIS IS NOT" 一节没提过这个假阳性。
+
+判定 PARTIAL ⇒ 当场修（规则五之四）。派实现子代理交付 `ed5d68e`：给
+`reference-transaction` 加同事务 delete+create 配对识别（供 `update-ref --stdin` 批量场景）+
+父进程 `$PPID`/`ps` argv 探测（供 `branch -m/-M` 场景，因为实测这两个操作在这台
+git 2.53.0 上根本不在同一个 hook 事务里——create 那一半**没有任何 hook 事件**）。
+自测 `branch -m/-M` 放行、`branch -D`/`reset --hard`/`branch -f` 倒退/伪造同事务
+"冒充改名"全部仍拒绝（rc=128）。
+
+派**第三个全新**子代理再证伪。**VERDICT: FALSIFIED**——回归项全部仍守住，
+但修补丁引入了一个**结构性更严重**的缺陷：`branch -m old new` 在这台 git 上是
+**先删 old、后建 new 两个不原子的步骤，中间没有任何事务保护 new 的创建**；
+"父进程 argv 授权删除"这条新机制只能确认*意图*，确认不了*改名真的完成*。
+一个纯并发 poll-and-kill（不需要注入延迟，不需要任何权限技巧，只是在进程存活期间
+轮询两个 ref 是否都不存在再杀掉它）对未改动的 `ed5d68e` 钩子实测 **500 次里 499 次**
+命中"old 永久消失、new 从未创建、无拒绝无痕迹"这个窗口。这正是本项目无人值守
+轮次的日常失败模式（额度杀、OOM、`ralph.sh` 收尾杀子进程、终端断线全都是 SIGKILL），
+而且发生在**这个修补丁本来要修的那个操作**（`branch -m/-M`）上——修复假阳性的代价
+是引入一个无提示的真删除窗口。
+
+**判定**：FALSIFIED ⇒ 不许声称这个修补丁 SURVIVES，`reference-transaction` 当前状态
+**比 `b5b3853` 之前更危险**（旧版本至少会拒绝改名、不会丢分支；新版本在中断下会
+默默丢分支）。这个缺陷本身够大，需要自己的判据与负控制（git 层面的非原子改名不是
+一个钩子脚本能简单补的：需要"改名前先拒绝除非能保证原子性"或"create 先于 delete
+的顺序"这类结构性改动），已按契约五之四拆成新卡 **F85**（`open`，cards.tsv 与本节
+同步登记，`cards_check.sh` rc=0）：判据是同一个 poll-and-kill 负控制跑 ≥500 次、
+0 次丢分支，且不能引入新的绕过（回归集不变）。
+
+**本轮结论**：F46 仍 `open`（欠 a/b/c 的最终落地版本，且新暴露的 F85 缺陷必须先解决，
+否则"修好假阳性"是净负分）；F85 新开、`open`，依赖 F46 不关；
+`.loop/UNREVIEWED_FIX` 里 F46 那一行——本轮已经对"F46 的修补丁"派过两轮独立证伪
+（PARTIAL 然后 FALSIFIED），按契约要求的"对修补丁本身跑一次新鲜证伪 pass"这件事本身
+已经做到，但因为最终判决不是 `SURVIVES (fix)`，`fix_queue.py` 的 `pos_drain` 不会
+自动清账（这是设计意图：`hold` 分支就是"每轮重新报告直到真正 survive"，不会自己过期）。
+不要在下一轮里把这一行读成"没人管过"——它管过两次，只是两次都合理地报了红。
+改动：`b5b3853`、`ed5d68e`（`tools/loop/hooks/` 四个文件 + memo.md）+ 本节 + cards.tsv 的 F85 行
+（`fhp-research` 树，commit 待下一步）。三棵树 `git status --porcelain` 除既有未跟踪文件外干净。
+本轮到此结束，不顺位挑其他卡。
+
 **F46 补丁轮（2026-09-16，本轮，修上面 (a)(b)(c) 与两处次要问题；⚠️ 本次修复本身
 尚未过新鲜证伪 pass，不构成 SURVIVES，F46 的 `- [ ]` 原样不动，只有下一轮独立证伪
 子代理的判决才能改这一行）：**
