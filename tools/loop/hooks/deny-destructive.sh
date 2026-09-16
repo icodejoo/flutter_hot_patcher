@@ -49,8 +49,29 @@ esac
 case $CMD in
   *"git reset --hard"*|*"git checkout --force"*|*"git checkout -f"*|*"git restore ."*|*"git clean -f"*|*"git clean -xf"*|*"git clean -fd"*|*"git clean -fdx"*|*"git clean -xdf"*)
     deny "blocked: discards uncommitted work. A killed round's half-applied negative control is evidence, not garbage -- report it instead." ;;
-  *"git branch -D"*|*"git push --force"*|*"git push -f"*|*"filter-branch"*|*"git reflog expire"*|*"git gc --prune=now"*)
+  *"git branch -D"*|*"git push --force"*|*"git push -f"*|*"filter-branch"*|*"git reflog expire"*|*"git gc --prune="*|*"git gc --aggressive"*|*"git prune"*)
     deny "blocked: destroys history or its recovery path." ;;
+esac
+
+# Stash drop/clear. F46 falsify pass (2026-09-16): reference-transaction (the
+# git-native hook, tools/loop/hooks/reference-transaction) can only catch
+# `stash clear` and dropping the LAST remaining stash entry -- both delete
+# refs/stash outright, which is a normal ref-transaction event. Dropping (or
+# popping) any OTHER entry never fires that hook at all: git does it via
+# reflog surgery, the same underlying mechanism `git reflog expire` uses, not
+# a ref-update transaction (verified empirically, see that file's header).
+# This string match is therefore the ONLY layer covering that shape, and it
+# has the same python-subprocess-argv-list bypass as everything else in this
+# file: `python3 -c "subprocess.run(['git','stash','drop'])"` never contains
+# the substring "git stash drop" and this scan will not catch it. There is
+# currently a real, standing project dependency on nobody running these
+# against loop-rescue stashes (see docs/LOOP_CONTRACT.md 六之二/六之三) --
+# `git stash pop` is included below even though it is also the normal way to
+# consume a stash, because its drop half is exactly the unguardable-by-hook
+# shape above; a human doing this on purpose runs it in their own terminal.
+case $CMD in
+  *"git stash drop"*|*"git stash pop"*|*"git stash clear"*)
+    deny "blocked: pops/drops/clears a stash entry. reference-transaction cannot see this operation (it bypasses git's ref-transaction hook via reflog surgery, verified 2026-09-16) -- this string match is the only layer here, and it is defeatable by a python-subprocess call the same way every other pattern in this file is. Run it yourself in your own terminal if you mean it." ;;
 esac
 
 # Machine-level and global-config changes. The contract forbids these in prose;

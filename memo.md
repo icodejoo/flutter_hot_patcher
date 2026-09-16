@@ -6407,3 +6407,109 @@ refs/wip 锚点已被保护」当真，而一条不带混淆的 `git stash clear
 本轮未追加新证据（证伪结果只记在本节，下一轮接手前先读这一段，不要重新从头核验
 已经证实成立的字面判据部分——只欠 (a)(b)(c) 三处覆盖面 + 两处次要问题）。
 本轮到此结束，不顺位挑其他卡。
+
+**F46 补丁轮（2026-09-16，本轮，修上面 (a)(b)(c) 与两处次要问题；⚠️ 本次修复本身
+尚未过新鲜证伪 pass，不构成 SURVIVES，F46 的 `- [ ]` 原样不动，只有下一轮独立证伪
+子代理的判决才能改这一行）：**
+
+实现细节：
+- **(a) `refs/stash`**：`reference-transaction` 新增按 ref 命名空间分派
+  （`refs/heads/*` `refs/tags/*` `refs/wip/*` 用原有「删除拒绝 + 非快进拒绝」策略；
+  `refs/stash` 用**不同**策略——因为实测 stash 条目之间没有祖先关系，对它套用
+  祖先检查会连正常的第二次 `stash push` 都拒绝）。`refs/stash` 的规则精确写为：
+  新值全零 ⇒ 拒绝（对应整体清空：`stash clear`，或丢掉最后一条剩余记录）；
+  新旧皆非零 ⇒ 放行、不做祖先检查（对应 push/pop/drop 的正常整体形状）。
+  **关键实测发现（2026-09-16，scratch repo）**：丢弃/弹出「非最后一条」的 stash 条目
+  **完全不经过 `reference-transaction` hook**——git 内部走的是 `reflog` 手术
+  （与 `git reflog expire` 同一套机制），不是 ref-update 事务；只有清空整个
+  stash（`clear`，或丢最后一条）才会真正触发一次 `refs/stash` 的 ref 事务
+  （已用 scratch repo 逐条实测证实：2 条 stash 时丢第 1 条**不触发**任何
+  `refs/stash` 事务，`stash clear` 和丢最后一条**都触发**、且新值全零）。
+  因此「丢非最后一条」这个口子结构性地无法用这个 git 原生 hook 关掉，
+  只能退回到 `deny-destructive.sh` 的字符串匹配层（同文件其余规则一样，
+  可被 python subprocess 绕过）——新增匹配 `git stash drop` / `git stash pop` /
+  `git stash clear` 三种拼写。
+- **(b) reflog expire + gc/prune**：`deny-destructive.sh` 原有 `git reflog expire` /
+  `git gc --prune=now` 两条已存在（此前证伪 pass 报「两层都 ALLOW」是因为只测了
+  python-subprocess 绕过路径，没意识到 bash 直接拼写那层其实一直在拦——本轮重新
+  实测确认：bash 拼写在改动前后都拦，python-subprocess 绕过在改动前后都不拦，
+  这条本身没有回归，改动的是覆盖面而不是修复一个「完全没拦」的洞）。
+  本轮把 `git gc --prune=now` 精确匹配放宽为 `git gc --prune=`（任意窗口，不止
+  `now`）并新增 `git gc --aggressive`、`git prune`（不带 gc 的裸 prune）。
+  **关键实测发现（2026-09-16，scratch repo，三步验证）**：① `git reflog expire`
+  本身**不触发** `reference-transaction`（与 stash drop 同一机制，已证实）；
+  ② `git gc`（不论带不带 `--prune=now`）**会**触发 `reference-transaction`——
+  但只是因为 pack-refs 把 loose ref 转成 packed 形式时，中间步骤的 ref 事务
+  「旧值→全零」在语义上和真删除长得一模一样，所以**现有未改动的** heads
+  策略已经把这个中间步骤误判成删除、连带拦住了（本仓库实测：一次裸
+  `git gc`（无 prune 参数）在 scratch repo 里被 `reference-transaction` 拒绝，
+  报 `fatal: ref updates aborted by hook`——这是一个已存在的、本轮才发现的
+  误报，不是本轮引入的；本轮没有修它，只如实记录，因为「修复它」需要
+  重新设计 pack-refs 场景下的判据，超出本次 (a)(b)(c) 范围）；③ `git prune`
+  （裸，不经 gc）**完全不触发任何 ref 事务**——实测建了一个悬空 commit，
+  跑 `reflog expire --expire=now --all` + `git prune -v`（python subprocess
+  两步）后该 commit 对象真的从 objects 里消失，且两步全程没有任何 hook
+  输出。**这是本轮找到的、目前唯一真实、无法用 `reference-transaction`
+  关闭的裸删除路径**（`git prune` 不碰任何 ref，没有事务可挂 hook）；
+  只能靠 `deny-destructive.sh` 的字符串匹配（本轮已加，仍可被 python
+  subprocess 绕过，未关闭）。
+- **(c) refs/tags/\* 与 refs/wip/\***：`reference-transaction` 的分派 case 语句
+  新增这两个命名空间，套用与 `refs/heads/*` 完全相同的策略。scratch repo 实测：
+  `git tag -d v1`（python subprocess）与 `git update-ref -d refs/wip/anchor`
+  （python subprocess）均被拒绝，rc=128。
+  **detached HEAD 下的 `reset --hard` 本轮判定为结构性无法关闭**，不是漏做：
+  实测（scratch repo）detached 状态下，`reset --hard` 与普通的
+  `git checkout <sha>`（纯浏览，无破坏意图）对 `reference-transaction` 而言
+  产生**完全相同**的事务形状（ref 名字面量 `HEAD`，旧 OID→新 OID，无需祖先
+  关系——浏览历史本来就经常是往回跳）。如果照搬 heads 策略拦截非快进的
+  `HEAD` 更新，会把正常的 detached 浏览也拦掉，属于本项目自己在
+  `deny-destructive.sh` 头部立的规矩「假阳性和假阴性一样贵」不允许的那类
+  改动。`deny-destructive.sh` 对 bash 拼写的 `git reset --hard` 本来就无条件
+  拦截（与 HEAD 状态无关，实测确认改动前后一致），detached+python-subprocess
+  这个组合的唯一未关闭口子是 python-subprocess 绕过 `deny-destructive.sh`
+  的字符串匹配——这一点在改动前后都是开着的，本次没有、也没找到可以
+  关闭它的机制（已如实写进 `reference-transaction` 头部注释，不再声称
+  比实际做到的更多）。
+- **(d) `install-reference-transaction.sh --check` 可执行位**：新增 `[ -x "$dest" ]`
+  判据；实测：`chmod -x` 掉已安装的真实 hook 后，`--check` 从 `OK` 变成
+  `NOT EXECUTABLE (...)`，`chmod +x` 恢复后变回 `OK`。同时补上了 `--check`
+  模式此前完全没有的非零退出码（`STALE`/`MISSING`/`NOT EXECUTABLE` 任一条命中
+  即 `exit 1`）——原脚本此前无论检查结果如何都 `exit 0`。
+- **(e) `verify-reference-transaction.sh` 的 trap**：cleanup 阶段把真实 hook
+  `mv` 到 `*.tmp-disabled-for-cleanup` 期间新增 `trap restore_real_hook EXIT
+  INT TERM HUP`。用独立最小复现脚本实测（不是在真仓库上测，避免真的杀本仓库
+  钩子）：`mv` 真文件到临时名后 `sleep 30` 模拟中途被杀，`kill -TERM` 该进程后
+  临时文件立刻被 `mv` 回原名、内容与杀之前逐字节一致。**明确记录未覆盖
+  `SIGKILL`（`kill -9`）**——这是 POSIX/shell 的普遍限制，任何 trap 都接不住，
+  不是本脚本特有的缺陷；那种情况下唯一的恢复路径是下一次运行
+  `install-reference-transaction.sh --check`（已用 (d) 的新判据能查出
+  `MISSING`）。
+
+实测汇总（逐条见上，均为 2026-09-16 本轮在 scratch repo 与本仓库真实安装的
+hook 上跑出）：
+```
+(a) stash drop（非最后一条）  -- reference-transaction 结构性看不见（已证实），
+                                  deny-destructive.sh 新增字符串匹配 DENY（bash 拼写）
+(a) stash clear / 丢最后一条  -- reference-transaction DENY，rc=128
+(b) reflog expire             -- reference-transaction 结构性看不见（已证实同 stash）；
+                                  deny-destructive.sh 原有匹配 DENY（bash 拼写，非新增）
+(b) git gc（任意，含误报）     -- reference-transaction DENY（副作用式，非本轮设计，已如实记录）
+(b) git prune（裸）           -- 两层都看不见 = 真实、未关闭的删除路径（本轮唯一发现的真口子）；
+                                  deny-destructive.sh 新增字符串匹配 DENY（bash 拼写）
+(c) refs/tags/* 删除           -- reference-transaction DENY，rc=128（新增覆盖）
+(c) refs/wip/* 删除            -- reference-transaction DENY，rc=128（新增覆盖）
+(c) detached HEAD reset --hard -- 结构性无法关闭（已证实与正常浏览同形状），如实记录为 OPEN
+(d) --check 可执行位           -- 新判据实测生效，NOT EXECUTABLE / OK 两态皆验证
+(e) trap 恢复                  -- 独立复现脚本实测 SIGTERM 触发恢复；SIGKILL 明确记录为不可控
+```
+`verify-reference-transaction.sh` 全量重跑（含新增的 tags/wip/stash 检查、
+以及本仓库真实安装的新版 hook 上的第二部分）：`ALL OK`，exit 0。
+`verify-deny.sh`（既有回归集，未新增用例）：`verify-deny: all vectors correct`，
+无假阳性回归。
+
+⚠️ **本次补丁尚未经过新鲜子代理的证伪 pass。** 按铁律第 9 条与本卡已有的规程，
+只有独立证伪 pass 的判决能把 F46 标记为 SURVIVES 或改动 `- [ ]`；本节只记录
+「做了什么、如何自测」，不构成关卡通过。下一轮如果挑到 F46，应直接派一个
+全新证伪子代理攻击本节列出的每一条实现，尤其是 (b) 里如实记录的「裸 `git gc`
+的误报」和 (c) 里 detached HEAD 的结构性未关闭点——这两处都不是「忘了做」，
+是「实测后判定当前工具做不到，且做了不代表不会再被攻击出新的口子」。

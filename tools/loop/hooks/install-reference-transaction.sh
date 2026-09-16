@@ -39,6 +39,7 @@ mode="${1:-install}"
 # De-duplicate by common git dir: fhp-research and flutter_hot_patcher share
 # one; dart-3122/sdk resolves to dart/sdk's common dir via its worktree link.
 declare -a seen_dirs=()
+check_failed=0
 for tree in "${TREES[@]}"; do
   [ -d "$tree" ] || { echo "SKIP (missing tree): $tree"; continue; }
   common="$(git -C "$tree" rev-parse --git-common-dir 2>/dev/null || true)"
@@ -73,12 +74,23 @@ for tree in "${TREES[@]}"; do
 
   dest="$common/hooks/reference-transaction"
   if [ "$mode" = "--check" ]; then
-    if [ -f "$dest" ] && cmp -s "$SRC" "$dest"; then
+    if [ -f "$dest" ] && cmp -s "$SRC" "$dest" && [ -x "$dest" ]; then
       echo "OK   installed and current: $common/hooks/reference-transaction"
+    elif [ -f "$dest" ] && cmp -s "$SRC" "$dest"; then
+      # Content matches but the executable bit is gone (e.g. an editor save
+      # rewrote the file without preserving mode) -- git silently SKIPS a
+      # non-executable hook, no warning, no error, hook just never runs.
+      # F46 falsify pass (2026-09-16): the old check only ran `cmp` on
+      # content, so this state read as OK. Content-correct-but-not-executable
+      # is not installed; say so.
+      echo "NOT EXECUTABLE (content matches but +x bit is missing -- git will silently skip this hook): $dest"
+      check_failed=1
     elif [ -f "$dest" ]; then
       echo "STALE (differs from tools/loop/hooks/reference-transaction): $dest"
+      check_failed=1
     else
       echo "MISSING: $dest"
+      check_failed=1
     fi
   else
     mkdir -p "$common/hooks"
@@ -94,3 +106,7 @@ for tree in "${TREES[@]}"; do
   [ -d "$tree" ] || continue
   echo "  $tree: '$(git -C "$tree" config --get core.hooksPath || true)'"
 done
+
+if [ "$mode" = "--check" ]; then
+  exit "$check_failed"
+fi

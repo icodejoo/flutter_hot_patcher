@@ -17,6 +17,13 @@
 # is git's own C code running the transaction, not a shell parsing a string.
 # There is no command string here to lose to quoting tricks.
 #
+# COVERAGE (2026-09-16 extended from refs/heads/* only -- F46 falsify pass):
+# refs/heads/*, refs/tags/*, and refs/wip/* (this project's anchor namespace,
+# see docs/LOOP_CONTRACT.md) all get the SAME policy below (deletion refused,
+# non-fast-forward rewrite refused). refs/stash gets a DIFFERENT, narrower
+# policy -- see the dedicated comment above the stash branch in the loop
+# below for exactly why the heads policy cannot simply be reused there.
+#
 # WHAT THIS IS NOT (read this before trusting it further than it goes):
 #   - It only fires on REF updates. `git checkout -f` on the SAME branch and
 #     `git clean -fdx` and `git restore .` discard working-tree/index content
@@ -25,6 +32,38 @@
 #     a python-subprocess call defeats the same way it defeats "git reset
 #     --hard". This is a known, intentional, and currently OPEN gap -- see
 #     the negative-control notes for what was and was not exercised.
+#   - `git reset --hard` while HEAD is DETACHED is a separate, DELIBERATE,
+#     VERIFIED-OPEN gap, not an oversight. Empirically (2026-09-16, scratch
+#     repo): while detached, git fires a reference-transaction update for the
+#     literal ref name `HEAD` (old detached OID -> new OID) on BOTH a hard
+#     reset AND on plain navigation via checkout to an older commit -- the
+#     two produce the byte-for-byte identical transaction shape, because
+#     browsing history backward while detached is exactly as "non-descendant"
+#     as discarding it. Blocking non-fast-forward updates to `HEAD` the way
+#     refs/heads/* is blocked below would refuse ordinary detached-HEAD
+#     history browsing as a false positive -- ruled out by this project's own
+#     standard (deny-destructive.sh's header: false positives cost as much as
+#     false negatives). No git-native hook can tell these two apart, because
+#     git itself cannot: the difference is operator intent, not ref state.
+#     deny-destructive.sh denies the literal string "git reset --hard"
+#     regardless of HEAD state, which covers the bash-invoked spelling; the
+#     python-subprocess bypass of THAT (this hook was never going to catch
+#     it, for the reason above, so there is nothing here for a subprocess
+#     call to bypass) remains open, same limitation as every string-scan
+#     case in that file.
+#   - `git stash drop` / `git stash pop` of anything OTHER than the very last
+#     remaining stash entry NEVER reaches this hook at all. Empirically
+#     verified (2026-09-16, scratch repo, 2-entry stash): dropping stash@{0}
+#     out of 2 produces ZERO reference-transaction events for refs/stash --
+#     git implements that as reflog surgery (the same underlying mechanism
+#     `git reflog expire` uses), not a ref-update transaction. Only two
+#     shapes touch refs/stash through this hook: creating it from nothing
+#     (first `stash push`) and deleting it entirely (`stash clear`, or
+#     dropping the LAST remaining entry) -- both handled below. The
+#     multi-entry-drop shape is NOT closeable by this mechanism; it is
+#     covered, bash-invocation only, by deny-destructive.sh's string match on
+#     "git stash drop" / "git stash pop" / "git stash clear" (same
+#     python-subprocess limitation as everywhere else in that file).
 #   - It is local-repo-scoped. It cannot stop a force-push landing on a
 #     remote; that is `pre-push`'s job (tools/loop/hooks/pre-push), which is
 #     itself invocation-shape-independent for the same reason (git runs it
@@ -42,7 +81,7 @@
 #
 # HOW IT DECIDES: for the "prepared" state of every transaction (the point at
 # which refusing still aborts cleanly -- see `man githooks`), for each queued
-# update to a `refs/heads/*` ref:
+# update to a `refs/heads/*`, `refs/tags/*`, or `refs/wip/*` ref:
 #   - resolve the ref's value ON DISK right now via `git rev-parse --verify`.
 #     This is deliberate: git's own force-update code path (`branch -f`,
 #     `branch -D`) reports the transaction's own <old-value> field as all-
@@ -63,6 +102,31 @@
 #     which also happens to match this project's existing rule against
 #     amending and rebasing rounds' commits.
 #
+# `refs/stash` GETS A DIFFERENT RULE, not the one above, because the one
+# above would break ordinary stash use. Stash entries are not an ancestor
+# chain -- each `git stash push` builds its commit from the CURRENT HEAD, not
+# from the previous stash entry, so successive stash values routinely have no
+# ancestor relationship at all even in completely legitimate use (verified
+# 2026-09-16: two ordinary `stash push` calls in a row are NOT
+# ancestor-related; requiring one anyway would refuse the second `stash push`
+# on the very first legitimate use). So for `refs/stash` specifically:
+#   - if the ref did not exist before: creation (`stash push` into an empty
+#     stash), allow.
+#   - if the new value is all-zeroes: deletion of the WHOLE stash (`stash
+#     clear`, or dropping the last remaining entry -- verified these are the
+#     only two shapes that reach this ref through a transaction at all,
+#     see the header), refuse.
+#   - otherwise (old and new both non-zero, old != new): allow, unconditionally,
+#     with no ancestor check. This is deliberately permissive: it is exactly
+#     the shape produced by `stash push`, and by dropping/popping a non-last
+#     entry when that path DOES reach this hook (it usually does not, per the
+#     header -- but if some other git version or code path ever changes that,
+#     this rule must not start blocking ordinary stash use as a side effect).
+#     The actual protection against a wrongful `stash drop`/`pop` of a
+#     non-last entry lives in deny-destructive.sh's string match, not here --
+#     see the header's "WHAT THIS IS NOT" for why this hook structurally
+#     cannot do better.
+#
 # No override environment variable, on purpose, same reasoning as
 # deny-destructive.sh: an override is the first thing a confused agent would
 # find and set. A human who actually needs one of these operations runs it in
@@ -82,7 +146,8 @@ BLOCK=0
 REASON=""
 while read -r _OLD_FIELD NEW REF; do
   case "$REF" in
-    refs/heads/*) : ;;
+    refs/heads/*|refs/tags/*|refs/wip/*) NS=strict ;;
+    refs/stash) NS=stash ;;
     *) continue ;;
   esac
   case "$NEW" in
@@ -95,11 +160,20 @@ while read -r _OLD_FIELD NEW REF; do
   fi
   if [ "$NEW" = "$ZERO" ]; then
     BLOCK=1
-    REASON="deletes branch ref $REF (was $RESOLVED)"
+    if [ "$NS" = "stash" ]; then
+      REASON="deletes refs/stash entirely (was $RESOLVED) -- this is a whole-stash clear or the last remaining entry being dropped"
+    else
+      REASON="deletes ref $REF (was $RESOLVED)"
+    fi
     continue
   fi
   if [ "$RESOLVED" = "$NEW" ]; then
     continue
+  fi
+  if [ "$NS" = "stash" ]; then
+    continue   # non-zero -> non-zero on refs/stash: push/pop/drop, no ancestor
+               # relationship required even for legitimate use -- see the
+               # header and the "HOW IT DECIDES" refs/stash section for why.
   fi
   if ! git merge-base --is-ancestor "$RESOLVED" "$NEW" 2>/dev/null; then
     BLOCK=1
