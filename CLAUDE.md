@@ -48,6 +48,19 @@
 文档与报告出现了一组精确数字（0 剩余字节、num_pool_entries 1421/3849、pairs 385/889、self_pp -4、subgraph_pp -88 等），但仓库内没有任何落盘脚本可复跑这些数字。
 🔑 **铁律第 8 条：报告里出现的每个数字，都要有一条落盘的命令能重新打印它；临时脚本产出的结论，在落盘之前不算结论。**
 
+🔴 **第三十八种仪器缺陷（2026-09-16，F80 pass 2 实测）：
+一轮可以如实报告「HEAD 未变、`git status --porcelain` 0 行、未构建」，
+同时把一份钉住的构建状态摧毁掉 —— 因为 `git checkout --` 恢复字节却打上新的 mtime，
+而 `git status` 看不见 mtime，ninja 只看 mtime。**
+实测:F37 那次落地尝试改了 `runtime/vm/thread.h` 与 `thread.cc`、用 `git checkout --` 回退、
+报告「未改动任何文件…未构建」——**内容上为真,构建状态上为假**。
+结果 `ninja -n -C xcodebuild/ProductARM64 | grep -vc '^ninja: '` 从 **0 变成 1895**
+（`-d explain` 直接点名 `older than most recent input ../../runtime/vm/thread.h`,
+两个被钉住的产物自己就在待办集里），而 F80 钉那份构建的全部意义就是让 F37 不必重建。
+⇒ **`git status` 干净不是「钉住的构建仍然完好」的证据。** 要判断就跑那个探针。
+⚠️ 同时暴露:`verify_all.sh:77` 只探 `$RELEASE`,`$PRODUCT` 有定义、在用、**从未被守卫**
+（同一判据指向 Product 读出 947）⇒ **Product 侧的陈旧无声穿过 harness**。已写进 F76。
+
 🔑 **铁律第 9 条（2026-09-16 立，全文见 `docs/VERIFICATION_METHOD.md`）：
 核验一份交付之前，先写下「如果它错，最可能错在哪一条」，第一个核那一条；
 核不了就如实写「未核验」，不许用外围几条的通过替它背书。**
