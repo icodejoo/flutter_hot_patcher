@@ -6224,3 +6224,41 @@ F78 **保持 `built`，不关卡**。真正的解锁路径是先解 F81（`nc5` 
 
 `built` 队列现状：F49（PARTIAL，欠修）/ F52 / F53 / F54 / F65 / F67 / F70 / F75 / F78（PARTIAL，
 欠修，已两次证伪一致）/ F80 仍欠新鲜证伪 pass 或欠修补丁的复审。
+
+### 轮次 2026-09-16T17:58：结账 `.loop/UNREVIEWED_FIX` 里的 F82 —— 对 `688dac2` 跑证伪 pass
+
+心跳：开工前三棵工作树 `git status --porcelain` 均干净（除已知无害未跟踪目录）；
+`.loop/UNREVIEWED_FIX` 里 F68/F69/F78/F82 四条均指向 `eef505e`，但 F82 在那之后
+又被 `688dac2`（本树 HEAD）单独打了第二个修补丁——「关掉最后两个逃逸口」——比
+`eef505e` 里记的版本更新，所以本轮对 F82 的审查对象是 `688dac2`，不是 `eef505e`。
+
+任务 = 派一个新鲜 Sonnet 子代理（`general-purpose`，25 次工具调用，153s）按
+`tools/loop/prompts/falsify.md` 审查 `688dac2`（`tools/loop/fix_queue.py` +
+`tools/loop/run_round.sh`：ESCAPE 1 快照篡改检测、ESCAPE 3 `scan()` 极性误判、
+以及交付时自曝的 `if before_sha:` 假阴性回归）。
+
+**F82 修补丁 VERDICT: SURVIVES (fix)** —— 新鲜子代理独立在 `/tmp` 副本里重跑了全部
+5 条交付负控制（sha 缺失→RED、真实消失→RED 并复原、篡改快照→RED 且不与消失混淆、
+真实判决→静默 drain、「提到卡号但非判决」的散文→不 drain），并额外把同一段输入喂给
+`688dac2` 之前的版本（`git show 30e40e5:...`）复现出旧的静默 drain bug，证明这个修补丁
+确实改变了行为而不是巧合过关；确认 RED 路径真的会把 `fq_owed` 推高（不是打印后被忽略，
+即 F82 本卡此前抓到过的「RED 是装饰」同型缺陷这次没有复发）。
+
+**STILL OPEN（原文抄录）**：Everything above is a code-level static/dynamic proof;
+it doesn't establish that this path has ever fired inside a real live `ralph.sh`
+round (memo.md's own F82 card, still listed `open`, flags "唯一有审计的出口，在生产里
+从未触发过" -- the audited exit has never actually triggered in production). The
+test that could still overturn "SURVIVES" is a live round where the snapshot is
+genuinely tampered or a real verdict-adjacent sentence appears in a real memo
+commit, observed end-to-end through `ralph.sh`/`run_round.sh` rather than through
+direct `fix_queue.py` invocation.
+
+改动 = 仅 `memo.md`（本节）。提交 = 状态树本次提交；研究树、SDK 树、引擎树本轮未动。
+`.loop/UNREVIEWED_FIX` 队列本身不由本轮手工删行（按契约，删行由 `run_round.sh` 在轮末
+凭这条判决自动出队）；F68/F69/F78 三条仍在队列里，欠各自的新鲜证伪 pass。
+
+**下一轮**：`.loop/UNREVIEWED_FIX` 剩 F68/F69/F78 三条待审（均指向 `eef505e`，
+F68/F69 是纯散文方向撤回、无代码可扰动的负控制——审查时需注意这一点，见
+`falsify.md` 攻击⑥的「纯散文修补丁没有可扰动对象」先例，F67 那次已经这样判过）；
+其后是 `built` 队列 F49/F52/F53/F54/F65/F67/F70/F75/F80。规则 0：SDK 本体优先于
+循环机械。
