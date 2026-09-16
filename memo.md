@@ -6356,3 +6356,54 @@ F69 的 UNDETERMINED / F68 的 direction-undetermined 结论本身仍不受影�
 `fhp-research` 树里那个 F55 rescued stash（`loop-rescue 2026-09-16T19:13:21
 round-62145`）需要专门一轮接手（先看内容是否已完整、能否直接 pop+提交，再决定要不要
 重跑 `verify_all.sh` 相关 check）；F55/F62/F63 仍是规则 0 正面工作，优先于循环机械卡片。
+
+**心跳 2026-09-16T21:25:03（本轮）**：开工前状态核对——`.loop/PAUSE` 不存在（循环在跑，
+`ralph.sh` PID 65832，`run_round.sh` 正在跑这一轮，本进程就是这一轮，不是并发写方）；
+`.loop/UNREVIEWED_FIX` 0 字节，无欠账；`cards.tsv`（`fhp-research/spikes/shorebird_linkinfo_oracle`）
+实测状态：F52/F53/F54 已在 2026-09-14 各拿到一次判决（PARTIAL/PARTIAL/FALSIFIED），但代码在
+`~/Documents/loop`（本套循环看不见的树），挑了只会空转；F49 已在 2026-09-16 拿到 PARTIAL，
+发现拆成了 F82（`open`，已存在，不重复派）；F80 已经过三轮证伪（最新 PASS 2 = PARTIAL，
+`DO NOT CLOSE`，欠一次 1895 步增量重建 + 重钉 sha256 + 补 Product 侧陈旧守卫，属于 `~/dart-3122/sdk`
+树，本轮不碰）。**本轮唯一可挑、且属于本树（`~/Documents/flutter_hot_patcher`）的任务是
+F46**（`open`，判据：用 python 调用 git 绕过按命令名做字符串匹配的拦截，仍必须失败；
+当前 `tools/loop/hooks/deny-destructive.sh` 自己的文档已承认它是「形状不是执行」，
+可被 `subprocess.run(['git','push','--force',...])` 这类调用绕开）。派发子代理实现 +
+另派新鲜子代理做证伪 pass。本树 `git status --porcelain` 除既有未跟踪文件外干净。
+
+**F46 实现 + 证伪 pass 结果（本轮，2026-09-16T21:5x）**：实现子代理交付
+`tools/loop/hooks/reference-transaction`（git 原生 `reference-transaction` hook，装在
+git 自己的事务层，与调用它的进程/语言无关）+ `install-reference-transaction.sh` +
+`verify-reference-transaction.sh`，提交 `6e1194c`（本仓）/ `c3b03a5`（`cards.tsv`）。
+我独立核实过安装状态（`install-reference-transaction.sh --check` 三棵树全 OK，
+`core.hooksPath` 三棵树皆空）。随后派**全新**子代理（未参与实现）按
+`tools/loop/prompts/falsify.md` 跑证伪 pass，七次攻击逐条实测：
+
+```
+VERDICT: PARTIAL
+FLAW: 卡片字面判据（python 调 git 绕过、reset --hard/branch -D/branch -f 反向/
+commit --amend 全部实测 rc=128 被拦）成立，但卡片标题「轮次不能摧毁历史」不成立，
+三个未被覆盖、且比字面判据更要命的口子：
+  (a) `git stash drop` / `git stash clear`（bash 与 python 两种调法）在
+      deny-destructive.sh 与新 hook 两层都是 ALLOW —— 这是循环自己文档化的救援路径
+      （LOOP_CONTRACT.md:391 的 auto-stash），当前 fhp-research 有 4 笔、dart-3122/sdk
+      有 1 笔未 pop 的 loop-rescue stash 正靠这条路径活着；
+  (b) `git reflog expire --expire=now --all` + `git gc --prune=now`（python 调用）
+      两层都 ALLOW —— reflog 正是这个 hook 所有「靠 reflog 兜底」推理的地基，地基本身
+      没上锁；
+  (c) hook 的 HOW 部分只处理 `refs/heads/*`，但头部 WHY 段的措辞（「几乎所有本地 ref
+      的创建/更新/删除」）过度陈述了实现覆盖面——`refs/tags/*` 删除、`refs/wip/*`
+      删除、detached HEAD 下的 reset --hard 均不在 refs/heads/* 范围内，全部实测 ALLOW。
+  次要：`install-reference-transaction.sh --check` 只 `cmp` 内容不查可执行位；
+  `verify-reference-transaction.sh` 清理阶段把真 hook `mv` 到临时名、无 trap，
+  中途被杀会让保护窗口不设防地留在磁盘上。
+STILL OPEN: n/a（PARTIAL）
+COST OF BEING WRONG: 若照原判据关卡，会把「5 笔待处理的 loop-rescue stash 与
+refs/wip 锚点已被保护」当真，而一条不带混淆的 `git stash clear` 就能拿掉它们。
+```
+
+**判定**：按证伪 pass 规则，PARTIAL ⇒ **不许把 F46 的 `- [ ]` 改成 `- [x]`**。
+本轮不做无准备的二次实现（stash/reflog/tags/wip 的覆盖面是新的设计面，不是小补丁，
+且这一轮的委派预算已用在实现+证伪各一次上）。F46 保持 `open`；cards.tsv 的 F46 行
+本轮未追加新证据（证伪结果只记在本节，下一轮接手前先读这一段，不要重新从头核验
+已经证实成立的字面判据部分——只欠 (a)(b)(c) 三处覆盖面 + 两处次要问题）。
+本轮到此结束，不顺位挑其他卡。
