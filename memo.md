@@ -6191,3 +6191,36 @@ F37 卡片本身保持 `open`，不改判据。
 派发 = 1 个新鲜 general-purpose 子代理（17 次工具调用，115s）+ 本轮我自己 1 次核验性 `sed`（非探索）。
 
 `built` 队列现状：F49/F52/F53/F54/F70/F75 六张仍欠新鲜证伪 pass（与上条一致，未变）。
+
+### 心跳 2026-09-16T16:46 本轮开工（F78 证伪 pass）
+开工前三棵工作树 git status --porcelain 均干净（除已知无害未跟踪目录）；本轮由 ralph.sh 派发（PID 65832），不视为异常。任务：memo.md「下一轮」优先级第 2 项 F78（built，未过新鲜证伪 pass），派发中。
+
+### 轮次 2026-09-16（续五）：F78 第二次证伪 pass —— PARTIAL 复现，未新增缺陷
+
+任务 = 对 `built` 卡 F78（dd_runtime_check.sh `--self-test` 阈值修复）派一个新鲜子代理
+（general-purpose，Sonnet，24 次工具调用，256s）按 `tools/loop/prompts/falsify.md`
+跑证伪 pass，不知道该卡已经在同一天更早被另一遍 pass（`reviewed 0cdbd949`）判过 PARTIAL、
+列出四条缺陷 (i)-(iv)。
+
+结果 = **VERDICT: PARTIAL**，与先前那遍**独立复现**、未发现新缺陷：
+- 攻击 1 证实检查不是永真式：抑制一条 `CASES` 声明能正确使 `--self-test` 变红。
+- 攻击 4 用不同方法独立重新发现缺陷 (i)：把某条 `CASES` 基线从 0 改成 3 后
+  `--self-test` 仍是绿的——因为 `EXPECTED_FAILURES` 里硬编码的 `got 0` 与 `run_case`
+  实测的 `$sites` 都源自同一条 `CASES` 声明，一个内部自洽但错误的基线，这个机制单独
+  抓不出来。
+- 直接复现缺陷 (iv)：在已提交的树（`b5724de`）上跑 `SKIP_STALENESS_GUARD=1
+  ./verify_all.sh --self-test`，**~5 分钟未返回，被手动杀掉**——判据 (b) 不只是「未满足」，
+  是**当前这套 harness 根本跑不完一次 self-test**，与 F79/F81 记的阻塞一致。
+
+**本轮未尝试修 (i)-(iii)**：(iv) 已经把关卡卡在 F81 上，且判据 (b) 的验证通路眼下不终止，
+在没有可用验证手段的情况下动 `dd_runtime_check.sh` 只会造出一份**连自己的负控制都跑不了**
+的新 `built`，不是收尾。
+
+改动 = 仅 `spikes/shorebird_linkinfo_oracle/cards.tsv`（F78 行追加本段结论）+ `memo.md`（本节）。
+提交 = 研究树 `09bc25c`；状态树本次提交。SDK 树、引擎树本轮未动。
+
+F78 **保持 `built`，不关卡**。真正的解锁路径是先解 F81（`nc5` 红）与 F79（新鲜构建 segfault），
+其次才是修 (i)-(iii) 的模板缺陷。
+
+`built` 队列现状：F49（PARTIAL，欠修）/ F52 / F53 / F54 / F65 / F67 / F70 / F75 / F78（PARTIAL，
+欠修，已两次证伪一致）/ F80 仍欠新鲜证伪 pass 或欠修补丁的复审。
