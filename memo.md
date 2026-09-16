@@ -4356,7 +4356,38 @@ OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 
 ---
 
 - [ ] **F69：读他们出厂 `analyze_snapshot` 的那三条指令，判定那个固定 3 字跳是不是我们独有的**
-      （`open`，2026-09-15 立；来自 F68 修补丁证伪 pass 的 STILL OPEN，**F68 的前置**）
+      （`built`，2026-09-15 立；来自 F68 修补丁证伪 pass 的 STILL OPEN，**F68 的前置**；
+      **`built` 不是 `closed`** —— 欠一次新鲜代理的证伪 pass）
+
+      🟢 **2026-09-16 实测判决：VERDICT A（`rc=0`）—— 那个固定 3 字跳确实在他们的二进制里。**
+      判据命令（落盘、可复跑）：
+      `THEIR_AS=<他们的 analyze_snapshot_arm64> ./f69_their_pool_skip_disasm.sh`
+      （研究树 `spikes/shorebird_linkinfo_oracle/`；读的是 rev `c15ef6379403` 那份，
+      sha256 `669423717d6208d2…`，`c2515c46` 那份与它**逐字节相同**，因此**不构成独立佐证**）。
+      - `0x100197434` 落在 `__TEXT,__text`，文件偏移 `0x57f434`（5764148），可执行；
+        原始文件读出的机器字 `0x52800069` 与反汇编器一致 ⇒ **NC2 通过，地址不是凭空的**。
+        该处三条指令实测为 `mov w9,#0x3` / `sub w9,w9,w14` / `str w9,[sp,#0x60]`。
+      - 那个存进 `[sp,#0x60]` 的字是一个**倒计时**，它 gate 的是**解码器再入**：
+        从窗口内 continue 边 `0x10019692c` 出发，把级联耗尽出口 `0x100196b98` 屏蔽掉，
+        过程内可达指令数从 **840 掉到 195**（`AccumulateRecursive` 共 1006 条），
+        `0x100197434` 随之不可达，**0 个间接跳转未知**。
+      - ⇒ **F68 反向**：不动 `DecodePoolReference`，改判为「我们的 `gen_snapshot` 不补 NOP」的代码生成卡。
+      🔴 **限定（承重，别丢）**：这把量具量的是**可达性，不是必经性**。
+      **F72 仍横在「存在一条路径」与「他们的跳等于我们的跳」之间**（五个 Entry push 全是 CONDITIONAL）。
+      在 F72 有结论之前**仍然不许动 `DecodePoolReference`**。
+      🔴 **订正本卡自己的括号**：`x22` 在该函数里是 **4 个定义、不是 6 个**，
+      其中**只有 1 个**是 `+#0x4`（`0x100196930`），另三个是 `mov x22,x0`（`0x1001966f8`）、
+      `mov x22,x20`（`0x1001968f0`）与尾声 `ldp x22,x21,[sp,#0xf0]`（`0x1001975c4`）——
+      脚本现在把这四行逐条打出来（铁律第 8 条），独立重数一遍得同样四个地址。
+      **2026-09-15 增补的三条已满足**：退出码跟着被 trace 的语义链走
+      （把倒计时正则改坏 ⇒ `ADVANCE_TRACED=False` + `VERDICT C` + `rc=3`，**此前是 A/rc=0**）；
+      `rc` 两个方向都动（改坏 0→3、还原 3→0）；两句被禁的判词在输出里**各 0 次**
+      （`drives the instruction pointer` / `second skip site`）。
+      **三档判决实测在真实地址上各自可达**：A = 原始字节；
+      C = 把该字节改成 `0x52800089`（`mov w9,#4`）⇒ `MOVW9_IMM=4`、`rc=3`；
+      B = 改成 `0x0b0e0129`（`add w9,w9,w14`）⇒ `VERDICT B`、`rc=0`
+      —— **所以 B 不是默认值，是能挣到的**。扰动全在 `$TMPDIR` 副本上，
+      还原后 `cmp` rc=0、他们的 sha256 未变，副本已删。
       **为什么它在 F68 前面**：F68 要去掉 `DecodePoolReference` 的固定 3 字跳。
       但那个跳**是从他们的二进制抄来的** —— `analyze_snapshot_api_impl.cc:1358-1366` 自己写着
       「`0x100197434` `mov w9,#3; sub w9,w9,w14` 向前跳 3-n 条指令」。
