@@ -5273,7 +5273,12 @@ Opus 修 24 次 + Opus pass 28 次）/
 
 **第四、第五处 ⇒ F76**：见下。
 
-- [ ] **F75：`rc==2` 在 `run_script` 里读成 BLOCKED，而 nc4/nc5 用 2 当真缺陷码 —— 真回归读成「没跑」；且 `blocked` 无 pin 使 rc 恒为 1**
+- [x] **F75：`rc==2` 在 `run_script` 里读成 BLOCKED，而 nc4/nc5 用 2 当真缺陷码**（`closed`，2026-09-16 证伪 pass 判 SURVIVES）
+      归因干净：nc4/nc5 返回 2 报真缺陷 ⇒ `rc=1` 且点名 `FAILED: nc4_…` / `FAILED: nc5_…`（`ran=1 failed=1 blocked=0`）；
+      前提缺失走 255 ⇒ `BLOCKED`（`ran=0 failed=0 blocked=1`）—— 两种含义分开了。
+      baseline `rc=0`（40 ran / 0 failed / 2 blocked）证明退出码不再恒为 1；每个扰动只让自己那格红，零连带。
+      🟡 **残留（记下不修）**：分离依赖 nc4/nc5 用**不同**的退出码 —— 把前提缺失强行改成 exit 2，两条路又都读成 FAILED；
+      且 `EXPECTED_BLOCKED` 是硬编码白名单要手工维护（但增删换任一都会触发 `BLOCKED-SET MISMATCH` rc=1）。
 - [ ] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上**（2026-09-16：`out_pm/` 不确定性那半边已拆给 F81）
 - [ ] **F81：harness 每轮重写自己的 12/112 个 `out_pm/` 输入 —— 被它读作输入的文件由同一次运行写出**（`open`，2026-09-16 立，从 F76 拆出）
       **为什么拆**：F76 一张卡同时要求①干净重建 `ReleaseARM64`（6.6G）、②不带 `SKIP_STALENESS_GUARD` 全量跑 `verify_all.sh`、③再跑两遍 harness 比 sha256 清单 —— 三件重活压在 `ROUND_TIMEOUT` 3600s 里。按契约闸门 1.5 拆开。
@@ -5778,7 +5783,31 @@ SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.l
 把 **F79** 加入（本轮未主动派证伪 pass，按契约五之四这本应是本轮同一轮内完成的第二步，
 但受限于本次调度器角色分工，留给下一轮/下一次调度处理——**这是本轮的已知缺口，不是遗漏未记**）。
 
-- [ ] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**
+- [ ] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**（`built`，2026-09-16 实现，欠一次证伪 pass）
+      🟢 **补丁由 agy(gemini-3.8-flash-high) 起草、我验证后落盘**：`-ge 5` 那一行**整行删掉，没有改成 4**
+      —— 改成 4 只是把闸门钉在今天这个偶然上，而那正是它过期的方式。
+      现在 `EXPECTED_FAILURES` **从 `CASES` 数组推导**（每个 case 一条 site-count 失败 + 一条 stats 缺行），
+      断言的是**集合相等**：每一条声明的失败都必须被观测到，不是数个数。增删 case 会自动更新期望。
+      **控制 5/5 实测**：未扰动 `--self-test` rc=0；**拿掉一个真注入的失败 ⇒ rc=1**（旧阈值做不到这件事）；
+      多一条**已声明**的失败仍通过；多一条**未声明**的被点名 rc=1；`bash -n` 干净。
+
+- [ ] **F82：修补丁队列唯一有审计的出口，在生产里从未触发过**（`open`，2026-09-16 由 F49 的证伪 pass 拆出）
+      🔴 **实测**：`grep -c 'fix-queue: drain' .loop/rounds.log` = **0**，而 enqueue **25** 次、hold **6** 次，
+      `owed>0 → owed=0` 的转换 **9** 次 —— **全部静默、全部 rc=0**。
+      九次全是**轮次自己删掉 `.loop/UNREVIEWED_FIX` 里那一行**，而 `run_round.sh:356` 的提示词明确授权它这么做；
+      `.loop/` 在 `.gitignore` 里，事后无从复核。
+      🔴 **真正要命的**：唯一有意义的那个差异 ——「轮次开始时欠着、结束时没了且没有判决」—— **当前不可测量**，
+      因为欠数（`run_round.sh:1332`，对文件 `grep -c`）与 drain 判定（`fix_queue.py:223`，从 memo + 提交标题）
+      **都读的是轮次可以编辑的那份「轮次结束后」的文件，而没有任何开始时的快照**。
+      **判据**：轮次开始时给队列拍快照，结束时比对，**「无判决而消失」必须是一个点名那一条的红**。
+      **其二**：`pos_same`/`pos_drain` 以 `agent_calls` 为门，而它数的是**每一个** `Agent` tool_use（`run_round.sh:711`）
+      ⇒ 两次无关的 `Explore` 加一行自己写的判决就能 drain 或压制 —— **轮次用自己的账决定自己的闸门**，
+      这是 `fix_queue.py` 自己的 docstring 明文禁止的。
+      **其三**：`rc=0` 在所有非 self-test 路径上是常量（含 unreadable-cards 的 WARNING 路径）
+      ⇒ **41 次生产 `rc=0` 打印零信息**，任何地方都不能拿它当判断。
+      **负控制**：在 `/tmp` 副本上，轮次中途删掉一条队列行且不记任何判决 ⇒ 结束时的比对必须**点名那一条并失败**；
+      再记一条真判决 ⇒ 必须安静 drain。**两个方向都要**，否则快照什么也没证明。
+      ⚠️ F49 自己那五条接线的变异漏掉了两个缺陷、只有 `--self-test` 抓到 ⇒ **这一条也要接进 `--self-test`**。
   （2026-09-15 立；被 F79 阻塞，F79 已解除阻塞，本卡待实测其三条判据）。
 - [x] **F79：`ProductARM64` 自 F37 起 AOT 执行 segfault**（**已关闭**，2026-09-15；三轮独立新鲜
   证伪：PASS 1 PARTIAL→当场修→PASS 2 SURVIVES（因果链）；PASS 3 PARTIAL→当场修（F77 commits 列）
