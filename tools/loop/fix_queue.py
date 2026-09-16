@@ -66,6 +66,11 @@ import tempfile
 # that "the snapshot was not taken" is distinguishable from "nothing was owed".
 SNAPSHOT_FAILED = "#SNAPSHOT-FAILED"
 
+# Parked in the queue when the snapshot cannot be trusted, so that fq_owed stays
+# non-zero and run_round.sh keeps warning. A red that leaves owed=0 is cosmetic.
+UNKNOWN_ID = "F--"
+UNKNOWN_REASON = "fix-queue snapshot unverifiable (%s); a human must reconcile"
+
 # A card id: an uppercase letter, digits, an optional lowercase suffix (F34b).
 # The lookarounds are the whole point of writing this in Python rather than in
 # grep: without them "ARM64" yields the id "M64", and BSD and GNU grep disagree
@@ -292,14 +297,25 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         try:
             raw = io.open(before_path, encoding="utf-8", errors="replace").read()
         except OSError as e:
+            # The RED alone was COSMETIC and a hostile pass caught it: `rows` is
+            # the already-emptied post-round queue and write_queue was never
+            # called, so the file stayed empty, run_round.sh then measured
+            # fq_owed=0, printed no warning, and the entry was permanently
+            # dropped. Announcing a problem while completing the data loss is
+            # worse than not announcing it. There is nothing to restore FROM
+            # here -- the snapshot is what is unreadable -- so the only honest
+            # move is to refuse to let the round be recorded as settled.
             actions.append("RED fix-queue snapshot unreadable (%s) -- cannot tell "
-                           "whether an entry disappeared; treating every standing "
-                           "entry as still owed" % e)
+                           "whether an entry disappeared, and the pre-round contents "
+                           "are unrecoverable; the round is NOT settled" % e)
+            write_queue(queue_path, rows + [(UNKNOWN_ID, now, UNKNOWN_REASON % e)])
             return actions, rows
         if SNAPSHOT_FAILED in raw:
             actions.append("RED fix-queue snapshot was not taken at round start -- "
-                           "cannot tell whether an entry disappeared; treating every "
-                           "standing entry as still owed")
+                           "cannot tell whether an entry disappeared; the round is "
+                           "NOT settled")
+            write_queue(queue_path, rows + [(UNKNOWN_ID, now,
+                        "snapshot missing at round start; queue state unverifiable")])
             return actions, rows
         before_rows = read_queue(before_path)
     else:
