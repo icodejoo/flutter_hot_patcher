@@ -1671,7 +1671,21 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 ---
 
 - [ ] **F67：第三处单侧去重 —— `pool_seen` / `self_pp`，以及「走的是不是同一条路」**
-      （**`built`**，2026-09-14 立、2026-09-15 实现并实测；欠一次新鲜代理的证伪 pass）
+      （**`built`**，2026-09-14 立、2026-09-15 实现并实测；2026-09-16 证伪 pass **VERDICT: FALSIFIED**，新鲜 Sonnet 代理）
+      🔴 **本卡的「机制」结论已被自己后续两次 CORRECTION 撤回，只有原始计数还站得住 ——
+      引用本卡时只能引用计数，不能引用「我们的 walk 走的路不一样」这句话。**
+      证伪 pass 的破绽（2026-09-16）：把 CLAIM 原样交给一个新鲜代理复核时，
+      它在 `cards.tsv` 里找到本卡自己记的两条 `CORRECTION 2026-09-15`：
+      第一条撤回「walk 不同」——控制输入变量后（只比较两侧机器码逐字节相同的函数），
+      `self_pp` 在 776/776 个此类函数上有序全等，两个 offender 全部落在
+      机器码本身不同的函数里；第二条连「那段代码没有那条引用」这个推论也撤回，
+      真实机制是 F68 定位的 `DecodePoolReference`（`analyze_snapshot_api_impl.cc:1350-1383`）
+      固定记 3 个字的解码器 bug，而非任何遍历顺序问题。
+      **原始计数不受影响、仍然成立**：`self_pp` 8263→9617（他们 9619）、
+      `missing=2 extra=0 ordered_mismatch_fns=2`、两处都是池索引 1332、
+      `prog fn#1580`/`fn#1633`——这些数字没有被撤回，被撤回的只是对它们的因果解释。
+      **本卡因此不关闭**：它的历史价值是「记录了这组计数」，
+      对「机制是什么」这个问题，权威答案在 F68（`open`），不在本卡。
       🔴 **实测答案是 NO（不是 YES）**：去掉 `pool_seen` 去重后
       `self_pp` 从 **8263 → 9617 槽**，他们是 **9619**，
       `missing=2 extra=0 ordered_mismatch_fns=2`
@@ -5649,3 +5663,26 @@ fix commit(s) 128afff; no pass on the fix」已满足——上面这条判决就
 3. F78（已解除阻塞，可实测三条判据）。
 4. F76：staleness guard 重建债。
 5. F72（解 guard 路径条件）。 6. F70（挂起中）。 7. F71（挂起中）。 8. F49（built、从未过 pass）。
+
+---
+
+**2026-09-16（本轮）心跳**：开工先核验 F63 关卡——`.loop/UNREVIEWED_CLOSURE` 指向的
+2026-09-16 07:08 那次关卡，其证伪 pass 实际已记在本文件第 1818-1837 行（`VERDICT: SURVIVES`，
+`STILL OPEN` 已原文抄录），`cards.tsv` 对应行 sha `4506ee8` 经 `git merge-base --is-ancestor` 确认
+是研究树 HEAD 的祖先 ⇒ 该账已结，非本轮伪造，已删除 `.loop/UNREVIEWED_CLOSURE`（未跟踪文件，
+不入版本控制）。三棵工作树开工前 `git status --porcelain` 均干净（仅无害未跟踪目录）。
+
+任务 = 对 `built` 队列（F49/F52/F53/F54/F67/F70/F75）里的 F67 派一个新鲜 Sonnet 子代理跑
+`tools/loop/prompts/falsify.md` / 判据 = 见 F67 卡片自述的四条判据（含 `ProductSimARM64` 构建
+模式、四种负控制、`DECODER2` 独立解码器交叉验证）/ 派发 = 1 个新鲜子代理（5 次工具调用，70s）/
+结论 = **VERDICT: FALSIFIED**——不是原始计数错，是 F67 卡片给出的**机制解释**（「我们的对象池
+遍历走的是与他们不同的路」）已被卡片自己记的两条 `CORRECTION 2026-09-15` 撤回：控制输入变量后
+`self_pp` 在 776/776 个双侧机器码逐字节相同的函数上有序全等，两个 offender 全部落在代码本身
+不同的函数里；真实机制是 F68 定位的 `DecodePoolReference` 解码器固定 3 字跳过 bug，与遍历顺序
+无关。原始计数（`self_pp` 8263→9617 对他们 9619，`missing=2 extra=0 ordered_mismatch_fns=2`，
+两处都是池索引 1332，`prog fn#1580`/`fn#1633`）未被推翻。
+当场修 = 在 F67 卡片头部加一段明示：只能引用计数，不能引用「walk 不同」这句话，机制权威答案
+在 F68（`open`，未关闭）/ 改动 = 仅 `memo.md`（F67 卡片新增撤回说明）/ 结果 = **F67 不关闭**
+（本来就是 `- [ ]`，未曾被误标 `[x]`），保持 `built`，等 F68 自己关闭后再回头判 F67 是否可关。
+
+下一轮 built 队列剩 F49/F52/F53/F54/F70/F75，六张仍欠新鲜证伪 pass。
