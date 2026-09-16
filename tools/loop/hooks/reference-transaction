@@ -1,0 +1,115 @@
+#!/bin/bash
+# Refuses local ref rewrites/deletions -- reset --hard, branch -D, branch -f
+# backward, commit --amend, filter-branch, etc. -- at the layer git itself
+# always consults, no matter what process or language asked git to do it.
+#
+# WHY THIS EXISTS ON TOP OF deny-destructive.sh: that hook pattern-matches the
+# literal Bash command STRING. Its own header already says what that is not
+# good for: `python3 -c "import subprocess; subprocess.run(['git','reset',
+# '--hard','HEAD~3'])"` never contains the substring "git reset --hard" (it's
+# split across a Python list), so a string scanner cannot and does not catch
+# it -- verified empirically, see verify-reference-transaction.sh. This file
+# is NOT a second string scanner with a different regex; it does not look at
+# the command that invoked git at all. It is installed as git's own
+# `reference-transaction` hook (git >= 2.28), which git fires for essentially
+# every local ref create/update/delete -- from bash, from a Python
+# subprocess, from a shell alias, from another program entirely -- because it
+# is git's own C code running the transaction, not a shell parsing a string.
+# There is no command string here to lose to quoting tricks.
+#
+# WHAT THIS IS NOT (read this before trusting it further than it goes):
+#   - It only fires on REF updates. `git checkout -f` on the SAME branch and
+#     `git clean -fdx` and `git restore .` discard working-tree/index content
+#     without moving any ref, so this hook never sees them. That destruction
+#     mode is still only covered by deny-destructive.sh's string match, which
+#     a python-subprocess call defeats the same way it defeats "git reset
+#     --hard". This is a known, intentional, and currently OPEN gap -- see
+#     the negative-control notes for what was and was not exercised.
+#   - It is local-repo-scoped. It cannot stop a force-push landing on a
+#     remote; that is `pre-push`'s job (tools/loop/hooks/pre-push), which is
+#     itself invocation-shape-independent for the same reason (git runs it
+#     for `git push` regardless of invoker) and already gates on
+#     FHP_ALLOW_PUSH rather than on command text.
+#   - `core.hooksPath` and the hooks directory itself are ordinary git config
+#     and ordinary files. A round that thinks to run
+#     `git config core.hooksPath ""` or delete this file unsets this
+#     protection, and reference-transaction cannot catch that (git isn't
+#     doing a ref update when you edit its config). This is not a security
+#     boundary against an adversary with full filesystem access to the
+#     repo -- it is a blast-radius limiter against an unattended round
+#     confidently doing the thing it always does (calling git), the same
+#     framing as deny-destructive.sh.
+#
+# HOW IT DECIDES: for the "prepared" state of every transaction (the point at
+# which refusing still aborts cleanly -- see `man githooks`), for each queued
+# update to a `refs/heads/*` ref:
+#   - resolve the ref's value ON DISK right now via `git rev-parse --verify`.
+#     This is deliberate: git's own force-update code path (`branch -f`,
+#     `branch -D`) reports the transaction's own <old-value> field as all-
+#     zeroes even when a real prior value existed and is being discarded --
+#     verified empirically below, and trusting that field would have let
+#     exactly the two operations this hook exists for slip through under
+#     their most common forced spelling.
+#   - if the ref did not exist before (resolve fails): a brand new branch,
+#     allow.
+#   - if the new value is the all-zeroes object id: a deletion, refuse.
+#   - if old == new: no-op, allow.
+#   - otherwise require old to be an ancestor of new (`git merge-base
+#     --is-ancestor`). Fast-forward commits and merge commits always satisfy
+#     this (old is a parent of new). `reset --hard` to an earlier commit,
+#     `branch -f` to anything not a descendant, and `commit --amend` (whose
+#     result shares amend's parent, not the amended commit, so it is never a
+#     descendant of what it replaces) all fail this check by construction --
+#     which also happens to match this project's existing rule against
+#     amending and rebasing rounds' commits.
+#
+# No override environment variable, on purpose, same reasoning as
+# deny-destructive.sh: an override is the first thing a confused agent would
+# find and set. A human who actually needs one of these operations runs it in
+# their own terminal after temporarily moving this file aside (see
+# install-reference-transaction.sh's header for the exact command) --
+# deliberate friction, not a flag.
+set -u
+STATE="${1:-}"
+ZERO="0000000000000000000000000000000000000000"
+
+if [ "$STATE" != "prepared" ]; then
+  cat >/dev/null   # drain stdin for committed/aborted calls, then no-op
+  exit 0
+fi
+
+BLOCK=0
+REASON=""
+while read -r _OLD_FIELD NEW REF; do
+  case "$REF" in
+    refs/heads/*) : ;;
+    *) continue ;;
+  esac
+  case "$NEW" in
+    ref:*) continue ;;   # symbolic-ref target line, not an oid update
+  esac
+
+  RESOLVED=$(git rev-parse --verify --quiet "$REF" 2>/dev/null)
+  if [ -z "$RESOLVED" ]; then
+    continue   # ref did not exist before this transaction: creation, allow
+  fi
+  if [ "$NEW" = "$ZERO" ]; then
+    BLOCK=1
+    REASON="deletes branch ref $REF (was $RESOLVED)"
+    continue
+  fi
+  if [ "$RESOLVED" = "$NEW" ]; then
+    continue
+  fi
+  if ! git merge-base --is-ancestor "$RESOLVED" "$NEW" 2>/dev/null; then
+    BLOCK=1
+    REASON="non-fast-forward update of $REF ($RESOLVED -> $NEW): this discards commits reachable only from the old value"
+  fi
+done
+
+if [ "$BLOCK" = 1 ]; then
+  echo "reference-transaction: refused -- $REASON" >&2
+  echo "reference-transaction: run it yourself in your own terminal if you mean it (see tools/loop/hooks/install-reference-transaction.sh)." >&2
+  exit 1
+fi
+exit 0
