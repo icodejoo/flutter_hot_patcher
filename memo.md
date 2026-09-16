@@ -6050,4 +6050,63 @@ SURVIVES**，七项攻击均实测跑过（含独立反汇编字面同名兄弟�
 派发 = 1 个新鲜 Sonnet 子代理（10 次工具调用，约 100s）/ 改动 = 仅 `memo.md`（本节）/
 结果 = `.loop/UNREVIEWED_FIX` 队列条目已清空（未跟踪文件，非受版本控制内容，无需提交）。
 
+---
+
+### 轮次 2026-09-16（续四）：F37 正式重开落地 —— 被 constraint (2) 挡住，未落地
+
+心跳：开工前 SDK 树 `git status --porcelain` 干净，HEAD 在 F79 的revert提交
+`121cc101d43` 之后；`.loop/UNREVIEWED_FIX`、`.loop/UNREVIEWED_CLOSURE` 均为空。
+
+任务 = 派一个新鲜 general-purpose 子代理，在 `~/dart-3122/sdk` 上把 F37 的三个已解出前置结论
+（`call_bootstrap_native_entry_point_` = THR+0x908、写入时机、`CallBootstrapNative` 是薄
+trampoline）落成代码：新增 Thread 字段（照抄 `enter_safepoint_entry_point_` 的模式，追加在
+Shorebird 字段块末尾）、在 `Thread::InitVMConstants()` 里照抄 `write_barrier_wrappers_entry_points_`
+的初始化风格把它接到 `StubCode::CallBootstrapNative().EntryPoint()`、把 `il_arm64.cc` 里
+`FLAG_precompiled_mode` 分支使用的 THR 偏移从错误的 `bootstrap_native_wrapper_entry_point_offset()`
+换成新字段的 offset，增量重建（复用 F80 钉住的 `ProductARM64` 产物，不 `gn gen`/不 clean），
+`dd_runtime_check.sh` 判据 + 负控制（改坏后必须复现同一个 SIGSEGV 签名）。
+
+**结果 = STATUS: stuck，未改动任何文件（改了又 `git checkout --` 撤回了），未构建、未提交。**
+
+🔴 **子代理自行发现的真实阻塞**（本轮派发时**我漏掉了**，cards.tsv 第 33 行 F37 卡片其实早就
+记着，是我写子代理简报时只抄了 constraint (1) 没抄 constraint (2)——一次可避免的漏派信息）：
+
+`runtime/vm/instructions_arm64.cc:82` 起的 `NativeCallPattern` 构造函数解码调用点时，断言紧邻
+`blr lr` 之前的是**两次** `DecodeLoadWordFromPool`（分别恢复 `target_code_pool_index_` 与
+`native_function_pool_index_`，且要求加载目标寄存器是 `R5`），这是 `CodePatcher::GetNativeCallAt`
+/`PatchNativeCallAt`（被 `LinkNativeCall` 运行时例程使用）解析调用点、回填真实原生函数地址的唯一
+方式。而 shape A 的真实指令序列是**一次** pool load + `asr x16,x16,#1; ldr x30,[THR,x16]; blr x30`
+——寄存器是 `R16` 不是 `R5`，第二条 load 是 THR 索引不是第二个 pool 索引。**两种形状在结构上不兼容**
+：即使按简报把 THR 偏移常量修对，只要这个调用点仍会走到首次 lazy-link 时的 `LinkNativeCall`，
+`NativeCallPattern` 的解码就会失败（debug 下 `ASSERT` 炸、release 下读到垃圾 pool index）。
+
+**本轮我做了一步独立核验**（一条 `sed`，非探索性大范围搜索，未违反契约「禁止主循环直接跑构建/
+测试/大范围搜索」）：`command sed -n '60,120p' runtime/vm/instructions_arm64.cc` 确认
+`NativeCallPattern` 构造函数确实断言 `blr lr`、两次 `DecodeLoadWordFromPool`、寄存器 `R5`——
+子代理的 fact 2 描述与代码原文一致，**不是误读**。
+
+⇒ **F37 不能只改一个偏移量常量就落地。** cards.tsv 第 33 行本来就写着
+「establish what their pool slot actually indexes」这一步还没做——本轮等于重新确认了这句话仍然
+成立，没有推翻它，也没有新增信息之外的东西。
+
+改动 = 仅 `memo.md`（本节）+ `cards.tsv` 第 33 行追加一句（见下）。提交 = 状态树本次提交；
+SDK 树、研究树、引擎树本轮未动（SDK 树子代理已把试探性编辑撤回，`git status --porcelain` 干净）。
+
+`cards.tsv` F37 行追加：`2026-09-16 attempt: fixing only the THR-offset constant (constraint 1)
+was attempted and aborted before build/commit -- constraint 2 (NativeCallPattern shape mismatch,
+instructions_arm64.cc:82, re-verified via sed this round) blocks it independently. Re-landing needs
+either (a) teach NativeCallPattern to also decode shape A, or (b) determine via Shorebird's real
+binary whether link_lazily() bootstrap-native call sites actually route through LinkNativeCall at
+all -- if they don't, constraint 2 may not apply to this call site and this card can proceed with
+just the offset fix. (b) is cheaper and should be tried first.`
+
+**下一轮**：先做 (b)——在研究树对 Shorebird 真机二进制做一次有针对性的反汇编/oracle 核验：
+挑一个已知的 `link_lazily()` 原生调用点（例如任何 bootstrap native 函数的调用现场），确认它执行
+过程中是否真的触发过 `LinkNativeCall`/`NativeCallPattern` 路径（例如查它的 pool slot 在快照里是
+否已经是「已链接」状态、或搜索是否存在对应的 patch 记录），而不是假设它一定用得上。
+只有排除 (b) 之后才值得做 (a)（教 `NativeCallPattern` 认 shape A，属于新范围，需要自己的判据）。
+F37 卡片本身保持 `open`，不改判据。
+
+派发 = 1 个新鲜 general-purpose 子代理（17 次工具调用，115s）+ 本轮我自己 1 次核验性 `sed`（非探索）。
+
 `built` 队列现状：F49/F52/F53/F54/F70/F75 六张仍欠新鲜证伪 pass（与上条一致，未变）。
