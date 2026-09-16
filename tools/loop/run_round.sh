@@ -521,15 +521,7 @@ trap 'rm -f "$LOCK"' EXIT
 # as the $13.36/M eq above, two days apart. RATIOS of eq are trustworthy here;
 # CONVERSIONS of eq into any external unit are not, until two dated readings pin
 # them. Both times the wrong anchor moved this constant in the tight direction.
-# TEMPORARY 2026-09-16 14:2x: 3600 -> 10800 while three agents dispatched from
-# an interactive session hold the SDK tree (F80), the research tree (F69) and a
-# /tmp sandbox (F70). Two writers in one worktree is what destroyed 478
-# unrecoverable lines once already, and gate 2.5's self-identification guard
-# deliberately tells a round NOT to stand down for a process it can see -- which
-# makes a round MORE likely to collide with an external agent, not less.
-# RESTORE TO 3600 once those three report. This is a coordination hold, not a
-# burn-rate decision.
-COOLDOWN=${FHP_LOOP_COOLDOWN:-10800}
+COOLDOWN=${FHP_LOOP_COOLDOWN:-3600}
 LAST_END=$STATE/last_round_end
 if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
   last=$(cat "$LAST_END" 2>/dev/null || echo 0)
