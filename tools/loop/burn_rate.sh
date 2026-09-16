@@ -21,6 +21,27 @@
 # cost one wrong recommendation on 2026-09-15: by count cache_read is 93% of
 # everything, but weighted it is 40%, with cache_write at 34% and output at 25%.
 # Optimising the 93% number would have been optimising the wrong term.
+#
+# BUCKETING FIX 2026-09-16: a record is attributed by ITS OWN timestamp, not by
+# the birthtime of the file it lives in. The first version bucketed whole
+# session files by st_birthtime, which is wrong for any session that outlives
+# the cutover, and the dominant consumer was exactly that: the interactive
+# session 7c27802a was born 09-14 09:41 against a cutover of 09-15 10:23, so
+# every token it spent afterwards was still counted on the "before" side. Two
+# errors, both pointing the same way -- the after-side human rate read
+# 0.00M eq/h while that file was 9.8 MB and still growing, and the baseline the
+# ratio divides by kept inflating as the same session grew. "On track" was
+# therefore partly an artifact of who was talking. The honest reading survived
+# only because the interactive side happened to be quiet overnight, which was
+# checked independently with token_window.sh: 0.533M eq/h by message timestamp
+# over 16h against 0.53M eq/h here.
+#
+# A session still has ONE kind -- loop, pass or human is a property of how it
+# was started, and kind_of() reads its first user message. What moves is only
+# which side of the cutover each record counts on, so one session can now
+# legitimately appear in BOTH windows. The session counts printed below are
+# distinct files contributing to that bucket, so the two sides may sum to more
+# than the number of files on disk. That is the fix, not a double count.
 set -uo pipefail
 
 CUT=${1:-2026-09-15T10:23}
@@ -28,11 +49,14 @@ PROJ=${FHP_PROJ_DIR:-$HOME/.claude/projects/-Users-Cruz-Documents-flutter-hot-pa
 
 [ -d "$PROJ" ] || { echo "no transcript dir: $PROJ" >&2; exit 1; }
 
-PROJ="$PROJ" CUT="$CUT" python3 - <<'PY'
+PROJ="$PROJ" CUT="$CUT" python3 - <<'PYEOF'
 import json, os, glob, datetime, collections
 
 proj = os.environ["PROJ"]
-cut = datetime.datetime.fromisoformat(os.environ["CUT"])
+local = datetime.datetime.now().astimezone().tzinfo
+cut = datetime.datetime.fromisoformat(os.environ["CUT"]).replace(tzinfo=local)
+now = datetime.datetime.now(tz=local)
+horizon = now - datetime.timedelta(days=7)
 
 # input-equivalents; see the header on why raw counts are not usable here
 W = {"input": 1.0, "cache_read": 0.1, "cache_write": 1.25, "output": 5.0}
@@ -63,77 +87,82 @@ def kind_of(path):
     return "human"
 
 buckets = collections.defaultdict(lambda: collections.Counter())
+files = collections.defaultdict(set)
 span = {}
+oldest_before = None
+
 for p in glob.glob(os.path.join(proj, "*.jsonl")):
-    st = os.stat(p)
-    birth = datetime.datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime))
-    end = datetime.datetime.fromtimestamp(st.st_mtime)
-    if birth < cut - datetime.timedelta(days=7):
-        continue
-    where = ("after " if birth >= cut else "before") + "/" + kind_of(p)
-    c = buckets[where]
+    kind = None
     for line in open(p, errors="replace"):
         try:
             d = json.loads(line)
         except Exception:
             continue
+        ts = d.get("timestamp")
         u = (d.get("message") or {}).get("usage") or {}
-        if not u:
+        if not ts or not u:
             continue
+        try:
+            t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(local)
+        except Exception:
+            continue
+        if t < horizon:
+            continue
+        if kind is None:
+            kind = kind_of(p)
+        after = t >= cut
+        where = ("after " if after else "before") + "/" + kind
+        c = buckets[where]
         c["input"] += u.get("input_tokens", 0)
         c["output"] += u.get("output_tokens", 0)
         c["cache_read"] += u.get("cache_read_input_tokens", 0)
         c["cache_write"] += u.get("cache_creation_input_tokens", 0)
-    c["sessions"] += 1
-    lo, hi = span.get(where, (birth, end))
-    span[where] = (min(lo, birth), max(hi, end))
+        files[where].add(p)
+        lo, hi = span.get(where, (t, t))
+        span[where] = (min(lo, t), max(hi, t))
+        if not after and (oldest_before is None or t < oldest_before):
+            oldest_before = t
 
-now = datetime.datetime.now()
 hours_after = max((now - cut).total_seconds() / 3600, 1e-9)
-# Bounded by the oldest session actually counted, so the baseline is not divided
-# by seven days when only two of them hold traffic.
-oldest = min((v[0] for k, v in span.items() if k.startswith("before")), default=cut)
-hours_before = max((cut - oldest).total_seconds() / 3600, 1e-9)
-print(f"cutover: {cut:%Y-%m-%d %H:%M}   now: {now:%m-%d %H:%M}")
+# Bounded by the oldest RECORD actually counted, not by any file's birthtime, so
+# the baseline is neither divided by seven days when only two of them hold
+# traffic, nor by a file's creation date when its traffic started later.
+hours_before = max((cut - (oldest_before or cut)).total_seconds() / 3600, 1e-9)
+
+print(f"cutover: {cut:%Y-%m-%d %H:%M}   now: {now:%m-%d %H:%M}   (bucketed by message timestamp)")
 print(f"windows: before {hours_before:.1f}h   after {hours_after:.1f}h\n")
 rates = {}
 for where in ("before/loop", "before/pass", "before/human",
               "after /loop", "after /pass", "after /human"):
     c = buckets.get(where)
     if not c:
-        print(f"{where}: no sessions")
+        print(f"{where}: no traffic in window")
         continue
-    # ONE denominator for every bucket, and it is wall-clock, not the bucket's
-    # own extent. The first version divided each bucket by its own first-birth
-    # to last-write span, which on 2026-09-15 13:11 printed
+    # ONE denominator per side, and it is wall-clock, not the bucket's own
+    # extent. The first version divided each bucket by its own first-birth to
+    # last-write span, which on 2026-09-15 13:11 printed
     #
     #   burn: combined before 2.08M eq/h   after 85.03M eq/h
     #   burn: ratio 40.91x
     #
     # because a subagent session that lived four seconds (11:17:24 -> 11:17:28)
     # carried 0.08M eq, and 0.08M / 0.001h is 83.7M eq/h. Summing per-bucket
-    # rates computed over per-bucket spans is not a rate at all. "A denominator
-    # of its own per bucket" is in this repo's catalogue of instrument defects;
-    # this was a fresh instance of it, written the same day.
-    #
-    # What kept it from being believed was the TOO EARLY guard below, which
-    # refused a verdict at two rounds and printed the 40.91x as unusable rather
-    # than as a regression.
+    # rates computed over per-bucket spans is not a rate at all.
     lo, hi = span[where]
     hours = hours_after if where.startswith("after ") else hours_before
     eq = sum(c[k] * W[k] for k in W)
     rates[where] = eq / hours
-    print(f"{where}  {lo:%m-%d %H:%M} -> {hi:%m-%d %H:%M}  ({hours:5.1f}h window, {c['sessions']:>3} sessions)")
+    print(f"{where}  {lo:%m-%d %H:%M} -> {hi:%m-%d %H:%M}  ({hours:5.1f}h window, {len(files[where]):>3} sessions)")
     for k in ("cache_read", "cache_write", "output", "input"):
         print(f"           {k:<12}{c[k]:>14,}  ->{c[k]*W[k]/1e6:>7.1f}M eq  {100*c[k]*W[k]/eq:>5.1f}%")
     print(f"           {'TOTAL':<12}{'':>14}  ->{eq/1e6:>7.1f}M eq  {eq/hours/1e6:>6.2f}M eq/h\n")
 
 b = sum(v for k, v in rates.items() if k.startswith("before"))
 a = sum(v for k, v in rates.items() if k.startswith("after "))
-a_sessions = sum(buckets[k]["sessions"] for k in buckets if k.startswith("after "))
-a_loop = sum(buckets[k]["sessions"] for k in buckets if k.startswith("after ") and k.endswith("loop"))
+a_loop = len(files.get("after /loop", ()))
 
 print(f"combined before {b/1e6:.2f}M eq/h   after {a/1e6:.2f}M eq/h")
+f = None
 if b:
     f = a / b
     print(f"ratio {f:.2f}x -- target 0.35x (2.11%/h -> 0.74%/h to reach Friday 20:00 on 60%)")
@@ -144,13 +173,19 @@ if b:
 # a measurement and being a number.
 if a_loop < 4:
     print(f"\nVERDICT: TOO EARLY -- only {a_loop} loop round(s) after the cutover.")
-    print("  FHP_LOOP_COOLDOWN is 7200s, so a 2h window holds at most one gap;")
-    print("  4+ rounds (~8h) is the first point where rounds/hour means anything.")
+    print("  4+ rounds is the first point where rounds/hour means anything.")
 elif not b:
     print("\nVERDICT: no baseline")
 elif f <= 0.35:
     print(f"\nVERDICT: on track ({a_loop} loop rounds after cutover)")
 else:
     print(f"\nVERDICT: NOT ENOUGH ({a_loop} loop rounds after cutover)")
-    print("  next knob, most linear and most predictable: FHP_LOOP_COOLDOWN 7200 -> 14400")
-PY
+    print("  next knob, most linear and most predictable: FHP_LOOP_COOLDOWN 3600 -> 7200")
+    print("  BUT the 0.35x target was calibrated on 2026-09-15 against '60% left at")
+    print("  Tuesday 10:00' and is not self-updating. Re-derive before acting:")
+    print("    allowance = remaining%  /  hours-to-reset")
+    print("  On 2026-09-16 10:23 that was 50% / 57.6h = 0.868%/h against a measured")
+    print("  0.188%/h -- 4.6x of slack, so this ratio going red would NOT have meant")
+    print("  overspending. A ratio against a frozen baseline answers 'did the cutover")
+    print("  change the rate', never 'can we afford it'.")
+PYEOF
