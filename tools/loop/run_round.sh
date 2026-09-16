@@ -521,16 +521,7 @@ trap 'rm -f "$LOCK"' EXIT
 # as the $13.36/M eq above, two days apart. RATIOS of eq are trustworthy here;
 # CONVERSIONS of eq into any external unit are not, until two dated readings pin
 # them. Both times the wrong anchor moved this constant in the tight direction.
-# HOLD #3, 2026-09-16 14:4x: 3600 -> 10800 while three more agents dispatched
-# from an interactive session hold the SDK tree (F80 pass), the research tree
-# (F55) and a /tmp sandbox (F69 pass). RESTORE TO 3600 when they report.
-#
-# This is the third hold today, and that is itself the finding: two dispatchers
-# exist for one set of worktrees, and the only coordination primitive between
-# them is a human editing this constant. Worth a card -- an in-progress claim
-# in cards.tsv (the state vocabulary has open/built/closed and nothing for
-# "someone is on it"), or a lock the external dispatcher can take.
-COOLDOWN=${FHP_LOOP_COOLDOWN:-10800}
+COOLDOWN=${FHP_LOOP_COOLDOWN:-3600}
 LAST_END=$STATE/last_round_end
 if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
   last=$(cat "$LAST_END" 2>/dev/null || echo 0)

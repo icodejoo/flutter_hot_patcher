@@ -1231,7 +1231,122 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       · **负控制实测生效**：`./measure_pool_residual.sh --drop-per-process` 实测 3 个 input 的分区恒等式全部断裂（hello 2254 != 2450, base_dd 2254 != 2450, prog 5514 != 5882），脚本立即以 rc=1 退出。
       · **保持 unknown 锁死**：走第 3 条路闭环，不添加任何 residual 行到 `structural_evidence.tsv`，`phase_gate` 保持 `unknown=24, structural=0`。
 
-- [ ] **F55：`shorebird` ×3 —— 70223 units**（`open`，2026-09-10 立；2026-09-14 大幅推进）
+- [ ] **F55：`shorebird` ×3 —— 39425 units**（`open`，2026-09-10 立；2026-09-14 大幅推进；2026-09-16 拿到本格第一个 locus）
+      🔴 **标题里的 70223 是第三次过期**：F66 把它带到 41344、F67 带到 39425。引用这一格的分母前先跑 `./diff_units.sh shorebird`。
+      🟢 **2026-09-16：本格第一个 locus —— 两个 `field_table` 桶被归因，`EXAMINED 0 → 16105`**
+      （研究树见本轮提交；`evidence_shorebird_field_dedup.sh` + `perturb_f55_field_dedup.sh`，
+      接闸门第 42 项，`EXPECTED_CHECKS` 41→42）
+
+      🔴 **先订正分母：现在是 39425，不是 70223。** F66 拆掉 `selector_subgraph_seen`
+      （67391→41344）、F67 拆掉 `pool_seen`（41344→39425）。**70223 / 75034 / 75042 三个数全部过期，
+      引用即错。** 复跑：`./diff_units.sh shorebird`。
+      ⚠️ 顺手修掉 `verify_all.sh:648` 里钉着 `70223-unit total` 的注释——
+      那个数在它下面已经动过两次，闸门自己的散文也受保鲜期规则约束。
+
+      **本轮做的事**：`evidence_shorebird_residual.sh` 自己就写着「桶只说单位住在哪，不说是什么造成的」
+      （`attributed=0`）；`evidence_shorebird_components.sh` 证的是集合/多重集关系，**按构造与顺序无关**。
+      本轮给其中两个桶一个**有序且精确**的关系，并据此赚到一条 residual：
+
+      > `first_occurrence_dedup(theirs[fn][field]) == ours[fn][field]`，
+      > 逐元素、按顺序、按 `index_in_entries` 配对，作用于 `self_field_table` 与 `subgraph_field_table`。
+
+      **实测**：两个字段上 hello 1380/1380、base_dd 1380/1380、prog 3216/3216 **逐槽有序全等，
+      mismatch 0**；且「他们那侧有重复」⟺「两条列表不同」这个 iff 在全部 6 个
+      (fixture,field) 行上**对称差为 0**。
+      **非空洞**（不成立则脚本 rc=1 而不是 0）：他们的重复槽 `self_field_table` 58/58/97、
+      `subgraph_field_table` 1656/1656/11086；预测器命中率 2.2%/2.2%/1.9% 与 14.1%/14.1%/23.3%
+      （>99% 直接判 DEGENERATE 红）；空预测器偏差 31/31/61 与 195/195/750。
+
+      🔑 **LOCUS 是我们自己 collector 里的两个 `std::set`，在运行时从源码 grep 出来而不是钉行号**
+      （行号会过期，构造不会；grep 不到就报红，因为那说明这份测量描述的是一个已不存在的二进制）：
+      · `field_seen` —— `runtime/vm/analyze_snapshot_api_impl.cc:1393` → `self_field_table`
+      · `field_subgraph_seen` —— 同文件 `:1887` → `subgraph_field_table`
+      **这是本 collector 的第四、第五个单侧去重，两个在本卡之前任何地方都没被披露过，
+      而且都还活着、没有开关**（前三个是 F66 的 `selector_subgraph_seen` 与 F67 的 `pool_seen`）。
+
+      **RESIDUAL 用的是 harness 的分母，分子来自对【他们那侧】做模型变换**
+      （把他们的产物按这两个字段做首次出现去重，**其余键逐键断言未被碰过**），再重跑 `diff_units.sh`：
+      `UNITS 39425 → 23320`，**EXPLAINED 16105（占本格 40.8%）**，
+      两个被点名的桶 `self_field_table 281→0`、`subgraph_field_table 15824→0`（**桶内 residual = 0**），
+      **COLLATERAL 0 个桶被挪动**。
+      两条**并不被迫一致**的计算必须一致：16105 作为「两次 harness 总数之差」，
+      与 16105 作为「逐行归键的两个桶之和」（后者的总数又与 `diff_units.sh` 交叉断言）。
+      **口径**：`EXAMINED 16105 of 39425 / UNEXPLAINED 23320`。
+
+      🟢 **第二解码器比的是 VALUE 不是长度**（对两个字段的元素流做 sha256，字节级正则扫描，
+      无 json 模块、无配对）—— 第十次 F55 pass 指出 `components.sh` 的 `INV-REPARSE`
+      **只比长度**，于是两个正确的解析器按构造一致。**F60 的限定照抄不绕**：
+      解码器 #2 读的是同一批字节，**抓不到两个解析器都犯的错**。
+
+      🛑 **这不是关闭，也不是 structural —— 恰恰相反。**
+      我们自己 collector 里的单侧去重是**可修的缺陷**，所以这 16105 个单位是**有名字的 gap 单位**，
+      诚实的下一步是照 F66/F67 的办法把这两个 `std::set` 删掉（**要重建，本轮不做**）。
+      **仍然完全没有 locus 的 23320 个单位**：`op_subgraph_hash` 9152 + `subgraph_hash` 9152
+      （F55 把这两个归约到 824 个 `self_hash` 单位 —— 归约，不是终结）、`offset` 4104、
+      `self_hash` 824、`subgraph_pp` 44、`size` 12、10 个 `snapshot_data` 键各 3、`self_pp` 2。
+
+      🟢 **判别力是实测出来的，不是断言的**：在 `--reorder` 语料上
+      （集合、多重集、每条长度**全部保持不变**，只动顺序）
+      `evidence_shorebird_components.sh` **实测 rc=0**、四条 INV 全绿、`CONTAINMENT HOLDS`、
+      `classification=gap real_gap=4`，而本检查 **rc=1**。
+      **这对实测就是本轮相对包含关系的增量。** 在 `--prefix` 语料上
+      （第十次 pass 造的那份、当时 rc=0 四条 INV 全绿而 headline 照样动的语料）本检查也红。
+
+      **负控制（全部 2026-09-16 实测，每条红都归到被审的那条断言，不是归到进程退出码）**：
+      · `--drop` → rc=1，6 条 `RELATION` + 1 条 `RELATION IFF` + `RESIDUAL self_field_table 9 units`
+        （每 fixture 每字段删一个元素；**集合包含在这条语料上是活的** —— 更短的子集仍是子集、
+        仍是子多重集，这正是重点）
+      · `--reorder` → rc=1，`RELATION` 命中 `self_field_table` 28/28/73、`subgraph_field_table` 169/…
+      · `--prefix` → rc=1，`RELATION` 11/11/18 与 154/154/647，
+        `RESIDUAL self_field_table 110`、`subgraph_field_table 7862`
+      · `--dedup-theirs` → rc=1，6 行 `VACUOUS` + 2 个 `VACUOUS bucket`，且分母仍是 23320
+        （>0，所以不是被分母守卫吞掉的）。它攻的是**整个 locus 赖以成立的前提**：他们不去重。
+      · `--transform-subgraph-pp-too` → rc=1，`COLLATERAL 1 bucket moved subgraph_pp 44→86552`，
+        且 `ACCOUNTING` 同时报（`EXPLAINED` 变成 **−70403** —— 把变换扩到 locus 没点名的字段
+        **是把差异放大**，不是缩小）
+
+      🔴 **一条如实记下的控制缺陷（本轮自己抓的）**：`--identical`（theirs := ours 的字节拷贝）
+      **rc=2 而不是 1**。两份产物相等 ⇒ `diff_units.sh` 报 `UNITS 0` ⇒ 脚本在**分母守卫**
+      （`BAD UNITS 0`）就退出，**根本走不到 VACUOUS 断言**。
+      退出码 2 对「分母为零」是正确答案，但**把它记成「空洞性控制 rc=1」就是给一条从没跑过的控制记账**
+      —— 这就是 F41 pass 1 那一型。因此本轮补了 `--dedup-theirs`。
+      ⚠️ **同一份语料在 `evidence_shorebird_components.sh` 上确实 rc=1 `CONTAINMENT VACUOUS`**
+      （那个检查前面没有分母守卫）⇒ **两个脚本的 identical-corpus 控制不可互换引用。**
+
+      `perturb_f55_field_dedup.sh` 已落盘且确定（seed 42 over sorted function keys；
+      2026-09-16 用生成两次 `--drop` 再 `diff -r` 实测无差异）——铁律第 8 条。
+
+      🔴 **F55 仍然不关。** 本卡判据是「`UNEXPLAINED` 从下界变成闭合值，再**逐分量**给 locus」，
+      现在是 `EXAMINED 16105 of 39425 / UNEXPLAINED 23320` —— **23320 个单位仍无 locus**。
+      契约五之三：判据跑了没达标 = 未完成。
+
+      **F62 还缺什么**（本轮没动 `parity_matrix.tsv`、没动 `phase_gate.expected`、没动棘轮）：
+      F64 撤回 `gap=3` 的理由是 `gap_class()` 没有分母 —— `gap_residual.sh` 实测
+      hello/base_dd 只解释 9470 行里的 6 行、prog 51283 行里的 790 行。
+      **本轮的 16105 不能直接补上那个洞**，因为它是 `diff_units.sh` 口径的行数、
+      不是 `gap_evidence.tsv` 的 slot 口径（slot↔unit 量纲不匹配是 Pass 11 攻 3 已登记的）。
+      F62 要想动棘轮，需要的是**把这条 locus 接进 `gap_residual.sh` 的分母模型**，
+      或者接受「这三格的 gap 只解释了本格的一小部分、因此留 unknown」这个结论并把它写下来。
+      ⚠️ 另外 F64 的缺陷 (b)（证据行的 flag 标签被无条件信任、pin 只数类别计数）本轮未碰。
+
+      ⚠️ **`verify_all.sh` 本轮实测读数，与本轮无关的红分开报**：
+      · **直接跑 `./verify_all.sh` 是 rc=2 BLOCKED，一个检查都没跑起来** ——
+        preflight 的 staleness guard 报
+        `ReleaseARM64 is 21 build step(s) behind the source tree`。
+        **这是并行那位改 SDK 源码的代理造成的**；本轮按指令不重建、不碰 `~/dart-3122/sdk`。
+      · 带 `SKIP_STALENESS_GUARD=1` 跑（唯一能验账的办法）：
+        **40 ran / 2 failed / 0 skipped / 2 blocked，42 of 42 checks accounted for** ——
+        账目对上（`EXPECTED_CHECKS` 41→42 生效），
+        且**本轮新加的 `evidence_shorebird_field_dedup.sh` 在同一轮里 `ok UNEXPLAINED 23320`**。
+      · 两个 blocked 是 `nc3_f66_dedup_multiset.sh` / `nc3_f67_pool_seen_multiset.sh`
+        （build experiment，本来就在 `EXPECTED_BLOCKED` 里）。
+      · 两个 failed 是 `measure_pool_residual.sh` 与 `evidence_shorebird_subgraph_hash.sh`，
+        **都不是本轮造成的，三条判据**：① 前者在 harness 顺序里跑在本轮新检查**之前**；
+        ② 两个脚本**单独跑都是 rc=0**（`UNEXPLAINED 3` / 全绿）；
+        ③ 实测本轮新检查**不改 `out_pm`**（112 个文件跑前跑后 md5 汇总逐字相同）。
+        最可能的成因就是那条被 override 掉的 guard 本身：整轮跑在一棵落后 21 步的构建树上。
+      ⚠️ **上一轮记着的 nc5 那条红本轮没有出现**（`nc5_f68_x27_ref_decode.sh` 不在 failed 列表里），
+      所以 F81 上那条读数已经动过；引用前先实测。
       **判据**：`UNEXPLAINED` 从下界变成**闭合值**（有上界论证），再逐分量给 locus。
       **负控制**：删掉任一分量 ⇒ `UNEXPLAINED` 上升且只在这一格。
 
