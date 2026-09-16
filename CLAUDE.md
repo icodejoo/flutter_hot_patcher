@@ -165,7 +165,25 @@ transcript `ce808561` 实测 Bash 44 / Read 7 / Edit 5 / ToolSearch 1）；前�
 **又由「F60 关闭」这个条件自动置上 `PAUSE`（20:22:09）**，现仍在位；`ralph.sh` 与快照器**还活着**
 （每次 tick 打 `skip: PAUSE present`），所以恢复只需删 `PAUSE`，不必重启任何东西。
 前两笔账已结：`UNREVIEWED_CLOSURE` 与 `UNREVIEWED_FIX` 都已被轮次处理掉。
-**`loop-rescue` stash 仍是 2 个。**
+🔴 **2026-09-16 订正：stash 的账已过期，而且漏了一整棵树。** 实测 `git stash list` 两处:
+`fhp-research` **4 笔**（不是 2 笔）—— `loop-rescue 09-16T19:13:21`（与 `7113928` 冗余，
+唯一差别是一个 emoji）· `auto-stash-round-20260915T055745`（`nc4_f68_pool_skip_1332.sh`，
+639 行，**被 HEAD 的 988 行取代的旧稿**，有 209 行不在 HEAD，未证明完全冗余）·
+`loop-rescue 09-09T13:00:19`（`parity_matrix.tsv`）· `loop-rescue 09-09T11:13:01`（`memo.md`）；
+**`~/dart-3122/sdk` 也有一笔**（`auto-stash-round-20260916T190408`，与 `b1111a30e62` 的 diff 逐字节相同，冗余）
+—— 这棵树此前从未被记在 stash 账里。⇒ **「两棵树共用一个 stash store」那条结论不覆盖 SDK 树，它是第三个 store。**
+
+🔴 **第四十一种仪器缺陷（2026-09-16 实测，与第 38 种同科）：
+一次运行的输出可以描述一份磁盘上已经不存在的代码，而 `git status` 全程是干净的。**
+循环当时是活的（无 `PAUSE`），两轮把一个交互会话里 subagent 的未提交工作 stash 走了 ——
+其中一次发生在负控制的 `for` 循环**中间**，于是**三条控制迭代打的是旧脚本的 FAIL 词汇**
+（`first_occurrence_dedup(theirs)`、`RELATION IFF`、`VACUOUS bucket`），
+而新脚本里这些词已经不存在。判别法**看输出的词汇跟你刚写的代码对不对得上**
+（那次的实际线索是 `usage:` 行里少了 `--dedup-ours`）。
+🔑 **推论：循环活着的时候，不要在共享工作树里留未提交的工作 —— 它不是被改坏，是被整份搬走，
+而 `git status` 之后是干净的，所以「我没改动」这个读数为真、结论为假。**
+落地判据:引用任何一条红之前，先确认**那条红的词汇存在于你要交付的那个 blob 里**
+（`git grep -c -- '<词>' HEAD -- <路径>`，且先用一个你确知存在的词测一遍这个装置）。
 
 🔴 **第一次观测到真实的额度硬阻塞（2026-09-10 20:46:13）** —— 这条软点此前记着「从未观测到，
 检测判据可能不命中」，**现在两件事都有答案了**：真实字符串是散文
