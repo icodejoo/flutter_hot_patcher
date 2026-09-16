@@ -335,6 +335,15 @@ say_once() {
 # could not tell "nothing owes a pass" from "the queue script is broken" --
 # both of them print nothing.
 FIX_QUEUE=$STATE/UNREVIEWED_FIX
+FIX_QUEUE_BEFORE=$STATE/UNREVIEWED_FIX.before
+# The fallback must not fabricate an EMPTY snapshot. An empty before-file reads
+# as "nothing was owed at round start", which hides a disappearance just as well
+# as no snapshot at all -- measured 2026-09-16 during verification: with the
+# snapshot missing, a vanished entry and no verdict produced silence and exit 0.
+# The sentinel makes "the snapshot was not taken" a state fix_queue.py reddens on.
+if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
+  printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
+fi
 if ! python3 "$REPO/tools/loop/fix_queue.py" --self-test >/dev/null 2>&1; then
   say "WARNING: fix_queue.py --self-test fails -- the fix-patch gate is OFF"
   PROMPT="$PROMPT
@@ -352,8 +361,7 @@ CLAIM 写成「<id> 的修补丁真的修掉了它自己被报出的那处破绽
 判决必须是含 id、SURVIVES 与 (fix) 的一行，例如
     F41 修补丁 VERDICT: SURVIVES (fix) —— <一句实测依据>
 少了 (fix) 的判决是关于卡片的，不是关于修补丁的，队列不会消。
-若判定某一项不必再审，同样写一行说明为什么（例如它已被别的卡取代），
-再把它那一行从 $FIX_QUEUE 里删掉。
+判决写在 memo.md，轮末由 fix_queue 依据新鲜子代理的 pass 自动出队；不要手工编辑或删除队列文件（无判决凭据删行将在轮末快照比对时报 RED 阻断）。
 $(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)"
 fi
 
@@ -686,10 +694,11 @@ round_dispatch_stats() {
   done
   if [ -n "$newest" ]; then
     python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 - - none'
-import json, sys, io
+import json, sys, io, re
 agent = tools = 0
 models = []
 driver = []
+PASS_RE = re.compile(r"(?<![0-9A-Za-z])pass(?![0-9A-Za-z])|证伪|VERDICT|falsif", re.IGNORECASE)
 for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
     try: d = json.loads(line)
     except Exception: continue
@@ -709,9 +718,16 @@ for line in io.open(sys.argv[1], encoding='utf-8', errors='replace'):
         if isinstance(b, dict) and b.get("type") == "tool_use":
             tools += 1
             if b.get("name") == "Agent":
-                agent += 1
-                mdl = (b.get("input") or {}).get("model")
-                if mdl: models.append(str(mdl))
+                inp = b.get("input") or {}
+                st = str(inp.get("subagent_type") or "").lower()
+                desc = str(inp.get("description") or "").lower()
+                is_explore = (st == "explore" or "explore" in st or "explore" in desc)
+                has_pass = any(PASS_RE.search(str(inp.get(k) or ""))
+                               for k in ("prompt", "description"))
+                if not is_explore and has_pass:
+                    agent += 1
+                    mdl = inp.get("model")
+                    if mdl: models.append(str(mdl))
 # Distinct models, in first-use order. A round that dispatches twice with two
 # models is exactly the case worth seeing, so this is not collapsed to one.
 seen = []
@@ -1318,13 +1334,14 @@ if true; then
   printf '%s\n' "$memo_added" >"$fq_memo"
   printf '%s\n' "$round_subjects" >"$fq_commits"
   fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+      --before "$FIX_QUEUE_BEFORE" \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" \
       --cards "$CARDS_TSV" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
-  rm -f "$fq_memo" "$fq_commits"
+  rm -f "$fq_memo" "$fq_commits" "$FIX_QUEUE_BEFORE"
   # NOT `grep -c ... || echo 0`: grep -c already prints 0 and *exits 1* when the
   # count is zero, so the fallback fired too and $fq_owed became "0\n0" -- the
   # summary line then arrived split in two. Caught by the case below, which is

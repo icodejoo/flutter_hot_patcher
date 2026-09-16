@@ -62,6 +62,10 @@ import re
 import sys
 import tempfile
 
+# Written into the before-round snapshot by run_round.sh when the copy fails, so
+# that "the snapshot was not taken" is distinguishable from "nothing was owed".
+SNAPSHOT_FAILED = "#SNAPSHOT-FAILED"
+
 # A card id: an uppercase letter, digits, an optional lowercase suffix (F34b).
 # The lookarounds are the whole point of writing this in Python rather than in
 # grep: without them "ARM64" yields the id "M64", and BSD and GNU grep disagree
@@ -261,7 +265,7 @@ def write_queue(path, rows):
 
 
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
-           allow_enqueue=True):
+           allow_enqueue=True, before_path=None):
     neg, fix, pos_same, pos_drain = scan(memo_lines, subjects, agents, known)
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
@@ -270,14 +274,66 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
     actions = []
     kept = []
-    for cid, seen, reason in rows:
-        if cid in pos:
-            actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
-        else:
-            kept.append((cid, seen, reason))
-            actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
 
-    for cid in sorted((neg & fix) - reviewed - queued) if allow_enqueue else []:
+    # If a before-round snapshot was provided, compare against it.
+    # Entries present at round start that were removed mid-round without
+    # recording a genuine verdict must go RED and be restored to the queue.
+    # FAIL-CLOSED, tightened 2026-09-16 during verification. The first version
+    # read `read_queue(before_path) if before_path else rows`, which made the
+    # whole comparison an identity whenever the snapshot was absent: probed with
+    # --before pointing at a missing file, and with --before omitted, a vanished
+    # entry with no verdict produced SILENCE and exit 0. That is the defect this
+    # card exists to close, reintroduced one level up on its own premise.
+    # run_round.sh's `cp ... || : >"$FIX_QUEUE_BEFORE"` fallback made it worse by
+    # fabricating an EMPTY snapshot, which reads as "nothing was owed at round
+    # start" and hides the disappearance too. So: a snapshot that was ASKED FOR
+    # and cannot be read is RED, and a snapshot that says it failed is RED.
+    if before_path:
+        try:
+            raw = io.open(before_path, encoding="utf-8", errors="replace").read()
+        except OSError as e:
+            actions.append("RED fix-queue snapshot unreadable (%s) -- cannot tell "
+                           "whether an entry disappeared; treating every standing "
+                           "entry as still owed" % e)
+            return actions, rows
+        if SNAPSHOT_FAILED in raw:
+            actions.append("RED fix-queue snapshot was not taken at round start -- "
+                           "cannot tell whether an entry disappeared; treating every "
+                           "standing entry as still owed")
+            return actions, rows
+        before_rows = read_queue(before_path)
+    else:
+        before_rows = rows
+    seen_ids = set()
+
+    for cid, seen, reason in before_rows:
+        seen_ids.add(cid)
+        if cid in queued:
+            if cid in pos:
+                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
+            else:
+                kept.append((cid, seen, reason))
+                actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
+        else:
+            # The entry was in the queue at round start, but disappeared from
+            # the queue file before round end.
+            if cid in pos:
+                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
+            else:
+                kept.append((cid, seen, reason))
+                actions.append("RED %s (disappeared with no recorded verdict)" % cid)
+
+    # Any entry in rows that was not in before_rows
+    for cid, seen, reason in rows:
+        if cid not in seen_ids:
+            seen_ids.add(cid)
+            if cid in pos:
+                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
+            else:
+                kept.append((cid, seen, reason))
+                actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
+
+    for cid in sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []:
         shas = " ".join(
             sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
         )
@@ -304,9 +360,9 @@ def self_test():
     cases = []
 
     def case(name, queue_in, memo, subjects, agents, expect_actions, expect_queue,
-             known=None, allow_enqueue=True):
+             known=None, allow_enqueue=True, before_in=None):
         cases.append((name, queue_in, memo, subjects, agents, expect_actions,
-                      expect_queue, known, allow_enqueue))
+                      expect_queue, known, allow_enqueue, before_in))
 
     # 1. The gap this file exists for: a pass came back red, the round fixed it,
     #    and no pass ran on the fix.
@@ -606,20 +662,60 @@ def self_test():
     #     that decides. Removing the fail-closed branch in main() left all
     #     fifteen cases green. This one runs the real CLI, so the branch that
     #     computes allow_enqueue is the thing under test.
-    cli_cases = [(
-        "CLI: an unreadable card table refuses to enqueue, out loud",
-        ["F38 pass 1 → PARTIAL"], ["1f2daaa fhp F38: fix it"], 1,
-        "/nonexistent/cards.tsv", [], "WARNING",
-    )]
+    #
+    # 15. F82 before/after snapshot: queue line removed mid-round with no verdict
+    #     recorded must go RED and name the entry.
+    case(
+        "red: queue line removed mid-round with no verdict",
+        [],
+        [],
+        [],
+        0,
+        ["RED F41"],
+        ["F41"],
+        before_in=[("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")],
+    )
+    # 16. Negative control for 15: queue line removed mid-round but genuine
+    #     fix pass recorded -> drains quietly with a drain line.
+    case(
+        "drain: queue line removed mid-round but genuine fix pass recorded",
+        [],
+        ["🟢 F41 修补丁 VERDICT: SURVIVES (fix)"],
+        [],
+        1,
+        ["drain F41"],
+        [],
+        before_in=[("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")],
+    )
+
+    cli_cases = [
+        (
+            "CLI: an unreadable card table refuses to enqueue, out loud",
+            [], ["F38 pass 1 → PARTIAL"], ["1f2daaa fhp F38: fix it"], 1,
+            "/nonexistent/cards.tsv", [], "WARNING", None,
+        ),
+        (
+            "CLI: entry disappeared with no verdict goes RED and names the entry",
+            [], [], [], 0,
+            "", ["F41"], "RED F41",
+            [("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")],
+        ),
+    ]
 
     failed = 0
     tmpdir = tempfile.mkdtemp(prefix="fix_queue_test.")
-    for (name, queue_in, memo, subjects, agents, want_actions, want_queue, known,
-         allow_enq) in cases:
+    for item in cases:
+        (name, queue_in, memo, subjects, agents, want_actions, want_queue, known,
+         allow_enq) = item[:9]
+        before_in = item[9] if len(item) > 9 else None
         path = os.path.join(tmpdir, "queue")
         write_queue(path, queue_in)
+        before_path = None
+        if before_in is not None:
+            before_path = os.path.join(tmpdir, "queue_before")
+            write_queue(before_path, before_in)
         actions, kept = update(path, memo, subjects, agents, "2026-09-09 17:00",
-                               known, allow_enq)
+                               known, allow_enq, before_path=before_path)
         got_actions = sorted(a.split(" (")[0].split(" --")[0].strip() for a in actions)
         got_queue = [r[0] for r in read_queue(path)]
         ok = got_actions == sorted(want_actions) and got_queue == want_queue
@@ -634,18 +730,24 @@ def self_test():
     # behind a helper that is called correctly by the test and not by anything
     # else.
     import subprocess
-    for name, memo, subjects, agents, cards, want_queue, want_out in cli_cases:
+    for name, queue_in, memo, subjects, agents, cards, want_queue, want_out, before_in in cli_cases:
         d = tempfile.mkdtemp(prefix="fix_queue_cli.")
         qp = os.path.join(d, "queue")
+        write_queue(qp, queue_in or [])
         mp = os.path.join(d, "memo")
         cp = os.path.join(d, "commits")
         io.open(mp, "w", encoding="utf-8").write("\n".join(memo) + "\n")
         io.open(cp, "w", encoding="utf-8").write("\n".join(subjects) + "\n")
-        r = subprocess.run([sys.executable, os.path.abspath(__file__),
-                            "--queue", qp, "--memo-added", mp, "--commits", cp,
-                            "--agents", str(agents), "--cards", cards,
-                            "--now", "2026-09-09 17:00"],
-                           capture_output=True, text=True)
+        cmd = [sys.executable, os.path.abspath(__file__),
+               "--queue", qp, "--memo-added", mp, "--commits", cp,
+               "--agents", str(agents), "--now", "2026-09-09 17:00"]
+        if cards:
+            cmd.extend(["--cards", cards])
+        if before_in is not None:
+            bp = os.path.join(d, "before")
+            write_queue(bp, before_in)
+            cmd.extend(["--before", bp])
+        r = subprocess.run(cmd, capture_output=True, text=True)
         got_queue = [x[0] for x in read_queue(qp)]
         ok = got_queue == want_queue and want_out in r.stdout
         print("%-4s %s" % ("ok" if ok else "FAIL", name))
@@ -662,6 +764,8 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--queue")
+    ap.add_argument("--before", default="",
+                    help="queue snapshot taken at round start")
     ap.add_argument("--memo-added")
     ap.add_argument("--commits")
     ap.add_argument("--agents", type=int, default=0)
@@ -703,7 +807,8 @@ def main():
               % args.cards)
         allow_enqueue = False
     actions, _ = update(args.queue, lines(args.memo_added), lines(args.commits),
-                        args.agents, now, known, allow_enqueue)
+                        args.agents, now, known, allow_enqueue,
+                        before_path=args.before or None)
     for a in actions:
         print(a)
     return 0
