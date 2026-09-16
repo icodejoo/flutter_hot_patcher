@@ -6273,3 +6273,41 @@ F68/F69 是纯散文方向撤回、无代码可扰动的负控制——审查时
 `falsify.md` 攻击⑥的「纯散文修补丁没有可扰动对象」先例，F67 那次已经这样判过）；
 其后是 `built` 队列 F49/F52/F53/F54/F65/F67/F70/F75/F80。规则 0：SDK 本体优先于
 循环机械。
+
+---
+
+## 2026-09-16 交互轮次：清 F68/F69/F78 三条修补丁待审队列
+
+派了两个新鲜 Sonnet 子代理并发跑 `falsify.md`（研究树只读，未并发写同一 index）。
+
+**F78 修补丁 VERDICT: SURVIVES (fix)** —— 独立子代理对 `09bc25c`/`239825d`（第二次
+独立 PARTIAL 复核）逐条重跑：live 90s 超时验证 `SKIP_STALENESS_GUARD=1
+./verify_all.sh --self-test` 确实仍卡住（复现缺陷 iv，且卡住点比先前报告的更早），
+`grep -n` 确认 `dd_runtime_check.sh:172` 的 `EXPECTED_FAILURES` 硬编码 `got 0` 而
+`bad()` 用真实 `$sites`（复现缺陷 i 的机制而非仅复述），`git log --oneline --
+dd_runtime_check.sh` 确认唯一落地的改动是 `b5724de`、`/tmp/f78fix` 那次结构化改法
+确实未落地，措辞未把两者混为一谈。判据可证伪（真修好的树会在这条命令上表现不同）。
+F78 保持 `built`，未关闭。
+
+**F69/F68 修补丁 VERDICT: SURVIVES (fix)**（先 PARTIAL、当场修复后重跑转绿）——
+独立子代理对 `eef505e` 的核心力学复核：独立反汇编确认 `0x100196960` /
+`0x100197470` / `0x100197488` 确是同一个 `push_back<Entry>` 符号但 kind 标签不同
+（`#0x7`+原始字 vs `#0x2`+池索引），budget-init 字节位于 `0x100197434` 且内容一致，
+CFG 可达性工具重跑得到同样的 840→195/1006 与 NC1/NC1b/NC2/NC3 全过 —— 核心论证
+在真实二进制上今天仍可复现。但抓出两处非承重的数字误差：①「20 other sinks」实数
+应为 26（对 `push_back` 调用在 0x100196694–0x100197648 范围内计数）；②
+`str wzr,[sp,#0x60]` 被误记在 `0x100196990`（该地址实为 `subs w8,w19,#0x1`），
+真实地址是 `0x10019699c`。已当场修（`31c81ca`，仅改 `cards.tsv` 两处文本），
+随后派一个新鲜 Haiku 子代理做纯机械核对：`grep -c "26 other sinks"`=1、
+`grep -c "20 other sinks"`=0、新地址字符串=1、旧地址字符串=0 —— 修补丁生效。
+（该轮 Haiku 环境没有已构建的 `analyze_snapshot_arm64`，未能对二进制字节做第二次
+独立复核；但真实字节复核已由前一个 Sonnet 子代理完成，Haiku 只验证文本替换本身。）
+F69 的 UNDETERMINED / F68 的 direction-undetermined 结论本身不受影响。
+
+改动 = `fhp-research` 树 `spikes/shorebird_linkinfo_oracle/cards.tsv`
+（提交 `31c81ca`，仅 1 处 2 行文本修正）+ 本文件。SDK 树、引擎树、状态树代码本轮未动。
+`.loop/UNREVIEWED_FIX` 的 F68/F69/F78 三行现已各自带判决，按契约由队列机制在下一次
+`run_round.sh` 轮末出队（本轮是交互式会话，非 ralph.sh 自动轮次，未手工改队列文件）。
+
+**下一轮**：`built` 队列 F49/F52/F53/F54/F65/F67/F70/F75/F80 待各自的首次证伪 pass；
+F55/F62/F63 是规则 0 正面工作，优先于循环机械卡片。
