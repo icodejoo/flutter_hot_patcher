@@ -56,6 +56,7 @@ are printed one per line; exit is 0 unless --self-test fails a case.
 """
 
 import argparse
+import hashlib
 import io
 import os
 import re
@@ -163,6 +164,27 @@ def strip_meta(line):
     return TOKEN_LIST.sub("", line)
 
 
+# A structured positive verdict:
+# - Explicit VERDICT keyword: `VERDICT: SURVIVES`
+# - 判决: `证伪 pass 判决：F41 SURVIVES`
+# - Pass result: `pass 2：SURVIVES`, `证伪 pass 2：SURVIVES`, `pass 5 → VERDICT: SURVIVES`
+# - Commit subject pass: `pass 5 SURVIVES`
+# - Two-pass resolution: `FALSIFIED then SURVIVES`
+#
+# A verdict must be recognised by structure, not by which sentiment word happens
+# to sit furthest right. "F41 修补丁 pending pass, not SURVIVES" must not drain.
+POS_VERDICT = re.compile(
+    r"(?:"
+    r"\bVERDICT\s*[:：]\s*(?:\*{1,2}|_{1,2})?SURVIVES\b"
+    r"|判决\s*[:：]\s*(?:(?:\*{1,2}|_{1,2})?[A-Z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s+)?(?:\*{1,2}|_{1,2})?SURVIVES\b"
+    r"|(?<![0-9A-Za-z])(?:证伪\s+)?pass\s*\d+\s*(?:[:：]|->|→)\s*(?:(?:\*{1,2}|_{1,2})?VERDICT\s*[:：]\s*)?(?:\*{1,2}|_{1,2})?SURVIVES\b"
+    r"|证伪(?:\s+pass)?(?:\s*\d+)?\s*[:：]\s*(?:\*{1,2}|_{1,2})?SURVIVES\b"
+    r"|(?<![0-9A-Za-z])pass\s+\d+\s+SURVIVES\b"
+    r"|\bFALSIFIED\s+then\s+SURVIVES\b"
+    r")"
+)
+
+
 def polarity(line):
     """Which verdict a line records: +1 SURVIVES, -1 red, 0 neither.
 
@@ -171,16 +193,12 @@ def polarity(line):
         "F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"
         "F49 pass 1 -> 名义 SURVIVES，实判 PARTIAL"   (nominally, actually)
 
-    Taking the union made both positive, so the second one -- a line whose whole
-    content is that a SURVIVES was rejected -- suppressed the enqueue its own fix
-    was owed. Found by replaying the gate over real round boundaries, in this
-    project's own record of reviewing this very card.
-
-    The later token wins, because that is how both sentences are written: the
-    verdict is what the line ends on.
+    A verdict must be recognised by structure, not by which sentiment word
+    happens to sit furthest right. Taking the rightmost token position allowed
+    "F41 修补丁 pending pass, not SURVIVES" to drain quietly.
     """
-    last_neg = max((m.start() for m in NEG_RE.finditer(line)), default=-1)
-    last_pos = line.rfind(POS)
+    last_neg = max((m.end() for m in NEG_RE.finditer(line)), default=-1)
+    last_pos = max((m.end() for m in POS_VERDICT.finditer(line)), default=-1)
     if last_pos < 0 and last_neg < 0:
         return 0
     return 1 if last_pos > last_neg else -1
@@ -270,7 +288,7 @@ def write_queue(path, rows):
 
 
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
-           allow_enqueue=True, before_path=None):
+           allow_enqueue=True, before_path=None, before_sha=None):
     neg, fix, pos_same, pos_drain = scan(memo_lines, subjects, agents, known)
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
@@ -310,6 +328,34 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                            "are unrecoverable; the round is NOT settled" % e)
             write_queue(queue_path, rows + [(UNKNOWN_ID, now, UNKNOWN_REASON % e)])
             return actions, rows
+        # FAIL-CLOSED, tightened 2026-09-16 during verification. The delivered
+        # patch wrote `if before_sha:`, so a missing checksum silently disabled
+        # tamper detection -- and run_round.sh reaches that state on its own,
+        # because it computes the sha with `$(python3 ... || echo "")` and then
+        # passes the flag only via `${VAR:+--before-sha ...}`. Probed: tamper the
+        # snapshot and omit the sha, and the tamper is not reported as a tamper;
+        # it is read as "F99 disappeared" from the forged contents, while F41's
+        # real disappearance becomes invisible. Third instance of the same shape
+        # in this card -- the new gate fails open on its own premise -- so the
+        # missing checksum is itself a refusal to settle the round.
+        if not before_sha:
+            actions.append("RED fix-queue snapshot checksum missing -- tamper "
+                           "detection is off, so the pre-round contents cannot be "
+                           "trusted; the round is NOT settled")
+            write_queue(queue_path, rows + [(UNKNOWN_ID, now,
+                        "snapshot checksum unavailable; tamper detection off")])
+            return actions, rows
+        if before_sha:
+            import hashlib
+            with io.open(before_path, "rb") as fh:
+                actual_sha = hashlib.sha256(fh.read()).hexdigest()
+            if actual_sha != before_sha:
+                actions.append("RED fix-queue snapshot tampered (checksum mismatch) -- "
+                               "cannot tell whether an entry disappeared, and the pre-round "
+                               "contents are unverifiable; the round is NOT settled")
+                write_queue(queue_path, rows + [(UNKNOWN_ID, now,
+                            "snapshot tampered mid-round; queue state unverifiable")])
+                return actions, rows
         if SNAPSHOT_FAILED in raw:
             actions.append("RED fix-queue snapshot was not taken at round start -- "
                            "cannot tell whether an entry disappeared; the round is "
@@ -727,11 +773,19 @@ def self_test():
         path = os.path.join(tmpdir, "queue")
         write_queue(path, queue_in)
         before_path = None
+        before_sha = None
         if before_in is not None:
             before_path = os.path.join(tmpdir, "queue_before")
             write_queue(before_path, before_in)
+            # Hash it here for the same reason run_round.sh hashes it at round
+            # start: a snapshot with no checksum is now a refusal to settle, so a
+            # self-test that omitted the sha would be testing a path production
+            # never takes. Three cases broke this way when the refusal was added.
+            with io.open(before_path, "rb") as fh:
+                before_sha = hashlib.sha256(fh.read()).hexdigest()
         actions, kept = update(path, memo, subjects, agents, "2026-09-09 17:00",
-                               known, allow_enq, before_path=before_path)
+                               known, allow_enq, before_path=before_path,
+                               before_sha=before_sha)
         got_actions = sorted(a.split(" (")[0].split(" --")[0].strip() for a in actions)
         got_queue = [r[0] for r in read_queue(path)]
         ok = got_actions == sorted(want_actions) and got_queue == want_queue
@@ -762,7 +816,13 @@ def self_test():
         if before_in is not None:
             bp = os.path.join(d, "before")
             write_queue(bp, before_in)
-            cmd.extend(["--before", bp])
+            # Supply the checksum too, for the same reason the in-process cases
+            # do: a snapshot with no sha is now a refusal to settle, so a CLI
+            # case that omitted it would exercise a path run_round.sh never
+            # takes and would report F-- instead of the entry it is asserting on.
+            with io.open(bp, "rb") as fh:
+                bp_sha = hashlib.sha256(fh.read()).hexdigest()
+            cmd.extend(["--before", bp, "--before-sha", bp_sha])
         r = subprocess.run(cmd, capture_output=True, text=True)
         got_queue = [x[0] for x in read_queue(qp)]
         ok = got_queue == want_queue and want_out in r.stdout
@@ -782,6 +842,8 @@ def main():
     ap.add_argument("--queue")
     ap.add_argument("--before", default="",
                     help="queue snapshot taken at round start")
+    ap.add_argument("--before-sha", default="",
+                    help="expected sha256 checksum of before-round snapshot")
     ap.add_argument("--memo-added")
     ap.add_argument("--commits")
     ap.add_argument("--agents", type=int, default=0)
@@ -824,7 +886,8 @@ def main():
         allow_enqueue = False
     actions, _ = update(args.queue, lines(args.memo_added), lines(args.commits),
                         args.agents, now, known, allow_enqueue,
-                        before_path=args.before or None)
+                        before_path=args.before or None,
+                        before_sha=args.before_sha or None)
     for a in actions:
         print(a)
     return 0

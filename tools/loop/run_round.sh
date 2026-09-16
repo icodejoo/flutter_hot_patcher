@@ -344,6 +344,7 @@ FIX_QUEUE_BEFORE=$STATE/UNREVIEWED_FIX.before
 if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
 fi
+FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
 if ! python3 "$REPO/tools/loop/fix_queue.py" --self-test >/dev/null 2>&1; then
   say "WARNING: fix_queue.py --self-test fails -- the fix-patch gate is OFF"
   PROMPT="$PROMPT
@@ -1335,6 +1336,7 @@ if true; then
   printf '%s\n' "$round_subjects" >"$fq_commits"
   fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
       --before "$FIX_QUEUE_BEFORE" \
+      ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" \
       --cards "$CARDS_TSV" 2>&1)
   fq_rc=$?
