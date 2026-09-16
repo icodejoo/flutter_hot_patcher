@@ -4421,7 +4421,19 @@ OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 
 
 ---
 
-- [ ] **F70：`nc4` 的闸门对它要守的那个缺陷在两个方向上都无反应；`nc5` 用总数冒充恒等**
+- [x] **F70：`nc4` 的闸门对它要守的那个缺陷在两个方向上都无反应；`nc5` 用总数冒充恒等**（`closed`，2026-09-16 证伪 pass 判 SURVIVES）
+      🟢 **新鲜代理证伪 pass 实测(a)(b)双双 SURVIVES**（沙箱在 `/tmp`，未提交、真实树逐字节未动）：
+      (a) `missing` 闸门两个方向都有反应 —— baseline `rc=0`；`fill`（missing 2→0，**「修好」方向**）`rc=16`；
+          `del`（2→3）`rc=16`；而旧的**只数个数**的 pin 读成绿的那两例 ——
+          `del_heal`（2→2、构成不同）与 `sg_del_heal`（44→44）—— **old rc=0 → new rc=16/32**。
+          每次红都恰好一条 `GATE RED` 行，且位 1/2/4/8 实测全灭（`extra 0`、`NOT-ORDERED-EQUAL 0`、`UNPARTITIONED 0`）
+          ⇒ **红可归因到被审的那个 pin，不是只看退出码。**
+      (b) `nc5`：一个让 `notin=2`、`within2=2` 纹丝不动的扰动，把 `symdiff` 从 0 推到 2，
+          **旧判据仍 PASS、新判据 FAIL**（`rc=2`，还原 `rc=0`）⇒ 「总数冒充恒等」是实测出来的。
+      🟡 **残留（记下来，不修）**：pin 钉的是**池索引**多重集，不是**站点**集合。
+          构造 `tree_siteswap`：治好两个真 offender（prog#1580/#1633）、改从 hello#1120/#1121 各删一个 1332，
+          独立读数与 baseline 逐字相同、**old/new 皆 rc=0**，而 `OFFENDERS` 行已从 1580/1633 变成 1120/1121
+          —— **读数印了、没进闸门**。不修的理由是本卡在 memo 的常驻指令：**不要再把 pin 细一级**。
       （`open`，2026-09-15 立；来自 F68 修补丁证伪 pass 的两处仪器弱点）
       **缺陷①（F60 型，第 34 种假绿）**：`nc4_f68_pool_skip_1332.sh` 的退出码跟着
       `extra` 与「代码逐字节相同分区里的 `NOT-ORDERED-EQUAL`」走，**却不跟着 `missing` 走**。
