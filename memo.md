@@ -506,6 +506,33 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       `NativeEntry::BootstrapNativeCallWrapper` 本体），但上面两条负控制缺口仍留着，不阻塞
       下一步、需要时再补。
 
+      🟢 **`CallBootstrapNative` 本体已反汇编（2026-09-16，新鲜子代理，58 次调用）**：
+      目标是 `dart::compiler::StubCodeCompiler::GenerateCallBootstrapNativeStub`（Shorebird
+      真机 `gen_snapshot_arm64`，thin 出 arm64 slice；`Flutter.framework` 的 dSYM 里此符号已被
+      内联掉，故用 `gen_snapshot_arm64` 做静态反汇编目标）。**结论：是薄 trampoline，不是
+      不同逻辑**——全函数 38 条指令，除一条 `bl` 跳去共享 helper
+      `GenerateCallNativeWithWrapperStub`（`CallNoScopeNative`/`CallAutoScopeNative` 用的
+      同一个 helper）外，其余全是栈保护/帧序言尾声样板；`git log -S` 核对我们自己 SDK
+      从未出现过 `GenerateCallBootstrapNativeStub`，证实是 Shorebird 新增。
+      脚本：研究树 `spikes/shorebird_linkinfo_oracle/evidence_callbootstrapnative_body.sh`，
+      提交 `cc06170`（rc=0，含改符号名触发 `FAIL`/`rc=1` 的负控制）。
+
+      🟢 **证伪 pass VERDICT: SURVIVES（2026-09-16，新鲜 Sonnet 子代理，9 次调用）**：
+      七项攻击全部实测跑过，含独立反汇编字面同名兄弟函数 `GenerateCallNoScopeNativeStub`
+      核对「共享同一 helper」不是子串误配、核对反汇编窗口未越界读到相邻函数、核对
+      helper 本体确实含 `EnterDartFrame`/`LeaveFrame`/`blr` 间接跳转而非 `Simulator` 专属逻辑、
+      核对负控制（改错符号名两种方式）真的分别命中两条不同的失败分支。
+      **该子代理的 `STILL OPEN` 只填了 `n/a`（不是具体测试），** 是本次交付的一处小瑕疵，
+      不阻塞把 (trampoline) 结论当可信前提使用，但记账：下一次审这条结论时，
+      应要求证伪 pass 明确给出「什么测试还能推翻它」而不是 `n/a`。
+
+      **F37 现状**：三个前置问题（`THR+0x908` 是谁 / 何时写 / `CallBootstrapNative` 本体是否
+      trampoline）已全部解出且各自过至少一次证伪 pass。**下一步**：可以正式重开 F37 的落地
+      工作（把 `il_arm64.cc` 那两条硬约束——① Thread 没有缓存 `CallBootstrapNative` 的偏移，
+      ② `NativeCallPattern` 解不出 shape A——纳入设计），但落地本身是一次新的发射改动，
+      需要它自己的判据（`dd_runtime_check.sh` 在全新构建的 `ProductARM64` 上为绿）与负控制，
+      留给下一轮单独派发，不在本轮顺带做。
+
       ✅ **F37 判据全通过（2026-09-09）**：
       ① `measure_dd_emission.sh` `ours native_patched=92`（与 theirs 一致）；
       ② `op_dump_check.sh` `exit=0`（pool slot 改用 kTaggedObject Smi，例外条件 `both_smi_thr` 补入 probe）；
@@ -5714,6 +5741,45 @@ and separately confirm F68 hasn't quietly flipped to `[x]` while still cited as 
 「walk 不同」当作在用机制（而不是"机制已撤回/计数仍在用"这个正确切分），就会把真实成因
 （F68 的 `DecodePoolReference` 解码器 bug）张冠李戴，可能把未来的修复工作重新引回
 已经排除掉的遍历顺序方向。
+
+---
+
+### 轮次 2026-09-16（续三）：反汇编 `CallBootstrapNative` 本体（F37 第三个前置问题）
+
+心跳：本轮开工前三棵工作树 `git status --porcelain` 均干净（除已知无害的
+`.serena/`、`graphify-out/` 等未跟踪目录）；`.loop/UNREVIEWED_FIX` 为空、无欠账；
+`.loop/RESCUED` 里的两笔 2026-09-09 救援与一笔 fhp-research auto-stash 均为已记账的
+历史存留，非本轮产生，未动它们。
+
+任务 = 接续上一轮「下一轮延续优先级」第 1 项：反汇编 `CallBootstrapNative` 本体，判断它是
+既有 wrapper 的薄 trampoline 还是真正不同逻辑（F37 重新落地前的第三个、也是最后一个前置
+问题）/ 判据 = 见上方 F37 卡片内新增两段「🟢 `CallBootstrapNative` 本体已反汇编」「🟢 证伪
+pass VERDICT: SURVIVES」/ 派发 = 两个新鲜子代理：① 实现（general-purpose，58 次调用，559s，
+默认模型）产出结论与证据脚本；② 证伪（general-purpose，9 次调用，127s，Sonnet）攻击结论。
+
+结论 = **是薄 trampoline**：`GenerateCallBootstrapNativeStub` 全函数 38 条指令，除一条 `bl`
+跳去与 `CallNoScopeNative`/`CallAutoScopeNative` 共用的 `GenerateCallNativeWithWrapperStub`
+外全是栈保护/帧序言样板，无独立的参数编排/simulator 分发/池查找逻辑。证伪 pass **VERDICT:
+SURVIVES**，七项攻击均实测跑过（含独立反汇编字面同名兄弟函数核对「不是子串误配」、核对
+反汇编窗口未越界、核对负控制真的走了两条不同失败分支）。**记账一处小瑕疵**：该证伪 pass 的
+`STILL OPEN` 字段只填了 `n/a`，不是具体可执行的推翻测试——不阻塞本轮把 trampoline 结论
+当可信前提使用，但下次再审这条结论时应指出并要求补上。
+
+改动 = 仅 `memo.md`（F37 卡片新增两段）+ 研究树新增
+`spikes/shorebird_linkinfo_oracle/evidence_callbootstrapnative_body.sh`。
+提交 = 研究树 `cc06170`（rc=0，自带负控制）；状态树本次提交（memo.md）。
+三棵树：SDK 树、引擎树本轮未动（引擎树按契约保持只读）。
+
+**F37 的三个前置问题（`THR+0x908` 是谁 / 何时写 / `CallBootstrapNative` 是否 trampoline）
+至此全部解出，且各自至少过了一次证伪 pass。** F37 卡片本身仍保持 `open`——落地发射改动
+是下一步独立工作，需要它自己的判据（`dd_runtime_check.sh` 在全新 `ProductARM64` 上为绿）
+与负控制，留给下一轮单独派发。
+
+**下一轮**：
+1. F37：正式重开落地（`il_arm64.cc` 两条硬约束 + `dd_runtime_check.sh` 判据），或者
+2. F78（已解除阻塞，可实测三条判据），或
+3. `built` 队列剩 F49/F52/F53/F54/F70/F75 六张仍欠新鲜证伪 pass（F49 排最前，从未过 pass）。
+   规则 0：SDK 本体（F37 落地 / F78）优先于循环机械（F49/F52/F53/F54）。
 
 派发 = 1 个新鲜 Sonnet 子代理（10 次工具调用，约 100s）/ 改动 = 仅 `memo.md`（本节）/
 结果 = `.loop/UNREVIEWED_FIX` 队列条目已清空（未跟踪文件，非受版本控制内容，无需提交）。
