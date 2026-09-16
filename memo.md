@@ -5028,7 +5028,12 @@ Opus 修 24 次 + Opus pass 28 次）/
 **第四、第五处 ⇒ F76**：见下。
 
 - [ ] **F75：`rc==2` 在 `run_script` 里读成 BLOCKED，而 nc4/nc5 用 2 当真缺陷码 —— 真回归读成「没跑」；且 `blocked` 无 pin 使 rc 恒为 1**
-- [ ] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上，且 harness 自己每轮重写 12/112 个 `out_pm/` 输入**
+- [ ] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上**（2026-09-16：`out_pm/` 不确定性那半边已拆给 F81）
+- [ ] **F81：harness 每轮重写自己的 12/112 个 `out_pm/` 输入 —— 被它读作输入的文件由同一次运行写出**（`open`，2026-09-16 立，从 F76 拆出）
+      **为什么拆**：F76 一张卡同时要求①干净重建 `ReleaseARM64`（6.6G）、②不带 `SKIP_STALENESS_GUARD` 全量跑 `verify_all.sh`、③再跑两遍 harness 比 sha256 清单 —— 三件重活压在 `ROUND_TIMEOUT` 3600s 里。按契约闸门 1.5 拆开。
+      **F81 这半边不需要构建任何东西**，可以排进一个完全不碰 SDK 的轮次。
+      **判据**：要么证明那 12 个 `out_pm/` 文件在连续两次 harness 运行间逐字节相同；要么承认 `parity_matrix.sh --reuse` 做不到确定性，那就**停止把它们叫做输入** —— 点名哪些闸门读的是同一次运行自己重写的文件，并给每一个这样的闸门一份 harness 不碰的钉住输入。
+      **负控制**：跑两遍 harness 比 sha256 清单 —— **12 个文件不同是当前的红读数，0 是目标**；⚠️ 在单次运行内部取的清单分辨不出这两者，不算判据。
 
   F76 的两笔实测：① `ninja -n -C ~/dart-3122/sdk/xcodebuild/ReleaseARM64 | grep -c .` = **19**，
   首步就是 `CXX analyze_snapshot_api_impl.o`；`analyze_snapshot` mtime **09-15 00:10:54**，
