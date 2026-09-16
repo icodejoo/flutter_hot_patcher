@@ -5686,3 +5686,36 @@ fix commit(s) 128afff; no pass on the fix」已满足——上面这条判决就
 （本来就是 `- [ ]`，未曾被误标 `[x]`），保持 `built`，等 F68 自己关闭后再回头判 F67 是否可关。
 
 下一轮 built 队列剩 F49/F52/F53/F54/F70/F75，六张仍欠新鲜证伪 pass。
+
+---
+
+**2026-09-16（本轮）**：结账 `.loop/UNREVIEWED_FIX` 里唯一一条——「F67（2026-09-16 09:14）：
+fixed after FALSIFIED verdict; fix commit(s) d58f911; no pass on the fix」。派一个新鲜 Sonnet
+子代理跑 `tools/loop/prompts/falsify.md`，CLAIM 改写成「commit d58f911 给 F67 卡加的撤回说明，
+真的修掉了 09-16 早些时候那次证伪 pass 报出的破绽（机制断言已被自己两条 CORRECTION 撤回，
+但可能仍被后续引用为在用结论）」。
+
+**F67 修补丁 VERDICT: SURVIVES (fix)** —— 七项攻击逐条过：①卡片全文无内部矛盾，新增的撤回
+说明在读者读到下方被撤回的机制原文之前先出现；`fix_queue.py` 的关卡本身只做文本/commit
+subject 模式匹配，不做散文一致性检查，这正是攻击①/⑥要探的弱点，子代理已明确指出。
+②说明里复述的数字（8263→9617 对他们 9619，missing=2 extra=0 ordered_mismatch_fns=2，
+池索引 1332，`fn#1580`/`fn#1633`）与 `cards.tsv` 第 63 行逐字核对一致，无转抄错误。
+③撤回范围卡得准：只撤回「机制」那句话，原始计数原样保留，与 `cards.tsv` 两条
+`CORRECTION 2026-09-15` 的范围一致，没有多撤或少撤。④`grep -rn "F67" *.md` 未发现
+`CLAUDE.md` 等其他文件仍在不带撤回说明的情况下引用「walk 不同」这句话。⑤
+`git merge-base --is-ancestor d58f911 HEAD` 为真，F67/F68 状态与说明所称一致（F68 仍 `open`）。
+⑥这类纯散文修补丁没有可扰动的负控制对象——子代理指出这本身是这类"fix"的结构性弱点，
+不是本次判定的缺陷。⑦确认审的是"修补丁是否修好"而非重复原判决。
+
+**STILL OPEN（原文抄录）**：re-run a scan of the memo.md F67/F68 region on any future edit,
+and separately confirm F68 hasn't quietly flipped to `[x]` while still cited as "open" elsewhere.
+
+**COST OF BEING WRONG**：若这条说明其实误导或位置不当，任何下游卡片若引用 F67 的
+「walk 不同」当作在用机制（而不是"机制已撤回/计数仍在用"这个正确切分），就会把真实成因
+（F68 的 `DecodePoolReference` 解码器 bug）张冠李戴，可能把未来的修复工作重新引回
+已经排除掉的遍历顺序方向。
+
+派发 = 1 个新鲜 Sonnet 子代理（10 次工具调用，约 100s）/ 改动 = 仅 `memo.md`（本节）/
+结果 = `.loop/UNREVIEWED_FIX` 队列条目已清空（未跟踪文件，非受版本控制内容，无需提交）。
+
+`built` 队列现状：F49/F52/F53/F54/F70/F75 六张仍欠新鲜证伪 pass（与上条一致，未变）。
