@@ -2623,6 +2623,17 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       （`grep -rn fingerprint` 在 `runner.py`/`finisher.py`/tests 上 rc=1、零命中），
       而那一个无法被反驳的答案驱动**三个**消费方。
 
+- [ ] **F84：被审计的生成器自己挑选「审计哪些格」**（`open`，2026-09-16 由 F65 第三次证伪 pass 拆出）
+      `parity_matrix.sh:937-938` 是 `: > $GAP_EVIDENCE; ./gap_evidence.sh > $GAP_EVIDENCE`，
+      而它同时写 `parity_matrix.tsv` 的第 5 列 ⇒ **direction B 审的那组格子，由被审的生成器决定**。
+      与第十种仪器缺陷同科（分子分母同源），但高一层：**这里自选的是「格子集合」而不是计数**。
+      残差测量本身仍然独立；不独立的是**哪些格子会被测**。
+      🔑 承重的那条控制是**它能不能发现「少了一格」**，不是「有一格错了」：
+      从生成的集合里删掉一行（或让 `gap_evidence.sh` 静默跳过一格），
+      `gap_evidence_check.sh` 必须非零退出并点名那一格。
+      今天生成器漏掉的格子就是审计根本不会去找的格子 ⇒ **这个扰动是不可见的**。
+      修前先跑一次确认它是绿的，修后再跑确认它变红。第二条控制：**多出一格伪造的也必须被拒**，
+      否则这个检查只是个子集测试。F65 那次 pass 正确地拒绝把它吸收进 F65（F65 的判据讲的是环境提供的被审对象）。
 - [ ] **F83：`outstanding()` 在 `git` 失败时报「零笔未结」，且救援笔记按位置引用 stash**（`open`，2026-09-16 由 F53 的证伪 pass 拆出）
       代码在 **`/Users/Cruz/Documents/loop`**（第四棵树，`ralph.sh` 看不见）。
       🔴 **(1) fail-open**：`finisher.py:97-100` 是 `rc, out, _ = _git(["stash","list"], path)` 然后
