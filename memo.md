@@ -2603,6 +2603,58 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       —— **时序依赖的控制不算控制**，要把 ref 名钉成常量才能精确复现。
 
 - [ ] **F53：通用版自己重新推导「有没有做事」，而权威源就在手边**（`open`，2026-09-10 立）
+      🔴 **2026-09-16 证伪 pass 判 PARTIAL —— 本卡不得关闭，F54 也不许靠它。**
+      审的代码其实在 **`/Users/Cruz/Documents/loop` @ `9939bf0`**，那是 **`ralph.sh` 看不见的第四棵树**，
+      且有三个未提交文件。**卡片引用的是旧代码**：它写 `598a651,316ced3,755db13,7d2a105,24416f7`，
+      而那棵树之后还有 `8889071 · d403cdd · 64cc88e · 9939bf0` 四个提交 ——
+      `9939bf0` 的标题是「Fix what the pass found: **64cc88e could stash an operator's work**」
+      ⇒ **最新那批修复自己也没被审过。**
+      🟢 判据**能**失败：baseline `6 ran / 390 checks / 0 failed`；把两个谓词退回 `bool(summary['tools'])`
+      ⇒ `rc=1`、`202 checks, 42 failure(s)`，且拆开的控制把每次红归到各自点名的检查。
+      🔴 **半 (a) 两个真缺陷 → 已拆成 F83**（`outstanding()` fail-open；`write_handoff` 按位置引用）。
+      🔴 **半 (b) 两个方向都错**：`git commit --allow-empty` 判为 productive，只碰 `.loop/` 的提交也是；
+      而 `~/Documents/loop` 里 F52/F53/F54 的修复工作**判为 idle**（落在三条硬编码路径之外），
+      `config.toml:103` 那第四棵树同理，未提交的 `memo.md` 行同理。**连续三次 idle 会自动置 PAUSE。**
+      ⚠️ 最难看的：docstring 自己引为动机的那一轮（2026-09-10 10:42，`0 subagent(s), 107 tool call(s)`、
+      三条自写判决）在窗口内提交了 8 次，新谓词回放仍是 **PROGRESS** ——
+      **这个修复没能重新分类它自己的动机案例。**
+      ⚠️ 不是同源恒等式（`did_work` 来自 `progress_command`，handoff 来自 `finisher.py`，确实不同来源），
+      但**没有任何东西拿它去和 `tools_observed` / `dispatch_stats.tsv` 交叉核对**
+      （`grep -rn fingerprint` 在 `runner.py`/`finisher.py`/tests 上 rc=1、零命中），
+      而那一个无法被反驳的答案驱动**三个**消费方。
+
+- [ ] **F83：`outstanding()` 在 `git` 失败时报「零笔未结」，且救援笔记按位置引用 stash**（`open`，2026-09-16 由 F53 的证伪 pass 拆出）
+      代码在 **`/Users/Cruz/Documents/loop`**（第四棵树，`ralph.sh` 看不见）。
+      🔴 **(1) fail-open**：`finisher.py:97-100` 是 `rc, out, _ = _git(["stash","list"], path)` 然后
+      `if rc != 0: return 0` ⇒ **「我判断不了」和「没有债」共用同一个返回值 `0`**。
+      实测：坏 gitlink → `git rc=128` → `finisher --outstanding` 打 `{"<path>": 0}` 且 `rc=0`；
+      `safe.directory` 与 dubious-ownership 也走 128。于是 `runner.rescue_outstanding()`（`runner.py:844`，
+      消费于 `:1132`）**永远到不了「保留笔记」那个分支,笔记被删而未恢复的工作还躺在 stash 里**。
+      今天只有进程级失败才 fail-closed（路径不存在 → 抛异常 → rc=1 → 笔记保留）。
+      ⚠️ **那些救援 stash 是被掐断的轮次留下的未提交工作的唯一安全网,而 store 是两树共用的。**
+      🔴 **(2) 按位置引用**：`write_handoff` 给每一条救援都写死 `stash@{0}` 和裸 `git stash pop`；
+      共用 store 下两条救援会都被标成 `{0}`，而其中一条实际在 `{1}`。
+      **本仓库的 `.loop/RESCUED` 正因此偏过一位**（见下），2026-09-16 已按 label 订正，
+      **但生成它的代码没修,所以会复发。**
+      **判据**：unknown 必须与 zero 可区分，且每个调用方都要把 unknown 当作「假定有债、保留笔记」；
+      救援必须**按 label 引用**，索引在读取时反查或干脆不写。
+      **负控制**：承重的那条是**补丁前必须失败、补丁后必须通过** —— 让 `git stash list` 非零退出
+      （坏 gitlink 最省），要求笔记**被保留**。其二：真正空的 stash 列表仍报零、仍允许删除
+      —— 若补丁后 unknown 与 zero 行为相同，就什么也没修。其三：共用 store 里两条救援，
+      笔记必须各按 label 点名，不得引用解析到另一条的位置索引。其四：在 `{0}` 插一个移位 stash，
+      要求笔记的指向不变。
+
+📌 **2026-09-16 `.loop/RESCUED` 人工订正记录**（因 `.loop/` 在 `.gitignore` 里，那次修改本身不入库，
+所以在这里留一条可复核的账 —— 这正是 F82 控告的那个性质，不能在修它的时候重犯）：
+原文两条救援的 `show:` 命令写死 `stash@{0}` / `stash@{1}`，实测索引是 **`{1}` / `{2}`**
+（`auto-stash-round-20260915T055745` 落在 `{0}` 把它们整体推后一位）。
+已改成执行时按 label 反查：`stash show -p "$(git stash list | grep -F '<label>' | cut -d: -f1)"`，
+实跑验证解析为 `stash@{1}` 与 `stash@{2}`，与真实列表一致。
+⚠️ **危害口径要写准**：原命令是 `stash show -p`（只读），所以它**误导而不破坏** ——
+但照它看到的是那个 auto-stash 的 diff（只碰 `nc4_f68_pool_skip_1332.sh`），
+据此判断「这条救援是空的」再 drop，**丢掉的就是真的那条**。危害是二阶的，不是一阶的。
+⚠️ **stash 列表实测未变**：三条 `{0} auto-stash-round-20260915T055745` ·
+`{1} loop-rescue …13:00:19 round-50544` · `{2} loop-rescue …11:13:01 round-30703`，没有 pop/drop/新增。
       两处同一个根，都用 `did_work = bool(summary.get("tools"))`：
       ① `runner.py:449-454` ⇒ `self.handoff.unlink(missing_ok=True)`——**F51 的实例，判据比 bash 版更弱**
          （bash 至少问 fingerprint 变没变，它连树有没有动都不问）：一轮只要发生过一次工具调用，
