@@ -1544,6 +1544,17 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 ---
 
 - [ ] **F65：审查脚本与它审的对象共用同一个环境变量开关**（`open`，2026-09-14 立）
+      🔴 **第三处,2026-09-16 实测 —— 在这张表自己的审查者里**:`cards_check.sh:14-16`
+      从环境取 `CARDS` / `CLAIMS` / `MEMO`,所以**那个负责断言两份表一致的脚本,
+      会去审你递给它的任何东西**。实测:
+      `CARDS=<3 行假表> CLAIMS=<只有表头> MEMO=<一个假 checkbox> ./cards_check.sh`
+      打印 `ok: open set agrees (1 cards)` 与 `cards_check: 0 failure(s)`,**rc=0**。
+      ⚠️ **修法不是删掉这个覆盖**:正是它让 check 5 的七条负控制得以成立,
+      而一个无法被喂进扰动输入的检查器,自己也就无法被证伪。
+      正解是**生产路径无条件从 `$HERE` 解析,fixture 输入走一个显式、不可能被误认作真实运行的开关**。
+      顺带在实测中发现的另一件小事(同族,独立):`closed` 集为空时脚本打印
+      `cards_check.sh: line 71: 0 0: expression expected`,却仍然报 ok、**rc=0**
+      —— **一个不会导致失败的报错**。
       **来历**：F64 证伪 pass（Opus，审 `1970d10`）判 SURVIVES 时留下的 `STILL OPEN`，原文在 F64 卡。
       **不是 F64 造成的**，是全屋共用的一个形态：`gap_evidence_check.sh` 读
       `RESIDUAL=${GAP_RESIDUAL:-./gap_residual.sh}`，而 `gap_class()` 读的是**同一个** `GAP_RESIDUAL`；
