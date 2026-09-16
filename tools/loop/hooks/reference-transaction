@@ -127,6 +127,94 @@
 #     see the header's "WHAT THIS IS NOT" for why this hook structurally
 #     cannot do better.
 #
+# SAME-TRANSACTION RENAME, ATTEMPT 1 (F46 falsify pass, 2026-09-16 -- `git
+# branch -m`/-M): the falsify pass's own hypothesis was that a rename is two
+# lines in the SAME transaction -- one deleting the old name (new=all-zeroes),
+# one creating the new name (old=all-zeroes, new=<the delete line's OLD
+# value>) -- and that refusing the delete line the instant it is read, before
+# the create line has been seen, is what produces the false positive.
+#
+# THAT HYPOTHESIS IS EMPIRICALLY FALSE for this host's git (2.53.0, files ref
+# backend), and this project's own rule (`CLAUDE.md` root rule, "断言的保鲜期
+# 规则": verify by running, a reasonable-sounding root cause is not evidence)
+# applies to a bug report as much as to anything else in this repo. Traced
+# 2026-09-16 with a logging stub in place of this hook plus
+# `GIT_TRACE2_EVENT`: `git branch -m master renamed` fires the hook exactly
+# THREE times (aborted, prepared, committed) for the WHOLE command, and EVERY
+# one of those three calls carries exactly ONE line -- deleting
+# refs/heads/master. `refs/heads/renamed` never appears on this hook's stdin
+# at all, in any state, for this command. Polling `refs/heads/*` from inside
+# the hook confirms why: at "prepared" (the only point a refusal is even
+# possible) the new ref does not exist anywhere on disk yet; it is written
+# directly, with no reference-transaction event of its own, only AFTER the
+# hook for the delete has already returned and the delete has committed. So
+# the two-line-same-transaction shape below is real (verified independently
+# with `git update-ref --stdin` combining a delete and a create in one
+# transaction -- that genuinely does produce two lines in one "prepared"
+# call) but it is NOT the shape `git branch -m`/-M produces, so keeping only
+# this check would still refuse the exact repro this fix exists for. See the
+# SECOND, separate mechanism below ("PARENT-PROCESS FALLBACK") that actually
+# closes that repro; this one is kept because it is independently correct for
+# the shape it does cover, not because it fixes the reported bug by itself.
+#
+# THE MATCH RULE, stated precisely because it is also the thing an adversarial
+# round could try to abuse: a `refs/heads/X` deletion (new=zero) is allowed as
+# a rename IFF some OTHER line in the SAME transaction is a `refs/heads/Y`
+# (Y != X) whose NEW value is exactly equal to X's OLD value (X's on-disk oid
+# right before this transaction, i.e. what `git rev-parse --verify refs/heads/X`
+# resolves to). That is deliberately narrow:
+#   - It requires the SAME oid to reappear under a new name, not merely "some
+#     other ref changed in this transaction" -- a round cannot smuggle a real
+#     `update-ref -d refs/heads/victim` past this by pairing it with an
+#     unrelated create of `refs/heads/decoy` at a DIFFERENT oid; the oid
+#     equality check fails and the deletion is still refused. Tested below
+#     (verify-reference-transaction.sh's "adversarial" section) by deleting a
+#     ref while creating a same-transaction decoy at an unrelated commit.
+#   - It is scoped to refs/heads/* on BOTH sides on purpose, not to
+#     refs/tags/* or refs/wip/*. Renaming a branch to a name that collides
+#     with an existing tag or wip ref does not take this path at all:
+#     `git branch -m master v1` where `v1` is already a tag does not delete
+#     refs/tags/v1, it creates/updates refs/heads/v1 alongside it (branches
+#     and tags are different ref namespaces; git never conflates them) --
+#     confirmed empirically below.
+#   - WHAT THIS IS NOT: `git branch -c old new` (copy, not move) never deletes
+#     `old` in the first place -- there is no zero-new line for it to pair
+#     with, so it never enters this code path at all (empirically confirmed,
+#     2026-09-16 scratch repo: a `branch -c` transaction contains exactly one
+#     refs/heads line, the creation of `new`; `old` does not appear). Nothing
+#     here treats a copy as a rename or vice versa.
+#   - The paired create/update line for Y still goes through its OWN normal
+#     decision below (ancestor check if Y already existed at a different
+#     value) -- this rule only ever changes whether X's DELETION is refused,
+#     never whether Y's own write is allowed.
+#
+# PARENT-PROCESS FALLBACK (the mechanism that actually closes the reported
+# repro): reference-transaction structurally cannot see `refs/heads/Y` being
+# created, because on this git it never happens through a transaction at all.
+# The signal that IS available at "prepared" time: this hook's own PPID is
+# always the `git` process running the exact command performing this
+# transaction -- git invokes hooks directly (no intermediate shell), and this
+# holds whether that `git` was launched from bash, from a python
+# `subprocess.run(["git", ...])`, or anything else, because the hook's parent
+# is never the launcher, it is always git itself (verified 2026-09-16: `ps -p
+# $PPID` during all three aborted/prepared/committed calls of a rename shows
+# the literal command `git branch -m tbX tbY`, stable across the whole
+# transaction). This is not a string the invoker gets to choose the spelling
+# of the way a wrapping shell command can be obfuscated -- it is git's own
+# argv, and there is no channel for a round to make git's own C code delete
+# some OTHER ref while its own argv says `branch -m`: the verb is what
+# decides which ref gets deleted. So: for a `refs/heads/X` deletion not
+# already matched by the same-transaction rule above, additionally allow it
+# if the parent process's argv contains `branch` followed later by `-m`,
+# `-M`, or `--move` (git branch's actual rename flags, confirmed via
+# `git branch -h`; there is no separate `--move-force` spelling, `-M` is
+# `--move --force` bundled). Consequence, and it is intentional: an
+# alias-based rename (`git -c alias.rn='branch -m' rn X Y`) is NOT recognised
+# here, because alias expansion happens inside git's C code and `ps` shows
+# the pre-expansion argv (`git rn X Y`) -- that is a false NEGATIVE (still
+# refused, run it yourself), never a false positive, so it is safe to leave
+# open rather than trying to out-guess every alias shape.
+#
 # No override environment variable, on purpose, same reasoning as
 # deny-destructive.sh: an override is the first thing a confused agent would
 # find and set. A human who actually needs one of these operations runs it in
@@ -137,40 +225,127 @@ set -u
 STATE="${1:-}"
 ZERO="0000000000000000000000000000000000000000"
 
+# Captured once, at top level, BEFORE any subshell -- $PPID inside a subshell
+# reflects the subshell's own parent (the running script itself, since a
+# subshell is a fork of it), not the script's parent, so this must be read
+# here and threaded through rather than re-read inside the function below.
+_HOOK_PPID="$PPID"
+
+# See the "PARENT-PROCESS FALLBACK" header comment above for why this exists
+# and what it does and does not catch. Runs in a subshell purely so `set -f`
+# (needed so a branch name containing a glob character like `*` doesn't
+# expand against this process's cwd during word-splitting) doesn't leak into
+# the rest of the script.
+_parent_is_branch_move() {
+  (
+    set -f
+    _pcmd=$(ps -ww -o command= -p "$_HOOK_PPID" 2>/dev/null) || exit 1
+    [ -n "$_pcmd" ] || exit 1
+    _seen_branch=
+    for _tok in $_pcmd; do
+      if [ -n "$_seen_branch" ]; then
+        case "$_tok" in
+          -m|-M|--move) exit 0 ;;
+        esac
+      fi
+      case "$_tok" in
+        branch) _seen_branch=1 ;;
+      esac
+    done
+    exit 1
+  )
+}
+
 if [ "$STATE" != "prepared" ]; then
   cat >/dev/null   # drain stdin for committed/aborted calls, then no-op
   exit 0
 fi
 
-BLOCK=0
-REASON=""
+# Pass 1: buffer every relevant line of the transaction. Must happen before
+# any decision is made -- see the rename comment above for why a single pass
+# cannot tell a rename from a deletion.
+declare -a REFS NEWS
+COUNT=0
 while read -r _OLD_FIELD NEW REF; do
   case "$REF" in
-    refs/heads/*|refs/tags/*|refs/wip/*) NS=strict ;;
-    refs/stash) NS=stash ;;
+    refs/heads/*|refs/tags/*|refs/wip/*|refs/stash) : ;;
     *) continue ;;
   esac
   case "$NEW" in
     ref:*) continue ;;   # symbolic-ref target line, not an oid update
   esac
+  REFS[COUNT]=$REF
+  NEWS[COUNT]=$NEW
+  COUNT=$((COUNT + 1))
+done
+
+BLOCK=0
+REASON=""
+_i=0
+while [ "$_i" -lt "$COUNT" ]; do
+  REF=${REFS[$_i]}
+  NEW=${NEWS[$_i]}
+  case "$REF" in
+    refs/heads/*|refs/tags/*|refs/wip/*) NS=strict ;;
+    refs/stash) NS=stash ;;
+  esac
 
   RESOLVED=$(git rev-parse --verify --quiet "$REF" 2>/dev/null)
   if [ -z "$RESOLVED" ]; then
+    _i=$((_i + 1))
     continue   # ref did not exist before this transaction: creation, allow
   fi
   if [ "$NEW" = "$ZERO" ]; then
+    # Same-transaction rename check -- refs/heads/* only, see header above.
+    if [ "$NS" = "strict" ]; then
+      case "$REF" in
+        refs/heads/*)
+          _renamed=
+          _j=0
+          while [ "$_j" -lt "$COUNT" ]; do
+            if [ "$_j" != "$_i" ]; then
+              OREF=${REFS[$_j]}
+              ONEW=${NEWS[$_j]}
+              case "$OREF" in
+                refs/heads/*)
+                  if [ "$OREF" != "$REF" ] && [ "$ONEW" != "$ZERO" ] && [ "$ONEW" = "$RESOLVED" ]; then
+                    _renamed=1
+                  fi
+                  ;;
+              esac
+            fi
+            _j=$((_j + 1))
+          done
+          if [ -n "$_renamed" ]; then
+            _i=$((_i + 1))
+            continue   # allow: X's old oid reappears as some other refs/heads/Y in this same transaction
+          fi
+          # No same-transaction pair -- the shape this git actually produces
+          # for `branch -m`/-M (see "PARENT-PROCESS FALLBACK" above). Ask the
+          # only other signal that can answer this: was the process running
+          # this exact transaction itself a `branch -m`/-M/--move invocation?
+          if _parent_is_branch_move; then
+            _i=$((_i + 1))
+            continue   # allow: this transaction's own process is a branch rename
+          fi
+          ;;
+      esac
+    fi
     BLOCK=1
     if [ "$NS" = "stash" ]; then
       REASON="deletes refs/stash entirely (was $RESOLVED) -- this is a whole-stash clear or the last remaining entry being dropped"
     else
       REASON="deletes ref $REF (was $RESOLVED)"
     fi
+    _i=$((_i + 1))
     continue
   fi
   if [ "$RESOLVED" = "$NEW" ]; then
+    _i=$((_i + 1))
     continue
   fi
   if [ "$NS" = "stash" ]; then
+    _i=$((_i + 1))
     continue   # non-zero -> non-zero on refs/stash: push/pop/drop, no ancestor
                # relationship required even for legitimate use -- see the
                # header and the "HOW IT DECIDES" refs/stash section for why.
@@ -179,6 +354,7 @@ while read -r _OLD_FIELD NEW REF; do
     BLOCK=1
     REASON="non-fast-forward update of $REF ($RESOLVED -> $NEW): this discards commits reachable only from the old value"
   fi
+  _i=$((_i + 1))
 done
 
 if [ "$BLOCK" = 1 ]; then

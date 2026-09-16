@@ -81,6 +81,42 @@ check allow "commit"                     commit --allow-empty -m d -q
 check allow "checkout existing branch"   checkout master
 check allow "status"                     status --porcelain
 
+echo "must now be allowed (F46 second falsify pass, 2026-09-16 -- git branch"
+echo "-m/-M rename false positive; see reference-transaction's own header,"
+echo "'PARENT-PROCESS FALLBACK', for why the fix is NOT the same-transaction"
+echo "buffering alone -- this git's branch rename never puts the new ref on"
+echo "this hook's stdin at all, so these specifically exercise the parent-"
+echo "process argv check):"
+CUR_BRANCH="$(cd "$SCRATCH" && git branch --show-current)"
+check allow "branch -m $CUR_BRANCH renamed (the exact repro from the falsify pass)" branch -m "$CUR_BRANCH" renamed
+check allow "branch -m renamed $CUR_BRANCH (rename back)"                           branch -m renamed "$CUR_BRANCH"
+check allow "branch -M $CUR_BRANCH renamed (force-rename form, -M)"                 branch -M "$CUR_BRANCH" renamed
+check allow "branch -M renamed $CUR_BRANCH (force-rename form, rename back)"        branch -M renamed "$CUR_BRANCH"
+
+echo "adversarial: a real deletion must NOT be smuggled past the same-"
+echo "transaction rename check by pairing it with an unrelated same-"
+echo "transaction create at a DIFFERENT oid (must still be blocked):"
+(
+  cd "$SCRATCH"
+  VICTIM_OLD="$(git rev-parse refs/heads/other)"
+  DECOY_OID="$(git rev-parse "$CUR_BRANCH")"
+  # Deliberately different oids: DECOY_OID is $CUR_BRANCH's tip, not
+  # refs/heads/other's old value, so the "same oid reappears under a new
+  # name" match must fail and the deletion must still be refused.
+  out="$(printf 'delete refs/heads/other %s\ncreate refs/heads/decoy %s\n' "$VICTIM_OLD" "$DECOY_OID" | python3 -c '
+import subprocess, sys
+r = subprocess.run(["git", "update-ref", "--stdin"], input=sys.stdin.read(), text=True)
+sys.exit(r.returncode)
+' 2>&1)"
+  rc=$?
+  if [ "$rc" != "0" ]; then
+    echo "  ok   block  rc=$rc  smuggled delete of refs/heads/other paired with unrelated refs/heads/decoy create (different oid)"
+  else
+    echo "  FAIL block  rc=$rc  smuggled delete of refs/heads/other paired with unrelated refs/heads/decoy create (different oid) -- SHOULD HAVE BEEN REFUSED"
+    exit 1
+  fi
+) || fail=$((fail+1))
+
 echo "refs/stash: must be blocked vs. must still be allowed (F46 falsify pass, 2026-09-16):"
 (
   cd "$SCRATCH"

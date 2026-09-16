@@ -6513,3 +6513,83 @@ hook 上跑出）：
 全新证伪子代理攻击本节列出的每一条实现，尤其是 (b) 里如实记录的「裸 `git gc`
 的误报」和 (c) 里 detached HEAD 的结构性未关闭点——这两处都不是「忘了做」，
 是「实测后判定当前工具做不到，且做了不代表不会再被攻击出新的口子」。
+
+**F46 补丁轮（2026-09-16 第三次，本轮，修一个新证伪 pass 抓到的假阳性）：
+`git branch -m master renamed`（无害、保历史的重命名）被
+`reference-transaction` 无条件当成删除拒绝，`rc=128`。**
+
+复现（证伪 pass 给出的原始形式）：
+```
+python3 -c 'import subprocess; r=subprocess.run(["git","branch","-m","master","renamed"],capture_output=True,text=True); print(r.returncode, r.stderr)'
+# 128, "reference-transaction: refused -- deletes refs/heads/master (was <sha>)"
+```
+
+**证伪 pass 给出的根因假设是错的，铁律 2（先证伪断言再引用）在这里也适用
+于「任务指令自带的根因描述」，不只适用于旧文档。** 该假设是：重命名在同一个
+transaction 里是两行（一行删旧名 new=全零，一行建新名 old=全零、
+new=删除行的旧值），本 hook 逐行边读边判所以来不及配对。**实测（本机
+git 2.53.0，files ref backend，`GIT_TRACE2_EVENT` + 一个把 stdin 原样落盘的
+桩钩子）证明这个假设不成立**：`git branch -m master renamed` 对整条命令只触发
+**三次** hook 调用（aborted/prepared/committed），**每次都只有一行**——删除
+`refs/heads/master`；`refs/heads/renamed` 全程不出现在这个 hook 的 stdin 上，
+在任何状态下都没有。在 hook 内轮询 `refs/heads/*` 磁盘状态确认了原因：
+**新名字在「prepared」时刻还没被写到任何地方**，它是在删除事务的 hook
+**返回并提交之后**才直接写盘的，绕开了 reference-transaction 完全。
+
+**据此实现了两层机制**（`tools/loop/hooks/reference-transaction`，函数与
+注释见文件本体的 "SAME-TRANSACTION RENAME, ATTEMPT 1" 与
+"PARENT-PROCESS FALLBACK" 两段头部注释）：
+1. **同一 transaction 内配对**（按证伪 pass 原方案实现，先缓冲全部行再判决）：
+   `refs/heads/X` 删除（new=zero）当且仅当同一 transaction 里存在另一行
+   `refs/heads/Y`（Y≠X）且其 new 值**恰好等于** X 的旧值时才放行。
+   **实测证实这个机制对真实重命名场景是死代码**（原因见上一段），但对
+   `git update-ref --stdin` 把 delete+create 塞进同一个 transaction 的场景是
+   真实有效的（已用 `printf 'delete refs/heads/tbB\nupdate refs/heads/tbC <sha>\n' | git update-ref --stdin` 实测确认这种输入确实产生两行的
+   `prepared` 调用），保留它不是摆设。
+2. **父进程 argv 兜底**（真正关闭这个复现案例的机制）：hook 自己的 `$PPID`
+   **总是**执行这个 transaction 的那个 git 进程本身（git 直接 fork+exec 钩子，
+   中间没有 shell；对 bash 调用与 python `subprocess.run(["git",...])` 调用
+   都成立，因为 hook 的父进程永远是 git 自己，不是发起 git 的那层）——
+   用 `ps -ww -o command= -p $PPID` 实测确认：整个 aborted/prepared/committed
+   序列里 `$PPID` 的命令行稳定显示 `git branch -m tbX tbY`。据此：对未被
+   规则 1 配对上的 `refs/heads/X` 删除，如果父进程 argv 里 `branch` 之后
+   出现 `-m`/`-M`/`--move`（用 `git branch -h` 核对过这是真实的重命名 flag，
+   没有单独的 `--move-force` 拼法，`-M` 就是 `--move --force` 合并形态），
+   放行。这不是可被伪造的字符串——它是 git 自己的 argv，删哪个 ref 是
+   git 自己的 C 代码按这个 verb 决定的，没有「argv 说 branch -m 但实际删了
+   别的 ref」这条通路。**已知的假阴性（不是漏洞，是变严格）**：alias 形式
+   的重命名（`git -c alias.rn='branch -m' rn X Y`）不会被识别，因为 alias
+   展开发生在 git 内部，`ps` 看到的是展开前的 argv（`git rn X Y`），仍会被
+   拒绝——这只是多一分摩擦，不是新的绕过口子。
+
+**实测结果（2026-09-16，scratch repo `/tmp/rt-final2` + 本仓库真实安装的
+hook）：**
+```
+git branch -m master renamed                                    rc=0  ALLOW（本次要修的复现案例）
+python3 subprocess git branch -m master renamed                 rc=0  ALLOW（复现案例的原始 python 形式）
+python3 subprocess git branch -m renamed master（改回来）         rc=0  ALLOW
+git branch -M master renamed（强制重命名）                        rc=0  ALLOW
+git branch -M renamed master（改回来）                            rc=0  ALLOW
+python3 subprocess git branch -D fullymerged（已完全合并的分支）   rc=128 REFUSE（不受影响，按原规则拒绝）
+python3 subprocess git reset --hard HEAD~1                       rc=128 REFUSE（不受影响）
+python3 subprocess git branch -f other HEAD~2（往回强推）          rc=128 REFUSE（不受影响）
+```
+**对抗性测试**：用 `git update-ref --stdin` 在同一个 transaction 里塞
+「删除 refs/heads/other（真实旧值）」+「创建 refs/heads/decoy（故意用一个
+不相关的 oid，不等于 other 的旧值）」，企图借同一 transaction 的「配对」
+规则把真删除蒙混过去：**仍被拒绝，rc=128**——因为规则 1 要求 new 值精确等于
+被删 ref 的旧值，decoy 的 oid 对不上就不配对。
+
+`tools/loop/hooks/verify-reference-transaction.sh` 已补上四条 rename ALLOW
+用例（`-m`/`-M` 各来回一次）与上面这条对抗性 smuggle 用例，独立可重跑；
+`bash tools/loop/hooks/verify-reference-transaction.sh` 本轮实测 **ALL OK**
+（含 scratch repo 部分与本仓库真实安装 hook 的第二部分）。已跑
+`install-reference-transaction.sh`（`--check` 从两处 `STALE` 变 `OK
+installed and current`），真实保护的 hook 与仓库里的源码一致。
+
+⚠️ **本次修复同样尚未经过新鲜证伪 pass。** 沿用铁律第 9 条与本卡规程：
+不改 `- [ ]`，不宣称 SURVIVES；只记录「做了什么、怎么自测的」。下一轮如果
+挑到 F46，除了老的 (b)/(c) 两处已知口子外，应重点攻击父进程 argv 兜底
+这条新机制——尤其是「`ps` 在极端负载/进程表被截断场景下会不会读不到
+或读错」、以及「除了 alias 之外还有没有别的方式让真正执行删除的 git 进程
+argv 不含 `branch -m/-M` 但效果等价于重命名」。
