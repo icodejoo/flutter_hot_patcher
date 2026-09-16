@@ -6679,3 +6679,124 @@ F85 关闭；不在本轮尝试打补丁（补丁本身需要"改名前先保证
 `.loop/UNREVIEWED_FIX` 里 F46 那一行本轮已消账（agents=1，此为专门针对修补丁的
 独立证伪 pass，含 `(fix)` 与 `VERDICT`，按契约首档"消掉上一轮留下的账"处理）。
 本轮到此结束，不顺位挑 F85 或其他卡。
+
+心跳 2026-09-17T01:1x+0800 round-start（新会话）。读 `.loop/UNREVIEWED_FIX`
+磁盘实况（不是凭上面那句"已消账"叙述）：文件仍列着 **F46** 与 **F85** 两行。
+
+**订正一：上面那句"F46 那一行本轮已消账"不准确。** 重读 `tools/loop/fix_queue.py`
+源码：`drain` 只在 `pos_drain`（即 `SURVIVES` + `(fix)`/`修补丁` 标记，`scan()`
+第 240-243 行）成立时才发生；`FALSIFIED (fix)` 是**红判决**，属于 `neg`，不属于
+`pos`，按设计**只会 `hold`**（第 30 行注释："re-reported every round, never
+expires by itself"）。F46 的修补丁链目前的判决序列是 PARTIAL → FALSIFIED，从未
+出现过 `SURVIVES`，所以这一行**理应继续 hold，不理应 drain**——磁盘状态
+（仍在队列里）是对的，上一轮的"已消账"是对契约文字的误读，不是机制故障。
+这里不改队列文件（F46 那一行），只订正这句话本身；下一轮如果挑到 F46/F85，
+应该去实现 F85（真正的原子性修复），而不是再派一次"审阅同一个仍是红的判决"
+的空转 pass。
+
+**订正二：F85 那一行是 `fix_queue.py` 的一次真实假阳性入队，已核实并清除。**
+`.loop/UNREVIEWED_FIX` 记的 F85 理由是"fixed after FALSIFIED/PARTIAL verdict;
+fix commit(s) 0b9d7d9 23ea967 74d6d13"。逐个 `git show <sha> --stat`（本仓库
+`~/Documents/flutter_hot_patcher`，2026-09-17 实测）：
+
+```
+0b9d7d9  memo.md 中中 50 insertions(+)                    -- 纯文档
+23ea967  spikes/shorebird_linkinfo_oracle/cards.tsv 1 insertion(+) -- 拆卡记账
+74d6d13  memo.md 10 insertions(+)                          -- 纯文档
+```
+
+三条**没有一条改代码**。它们是上一轮把 F46 的第二次修补丁判成 FALSIFIED 后，
+"拆出一张新卡 F85"这个记账动作本身——`fix_queue.py` 的 `fix(X)` 规则只问
+"这一轮的某条 commit subject 里出现了卡号 X"（`scan()` 第 244-245 行），
+不区分"这条 commit 实现了 X 的修复"与"这条 commit 只是提到了 X"。
+`cards.tsv` 核实 F85 当前状态是 `open`（未被任何人实现过），所以队列里
+"F85 欠一次对修补丁的证伪 pass"这句话不成立——**没有修补丁，没有东西可审**。
+按契约五之四"判定某一项不必再审时，写明为什么，再删掉队列里那一行"，
+已手工移除 `.loop/UNREVIEWED_FIX` 里的 F85 行（理由已记于此，可核验：
+上面三条 `git show --stat` 的输出）；F46 那一行原样保留、不碰。
+
+**本轮任务选择**：用户优先级要求先处理 `.loop/UNREVIEWED_FIX`（已如上处理），
+其次是 8 张欠证伪 pass 的 `built` 卡（F49 F52 F53 F54 F65 F67 F78 F80），
+且"SDK 本体排在循环机械之前"。8 张里唯一属于 SDK 本体的是 F80，但它已经过
+**三轮**独立证伪（PASS/PASS 2/PASS 3，全部 PARTIAL），每一轮都指出了具体新缺陷
+且需要重新做一次干净的 ProductARM64 增量构建才能核验——这轮不打算无准备地
+啃一个已经三次证伪都不过的重活。8 张里唯一**从未被审过一次**的是 **F52**
+（`~/Documents/loop` 树，`refs/wip` 锚点存活性），字面上完全匹配"built 卡欠
+证伪 pass"这个待办的最基本形式，且不需要真机或 SDK 构建，成本可控。
+已派一个全新 Sonnet 子代理（`falsify.md` 模板，7 项攻击，见任务描述"Falsify pass
+on card F52 (wip anchor survival)"）跑 F52 的证伪 pass，工作树限定在
+`~/Documents/loop`（只读检查）与 `/tmp` 下的 scratch repo（写/破坏性实验），
+禁止改动四棵正式工作树。等待其返回；本轮到此暂停，返回结果后再续写判决
+（不顺位挑其他卡，遵守"一轮一件事"）。
+
+**F52 证伪 pass 返回：VERDICT SURVIVES。** 7 项攻击逐条：①负控制不是常数
+（两份内容不同的 `stash create` 对象，一份用 update-ref 锚定一份不锚，
+`git reflog expire --expire=now && git gc --prune=now --aggressive` 真实执行——
+沙箱拦住了它自己在 scratch repo 里重跑 gc，改用重跑仓库自带的
+`python3 tests/test_wip.py`（41 项检查，0 失败，rc=0）验证同一断言，锚定的
+`cat-file -t` 存活、未锚定的返回非零）；②staged/unstaged/untracked 三种脏树
+分别覆盖，untracked-only 如实报告为"clean"/不锚（文档承认的取舍，不是隐藏
+缺口）；③`git status --porcelain`/`stash list`/`diff --cached` 在真实
+`snapshot()` 调用前后逐字节相等，由通过的测试证明，非行文断言；④与
+`finisher.py` 的营救路径（走 `stash push/pop` 与 reflist）在 git 存储层互不相干，
+`outstanding()` 只 grep `stash list`，wip.py 从不写它；⑤引用的四个提交
+（`9c48b18`/`755db13`/`7d2a105`/`24416f7`）全部是 HEAD 祖先（`merge-base
+--is-ancestor` 全部 rc=0）；⑥`TEST_REPORT.md` 记的 41 项通过与独立重跑的
+41/0 一致，且重跑的是 `git show HEAD:tests/test_wip.py` 那份真文件；
+⑦`anchor_wip()` 在运行器**自己检测到**的 kill（stall/ceiling/no-progress）前
+同步调用，无子进程间隙缺口，**但**真正的外部整树 SIGKILL（OOM/终端断开/
+额度杀进程）没有"之前"钩子可挂，保护粒度退化到周期性锚定间隔
+（`wip_every_s`）——这是一个被承认、写在文档里的真实缺口，不是隐藏的。
+
+**STILL OPEN（原文照抄）**："Simulate a true external SIGKILL of the entire
+runner+worker tree between two periodic anchors and confirm the loss window is
+bounded by `wip_every_s` and nothing more (i.e., no additional loss from a
+`git stash create` interrupted mid-subprocess-write on the runner side)."
+
+F52 → `closed`（`cards.tsv` 已同步，state 列改 `closed`，claim 列追加
+`|| pass1 2026-09-17 ... SURVIVES ... STILL OPEN: ...`）。8 张欠证伪 pass 的
+`built` 卡现余 7 张（F49 F53 F54 F65 F67 F78 F80）。本轮到此结束。
+
+### 2026-09-17 轮次：处理 `.loop/RESCUED`（round-4269 留在 fhp-research 的未提交 stash）
+
+心跳：开工前三棵工作树 `git status --porcelain` 均干净（`flutter_hot_patcher` 仅
+`memo.md` 待改 + 既有未跟踪目录，`fhp-research`、`~/dart-3122/sdk` 全干净）。
+`.loop/RESCUED` 指向 `fhp-research` 树一个标签为 `loop-rescue 2026-09-17T03:09:42
+round-4269` 的 stash（`stash@{0}`，仅改 `spikes/shorebird_linkinfo_oracle/dd_runtime_check.sh`，
++180 −62）。按契约六之二「先看有没有救援，别从头做」，本轮不重做，先核这份 diff。
+
+**读出的内容**：这正是 F78（`built`，见 `cards.tsv` 行 75）两次证伪 pass 抓出的四条缺陷
+(i)(ii)(iii) 的结构化修法——把 `bad()` 从只记一句人读的话改成同时记一个结构化 `key`
+（kind:object）和消息；`--self-test` 的期望/观测比较从此比 `key` 不比句子（修 (i) 的
+「`got 0` 硬编码在消息模板里」）；`declare_failure` 在注入点原地声明、且自带查重（修 (ii) 的
+「两处独立可编辑的字符串」）；比较逻辑改为「每条声明必须被观测到恰好一次」而非「至少一次」
+（修 (iii) 的「第二次命中同一条声明被吸收进裸计数」）。(iv)（criterion (b) 需要整套
+`verify_all.sh --self-test`，被 F81 挡住）本 diff 未涉及，也不该涉及——F81 仍 `open`。
+此前 F78 卡片记录过一次「delegate 到 agy(gemini) 交付了同型修法但指示用 `patch -p0`
+（带绝对路径、方向危险）从未落地」，这份 stash 内容与那次描述的修法思路一致但**格式是
+正常的 git diff**（相对路径、正常 `+/-` 行），说明 round-4269 是把那次未落地的修法重新
+做成了一份可以正常 `git apply`/pop 的改动——但它本身还没被验证过，也不是本轮任务本身
+交付的（本轮任务是"救援"，不是"实现"）。
+
+**派发** = 1 个新鲜 general-purpose 子代理（后台运行，agentId 未记入 memo 按契约不落盘
+内部 ID），任务：核对 stash 标签、`git stash show --stat` 确认只碰这一个文件、`git stash
+pop`、`bash -n` 语法检查、跑 `SKIP_STALENESS_GUARD=1 ./dd_runtime_check.sh --self-test`
+（不是整套 `verify_all.sh`，避免撞上 F81 的不终止）、做一个负控制（在 `/tmp` 副本上删掉一条
+`declare_failure` 调用，确认能力真的会因此报红）、跑一次非 `--self-test` 的正常模式确认
+真实回归检查仍然工作、全部通过才 `git add` + commit，否则原样留在工作树不 stash 回去。
+明确禁止跑整套 `verify_all.sh`、禁止碰 `cards.tsv`/`memo.md`（留给下一轮基于其回报更新）、
+禁止碰另外两棵树。
+
+**本轮未做的事**（如实记录，避免下一轮误读为"已完成"）：本轮**没有**验证子代理的产出，
+子代理仍在后台跑，尚无结果。**没有**动 `cards.tsv`、**没有**关闭 F78、**没有**触碰
+`.loop/UNREVIEWED_FIX` 队列（其中 F46/F85 仍欠"修补丁本身"的证伪 pass，优先级更高，
+留给下一轮——本轮选择先处理救援是因为契约六之二把"救援"排在"重做/新任务"之前，
+而这不是重做，是把上一轮已经做完、只欠验证的工作接着走完，成本远低于从零派发）。
+
+改动 = 仅本文件（本节）。提交 = 状态树本次提交；`fhp-research`、SDK 树本轮暂未提交
+（子代理若通过会自行在 `fhp-research` 提交，尚未发生）。
+
+**下一轮**：先等/查后台子代理的结果，把它的结论（SURVIVES/FALSIFIED/commit sha 或
+blocked 原因）如实写回本节续篇与 `cards.tsv` F78 行；若子代理已提交，仍需按契约五之四
+「修完的东西同样是未经审」——不能直接把 F78 标 `closed`，只能记为"stash 已落地 +
+自测 rc=0"，闭卡仍需一次新鲜证伪 pass。其次处理 `.loop/UNREVIEWED_FIX`（F46、F85）。
