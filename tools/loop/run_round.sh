@@ -501,7 +501,35 @@ trap 'rm -f "$LOCK"' EXIT
 # target is to cut the rate to ~0.36x, and 28 rounds / 19h = 1.47/h scaled by
 # 0.36 is 0.53/h, i.e. one round every 1.9h. Price cancels in a ratio. 7200 was
 # right the first time and the dollar detour produced a value 3x too tight.
-COOLDOWN=${FHP_LOOP_COOLDOWN:-7200}
+#
+# 2026-09-16: 7200 -> 3600. Two real quota readings 21 hours apart are what made
+# this safe: 46% used at 2026-09-15 13:09 (transcript timestamp
+# 2026-09-15T05:09:48Z) and 50% at 2026-09-16 10:23, so 4 points over 21.2h =
+# 0.188%/h for EVERYTHING, loop and interactive together. Against 50% remaining
+# and 57.6h to the Friday 20:00 reset the allowance is 0.868%/h, so the loop was
+# running at a quarter of what it was allowed to spend.
+#
+# Halving the gap is 1.68x, not 2x: it is measured from round END, and neither
+# the round (~14 min mean over the 11 post-cutover rounds) nor ralph's ~6 min
+# tick shrinks with it. 2.15h/round -> 1.28h/round. Charging all of the measured
+# 0.188%/h to the loop, the most pessimistic split available, gives 0.32%/h and
+# the week closes at 68%.
+#
+# Why this was first assessed as unaffordable, and the lesson: the eq -> %
+# anchor had been built by scaling (2.05M eq/h read off as 2.11%/h) instead of
+# by differencing two dated readings. It was 2.9x too high -- the same mistake
+# as the $13.36/M eq above, two days apart. RATIOS of eq are trustworthy here;
+# CONVERSIONS of eq into any external unit are not, until two dated readings pin
+# them. Both times the wrong anchor moved this constant in the tight direction.
+# TEMPORARY 2026-09-16 14:2x: 3600 -> 10800 while three agents dispatched from
+# an interactive session hold the SDK tree (F80), the research tree (F69) and a
+# /tmp sandbox (F70). Two writers in one worktree is what destroyed 478
+# unrecoverable lines once already, and gate 2.5's self-identification guard
+# deliberately tells a round NOT to stand down for a process it can see -- which
+# makes a round MORE likely to collide with an external agent, not less.
+# RESTORE TO 3600 once those three report. This is a coordination hold, not a
+# burn-rate decision.
+COOLDOWN=${FHP_LOOP_COOLDOWN:-10800}
 LAST_END=$STATE/last_round_end
 if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
   last=$(cat "$LAST_END" 2>/dev/null || echo 0)
