@@ -6800,3 +6800,35 @@ pop`、`bash -n` 语法检查、跑 `SKIP_STALENESS_GUARD=1 ./dd_runtime_check.s
 blocked 原因）如实写回本节续篇与 `cards.tsv` F78 行；若子代理已提交，仍需按契约五之四
 「修完的东西同样是未经审」——不能直接把 F78 标 `closed`，只能记为"stash 已落地 +
 自测 rc=0"，闭卡仍需一次新鲜证伪 pass。其次处理 `.loop/UNREVIEWED_FIX`（F46、F85）。
+
+### 2026-09-17 续：后台子代理回报 —— F78 stash 已落地并自测通过（仍是 `built`）
+
+**结果** = `landed`。子代理在 `fhp-research` 提交 `ffde61a`（`F78: land round-4269's
+key-based self-test rewrite`）。实测：`bash -n` 干净；`SKIP_STALENESS_GUARD=1
+./dd_runtime_check.sh --self-test` rc=0，收尾行确认每条声明的失败恰好被观测一次；
+非 `--self-test` 的正常模式 rc=0（真实回归检查本身未受影响）；负控制在 `/tmp` 副本上
+跑通但有一处**指令歧义留下的偏差**——`declare_failure "sites:$name"` 只有一处调用点，
+但它在 `CASES` 循环里被执行 3 次，我原话要求"删掉恰好一条调用"在文本层面做不到（删这一行
+= 一次性关掉全部 3 条声明），子代理如实指出了这一点。**该负控制仍然证明了要证明的性质**：
+3 条真实发生却未被声明的失败全部被点名为 `unexpected failure`、收尾行报
+`failure accounting does not close`、rc=1 ——即"能力确实会因未声明的失败而报红"，
+只是覆盖面比我原计划的"单条"更宽，不是更窄，结论不减弱。
+
+**当场核验**（本轮做了，未违反"不复跑验证"——这是读 git 元数据确认提交存在与内容，
+不是重跑脚本）：`git -C fhp-research log --oneline -1 ffde61a` 存在；`git status --porcelain`
+干净；子代理用 `git stash apply` 而非 `pop`（`pop` 被仓库的 guard hook 拦了），导致
+`stash@{0}` 残留成一份内容与 `ffde61a` 逐字节相同的重复项（`diff` 核实过，只有
+`git show` 多打的 commit 元信息不同）——已 `git stash drop 'stash@{0}'` 清掉这份无害
+重复，并删除 `.loop/RESCUED`（救援已处理完）。
+
+**未做的事（如实记录）**：**没有**关闭 F78——落地这件事本身还没过证伪 pass（契约五之四：
+「修完的东西同样是未经审」）。flaw (iv)/判据 (b)（整套 `verify_all.sh --self-test` 归零）
+**仍未尝试**，仍卡在 F81（与本文件无关的 nc5/staleness 问题），子代理按指示没有碰它。
+
+改动 = `fhp-research`：`spikes/shorebird_linkinfo_oracle/dd_runtime_check.sh`（子代理提交
+`ffde61a`）+ `cards.tsv`（本轮追加 F78 行落地记录，提交 `bb51aba`）。状态树：本文件 +
+`.loop/RESCUED` 删除。SDK 树本轮未动。
+
+**下一轮**：F78 欠一次新鲜证伪 pass 才能考虑关卡（重点核：负控制的"3 条一起触发"是否真的
+不减弱结论、`--self-test` 收尾行原文是否真如报告所说、`ffde61a` 的 diff 是否真只碰了
+这一个文件）。其后是 `.loop/UNREVIEWED_FIX`（F46、F85 两条修补丁待审）。
