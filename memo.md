@@ -6311,3 +6311,48 @@ F69 的 UNDETERMINED / F68 的 direction-undetermined 结论本身不受影响�
 
 **下一轮**：`built` 队列 F49/F52/F53/F54/F65/F67/F70/F75/F80 待各自的首次证伪 pass；
 F55/F62/F63 是规则 0 正面工作，优先于循环机械卡片。
+
+### 2026-09-16 轮次：确认 `.loop/UNREVIEWED_FIX` 里 F68/F69 一行的账已结
+
+心跳：开工前查 `.loop/RESCUED`——上一轮（round-62145）留下 `fhp-research` 树里一个
+未提交的 stash（`spikes/shorebird_linkinfo_oracle/evidence_shorebird_field_dedup.sh`
+与 `perturb_f55_field_dedup.sh` 的重写，471 增 196 删），**未动它**：它是 F55 正面工作
+的一部分而非本轮任务，留在 stash 里等下一次专门处理 F55 的轮次接手，不重做。
+
+任务 = `.loop/UNREVIEWED_FIX` 队列里 F68/F69 那一行仍写着 `no pass on the fix`，
+但 `memo.md` 上一节（"2026-09-16 交互轮次：清 F68/F69/F78 三条修补丁待审队列"）
+已经记过 `F69/F68 修补丁 VERDICT: SURVIVES (fix)`——那一轮是交互式会话，没有走
+`run_round.sh` 的轮末自动出队，所以队列文件字面上仍欠着。本轮不重跑那一整套证伪
+（避免重复烧钱），只派一个新鲜 Sonnet 子代理（`general-purpose`，14 次调用，87s）
+去核那次修补（`31c81ca`，建立在 `eef505e` 之上）本身有没有破绽——即"这次文本修正
+是否真的对、有没有引入新问题"这一更窄的问题。
+
+**F68/F69 二次修补丁 VERDICT: SURVIVES (fix)** —— 独立子代理：① 两条 grep
+（`"26 other sinks"`=1、`"20 other sinks"`=0）确认新旧文本互斥；② `git show 31c81ca
+--numstat` 确认改动只有 1 个文件、+1/-1，仅 F69 那一行 TSV，没有夹带别的技术结论；
+③ 用 `otool -tv -arch arm64` 独立反汇编真实二进制（sha256 与卡片里记的一致）确认
+`0x100196990` 确是 `subs w8,w19,#0x1`、`0x10019699c` 确是 `str wzr,[sp,#0x60]`，
+与修正后的文本一致；④ 用仓库自带脚本里已有的地址区间（0x100196694–0x100197648）
+重新数 `push_back` 调用点，排除引用点本身后得到 26，与修正后的"26 other sinks"一致；
+⑤ `git merge-base --is-ancestor 31c81ca HEAD` 为真（HEAD `8e16c03`），磁盘上的
+cards.tsv 当前确实是修正后的文本、未被之后的提交打回去。
+
+**STILL OPEN（原文抄录）**：I did not re-verify that 27 is the *complete*
+push_back-site count under every possible instruction-decode edge case (e.g.
+tail-call optimized `push_back` variants not matching the literal string
+"push_back", or calls via `blr` rather than `bl`) — a stricter re-count with a
+different disassembler could in principle differ, though otool's linear sweep
+over this straight-line function body is unlikely to miss any.
+
+F69 的 UNDETERMINED / F68 的 direction-undetermined 结论本身仍不受影响
+（本轮核的是修补丁本身，不是重新推导那个已撤回的技术结论）。
+
+改动 = 仅 `memo.md`（本节）。SDK 树、引擎树、状态树代码本轮未动；`fhp-research`
+树本轮未提交任何东西（那个 rescued stash 仍原样留在 stash 里）。
+`.loop/UNREVIEWED_FIX` 队列文件本身按契约不手工改，留给 `run_round.sh` 轮末机制
+依据本节的判决自动出队。
+
+**下一轮**：`built` 队列 F49/F52/F53/F54/F65/F67/F70/F75/F80 待各自的首次证伪 pass；
+`fhp-research` 树里那个 F55 rescued stash（`loop-rescue 2026-09-16T19:13:21
+round-62145`）需要专门一轮接手（先看内容是否已完整、能否直接 pop+提交，再决定要不要
+重跑 `verify_all.sh` 相关 check）；F55/F62/F63 仍是规则 0 正面工作，优先于循环机械卡片。
