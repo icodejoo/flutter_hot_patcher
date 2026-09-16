@@ -5856,7 +5856,7 @@ SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.l
 把 **F79** 加入（本轮未主动派证伪 pass，按契约五之四这本应是本轮同一轮内完成的第二步，
 但受限于本次调度器角色分工，留给下一轮/下一次调度处理——**这是本轮的已知缺口，不是遗漏未记**）。
 
-- [ ] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**（`built`，2026-09-16 实现，欠一次证伪 pass）
+- [x] **F78：`dd_runtime_check.sh --self-test` 的 `fail -ge 5` 阈值是死数，harness 只稳定产生 4 个诱发失败**（`closed`，2026-09-17，独立证伪 pass 判 SURVIVES on (a)/(c)；(b) 仍 OWED，归 F81）
       🟢 **补丁由 agy(gemini-3.8-flash-high) 起草、我验证后落盘**：`-ge 5` 那一行**整行删掉，没有改成 4**
       —— 改成 4 只是把闸门钉在今天这个偶然上，而那正是它过期的方式。
       现在 `EXPECTED_FAILURES` **从 `CASES` 数组推导**（每个 case 一条 site-count 失败 + 一条 stats 缺行），
@@ -6832,3 +6832,35 @@ key-based self-test rewrite`）。实测：`bash -n` 干净；`SKIP_STALENESS_GU
 **下一轮**：F78 欠一次新鲜证伪 pass 才能考虑关卡（重点核：负控制的"3 条一起触发"是否真的
 不减弱结论、`--self-test` 收尾行原文是否真如报告所说、`ffde61a` 的 diff 是否真只碰了
 这一个文件）。其后是 `.loop/UNREVIEWED_FIX`（F46、F85 两条修补丁待审）。
+
+### 2026-09-17 续：F78 证伪 pass（新鲜 Sonnet 子代理，未共享上下文）—— VERDICT: SURVIVES
+
+七项攻击全部亲自复现（不是转述落地代理的叙述）：① 读代码 `dd_runtime_check.sh:213-413`
+后亲跑 `SKIP_STALENESS_GUARD=1 ./dd_runtime_check.sh --self-test` rc=0，且在 `/tmp` 副本上
+扰动能报红，不是恒真判据；② 自检 + 正常模式用同一套调用形式，针对当前真实构建的
+`~/dart-3122/sdk/xcodebuild/ProductARM64/{gen_snapshot,dartaotruntime}`（mtime 2026-09-15），
+未发现夹具陈旧；③ 逐条亲自复现 flaw (i)/(ii)/(iii) 的修复（`bad()` 用动态 `$sites` 消息，
+`missing_line` 单点定义被两处共用，未声明失败被逐条点名而非并入裸计数）；④ grep 全部同类
+检查脚本，`dd_pass_check.sh`/`op_link_info_check.sh`/`shorebird_info_check.sh` 仍是旧的
+裸计数形状，但 F78 范围内本就不该动它们；⑤ `ffde61a` 确认存在且是 route-a-research 分支
+祖先，diff 与 HEAD 内容一致；⑥ 复现原负控制（注释掉唯一的 `declare_failure "sites:$name"`
+调用点，3 条循环声明同时消失，重跑 rc=1 且逐条点名），并**独立追加两个自选扰动**：
+把某条 CASES 基线改坏（0→5）——`--self-test` 保持绿，读代码确认这是设计内不钉真实站点数，
+不算破绽；给两条 CASES 条目起同名标签——被本次提交新增的 `ALL_LABELS`/`uniq -d`
+去重检查当场抓到，rc=1 并点名重复标签（**这正好回应了上一次 PARTIAL pass 留下的"重名
+标签未钉住"那条 STILL OPEN**）；⑦ 判据 (a)/(c) 均被本 pass 亲自验证成立；判据 (b) 亲自
+跑了 `SKIP_STALENESS_GUARD=1 ./verify_all.sh --self-test`，90 秒内不终止，与落地代理
+"UNATTEMPTED"的描述一致，确认是真的 OWED，不是被默认放过。
+
+**STILL OPEN**（原文抄录）：「none for (a)/(c) as scoped. For (b): criterion (b) can only
+be closed once F81 (nc5/staleness) unblocks verify_all.sh's self-test enough to terminate;
+until it does, "does verify_all.sh --self-test reach rc=0" remains untestable and must stay
+OWED, not assumed.」
+
+**结论**：F78 判据 (a)(c) 经独立证伪 pass 复核为 SURVIVES，可关卡；判据 (b) 本就明确划给
+F81（不在 F78 范围内），继续 OWED，不因本次关卡而消失。子代理用的模型是 Sonnet，
+20 次工具调用，85075 tokens，253.8 秒；亲眼确认真实工作树未被扰动（`/tmp/f78_verify`
+是它自己的一次性副本，留在 `/tmp` 之外不影响仓库）。
+
+**下一轮**：处理 `.loop/UNREVIEWED_FIX`（F46、F85 两条修补丁待审，均是"修补丁本身"欠证伪
+pass，不是卡片本身）。
