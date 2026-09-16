@@ -2583,7 +2583,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 **但通用版还没上生产，没有证据说明这件事必须在部署前解决**，而立一张没有判据的卡只会让队列变长。
 ⇒ 形状记在这里，等它真要上生产时再立。
 
-- [ ] **F52：通用版没有 WIP 快照，而它的看门狗建立在「被掐断也丢不了」之上**（`open`，2026-09-10 立）
+- [x] **F52：通用版没有 WIP 快照，而它的看门狗建立在「被掐断也丢不了」之上**（`closed`，2026-09-17，falsify pass VERDICT: SURVIVES，见本文件 2026-09-17 F52 章节）
       **优先级最高的一张**：其余几条是「看不见」，这一条是**保证不成立**。
       `runner.py` 的看门狗会掐轮次（`killed_reason`：无事件 / 撞上限），`finisher.py` 按设计只 stash 不提交——
       这两个动作**都以「未提交的工作丢不了」为前提**，而那个保证在生产里由
@@ -6864,3 +6864,64 @@ F81（不在 F78 范围内），继续 OWED，不因本次关卡而消失。子�
 
 **下一轮**：处理 `.loop/UNREVIEWED_FIX`（F46、F85 两条修补丁待审，均是"修补丁本身"欠证伪
 pass，不是卡片本身）。
+
+### 2026-09-17 续：F52 checklist 订正 + F67（`built`，SDK 本体）证伪 pass —— VERDICT: PARTIAL
+
+**先修一处发现的漂移**：`.loop/UNREVIEWED_FIX` 磁盘实况仍列 F46 F85 两行（`fix_queue.py`
+按 commit subject 子串重新扫描重建，不持久化人工删除；F85 那行连续多轮被诊断为假阳性——
+引用的 `0b9d7d9`/`23ea967`/`74d6d13` 三条提交纯记账不改代码，F85 卡片本身仍是 `open`
+未实现——本轮不重复劳动，只确认诊断仍然成立，`git show --stat` 逐条复核同前）；
+`cards_check.sh` 报 2 处失败：`memo.md`/`cards.tsv` 在 F52 的 open/closed 集合上不一致
+（`cards.tsv` 已在上一轮标 `closed`，memo 顶部 checklist 那行仍是 `- [ ]`）——已订正
+（本文件 2586 行 `- [ ]` → `- [x]`），重跑 `cards_check.sh` rc=0（20 open + 28 closed 一致）。
+
+**本轮任务选择**：8 张 `built` 卡里，F49/F53/F54/F80 均已至少一轮 PARTIAL 判决在案
+（F80 三轮），F65 已被**三次**敌意 pass FALSIFIED（最近一次点名 `$HOME` 未被拒收），
+均是"欠继续修"而非"从未审过"。唯一卡片原文自称"built, not closed: no fresh agent has
+reviewed this" 的是 **F67**（依赖 F66，SDK 本体，`~/dart-3122/sdk` 树），且不需要新的
+干净构建（`ProductSimARM64` 已在 2026-09-16 构建、`git status --porcelain` 干净、
+产物比源码新），符合"SDK 本体排在循环机械之前"。已派一个全新 Opus 子代理
+（`falsify.md` 模板全七项攻击，前台等待，非共享上下文）跑 F67 的证伪 pass，工作树限定
+只读（`~/Documents/fhp-research`、`~/dart-3122/sdk` 均不可写，扰动一律在 `/tmp` 副本做，
+不得提交、不得碰 `cards.tsv`/`memo.md`）。
+
+**F67 证伪 pass 返回：VERDICT PARTIAL**（Opus，57 次工具调用，419s）。七项攻击：
+①②⑤⑥⑦ SURVIVE——四种单槽扰动（delete/dup/value/reorder）在 `/tmp` 副本上独立报红；
+两个二进制都是 `ProductSimARM64` 对 `ProductSimARM64`（非混用 `ProductARM64`/Release），
+SDK 树 `b1111a30e62` 干净、产物比源码新；8263 去重基线由当前 9617 未去重读数首次出现去重
+精确复现；一个**纯换序**（不改值不改数量）独立扰动单独把 `ordered_mismatch` 报红，证明
+"ordered" 真的在查顺序。③④ **推翻了卡片声称的机制**：所谓"我们自己的 analyze_snapshot
+解码器对 pool 形式固定倒扣 3 词、吞掉紧邻的第二个引用"被自家源码证伪——对两个偏差点
+（prog fn#1580/#1633）逐字节 dump 池引用附近的指令流，发现**他们的 gen_snapshot 把
+pool load 补齐到 3 词槽（4 个词的间距、4 条真实 NOP）,我们的 gen_snapshot 完全没有补齐
+（2 个词的间距、0 条 NOP）**；根源在 `runtime/vm/compiler/assembler/assembler_arm64.h`
+定义的 `kObjectPoolLoadStoreMinInstructionCount=3` 与 `assembler_arm64.cc` 的
+`PadLoadStore`——按该文件自己的注释，只有 object pool editor 走这条补齐路径，
+本分支从未把另外约 19 个上游发射点（`LoadImmediate`/`LoadObjectHelper`/
+`LoadNativeEntry`/`BranchLink` 等）接进来补齐，**这两处是 gen_snapshot 的代码生成缺口，
+不是 analyze_snapshot 的解码器缺口**；`nc5` 的 `within2/symdiff` 测试结构上分不清
+"解码器错"与"代码生成欠补、两侧解码器都正确倒扣 3"，且 N=2 论证薄弱。
+
+**STILL OPEN（原文照抄）**：「whether the 776/776 byte-identical-code functions are a
+representative sample or a selection effect (they are short/simple, 17% of 4596) -- a
+size-stratified reading of ordered-equality was not done; and whether index_in_entries ->
+{offset,size} on the theirs-side is derived independently or copied/aligned from ours (would
+make the partition circular) -- not verified, proposed test: perturb a size field only in a
+/tmp copy of the theirs .so and confirm both partition and self_pp comparison move.」
+
+**处理**：`cards.tsv` F67 行已追加该 pass 的完整发现（state 仍 `built`，不关卡——
+"byte-identical-code 上 self_pp 逐槽有序复现"这半survive，但"2 槽短缺的成因"这半被推翻，
+按契约"够大需要自己的判据"，卡片本身需要先改写归因才能考虑关闭，本轮不越权重写它的
+核心 claim，只追加发现）；F68（`open`，依赖 F67，其判据字面写的正是"改 analyze_snapshot
+的 DecodePoolReference"）已追加一条交叉引用note，提示下一轮审 F68 时先核实
+build 侧 NOP 补齐是否对齐，而不是直接改解码器——但**未**改动 F68 的核心 claim/criterion，
+留给下一轮或专门的 pass 处理。两处均为纯追加（`||` 分隔），未删改既有文字。
+
+改动 = `fhp-research`：`spikes/shorebird_linkinfo_oracle/cards.tsv`（F67 追加 + F68 追加，
+待提交）。状态树：本文件（F52 checklist 订正 + 本节）。SDK 树本轮未动（只读）。
+
+**下一轮**：① 处理 `.loop/UNREVIEWED_FIX`（F46、F85，同前）；② 若挑 F68，先核实
+"build 侧 NOP 补齐缺口"这条新证据，不要在没有核实的前提下直接把 F68 的判据
+（DecodePoolReference 倒扣）当真去修；③ F67 仍 `built`，若有人要归因改写，需要新的判据
+（"NOP 补齐缺口"本身的负控制：在 `/tmp` 副本上人为把某处补齐/去补齐，观察 self_pp
+的 missing/ordered 是否随之翻转）。
