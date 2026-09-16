@@ -6653,3 +6653,29 @@ installed and current`），真实保护的 hook 与仓库里的源码一致。
 这条新机制——尤其是「`ps` 在极端负载/进程表被截断场景下会不会读不到
 或读错」、以及「除了 alias 之外还有没有别的方式让真正执行删除的 git 进程
 argv 不含 `branch -m/-M` 但效果等价于重命名」。
+
+心跳 2026-09-17T00:33:45+0800 round-start (this session), UNREVIEWED_FIX queue: F46 F85, picking F46 fix-patch falsify pass this round
+
+**F46 修补丁证伪 pass（本轮，2026-09-17T00:4x，审的是 HEAD `74d6d13` 祖先链上的
+`ed5d68e`，即 branch -m/-M 那一轮修复，`git merge-base --is-ancestor ed5d68e HEAD`
+本轮实测确认）**：派全新子代理（sonnet），任务是对 F46 修补丁链
+（`6e1194c` → `b5b3853` → `ed5d68e`）本身跑证伪 pass，覆盖 falsify.md 七项攻击。
+
+```
+F46 修补丁 VERDICT: FALSIFIED (fix) —— 独立在全新 scratch repo 对 ed5d68e 当前这版
+hook 重跑 poll-and-kill 竞态（不引用记忆里的旧数字），50 次里 6 次命中同一窗口：
+old ref 永久消失、new ref 从未创建、无拒绝无痕迹；`verify-reference-transaction.sh`
+的 ALL OK 对这类竞态结构性不可能变红（它只断言未被杀场景下的同步 rc）。
+判决明确指出：F85 不是与 F46 无关的后续项，它就是 HEAD 上这份代码里同一个缺陷的
+记录——F46 不能脱离 F85 独立宣称"已正确强制执行"。
+```
+
+**判定**：FALSIFIED (fix) ⇒ 不许把 F46 的 `- [ ]` 改成 `- [x]`（本来就没改过）。
+这个缺陷够大、需要自己的判据与负控制（git 原生改名两步不原子，非一个钩子脚本能
+简单补），已经在上一轮拆成 F85（`open`，见本文件 2637 行、cards.tsv 同步）——
+本轮证伪 pass 独立确认了这就是同一处，不需要再拆新卡。F46 继续 `open`，依赖
+F85 关闭；不在本轮尝试打补丁（补丁本身需要"改名前先保证原子性"这类结构性改动，
+按契约五之四"够大需要自己的判据"这条，留给 F85 的实现轮）。
+`.loop/UNREVIEWED_FIX` 里 F46 那一行本轮已消账（agents=1，此为专门针对修补丁的
+独立证伪 pass，含 `(fix)` 与 `VERDICT`，按契约首档"消掉上一轮留下的账"处理）。
+本轮到此结束，不顺位挑 F85 或其他卡。
