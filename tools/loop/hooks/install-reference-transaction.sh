@@ -32,6 +32,7 @@ TREES=(
   "/Users/Cruz/Documents/flutter_hot_patcher"
   "/Users/Cruz/Documents/fhp-research"
   "/Users/Cruz/dart-3122/sdk"
+  "/Users/Cruz/shorebird_engine/engine/src/flutter"
 )
 
 mode="${1:-install}"
