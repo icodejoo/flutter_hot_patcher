@@ -2655,6 +2655,27 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       不得仅凭这一条把 X 入队。承重负控制：一笔**真代码提交**（不碰
       `memo.md`/`cards.tsv`）、subject 含卡号 X、发生在 `neg(X)` 之后，必须仍然入队——
       证明修复没有把真正的修补丁一并静默吞掉，只吞掉纯散文自引用。
+      🔴 **2026-09-18 拆卡（契约第 1.5 条）**：关掉这张卡需要在 `run_round.sh`
+      （95KB shell 脚本）里新增「取每笔提交 diff 路径」的管线，和 `fix_queue.py`
+      本体的改动 + 自测不是一个体量，装不进一轮。拆成 F89a（只改 `fix_queue.py`，
+      自包含、`--self-test` 可独立验）与 F89b（`run_round.sh` 接线，依赖 F89a）。
+      本行保留为 umbrella，两张子卡都关且过一遍新鲜证伪 pass 才能勾选本行。
+- [ ] **F89a：`fix_queue.py` 接受可选的「按 subject 标注是否碰了代码」信号**（`open`，2026-09-18 由 F89 拆出）
+      在 `fix_queue.py:475-476`（`for line in subjects: fix |= ids_on(line, known)`）
+      加一个可选参数：给定某笔提交是「纯散文」（只碰 `memo.md`/`cards.tsv`），
+      它的 subject 不再计入 `fix` 集合；不传这个参数时行为与今天完全一致
+      （向后兼容，`run_round.sh` 还没接线——那是 F89b）。
+      判据：新增 `--self-test` 用例——同一个卡号 X 出现在两笔提交里，一笔标「纯散文」
+      一笔标「碰代码」，两笔都在 `neg(X)` 之后；纯散文那笔不得入队，碰代码那笔必须入队。
+      承重负控制：完全不传新参数时，现有全部 `--self-test` 用例逐条必须原样通过
+      （不回归）。验证命令：`python3 tools/loop/fix_queue.py --self-test`。
+- [ ] **F89b：`run_round.sh` 把「这笔提交碰没碰代码」接进 F89a 的新参数**（`open`，2026-09-18 由 F89 拆出，依赖 F89a）
+      对 `subjects` 里已经列出的每个 sha 跑一次 `git diff-tree --no-commit-id --name-only -r <sha>`，
+      判定是否只碰 `memo.md`/`cards.tsv`，按 F89a 定的格式传给 `fix_queue.py`。
+      判据：挑几个真实 sha（一笔已知纯记账、一笔已知碰代码）跑新逻辑，手工核对
+      `git show --stat` 与判定结果一致。承重负控制：一笔**同时**碰了 `memo.md`/`cards.tsv`
+      **和**代码文件的混合提交，必须判成「碰代码」不是「纯散文」——否则一次真修复
+      顺手带了记账，会被这条规则连带放过。
 - [ ] **F87：DD 判别器的负控制不可能失败，它的期望也没有被断言**（`open`，2026-09-17 由 F36 首次证伪 pass 拆出）
       `measure_dd_emission.sh` 写的控制是「拿掉判别器,计数回到 92」—— **算术上恒真**:
       `native_patched + dd_dispatch` 恒等于命中数,合并两桶必然得到和。
@@ -7572,3 +7593,33 @@ F52 与 F67 两个子代理都独立定位到 `fix_queue.py` 的 `ids_on()`/fix 
 不顺带补 `LOOP_CONTRACT.md` 第八节的工作树清单、不顺带审 6 张 built 卡
 （F49/F53/F54/F65/F67/F80，本轮任务书本身把这些排在修补队列之后，且已用完
 本轮一件事的额度）。
+
+### 2026-09-18（本轮）：`.loop/UNREVIEWED_FIX` 复现同五行，定位为 F89 的确诊而非新账，拆卡而非重烧证伪
+
+心跳 round-start：实测 `.loop/UNREVIEWED_FIX` 与上一节记的"已清空为 0 字节"矛盾——
+磁盘上仍是同样 5 行（F46/F52/F67/F86/Q0），时间戳与清空前逐字相同；`.loop/` 在
+`.gitignore` 里，本身不提交，排除了"提交把清空还原掉"这条。对照 `git log --oneline`
+（`ff6997d` 之后无新提交）与 `fix_queue.py:475-476` 的 `for line in subjects:
+fix |= ids_on(line, known)`：这一行按 subject 裸子串把任何提到卡号 X 的提交都记进
+`fix`，从不检查 diff 有没有碰代码——这正是同一轮已经开出的 `F89` 的根因，不是新缺陷。
+`F52/F67/F86` 三条队列噪声全部溯源到只碰 `memo.md`/`cards.tsv` 的记账提交，只要
+`F89` 不修，`fix_queue.py` 每次重新扫描历史都会把同样三条噪声（连同它们各自的
+"no pass on the fix" 措辞）重新算出来——这也是"两轮零提交"的真因：上两轮大概率
+在对着同一批已经审过的噪声重新派发 5 个新鲜子代理，而不是在推进 F89 本身。
+
+按本轮任务书的显式指令（"最近 2 轮没有产出任何提交，改做拆解"）与契约 1.5，
+本轮没有重跑那 5 个证伪 pass，而是读 `fix_queue.py` 定位到 F89 的确切改动点
+（`:475-476`），判定它需要 `run_round.sh`（95KB）里新增"取每笔提交 diff 路径"
+的管线，与 `fix_queue.py` 本体改动不是一个体量，装不进一轮，据契约 1.5 拆成
+`F89a`（只改 `fix_queue.py`，自包含，靠 `--self-test` 验）与 `F89b`
+（`run_round.sh` 接线，依赖 F89a）；`F89` 本行改为 umbrella，`cards.tsv` 加
+`F89a`/`F89b` 两行（含判据与承重负控制），本文件同步加两条 checklist，
+`cards_check.sh` 复跑 `rc=0`（先 FAIL 在 open 集合不一致，是 memo.md 漏加
+两条 checklist 导致，已修）。
+
+**处理**：`.loop/UNREVIEWED_FIX` 本身未动（不属于本轮范围，且不确定它下一次
+扫描是否会再生成同样内容——这取决于 F89a/F89b 落地后 `fix_queue.py` 的行为，
+留给做 F89a 的那一轮验证）。改动：`fhp-research` 树的 `cards.tsv`（+2 行、
+F89 行改注）与 `flutter_hot_patcher` 树的 `memo.md`（本节 + 两条 checklist）
+各自提交。按"一次一件事"，本轮到此结束：不实现 F89a/F89b，不重派 5 个证伪
+子代理，不动 `.loop/UNREVIEWED_FIX`，不审 6 张 `built` 卡。
