@@ -7153,3 +7153,83 @@ F85 修补丁 VERDICT: SURVIVES (fix) —— 第四次证伪 pass（Sonnet，18 
 队列文件本身**未手动编辑**（按指令不手动删改，留给 `fix_queue.py` 下轮按提交主题
 重新扫描后自然更新/清账；若下轮它仍挂着旧的三笔 commit 标记，那是它的记账口径
 问题，不代表 F85 仍欠审）。F46/F52/F67 三行本轮未处理，按"一次一件事"留给后续轮。
+
+### 2026-09-17（新会话，处理 `.loop/UNREVIEWED_FIX` 队首 F46）
+
+心跳 round-start：三棵树 `git status --porcelain` 干净（除既有未跟踪历史遗留）；
+`.loop/PAUSE` 在位（无人值守已按早前指令停机，本轮是人工/手动触发的单轮）。
+
+队列现状：`.loop/UNREVIEWED_FIX` 仍列 F46/F52/F67 三行"修补丁未经证伪"。挑队首 F46——
+它现在的完整状态是 F46 自身四笔提交（`6e1194c,c3b03a5,b5b3853,ed5d68e`）叠加 F85 的
+rename-recovery 锚点（`5a4eb1b,b172469,3364de8`，F85 已用四轮独立证伪关闭 `closed`）。
+此前三次证伪都只审过其中一段（PARTIAL→PARTIAL→FALSIFIED，催生 F85），**从未有一次
+审过这七笔提交叠加后的当前 HEAD 状态整体**——这正是本轮要补的那一遍。
+
+派**全新** Opus 子代理（未参与任何前序实现），按 `tools/loop/prompts/falsify.md`
+七项攻击对当前 HEAD 状态跑证伪 pass，任务书见 `/tmp/f46_falsify_prompt.md`（本轮已写盘，
+CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 齐全）。
+
+**F46 修补丁证伪 pass 返回：VERDICT FALSIFIED**（Opus，33 次工具调用，447s）。
+
+①：在 scratch 副本上把 hook 阉割（`BLOCK` 判据改成恒假）后 `branch -D`/`branch -f`
+倒退均 `rc=0`；真 hook 下同样两条命令 `rc=128`——判据可证伪，不是恒真；
+`verify-rename-recovery.sh 60` 复现 `with-fix lost=0/60` vs `no-fix lost=51/60`，
+负控制真实。②：`install-reference-transaction.sh --check` 三个 common dir 全
+`OK installed and current`，`core.hooksPath` 四棵树皆空，scratch 结果可迁移。
+③：卡片列出的 9 类操作里 7 类（reset --hard 两种调用形态、branch -D、branch -f 倒退、
+tag 删除、wip ref 删除、stash clear）逐条实测仍 `rc=128`；剩下两类（④⑦）不成立。
+④：`_parent_is_branch_move` 只要父进程 argv 含 rename 意图就放行**任意**
+`refs/heads/*` 删除，而 `branch -M` 一次删两个 head（源+被顶替的目的分支）——
+`git branch tmp HEAD~2; git branch -M tmp master` 实测 `rc=0`，`master` 从
+3 笔提交的历史直接被替换成 1 笔提交的历史；额外用一个持有独有提交的分支复现同一
+形状，该分支被顶替、`rc=0`，提交本体只靠 F85 的锚点活下来，"分支"本身没了。
+⑤：卡片引用的 7 笔提交里 6 笔是本仓（fhp-research）HEAD 的祖先；`c3b03a5`
+在 `flutter_hot_patcher`（`v1` 分支）不是祖先，但在 `fhp-research`（`route-a-research`
+分支，`cards.tsv` 所在树）里核实是祖先——不算过期，是三棵树分工的正常现象。
+⑥：F85 与 hook 本体的负控制均可复现变红。⑦（决定性缺陷）：卡片声称
+stash drop/clear 与"reflog 过期+gc"两类"不分调用形态都拦得住"，而实测只有
+**bash 调用**被 `deny-destructive.sh` 的字符串扫描拦住——这恰好是 F46 标题宣称
+已经超越的"命令名 wrapper"那种拦法。三条 `subprocess.run(['git',...])` 调用
+（丢一条 stash 条目 → 过期全部 reflog → `gc --prune=now`）全部 `rc=0`，随后
+`git cat-file -t <oid>` 报"could not get object info"——三条命令、零拒绝、
+对象永久消失。
+
+**FLAW（两处真实缺陷）**：(a) 卡片枚举为"不分调用形态都拦住"的两类操作，只被
+字符串扫描覆盖，python 形态直接穿透并造成实测到的永久对象丢失；`deny-destructive.sh`
+注释里承认这个口子，但**没有写进 F46 在 `cards.tsv` 里的残留缺口清单**（那里只写了
+`checkout -f`/`clean -fdx`/`restore .`/`core.hooksPath` 四项）。(b) 父进程 argv
+兜底过度信任：`branch -M <src> <已存在且历史不同的 dst>` 被判定为合法改名放行，
+`rc=0`，把 `dst` 静默顶替——这正是判据要求必须 `rc=128` 的一类操作。
+
+**COST OF BEING WRONG**：F46 是无人值守循环重新开机所依赖的安全底线——照原判据关卡，
+会让人误信"一轮不能摧毁历史"，而循环自己的救援机制正靠着 `refs/stash`
+（`loop-rescue` stash，本仓现有未 pop 的两笔正是这条路径的活样本）活着，一条不混淆的
+python 三连招就能拿掉它，且不留痕迹。
+
+**判定**：FALSIFIED ⇒ F46 保持 `open`，不许把它的 `- [ ]` 改成 `- [x]`。缺陷本身
+（reference-transaction 只在 ref 事务上触发、不在纯 reflog 变更上触发，是 git hook
+架构层面的限制，需要另一套机制——例如包一层 git 可执行文件本身，或对象保留策略；
+以及 branch -M 的顶替检测）够大，按契约五之四"修复本身需要自己的判据与负控制"
+拆成新卡 **F86**（`open`，依赖 F46 与 F85，`spikes/shorebird_linkinfo_oracle/cards.tsv`
+已追加该行，`cards_check.sh` 重跑：仅剩"memo.md 与 cards.tsv 的 open 集合不一致
+（F86 未在本文件登记）"一项失败，随本次编辑一并解决）。
+
+F46 修补丁 VERDICT: FALSIFIED —— Opus 证伪 pass（33 次调用）在当前 HEAD 状态上
+独立复现 python 形态穿透 stash-drop/reflog-expire/gc-prune 造成对象永久丢失，
+以及 `branch -M` 顶替已存在分支仍放行两处真实缺陷；`.loop/UNREVIEWED_FIX` 里 F46
+那一行本轮已消账（agents=1，专门针对修补丁的判决，非泛泛褒奖）；未被消账的是
+F46 本身仍 `open`，且新增 F86 承接这两处缺陷的独立修复。
+
+改动：`spikes/shorebird_linkinfo_oracle/cards.tsv`（追加 F86 行，`fhp-research` 树，
+待提交）、本文件（本节 + 下方 F86 checklist 行）。三棵树 `git status --porcelain`
+除既有未跟踪历史遗留外干净。按"一次一件事"，本轮到此结束，不顺位挑 F52/F67 或
+其他 built 卡。
+
+- [ ] **F86：reference-transaction 只在 ref 事务上触发，纯 reflog 变更（stash drop/clear
+      单条、reflog expire、gc --prune）穿透不设防；branch -M 顶替已存在分支仍放行**（`open`，
+      2026-09-17 由 F46 证伪 pass 拆出）
+      判据两部分，见 `cards.tsv` F86 行：(a) stash-drop→reflog-expire→gc-prune 三连招
+      在 bash 与 python 两种调用形态下，被丢弃对象必须仍可用 `git cat-file -t` 取到，
+      或在 prune 前被拒绝（`rc=128`）；(b) `branch -M <src> <已存在且历史不同的 dst>`
+      必须被拒绝，或为被顶替的 `dst` 也写一份 rename-recovery 锚点（现在只锚 `src`）。
+      负控制：撤回修复后两条性质必须能实测翻回坏的那一侧。
