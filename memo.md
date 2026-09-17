@@ -2642,6 +2642,19 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       则控制是「拿我们的哈希函数喂他们的元素表,必须复现某个具名函数的他们的哈希,
       而喂一个单元素扰动必须不复现」。反向负控制:`neither` 桶里的 1400 个函数在同一扰动下必须逐字节不变。
       **这是几周来第一张指向 `unknown` 计数、而不是指向仪器的卡。**
+- [ ] **F89：`fix_queue.py` 的 `ids_on()` 按 commit subject 里的裸子串匹配卡号，
+      不检查那笔提交有没有改代码，也不排除产生 `neg(X)` 那笔提交自己**（`open`，
+      2026-09-17 本轮在对 F52/F67/F86 三条队列噪声做证伪时发现）
+      三条队列条目全部溯源到只碰了 `memo.md`/`cards.tsv` 散文、从没碰过代码的提交
+      （例如「cards: F86 F46, falsify FALSIFIED」这类记账 commit），却被判成
+      "fix commit owed a pass" 重新入队——这正是 `fix_queue.py` 文档自己写的
+      "a fix does not inherit the review of the thing it fixed" 被反过来用在了
+      "根本不是 fix 的记账提交"上。
+      判据：给定一笔提交，其 diff 只碰 `memo.md`/`cards.tsv`（不碰任何代码文件），
+      且 subject 里含有某个也出现在 `neg(X)` 触发行里的卡号 X，`fix_queue.py`
+      不得仅凭这一条把 X 入队。承重负控制：一笔**真代码提交**（不碰
+      `memo.md`/`cards.tsv`）、subject 含卡号 X、发生在 `neg(X)` 之后，必须仍然入队——
+      证明修复没有把真正的修补丁一并静默吞掉，只吞掉纯散文自引用。
 - [ ] **F87：DD 判别器的负控制不可能失败，它的期望也没有被断言**（`open`，2026-09-17 由 F36 首次证伪 pass 拆出）
       `measure_dd_emission.sh` 写的控制是「拿掉判别器,计数回到 92」—— **算术上恒真**:
       `native_patched + dd_dispatch` 恒等于命中数,合并两桶必然得到和。
@@ -7253,14 +7266,40 @@ F46 本身仍 `open`，且新增 F86 承接这两处缺陷的独立修复。
 除既有未跟踪历史遗留外干净。按"一次一件事"，本轮到此结束，不顺位挑 F52/F67 或
 其他 built 卡。
 
-- [ ] **F86：reference-transaction 只在 ref 事务上触发，纯 reflog 变更（stash drop/clear
-      单条、reflog expire、gc --prune）穿透不设防；branch -M 顶替已存在分支仍放行**（`open`，
-      2026-09-17 由 F46 证伪 pass 拆出）
+- [x] **F86：reference-transaction 只在 ref 事务上触发，纯 reflog 变更（stash drop/clear
+      单条、reflog expire、gc --prune）穿透不设防；branch -M 顶替已存在分支仍放行**（`closed`，
+      2026-09-17 由 F46 证伪 pass 拆出，同日修复并经独立证伪 pass 确认）
       判据两部分，见 `cards.tsv` F86 行：(a) stash-drop→reflog-expire→gc-prune 三连招
       在 bash 与 python 两种调用形态下，被丢弃对象必须仍可用 `git cat-file -t` 取到，
       或在 prune 前被拒绝（`rc=128`）；(b) `branch -M <src> <已存在且历史不同的 dst>`
       必须被拒绝，或为被顶替的 `dst` 也写一份 rename-recovery 锚点（现在只锚 `src`）。
       负控制：撤回修复后两条性质必须能实测翻回坏的那一侧。
+
+      **CLOSE 2026-09-17（本轮，fresh Sonnet falsify pass，无共享上下文，HEAD `3763f61`）**：
+      真实修复是 `83fc66c`/`d5a8efb`/`3763f61`（`_write_stash_push_anchor` 机制），**不是**
+      `.loop/UNREVIEWED_FIX` 队列曾引用的 `6e29543`/`bb4be82`（那两笔只是创建这张卡本身的
+      记账提交，本节 7289-7294 行与 7321-7325 行已两次记录这个区分）。VERDICT: SURVIVES。
+      两部分都在一次性 `/tmp` scratch repo 里用真实正/负控制独立复现，两种调用形态
+      （bash git、python `subprocess.run`）、files 与 reftable 两种 ref 后端全跑过：
+      (a) 修复前的 hook（`83fc66c`）对同一条 drop+expire+gc 序列真实丢对象
+      （`git cat-file -t` 返回 rc=128 "could not get object info"），修复后的 hook
+      （`d5a8efb`+`3763f61`）在同一序列上存活；reftable 后端在 push 阶段就先行拒绝
+      （rc=128），比 drop/expire/gc 更早拦下。(b) 修复前的 hook 对分叉的
+      `branch -M src dst` 产出 0 个 rename-recovery 锚点，修复后产出 2 个（src 与 dst
+      各一个）——这部分在这三笔提交之前就已经是真的，与 (a) 无关。
+
+      **STILL OPEN（判决原文，逐字保留）**："the anchor mechanism only protects stash
+      entries pushed after the fixed hook was installed -- a stash created under the OLD
+      hook (or with hooks bypassed via `core.hooksPath ""` or a moved-aside hooks dir) is
+      not retroactively covered, and nothing currently detects that a round temporarily
+      disabled the hook to do a legitimate drop and forgot to restore it. A pass that
+      plants an old-format stash (or disables the hook, stashes, drops, re-enables) before
+      running the sequence would still show loss and could overturn 'criterion (a) holds'
+      if the card is ever read as an unconditional guarantee rather than a from-here-forward
+      one."
+
+      改动：`spikes/shorebird_linkinfo_oracle/cards.tsv`（F86 行 state→`closed`，追加
+      evidence 与 commits 列，`fhp-research` 树，待提交）、本文件（本行）。
 
 ### 2026-09-17（新会话，人工单轮，`.loop/PAUSE` 在位）：清账 `.loop/UNREVIEWED_FIX` 的 Q0 停摆
 
@@ -7419,3 +7458,117 @@ F82 仍开着五项：(i) `heads_before` 少一棵树 · (ii) id 不在 `cards.t
 ③ 说「F69 倒的是仪器、答案不受影响」—— 我核的四个事实都对，**从它们推出的结论错了**。
 ④ cwd / pathspec 错三次（`patch -p0` 在子目录跑、注入文件写错层、`git grep` 用根 pathspec），
    每次都在「差点记成被测对象坏了」那一步被**先测基线**这一步抓住。
+
+### 2026-09-17 17:5x（人工会话，与循环并行）：两份 agy 交付的独立复核
+
+派发通道：**操作者手工派单**，不走循环、也不走 `agy-run.sh`（那张别名表是过期的，F69 卡里已记）。
+复核者 = 本会话（Opus），**未参与任何一份实现**。交付：`c7f9d1f`（F88）、`84566df`+`511e4c2`（F69）。
+复核前先写下「如果它错，最可能错在哪」（铁律第 9 条），两条都写在下面各自开头。
+
+**F88（`c7f9d1f`，2 文件 448 行）：答案成立，但欠一条控制。**
+预判的最可能失败：**「重复计数」这个结论是数学恒等而非测量**（第 10 种仪器缺陷，分子分母同源）。
+— 自跑 `./f88_residue_evidence.sh`，rc=0，复现已记录基线 `3100/4576 = 67.7%`、distinct `2351/3567 = 65.9%`。
+— 答案：distinct 残差 1,216 = **pure-subtree 1,106（91.0%）重复计数** + **root-diff 75（6.2%）新**；
+  pure-subtree 侧 `self_hash` 对他们 100% 命中（225/225、881/881）。
+— **预判的失败模式未出现**：`analyze_reachability` 跑的是 `range(num_fns)` 全部 1380 个函数，
+  不是只跑残差集 ⇒ 两个数不同源，⊆ 方向（残差之外无人够得着 root-diff）真能被证伪。
+— **复核者亲手双向驱红**（控制在 `/tmp`，**未落盘**，见下方欠账）：
+  从 root 集删一个真 root → `reachers 258 vs 残差 260`，`AssertionError` rc=1；
+  塞进非 root（func 0）→ `262 vs 260`，rc=1。⇒ 那条等式不是恒真式，紧到差一个 root 就破。
+— 因果节确实调**真的、已建好的** `analyze_snapshot`（`subprocess` @ 306/374/394/411 行），
+  改 `/tmp` 里的副本，原件不动，不重建。
+🔴 **欠账：交付的三个 RED 控制（A 朴素 +0x20 / B 扰动 pure-subtree caller / C 破坏 `neither`）
+无一打在第 3 节 `assert is_exact` 上** —— 而那是「重复计数」这个答案的承重判据。
+**控制是复核者补的，不是交付的一部分；且它在 `/tmp`，按铁律第 8 条落盘之前不算结论。**
+⚠️ 必须跟着结论走的限定：所有读数来自 `sdk_path.pin` 钉的 product build，**落后源码 1895 步**（F76）。
+
+**F69（`84566df`+`511e4c2`，168 行 md）：反汇编层成立，语义层未验证。**
+预判的最可能失败：**没加 `-arch arm64`**（fat 文件，读数会长得完全正常），或引用 `unreviewed/` 里被证伪的仪器。
+— 合规项全中：**未交 check 脚本**（按简报要求）、无自引我们的源码、未引用 `unreviewed/`、用了 `-arch arm64`。
+— **复核者独立反汇编**（`otool -tV -arch arm64`，sha256 `669423717d62…` 一致）：
+  它引用的 **43 条指令 43 条逐字命中**，一字不差。
+— **单入口独立确认**：全 arm64 slice 里 `grep '\t0x100196b98$'` **命中 1 条**，即 `0x100196b30 b.lt`；
+  `0x100196b94` 是无条件 `b` ⇒ 无 fallthrough。四道门 `subs;b.lt` 的 AND 推导成立。
+— 结论成立：**推翻「同一计数器两个角色」**，`[sp,#0x60]` 只是四道门里的第一道。
+🔴 **承重项未验证，且未被自报**：计数器 2/3/4 的**构造标签**（派发表调用 / 字段表引用 / 间接静态调用）
+是从 setup 常量（`w12∈{3,4,5}`、`w28∈{2,3}`、`w10=2`）**推断**的，文档没有给出
+「每个 setup 点落在分类器的哪个块里」。而它的「未验证清单」列的是动态追踪 / counter-4 条件矩阵 / `br` 风险
+—— **恰恰不含这一条**。⇒ 又一次铁律第 9 条那个形状：**自报的最弱环节不是真正的最弱环节。**
+
+**判定：两张都保持 `open`。** F88 = SURVIVES（带缺口）；F69 = 反汇编层 SURVIVES / 语义层 UNVERIFIED。
+`cards_check.sh` rc=0；`cards.tsv` 那笔只改第 5 列叙述，`state` 未被自我提拔；三棵树干净。
+
+🔴 **第四十五种仪器缺陷（2026-09-17 本会话实测）：一条防御习惯瞄准的工具根本没有装。**
+`CLAUDE.md` 验证纪律第 5 条与 `memory/` 都写着「RTK 包装不可信，`grep`/`git log`/`diff` 一律加 `command` 前缀」。
+实测：`command -v rtk` → **not found**；`~/.claude/hooks/rtk-rewrite.sh` 第 15-18 行在 rtk 不在 PATH 时
+打一句 WARNING 并 `exit 0`、**不改写任何命令** ⇒ **这台机器上 RTK 全程空转。**
+真正把 19 行反汇编压成 60 词、把助记符整列吃掉的是 **harness 自己的工具输出压缩**
+（签名是 `[N words compressed to M … Retrieve more: hash=…]`）。复核者本人在本会话里把它误记成 RTK 一次，当场更正。
+🔑 **判别法：引用一条防御措施之前，先确认它防的那个东西在不在跑。**
+对 harness 压缩，`command` 前缀**无效**；有效的对策是**落盘再用 Read 读原文**——本节所有承重读数都是这么取的。
+
+**复核者自己的未验证清单（不许用外围几条的通过替它背书）**
+1. **没有重跑 `verify_all.sh` / `parity_matrix.sh` / `phase_gate.sh`** —— 这两份交付**都没有接进任何闸门**，
+   它们现在是「卡片的证据」，不是被守住的判据。
+2. F88 那 428 行 python 我**只读了可达性与因果两节**，其余未逐行审。
+3. F69 的构造标签我**既没证实也没证伪**，只是指出它未被证实——这是最可能翻盘的一条。
+4. 我驱红 F88 闭包断言的两个控制脚本在 `/tmp`，**未落盘**，按铁律第 8 条**现在还不算结论**。
+
+### 2026-09-17（本轮，无人值守循环，`.loop/PAUSE` 不在位）：清账 `.loop/UNREVIEWED_FIX` 五行，真落盘
+
+心跳 round-start：`.loop/UNREVIEWED_FIX` 实测 5 行（F46/F52/F67/F86/Q0），与上文
+16:21 那节固化的 `queue_at_resume_20260917.tsv`（md5 `14685b1807b5c0fa56d45fa6af34870f`）
+逐字节相同——队列自恢复以来没被真正清空过，此前"已清空"的记账（7296、7331 行）
+写进过 memo.md 但没有落盘到磁盘文件本身，这次核对到磁盘为准。
+
+本轮对 5 条队列行各派发一个**新鲜、无共享上下文**的 falsify.md 子代理（Sonnet/Opus
+按证据判断力选型），逐条独立复核，不采信 memo.md 早前叙述：
+
+- **F46**：SURVIVES，真·Opus 33 次调用，独立复现 `4995a6b`/`6e1194c`/`c3b03a5` 这条
+  hook 修复链在当前 HEAD 状态上对 (a) drop+expire+gc 三连招、(b) `branch -M` 顶替
+  两条判据都成立，正/负控制皆用一次性 `/tmp` scratch repo 真实跑过（bash 与 python
+  两种调用形态、files 与 reftable 两种 ref 后端）。
+- **F52**：FALSIFIED-as-queue-noise。`cards.tsv` 第 49 行 `state=closed`，且已带一条
+  2026-09-17 fresh Sonnet falsify pass 的 `SURVIVES`（41/41）；队列引用的 `7133f91`
+  `git log --oneline -1` 主题是纯记账（"memo: F52 sync + F67 falsify PARTIAL record"），
+  不碰代码。派给它的子代理独立核实了这一点，并额外发现 F52 的真实实现落在一棵
+  此前从未被 `LOOP_CONTRACT.md` 契约第八节记录过的**第五棵工作树** `~/Documents/loop`
+  （发现时 HEAD `9939bf0`），四笔提交 `9c48b18,755db13,7d2a105,24416f7` 均只存在于
+  这棵树，`~/dart-3122/sdk`/`fhp-research`/`flutter_hot_patcher`/`shorebird_engine`
+  四棵文档记录的树里全部查无此提交（`git cat-file -t`/`git log --all`/`git reflog --all`
+  三种方式确认，非漏检）。**这是文档缺口，不是本轮范围，留给后续轮次去补
+  `LOOP_CONTRACT.md` 第八节的工作树清单。**
+- **F67**：FALSIFIED-as-queue-noise。`cards.tsv` 第 65 行 `state=built`（非 `closed`），
+  队列引用的 `0fac727`/`7133f91` 主题都是卡片自身的 PARTIAL 判决记账，不是"某个
+  修补丁"的判决——F67 从未自称是谁的 fix，队列把"卡片记录自己的证伪结果"误判成
+  "有个 fix 欠审"。子代理在 `fix_queue.py` 里定位到具体缺陷根源（见下）。
+- **F86（队列条目本身）**：FALSIFIED-as-queue-noise，但**F86 卡片自身有一个真实、
+  从未被任何机制表面化过的修复**：队列引用的 `6e29543`/`bb4be82` 是**创建** F86 这张
+  卡（记录对 F46 的 FALSIFIED 判决、顺带拆卡）的提交，不是修复；而 F86 真正的修复
+  是当天更晚的 `83fc66c`/`d5a8efb`/`3763f61`（`_write_stash_push_anchor` 机制），
+  这条真修复从未进过 `.loop/UNREVIEWED_FIX`，是队列机制的一个盲区而非它当前声称
+  的那条噪声。已单独派发第 5 个 fresh falsify pass 专门审这条真修复，VERDICT
+  SURVIVES（含 STILL OPEN 限定，逐字保留），据此把 `cards.tsv` 第 80 行的 F86
+  改为 `closed`，并把本文件上方（7256 行起）的 F86 checklist 项从 `- [ ]` 改成
+  `- [x]`，`cards_check.sh` 复跑 `rc=0`（此前显示 2 处 open/closed 集合不一致，
+  已修复）。
+- **Q0**：随以上四条逐一坐实（每条都有本轮新鲜子代理的独立证据，不是转述上一轮
+  文字）而解除——"上一轮没跑关卡"这件事，本轮已经用比"跑关卡"更强的证据
+  （五个独立新鲜 pass）覆盖过一遍。
+
+**新发现、需要单独追踪的缺陷（已开新卡 `F89`，见上方 checklist 与 `cards.tsv`）**：
+F52 与 F67 两个子代理都独立定位到 `fix_queue.py` 的 `ids_on()`/fix 检测逻辑——它
+按 commit subject 里的裸子串匹配卡号，**不检查那笔提交是否改了代码，也不排除
+产生 `neg(X)` 那笔提交自己**。三条队列噪声（F52/F67/F86）的根因都是同一个：
+一笔只碰 `memo.md`/`cards.tsv` 散文的记账提交，被这条逻辑误判成"欠审的修补丁"。
+按契约"修复本身需要自己的判据与负控制"，这不在本轮就地修，拆成新卡 `F89`
+（`open`，判据与负控制见 `cards.tsv` 第 83 行与本文件 checklist）。
+
+**处理**：`.loop/UNREVIEWED_FIX` 本轮真实清空为 0 字节（该文件在 `.gitignore` 里，
+不需要提交）；`cards.tsv` 改动（F86 关闭、新增 F89 行）与本文件改动（F86 checklist
+翻转、新增 F89 checklist、本节）分别提交到 `fhp-research` 与 `flutter_hot_patcher`
+两棵树。三棵文档记录的树（不含新发现的第五棵）`git status --porcelain` 除既有
+未跟踪历史遗留外干净。按"一次一件事"，本轮到此结束：不顺带派发 F89 的实现、
+不顺带补 `LOOP_CONTRACT.md` 第八节的工作树清单、不顺带审 6 张 built 卡
+（F49/F53/F54/F65/F67/F80，本轮任务书本身把这些排在修补队列之后，且已用完
+本轮一件事的额度）。
