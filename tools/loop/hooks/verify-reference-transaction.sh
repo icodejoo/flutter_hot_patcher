@@ -255,6 +255,123 @@ sys.exit(r.returncode)
   echo "  cleaned up throwaway branch $BR (hook temporarily moved aside to do it, then restored)"
 fi
 
+echo
+echo "== F86(a): stash-drop + reflog-expire + gc-prune data loss (documented"
+echo "   gap, NOT pass/fail here -- see reference-transaction's own header,"
+echo "   'F86, PART (a)', for why no git-native hook can close this; this"
+echo "   section keeps the finding falsifiable by re-running it, not by"
+echo "   asserting it) =="
+f86a_repro() { # invocation label, invocation shape: bash|python
+  local label="$1" shape="$2"
+  local s; s="$(mktemp -d "${TMPDIR:-/tmp}/rt-verify-f86a.XXXXXX")"
+  (
+    cd "$s"
+    git init -q .
+    git commit --allow-empty -m base -q
+    echo one >f1.txt; git add f1.txt; git stash push -q -m s1
+    echo two >f2.txt; git add f2.txt; git stash push -q -m s2
+    mkdir -p .git/hooks
+    cp "$HOOK_SRC" .git/hooks/reference-transaction
+    chmod +x .git/hooks/reference-transaction
+    dropped="$(git rev-parse stash@{0})"
+    if [ "$shape" = python ]; then
+      python3 -c '
+import subprocess, sys
+for args in (["stash","drop","stash@{0}"], ["reflog","expire","--expire=now","--all"], ["gc","--prune=now","-q"]):
+    subprocess.run(["git", *args])
+' >/dev/null 2>&1
+    else
+      git stash drop stash@{0} >/dev/null 2>&1
+      git reflog expire --expire=now --all >/dev/null 2>&1
+      git gc --prune=now -q >/dev/null 2>&1
+    fi
+    if git cat-file -t "$dropped" >/dev/null 2>&1; then
+      echo "  NOTE  $label: dropped object SURVIVED (would mean the gap narrowed -- re-check the header's F86(a) claim if this ever prints)"
+    else
+      echo "  NOTE  $label: dropped object UNRETRIEVABLE afterward (confirms the documented, unclosed F86(a) gap -- rc=128 on cat-file -t, reproduced $(date -u +%Y-%m-%d))"
+    fi
+  )
+  rm -rf "$s" 2>/dev/null
+}
+f86a_repro "bash-invoked git"                     bash
+f86a_repro "python3 subprocess.run(['git', ...])" python
+
+echo
+echo "== F86(b): branch -M src dst where dst pre-exists with diverging"
+echo "   history -- both src's and dst's prior tips must survive under"
+echo "   refs/rename-recovery/*, or the rename must be refused =="
+f86b_scratch() { # writes repo with diverging src/dst into $1, hook copied from $2
+  local dir="$1" hook="$2"
+  git init -q "$dir"
+  (
+    cd "$dir"
+    git commit --allow-empty -m base -q
+    git branch src
+    git checkout -q src
+    git commit --allow-empty -m src-only -q
+    git checkout -q master
+    git branch dst
+    git checkout -q dst
+    git commit --allow-empty -m dst-only-diverging -q
+    git checkout -q master
+    mkdir -p .git/hooks
+    cp "$hook" .git/hooks/reference-transaction
+    chmod +x .git/hooks/reference-transaction
+  )
+}
+
+F86B_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rt-verify-f86b.XXXXXX")"
+f86b_scratch "$F86B_DIR" "$HOOK_SRC"
+DST_OLD="$(git -C "$F86B_DIR" rev-parse dst)"
+SRC_OLD="$(git -C "$F86B_DIR" rev-parse src)"
+rc_b="$(cd "$F86B_DIR" && python3 -c '
+import subprocess, sys
+r = subprocess.run(["git","branch","-M","src","dst"])
+sys.exit(r.returncode)
+'; echo $?)"
+SRC_ANCHOR="$(git -C "$F86B_DIR" for-each-ref refs/rename-recovery --format='%(refname) %(objectname)' | awk -v oid="$SRC_OLD" '$2==oid {print $1; exit}')"
+DST_ANCHOR="$(git -C "$F86B_DIR" for-each-ref refs/rename-recovery --format='%(refname) %(objectname)' | awk -v oid="$DST_OLD" '$2==oid {print $1; exit}')"
+if [ "$rc_b" = 0 ] && [ -n "$SRC_ANCHOR" ] && [ -n "$DST_ANCHOR" ]; then
+  printf '  ok   f86b   rc=%-4s src anchored (%s) AND dst anchored (%s) -- dst'"'"'s clobbered tip is recoverable\n' "$rc_b" "$SRC_ANCHOR" "$DST_ANCHOR"
+elif [ "$rc_b" != 0 ]; then
+  printf '  ok   f86b   rc=%-4s branch -M refused outright (dst untouched) -- also satisfies F86(b)\n' "$rc_b"
+else
+  printf '  FAIL f86b   rc=%-4s expected dst-clobber to be refused OR both src (%s) and dst (%s) anchored; src_anchor=%s dst_anchor=%s\n' "$rc_b" "$SRC_OLD" "$DST_OLD" "${SRC_ANCHOR:-<none>}" "${DST_ANCHOR:-<none>}"
+  fail=$((fail+1))
+fi
+
+# Negative control: run the identical scenario against the hook exactly as it
+# stood immediately before the F85 anchor commit (5a4eb1b~1 -- no
+# _write_rename_recovery_anchor call exists in that revision at all), proving
+# this check can actually fail and is not a tautology. Best-effort: if that
+# revision can't be extracted (e.g. shallow clone), skip with a note rather
+# than failing the whole run over an environment limitation.
+PRE_F85_HOOK="$(mktemp "${TMPDIR:-/tmp}/rt-verify-pre-f85.XXXXXX")"
+if git -C "$HERE" show 5a4eb1b~1:tools/loop/hooks/reference-transaction >"$PRE_F85_HOOK" 2>/dev/null && [ -s "$PRE_F85_HOOK" ]; then
+  chmod +x "$PRE_F85_HOOK"
+  F86B_NEG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rt-verify-f86b-neg.XXXXXX")"
+  f86b_scratch "$F86B_NEG_DIR" "$PRE_F85_HOOK"
+  DST_OLD_NEG="$(git -C "$F86B_NEG_DIR" rev-parse dst)"
+  SRC_OLD_NEG="$(git -C "$F86B_NEG_DIR" rev-parse src)"
+  rc_b_neg="$(cd "$F86B_NEG_DIR" && python3 -c '
+import subprocess, sys
+r = subprocess.run(["git","branch","-M","src","dst"])
+sys.exit(r.returncode)
+'; echo $?)"
+  DST_ANCHOR_NEG="$(git -C "$F86B_NEG_DIR" for-each-ref refs/rename-recovery --format='%(refname) %(objectname)' | awk -v oid="$DST_OLD_NEG" '$2==oid {print $1; exit}')"
+  if [ "$rc_b_neg" = 0 ] && [ -z "$DST_ANCHOR_NEG" ]; then
+    echo "  ok   negctl rc=$rc_b_neg  pre-F85 hook (5a4eb1b~1) allows the same dst-clobber with NO dst anchor -- confirms the f86b check above is not a tautology"
+  else
+    echo "  FAIL negctl rc=$rc_b_neg  expected the pre-F85 hook to allow the clobber with no dst anchor (dst_anchor=${DST_ANCHOR_NEG:-<none>}); the f86b check's negative control did not measurably fail as expected"
+    fail=$((fail+1))
+  fi
+  rm -rf "$F86B_NEG_DIR" 2>/dev/null
+else
+  echo "  SKIP negctl  could not extract tools/loop/hooks/reference-transaction@5a4eb1b~1 (not fatal, environment-dependent)"
+fi
+rm -f "$PRE_F85_HOOK" 2>/dev/null
+rm -rf "$F86B_DIR" 2>/dev/null
+
 rm -rf "$SCRATCH" 2>/dev/null
 rm -f /tmp/rt-verify-out.* /tmp/rt-verify-real.* 2>/dev/null
 

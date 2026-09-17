@@ -290,6 +290,104 @@
 #     mechanism's contract is "no permanent unrecoverable loss of history",
 #     not "the rename always finishes".
 #
+# F86, PART (a) -- STASH-DROP + REFLOG-EXPIRE + GC-PRUNE IS UNCLOSABLE BY ANY
+# GIT-NATIVE HOOK (2026-09-17, empirically exhausted, not guessed):
+# The three-step sequence (drop a non-last stash entry, `git reflog expire
+# --expire=now --all`, `git gc --prune=now`) permanently deletes the dropped
+# object. Verified end to end in a scratch repo, WITH this hook installed,
+# both via plain bash-invoked git and via
+# `python3 -c "import subprocess; subprocess.run(['git', ...])"` for each of
+# the three steps: after all three, `git cat-file -t <dropped-oid>` returns
+# rc=128 "could not get object info" -- real, reproduced, permanent loss.
+#   - `git stash drop <non-last>` and `git reflog expire` each independently
+#     produce ZERO reference-transaction events (confirmed with a logging
+#     stub in place of this hook): neither is a ref-VALUE update, so this
+#     hook's only sensor -- the `reference-transaction` hook itself -- cannot
+#     be invoked for either. This was already known (see the "WHAT THIS IS
+#     NOT" section above for stash); F86 additionally confirmed reflog-expire
+#     has the identical blind spot.
+#   - `git gc --prune=now` DOES fire this hook, but only incidentally and too
+#     late to help: internally it runs `git pack-refs --all --prune`, which
+#     transiently deletes each loose ref (reported to this hook as
+#     old=<real>, new=all-zeroes) before writing it back packed. For
+#     `refs/stash` specifically that transient delete IS refused by the
+#     existing stash policy above ("deletes refs/stash entirely") -- but
+#     empirically (2026-09-17) `git gc`'s own C code does not treat a failed
+#     pack-refs sub-step as fatal to the run: it prints
+#     "error: failed to run pack-refs" to stderr and CONTINUES, still exits
+#     rc=0, and still runs its object-pruning phase, which is a completely
+#     separate operation (deleting now-unreachable loose objects, not a ref
+#     update) that fires no hook at all. The refusal is real but inert: by
+#     the time this hook is even asked about the ref, it is already too late
+#     to stop the prune that actually destroys the object, and nothing in
+#     `git gc`'s own exit-status handling lets a hook's refusal of one
+#     internal sub-step abort the rest of the run.
+#   - `pre-auto-gc` (the only other candidate git ships) is documented by
+#     git's own `githooks(5)` as invoked ONLY by `git gc --auto`, and this was
+#     verified directly (2026-09-17, `git help githooks`: "This hook is
+#     invoked by git gc --auto"): a `pre-auto-gc` script that unconditionally
+#     exits 1 was confirmed to fire and abort `git gc --auto` once the
+#     `gc.auto` loose-object threshold was exceeded, proving the hook
+#     mechanism itself works -- and the SAME script was confirmed to NEVER
+#     fire for plain `git gc` or `git gc --prune=now`, with or without a
+#     `gc.auto` threshold set, across multiple repeated runs. Even if it did
+#     fire for manual invocations, `pre-auto-gc` cannot distinguish
+#     `--prune=now` from git's own safe default (`gc.pruneExpire`, 2 weeks) --
+#     it takes no arguments -- so it would not usefully gate this specific
+#     threat model even where it applies.
+# CONCLUSION: with `stash drop`/`reflog expire` invisible to every git hook
+# and `git gc`'s object-pruning phase invisible to every git hook (including
+# the one hook, `pre-auto-gc`, that sounds adjacent but is scoped to the
+# `--auto` code path only, per git's own docs and confirmed empirically), F86
+# criterion (a) as phrased -- close this via a git-native hook -- is
+# UNSATISFIABLE by any mechanism this file's own architecture can house. The
+# only remaining lever is a `git` wrapper/alias/PATH shim, which this project
+# has already rejected elsewhere (deny-destructive.sh's own header: string/
+# argv scanning is known-bypassable and this project does not pretend
+# otherwise) and which would not actually be more robust here than
+# deny-destructive.sh's existing (bypassable, documented-as-such) string match
+# on "git stash drop"/"pop"/"clear" and "git reflog expire"/"git gc --prune=".
+# No fix is implemented for this part; fabricating a check that cannot
+# actually prevent the loss would itself be exactly the kind of false-green
+# instrument this project's CLAUDE.md already catalogs dozens of. See
+# verify-reference-transaction.sh's F86(a) section for the runnable repro that
+# keeps this finding falsifiable rather than a prose claim.
+#
+# F86, PART (b) -- `branch -M <src> <dst>` WHERE <dst> PRE-EXISTS WITH
+# DIVERGING HISTORY (2026-09-17): the falsify pass that opened this card
+# asserted "today only <src>'s prior tip gets anchored; <dst>'s prior tip does
+# not." That assertion is EMPIRICALLY FALSE for this host's git (2.53.0,
+# files backend), verified directly against the unmodified, already-committed
+# hook (not a hypothetical fix): `git branch -M src dst` where `dst` exists
+# and points at a commit unreachable from `src` fires TWO INDEPENDENT
+# `reference-transaction` "prepared" calls, not one combined transaction --
+# one deleting `refs/heads/src` (git reports its real old value), and a
+# SEPARATE, LATER one for `refs/heads/dst` (git reports old=new=all-zeroes
+# for this one, same force-update-hides-old-value behavior the "HOW IT
+# DECIDES" section above already documents for `branch -f`/`branch -D`, which
+# is exactly why this hook resolves the ref's true prior value itself via
+# `git rev-parse --verify` rather than trusting git's own old-value field).
+# Because the PARENT-PROCESS FALLBACK rule above is written per-ref, not
+# per-name -- it fires for ANY `refs/heads/X` deletion in a transaction whose
+# parent argv is a branch move, whichever X that happens to be -- `dst`'s
+# deletion independently qualifies for the exact same fallback as `src`'s,
+# and `_write_rename_recovery_anchor` runs for `dst` too, pinning `dst`'s true
+# prior oid before the delete is allowed. Verified twice (2026-09-17, scratch
+# repo, unmodified hook): both the diverging case and, separately, a
+# fast-forward-shaped case (`dst` an ancestor of the new tip) leave TWO
+# anchors on disk afterward, `refs/rename-recovery/src-<oid>-...` and
+# `refs/rename-recovery/dst-<oid>-...`, each pinning the correct pre-image --
+# `git for-each-ref refs/rename-recovery` after the command shows both, and
+# `<dst>`'s prior tip is not lost, only its friendly name is (recoverable via
+# `git branch <name> refs/rename-recovery/<...>`, same as `src`'s case,
+# already documented above). No code change was needed for this part: the
+# generic, name-agnostic shape of the existing fallback already covers it.
+# Negative control and the full repro are in verify-reference-transaction.sh's
+# F86(b) section, including a run against the hook as it stood immediately
+# before the F85 anchor commit (5a4eb1b~1, no `_write_rename_recovery_anchor`
+# call at all) to prove the check actually distinguishes "anchored" from "not
+# anchored" rather than passing regardless.
+#
 # No override environment variable, on purpose, same reasoning as
 # deny-destructive.sh: an override is the first thing a confused agent would
 # find and set. A human who actually needs one of these operations runs it in
