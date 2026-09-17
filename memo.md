@@ -6925,3 +6925,231 @@ build 侧 NOP 补齐是否对齐，而不是直接改解码器——但**未**�
 （DecodePoolReference 倒扣）当真去修；③ F67 仍 `built`，若有人要归因改写，需要新的判据
 （"NOP 补齐缺口"本身的负控制：在 `/tmp` 副本上人为把某处补齐/去补齐，观察 self_pp
 的 missing/ordered 是否随之翻转）。
+
+### 2026-09-17 续（新会话）：F46/F85 队列重读 —— 停止重复诊断，改派 F85 的实现
+
+心跳 2026-09-17T08:50:33+0800 round-start（新会话）。三棵工作树 `git status --porcelain`：
+`flutter_hot_patcher` 仅本文件待改；`fhp-research`、`~/dart-3122/sdk` 未在本轮检查前重读
+（本轮不需要动它们）。`.loop/UNREVIEWED_FIX` 磁盘实况：仍是 F46/F85/F52/F67 四行
+（`fix_queue.py` 按 commit subject 扫描重建，不持久化过去的人工订正——与既往记录一致，
+不是新漂移）。
+
+**逐行核对，不复述结论、自己重新推一遍**：
+- **F52**：`cards.tsv` 第 49 行 state=`closed`，claim 含 `pass1 2026-09-17 ... SURVIVES`
+  且带 `STILL OPEN`。符合契约五之四"消账"格式。队列里这一行是 `fix_queue.py` 的重建噪声，
+  不代表真实欠账。
+- **F67**：`cards.tsv` 第 65 行 state=`built`（不是 closed），本轮（上一节）刚拿到一次
+  PARTIAL 判决，STILL OPEN 已记录。它进 `UNREVIEWED_FIX` 是因为 commit subject 提到了它，
+  不代表"F67 的修补丁需要再审"——F67 从未声称自己是"修补丁"，是原卡片本身仍 `built`。
+  按契约"判定某一项不必再审时,写明为什么"处理：**这一行是噪声，理由已如上**。
+- **F46**：`cards.tsv` 第 43 行 state 仍 `open`，判决序列 PARTIAL → FALSIFIED（`ed5d68e`
+  那版父进程 argv 兜底修法），从未出现 SURVIVES ⇒ 按 `fix_queue.py` 第 30 行注释
+  "re-reported every round, never expires by itself"，这一行**本来就应该每轮都在队列里**，
+  不是漂移，是设计如此。**不派新的"审阅同一个仍是红判决"的 pass**——上一次会话已经
+  两次确认这一点（6686-6695 行），本轮不再验证第三次。
+- **F85**：`cards.tsv` 第 79 行 state 仍 `open`。这张卡从被拆出来那天起就没有任何实现
+  提交（只有三条纯记账 commit `0b9d7d9`/`23ea967`/`74d6d13` 被 `fix_queue.py` 误判为
+  "fix commit"）。它在 `UNREVIEWED_FIX` 里的说法"fixed after FALSIFIED verdict"对 F85
+  本身不成立——F85 不是别的卡的修补丁，它自己就是需要被实现的那张卡。
+
+**本轮判断**：连续三轮（6460 起、6683 起、6870 起）都在原地重复"F46 正确 hold / F85
+是记账噪声"这个结论，没有一轮真正去实现 F85 描述的修复。这本身就是契约六之二警告的
+"重复交不出提交"信号。本轮改为**派发 F85 的实际实现**，不再是又一次队列诊断。
+
+**F85 待实现内容**（据 cards.tsv 第 79 行 + 本文件 6577-6623 行对 `reference-transaction`
+hook 机制的记录）：`git branch -m/-M` 在这台 git（2.53.0，files backend）上是两个不
+原子的磁盘操作——先删旧 ref（触发 hook 的 delete 事务并被"父进程兜底"规则放行），
+新 ref 是在 hook 返回、事务提交**之后**才直接写盘的，中间没有任何事务事件。
+poll-and-kill 实测（本文件 6577 行起引用的证伪 pass，499/500 或类似量级）在这个窗口
+kill 掉进程会造成**旧分支永久消失、新分支从未创建、无拒绝无痕迹**。这不是 hook 能在
+"prepared"时刻挡住的（新 ref 还不存在，hook 早已返回），必须在 hook 之外增加一层
+**恢复锚点**：候选方案——hook 在放行"父进程是 branch -m/-M 的删除"这条规则时，
+顺手用 `git update-ref refs/rename-recovery/<old-branch-name> <old-oid>` 先写一个
+恢复锚点（这是 hook 自己在同一个 bash 进程里能做的、不依赖等待新 ref 出现），
+使得即使随后真正的重命名在写新 ref 之前被杀，旧内容仍可通过这个恢复 ref 找回
+（不要求"分支叫回原名"，只要求"commit 不丢、可被引用找回"，这是卡片实际要求的判据）。
+这只是候选方案，不是既定结论——派下去的子代理必须先自己验证这个方案能不能在
+真实 poll-and-kill 下把"lost outcome"降到 0/500，不能就报告并提出别的方案。
+
+已派一个全新 general-purpose 子代理（后台运行，非共享上下文），任务见上方派发指令；
+完全自包含、限定沙盒范围（真实 hook 与 install 脚本改动限 `flutter_hot_patcher` 仓库内
+`tools/loop/hooks/`；破坏性 poll-and-kill 实验一律在 `/tmp` scratch repo 里跑，不得碰
+三棵正式工作树，不得 push）。要求它只做**实现 + 自测**（500 次 poll-and-kill，负控制：
+故意去掉恢复锚点这一步确认 lost outcome 不为 0 从而证明该负控制本身有效），**不得**
+自称 SURVIVES 或改 `cards.tsv`/`memo.md` 的 `- [ ]`——按契约五之四，这仍然只是新的
+`built`，下一轮需要独立证伪 pass 才能考虑关卡。
+
+**子代理返回（`STATUS: success`）**：机制 = 在 hook 的父进程兜底规则即将放行
+`refs/heads/X` 删除（`branch -m/-M` 场景）时，同步写一个不重用、不删除的
+`refs/rename-recovery/<X>-<oid>-<epoch>-<pid>` 恢复锚点（用 oid+timestamp+pid 避免
+同名分支反复重命名时互相覆盖），并把 `refs/rename-recovery/*` 一并纳入本 hook
+既有的"删除拒收"命名空间。改动文件：`tools/loop/hooks/reference-transaction`
+（新增 `_write_rename_recovery_anchor` 及调用点、命名空间扩展、header 说明）+
+新增 `tools/loop/hooks/verify-rename-recovery.sh`（poll-and-kill 负控制脚本，
+只在 `/tmp` scratch repo 跑）。**提交 = `5a4eb1b`**（已用 `git show --stat` 核实存在、
+只碰上述两个文件；`git status --porcelain` 核实三棵工作树外的改动干净，
+仓库里大量 `??` 未跟踪项是本会话开始前就存在的历史遗留，与本次改动无关）。
+
+**自测结果（子代理原话）**：`verify-reference-transaction.sh` 改动前后输出逐字节
+一致，ALL OK，0 回归（含既有的对抗性 smuggle 与 stash 用例）；`verify-rename-recovery.sh`
+N=500（交替用 bash 直接调用与 `python3 subprocess.run(['git','branch','-m',...])`
+调用，kill 点用一份仅测试用的插桩 hook 副本精确落在"删除已提交、新 ref 尚未写盘"
+的窗口）：**带修复 lost=0/500**；**故意注释掉恢复锚点这一行，lost=385/500**——
+负控制证明它真的在检测它要检测的丢失，不是恒真判据。子代理还记录了两次
+"假 0 丢失"的харness 陷阱（victim 分支曾与 master 共享 oid；victim 曾经是 HEAD
+导致 oid 被 HEAD 自己的 reflog 钉住）已被识别并改用 `git commit-tree` + 独立分支
+避免。
+
+**已知局限（子代理原话，如实抄录，不是安全感）**：只恢复 commit 内容不恢复分支
+"友好名字"——事后需要人或后续步骤手动 `git branch <name> refs/rename-recovery/<...>`；
+`git update-ref` 本身写锚点也可能失败（磁盘满/权限），失败时 hook 打警告但仍放行
+重命名而不是拦截，即"尽力而为"不是"必然写入"，这一分支未被测试覆盖；只覆盖
+"父进程兜底"这一条路径，依赖与该规则本身相同的经验观察（这台 git 2.53.0 的行为），
+未来 git 版本可能改变这个形状；`refs/rename-recovery/*` 永久累积、无内建 GC
+（故意的，blast-radius 限制器而非整洁性），但这是一个真实、被承认的成本。
+
+**处理**：这仍是 `built`，不是 `closed`。按契约五之四"做完之后本轮还没结束"，
+本轮继续派一个**全新**独立子代理跑 `falsify.md` 的证伪 pass，攻击这个刚落地的实现
+本身（不是审阅 F46 旧的判决链）。CLAIM：F85 描述的 branch-rename 非原子丢失窗口，
+在提交 `5a4eb1b` 之后已通过 rename-recovery 锚点机制堵住，poll-and-kill 下丢失数
+降为 0/500 且负控制证实该测量有效。见下一条派发记录。
+
+**F85 修补丁证伪 pass 返回：VERDICT PARTIAL**（Opus，26 次工具调用，459s，独立复现
+不是转述）。①②③④⑥ SURVIVE：自建插桩版 harness（N=80/臂）独立复现——`no-fix` 臂
+59/80 丢失、21/80 因 kill 落空而幸存，与他们 385/500=77% 同量级；`with-fix` 臂
+64/80 被锚点救回、16/80 kill 落空，**两臂 0 例靠 reflog 幸存**（证实"reflog 掩盖"
+陷阱确实已被规避，不是运气）；在锚点自己的 `update-ref` 窗口内单独杀 20 次，
+0/20 不可达（锚点写入本身不会比不写更糟）；对抗性核实两份生成的 hook 真的只在
+"是否包含 `_write_rename_recovery_anchor` 调用"这一行上有差异。
+
+**⑤ 抓到真实缺陷（FLAW）**：**这次修复只提交进了仓库，从未被安装进任何真正生效的
+`.git/hooks/` 目录。** `bash tools/loop/hooks/install-reference-transaction.sh --check`
+对 `flutter_hot_patcher`（与 fhp-research 共用）和 `~/dart-3122/sdk` 两处共享 `.git`
+公共目录均报 `STALE`；已安装的 `reference-transaction` 与 `ed5d68e`（**F85 之前**那版）
+逐字节相同（`cmp` 确认），`grep -c _write_rename_recovery_anchor` 在已安装文件里是
+**0**。⇒ **三棵正式工作树的真实暴露面从未改变**——这正是本文件反复记录过的
+"验证在不具备关键条件的环境里做的"那种仪器缺陷（第十一种，F41 pass 1 同型）。
+连带发现：`tools/loop/` 与 `verify_all.sh` 没有任何环节会自动跑
+`install-reference-transaction.sh --check`；`verify-reference-transaction.sh`
+本身也是 **0** 处覆盖 rename-recovery（`git grep -c rename-recovery` 命中 0），
+它的"真实已安装 hook"那部分测的是这份陈旧 hook，所以全程报 ALL OK、发现不了这个缺口。
+
+**STILL OPEN（原文照抄，机制侧，安装缺口修完之后仍然成立）**："whether the anchor
+write can fail silently in a way the harness never exercises (`git update-ref` errors
+are swallowed to stderr and the delete is allowed anyway — disk-full/EPERM path
+explicitly untested); renames of a packed ref and of the current branch each write
+TWO anchors per rename (observed), so anchors accumulate faster than the header
+estimates."
+
+**判定**：PARTIAL ⇒ 不许关卡。按契约五之四"能在本轮修的就当场修，然后重跑"，
+本轮继续派一个新的实现子代理修这处安装缺口 + 补上 `verify-reference-transaction.sh`
+的 rename-recovery 覆盖，然后重跑这一遍。见下一条派发记录。
+
+**安装缺口修补返回（`STATUS: success`）**：`install-reference-transaction.sh --check`
+修前对 `flutter_hot_patcher`（与 fhp-research 共用）与 `~/dart-3122/sdk` 两处共享
+`.git` 公共目录均报 `STALE`，已安装文件里 `_write_rename_recovery_anchor` 计数为
+**0**（源文件为 2）；跑 `install-reference-transaction.sh` 之后两处均变
+`OK installed and current`，已安装文件计数变为 **2**，与源文件一致。补上两条
+`verify-reference-transaction.sh` 用例（scratch repo 内）：①重命名后确认
+`refs/rename-recovery/*` 确实指向重命名前的旧 oid；②对该锚点 ref 跑
+`update-ref -d` 确认被拒绝（rc=128），与 `refs/heads|tags|wip` 同一套保护。
+提交 `b172469`（只碰 `tools/loop/hooks/verify-reference-transaction.sh`，`memo.md`
+留给本文件自己）。`verify-reference-transaction.sh` 重跑两次，`ALL OK`，新增两行
+确认真的执行而非被跳过。已知局限：仍未覆盖 `git update-ref` 本身失败（磁盘满等）
+的路径，与 hook 自己 header 里承认的缺口一致，不是新缺口。
+
+**当场核验**（读 git 元数据，不复跑对方的验证脚本）：`git -C flutter_hot_patcher log
+--oneline -1 b172469` 存在；`git status --porcelain` 干净（除本文件与既有大量
+无关未跟踪历史遗留）；`git -C ~/dart-3122/sdk status --porcelain` 与
+`git -C ~/Documents/fhp-research status --porcelain` 均干净——安装钩子写的是
+`.git/hooks/` 目录下的文件，不是这两棵树的受控源码，符合预期不产生源码 diff。
+
+**这是一次"修复"，本身尚未被审。** 按契约五之四"修完的东西同样是未经审的"，
+派第三个全新子代理，narrower scope，只核这次安装 + 覆盖修补本身（不是重新走
+一遍完整七项攻击去质疑锚点机制本体——那部分已经在上一条记录里 SURVIVES 了）。
+
+**第三次证伪 pass 返回：VERDICT PARTIAL**（Sonnet，26 次工具调用，147s，逐条独立
+复现）。①②③④ SURVIVE：亲自跑 `install-reference-transaction.sh --check` 两处
+`OK`（fhp-research 因共享同一 `.git` 正确报"已覆盖"）；`grep -c
+_write_rename_recovery_anchor` 两处已安装文件均为 2，与源文件字节级相同；把
+真正已安装的 hook（不是仓库源码副本）复制进 `/tmp` scratch repo 验证功能真实存在；
+`b172469` 的两条新用例不是恒真判据——分别在两份改坏的副本上跑，anchor 用例与
+delete-protection 用例各自独立报红；`verify-reference-transaction.sh` 全量重跑
+`ALL OK`、`verify-deny.sh` 未受影响；`~/dart-3122/sdk` 与 `fhp-research` 均无源码
+`git status` 变化。**顺带订正一处细节**：保护逻辑的承重行是第 361 行的缓冲过滤器，
+不是第 379 行的 `NS=strict` 标签（只删第 379 行不会让保护失效）——已记录，不需要
+再改代码，只是命中位置的订正。
+
+**⑤ 抓到一处真实覆盖缺口**：`docs/LOOP_CONTRACT.md` 第八节列的**第四棵树**
+`~/shorebird_engine/engine/src/flutter`（iOS 引擎构建树，规则原文明确标注
+"最高风险,不许对它跑 checkout/stash/clean"）**有自己独立的 `.git`**（不是另外三棵树共用
+的那个 common dir 的 worktree），而 `install-reference-transaction.sh` 的 `TREES`
+数组里**没有它**——该树上此刻**完全没有** `reference-transaction` 保护。
+**COST OF BEING WRONG（原文）**：若照现状关卡，`branch -D`/`reset --hard` 等在这棵
+"最危险、最不该碰"的树上仍然不设防，F85 本来要堵的那类破坏性丢失换了第四个地方
+重新敞开，且没人在检查它。
+
+**判定**：PARTIAL ⇒ 不许关卡。缺口范围明确、修法与已完成的两次同型（往
+`TREES` 数组加一条路径 + 装 + 跑 `--check` 验证），仍在"当场能修"的量级，按契约
+五之四继续修，不升级成独立卡片。派第四个子代理修这个具体缺口，然后做**收尾**：
+若这一遍返回 SURVIVES，把 `STILL OPEN` 原文抄进本文件、`cards.tsv` F85 行改
+`closed`；若仍不 SURVIVES，本轮到此为止，把新判决如实记下，F85 留 `built`，交给
+下一轮。
+
+**第四个子代理（Sonnet）修补此缺口**：`install-reference-transaction.sh` 的
+`TREES` 数组加入 `/Users/Cruz/shorebird_engine/engine/src/flutter`（commit
+`3364de8`，只改这一行）。装之前先跑 `git status --porcelain` / `git diff --stat`
+拿到引擎树的基线（4 个受控文件的既有 diff + 若干无关未跟踪目录），装完（跑
+`install-reference-transaction.sh` 默认模式）再跑一遍同样两条命令逐字对比确认
+未变；`--check` 对四棵树全报 `OK`（`fhp-research` 因共享 `.git` 报"已覆盖"）；
+装进引擎树里的那份 `grep -c _write_rename_recovery_anchor` = 2，与源文件字节级
+相同。只提交了 `flutter_hot_patcher` 里的这一行改动，引擎树本身（按规则永远不
+提交）未被触碰。
+
+**第四次证伪 pass 返回：VERDICT SURVIVES**（Sonnet，18 次工具调用，narrower scope
+只核这次装四棵树的修补，不重新质疑锚点机制本体）。①：亲自在 `/tmp` 隔离 scratch
+仓库里把 `--check` 逻辑的四种失败态全部逼出来——改坏一字节报 `STALE`、去掉 `+x`
+报 `NOT EXECUTABLE`、删文件报 `MISSING`，三者 rc 均为 1，判据能报红。②：
+`git -C ~/shorebird_engine/engine/src/flutter rev-parse --git-common-dir` 确认是
+独立 `.git`（非指向他树的 `commondir` 指针文件）；`cmp` 源文件与该树已装文件字节级
+相同；确认不是符号链接。③：从 `docs/LOOP_CONTRACT.md` 第八节原文独立重新枚举
+受保护树清单，四棵——`~/dart-3122/sdk`、`fhp-research`（与 `flutter_hot_patcher`
+共用 common dir 的 worktree）、`flutter_hot_patcher`、`~/shorebird_engine/engine/src/flutter`
+——与 `TREES` 数组现状逐一对应，契约里没有第五棵。④：确认引擎树 `core.hooksPath`
+本地作用域为空、安装脚本的 warning 分支确实跑过且未报警。⑤：`git merge-base
+--is-ancestor 3364de8 HEAD` 通过；磁盘上 `TREES` 数组当场 grep 确认含第四条路径。
+⑥：亲自重跑 `git status --porcelain` 与 `diff <(git diff -- engine/src/flutter/)
+engine/patches/engine_tree_current_probefree.diff`，后者 rc=0（逐字节吻合已record
+的补丁），`--stat` 显示 `4 files changed, 19 insertions(+), 4 deletions(-)`，与
+预期形状一致。⑦：确认无符号链接冲突、无 hooksPath 覆盖、锚点函数名在已装文件中
+出现两次（定义+调用点），与源码吻合。
+
+**STILL OPEN（原文抄录）**：The one test I could not run in this sandbox —
+checking `core.hooksPath` at global/system git config scope — would still
+overturn this if a global override exists that shadows the local empty value
+for this specific tree. (Git resolves local over global, so an empty local
+value should win regardless, but this was asserted, not independently
+re-derived from git's config precedence rules for hooksPath specifically at
+this shop's git version — worth a `git -C <tree> config --show-origin --get
+core.hooksPath` run outside this sandbox to close it fully.)
+
+**判定：SURVIVES ⇒ 可以关卡。** F85 四轮（机制实现 → 证伪 PARTIAL(缺装) → 装+补测
+→ 证伪 PARTIAL(缺第四棵树) → 补装第四棵树 → 证伪 SURVIVES）全部走完，`cards.tsv`
+F85 行 `state` 由 `open` 改为 `closed`。本轮到此结束，不额外拾取其他 built 卡片
+（F49/F53/F54/F65/F80）或 `.loop/UNREVIEWED_FIX` 队列剩余项（F46 依赖 F85，随
+F85 关闭一并清；F52/F67 此前已各自处理过，属 `fix_queue.py` 重生成噪音非真实欠账，
+已在本轮更早处记录过判断依据），留给下一轮按"一次一件事"原则依次处理。
+
+**`.loop/UNREVIEWED_FIX` 队列清账（F85 一行）**：队列里 F85 那行记的是
+`0b9d7d9`/`23ea967`/`74d6d13`（2026-09-16 23:32），那三笔其实是**拆卡记账**
+（把 F85 从 F46 里拆出来 + 补 checklist），不是本轮做的机制实现；本轮的真实修复
+链是 `5a4eb1b`→`b172469`→`3364de8`，经过三次独立证伪 pass（PARTIAL→PARTIAL→
+SURVIVES）才关闭。按格式记下：
+
+F85 修补丁 VERDICT: SURVIVES (fix) —— 第四次证伪 pass（Sonnet，18 次调用）核验
+`3364de8`（补装第四棵引擎树）后对四棵树逐一验证 `--check` 全 OK、锚点函数字节级
+相同、引擎树受控 4 文件 diff 前后逐字节吻合未被扰动，判 SURVIVES。
+
+队列文件本身**未手动编辑**（按指令不手动删改，留给 `fix_queue.py` 下轮按提交主题
+重新扫描后自然更新/清账；若下轮它仍挂着旧的三笔 commit 标记，那是它的记账口径
+问题，不代表 F85 仍欠审）。F46/F52/F67 三行本轮未处理，按"一次一件事"留给后续轮。
