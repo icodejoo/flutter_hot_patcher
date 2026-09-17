@@ -421,10 +421,22 @@ if [ -n "$free_gb" ] && [ "$free_gb" -lt "$DISK_FLOOR_GB" ]; then
   # start while directories are being removed; the round in flight, if any, is
   # left alone exactly as before.
   say "refuse: only ${free_gb} GB free, floor is ${DISK_FLOOR_GB} GB -- slimming"
+  # Do not lift a PAUSE this block did not place. Until 2026-09-17 the `rm -f`
+  # below was unconditional, so a HAND-MADE kill switch -- the one the comment
+  # 20 lines down says nothing in this script can override -- was silently
+  # removed the first time the disk dipped below the floor. The kill switch at
+  # :449 distinguishes auto-idle from hand-made; this block ran BEFORE it and
+  # consulted neither. Remember who owned the file.
+  pause_was_ours=0
+  [ -e "$PAUSE" ] || pause_was_ours=1
   touch "$PAUSE"
   if "$(dirname "$0")/disk_slim.sh" "$LOG"; then
-    rm -f "$PAUSE"
-    say "disk_slim recovered to $(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}') GB -- PAUSE lifted"
+    if [ "$pause_was_ours" = 1 ]; then
+      rm -f "$PAUSE"
+      say "disk_slim recovered to $(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}') GB -- PAUSE lifted"
+    else
+      say "disk_slim recovered to $(df -g "$REPO" 2>/dev/null | awk 'NR==2 {print $4}') GB -- PAUSE left in place, it was not ours to lift"
+    fi
   else
     # Left paused on purpose. Everything still large is on disk_slim's denylist
     # (build trees, their oracle binaries, the one DeviceSupport entry that is
