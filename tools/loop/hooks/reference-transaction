@@ -215,6 +215,81 @@
 # refused, run it yourself), never a false positive, so it is safe to leave
 # open rather than trying to out-guess every alias shape.
 #
+# RENAME RECOVERY ANCHOR (F85 fix, 2026-09-17): the PARENT-PROCESS FALLBACK
+# above closes the false-positive (a legitimate `branch -m`/-M is no longer
+# refused). It does NOT close a separate, real gap discovered while
+# reproducing it: `git branch -m old new` is NOT atomic on this host's git
+# (2.53.0, files ref-storage backend). Empirically (poll-and-kill harness,
+# /tmp scratch repo, 2026-09-17, see tools/loop/hooks/verify-rename-recovery.sh):
+# git deletes refs/heads/old THROUGH THIS HOOK (the transaction this comment
+# block is about), and only AFTER that transaction has fully committed and
+# this hook has returned does git write refs/heads/new -- directly, with NO
+# reference-transaction event of its own (same fact already established above
+# for why refs/heads/new never appears on this hook's stdin at all). If the
+# `git branch -m` process is killed in the window between "old ref deleted"
+# and "new ref written", the branch is gone under BOTH names: this is a real,
+# reproduced, permanent loss of a friendly ref to the commit, not a
+# theoretical one.
+#
+# This hook cannot make git's own two-step rename atomic -- that is git's C
+# code, not this hook's. What it CAN do, because it runs synchronously and
+# fully inside the SAME process invocation that is about to allow the delete,
+# is durably pin the commit under a DIFFERENT, never-deleted ref name before
+# returning success -- so a kill in that window loses the friendly name but
+# never loses the commit's reachability. Mechanism: immediately before
+# allowing a refs/heads/X deletion via the parent-process-fallback path
+# (i.e. exactly the case with no same-transaction pair to fall back on),
+# `git update-ref refs/rename-recovery/<X-sanitized>-<old-oid>-<epoch>-<pid>
+# <old-oid>` is run right here, synchronously, before this hook exits 0. That
+# ref write does not depend on git's own rename completing at all -- it is a
+# completely separate ref, created by this hook's own `git update-ref` call,
+# which either lands on disk before this hook returns (in which case it is
+# there no matter what happens to the rest of the `branch -m` afterward) or
+# it does not run at all (this hook never got to "prepared", nothing was
+# allowed either). There is no window where the delete is permitted but the
+# anchor write has not yet been attempted.
+#
+# Naming is deliberately collision-safe rather than reusing X as-is: the oid,
+# a wall-clock timestamp, and this hook's own pid are all folded into the ref
+# name specifically so that (a) renaming branches that happen to share a name
+# at different times never overwrites an earlier anchor, and (b) two
+# concurrent renames (unlikely for the same name, but not impossible) do not
+# race on the same ref name. refs/rename-recovery/* is added to the SAME
+# protected namespace as refs/heads/*, refs/tags/*, refs/wip/* below (NS=strict)
+# so an anchor, once written, is itself refused deletion by this same hook --
+# it is meant to be a durable, append-only safety net, not another mutable
+# ref a later round could clean up by mistake. Consequence, stated plainly:
+# these accumulate forever and are NOT garbage collected by anything in this
+# repo. That is intentional (this is a blast-radius limiter, not tidy
+# housekeeping) but it is a real, known cost -- a human who wants to prune
+# confirmed-safe old anchors does so manually, the same "move the hook aside"
+# friction as every other override in this file.
+#
+# WHAT THIS DOES NOT COVER (stated as plainly as the rest of this header):
+#   - It only fires for the parent-process-fallback path, i.e. only for
+#     renames git implements as this hook actually seeing. If some future git
+#     version changes `branch -m` to not go through a reference-transaction
+#     hook call for the delete at all, this anchor is never written -- this
+#     mechanism rides on the same empirical fact (2026-09-17, this host's
+#     git) as the fallback rule itself, not a documented git guarantee.
+#   - The `git update-ref` call for the anchor can itself fail (disk full,
+#     permissions). This hook does NOT refuse the rename in that case -- it
+#     logs a warning to stderr and allows the delete anyway, on the
+#     reasoning that turning a rare local I/O failure into a blocked
+#     everyday `branch -m` would be a worse false positive than the (already
+#     rare -- it requires a kill in a narrow window) case this anchor
+#     protects against. This means the anchor's guarantee is "best effort
+#     durable", not "provably always written" -- see
+#     verify-rename-recovery.sh for the measured lost-count with and without
+#     this mechanism, including this failure mode left untested (would
+#     require simulating disk-full inside the harness, not done).
+#   - It recovers the COMMIT, not the FRIENDLY NAME. After a kill in the
+#     window, `refs/heads/new` still does not exist and `refs/heads/old` is
+#     still gone -- a human (or a follow-up automated step) must notice and
+#     run `git branch new refs/rename-recovery/<...>` themselves. This
+#     mechanism's contract is "no permanent unrecoverable loss of history",
+#     not "the rename always finishes".
+#
 # No override environment variable, on purpose, same reasoning as
 # deny-destructive.sh: an override is the first thing a confused agent would
 # find and set. A human who actually needs one of these operations runs it in
@@ -256,6 +331,21 @@ _parent_is_branch_move() {
   )
 }
 
+# See the "RENAME RECOVERY ANCHOR" header comment above. Writes a durable
+# ref pinning $2 (an oid) under a new, never-reused, never-deleted name
+# derived from $1 (the refs/heads/X ref about to be deleted) before this
+# hook returns success for that deletion. Best-effort: a failure here is
+# logged but does not itself block the rename (see header for why).
+_write_rename_recovery_anchor() {
+  _rr_ref=$1
+  _rr_oid=$2
+  _rr_sanitized=$(printf '%s' "${_rr_ref#refs/heads/}" | tr '/' '_')
+  _rr_anchor="refs/rename-recovery/${_rr_sanitized}-${_rr_oid}-$(date +%s)-$$"
+  if ! git update-ref "$_rr_anchor" "$_rr_oid" 2>/dev/null; then
+    echo "reference-transaction: WARNING failed to write recovery anchor $_rr_anchor for $_rr_ref (was $_rr_oid) -- allowing the rename anyway, see F85 fix notes in this file's header" >&2
+  fi
+}
+
 if [ "$STATE" != "prepared" ]; then
   cat >/dev/null   # drain stdin for committed/aborted calls, then no-op
   exit 0
@@ -268,7 +358,7 @@ declare -a REFS NEWS
 COUNT=0
 while read -r _OLD_FIELD NEW REF; do
   case "$REF" in
-    refs/heads/*|refs/tags/*|refs/wip/*|refs/stash) : ;;
+    refs/heads/*|refs/tags/*|refs/wip/*|refs/stash|refs/rename-recovery/*) : ;;
     *) continue ;;
   esac
   case "$NEW" in
@@ -286,7 +376,7 @@ while [ "$_i" -lt "$COUNT" ]; do
   REF=${REFS[$_i]}
   NEW=${NEWS[$_i]}
   case "$REF" in
-    refs/heads/*|refs/tags/*|refs/wip/*) NS=strict ;;
+    refs/heads/*|refs/tags/*|refs/wip/*|refs/rename-recovery/*) NS=strict ;;
     refs/stash) NS=stash ;;
   esac
 
@@ -325,6 +415,7 @@ while [ "$_i" -lt "$COUNT" ]; do
           # only other signal that can answer this: was the process running
           # this exact transaction itself a `branch -m`/-M/--move invocation?
           if _parent_is_branch_move; then
+            _write_rename_recovery_anchor "$REF" "$RESOLVED"
             _i=$((_i + 1))
             continue   # allow: this transaction's own process is a branch rename
           fi
