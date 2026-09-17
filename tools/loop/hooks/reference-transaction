@@ -414,6 +414,30 @@
 # its negative control (hook with the anchor call removed still loses the
 # object).
 #
+# F86(a) SECOND CORRECTION (2026-09-17, second falsify pass on the fix
+# above): two defects found, both fixed here, neither yet covered by a fresh
+# falsify pass of ITS OWN as of this comment --
+#   1. REFTABLE BACKEND: `_write_stash_push_anchor`'s nested `git update-ref`
+#      cannot run inside git's own reftable transaction (`git init
+#      --ref-format=reftable`), so on that backend the anchor write always
+#      failed and the original fix here degraded to a stderr-only WARNING
+#      while still allowing the push -- i.e. it silently protected nothing on
+#      that backend while claiming to. Changed to a hard refusal
+#      (BLOCK+REASON) at both call sites instead of a warning: if this hook
+#      cannot anchor a stash push, it now refuses the push rather than
+#      allowing an unprotected one. This project's actual trees all use the
+#      default "files" backend (`git rev-parse --show-ref-format` in each),
+#      so this refusal path is not expected to fire in practice here, but it
+#      is the correct behavior if that ever changes.
+#   2. STALE INSTALLED HOOKS: the fix in this file existed in source control
+#      but `.git/hooks/reference-transaction` in all three of this project's
+#      working trees still had the PRE-anchor version installed (missing
+#      `_write_stash_push_anchor` entirely) until
+#      `tools/loop/hooks/install-reference-transaction.sh install` was
+#      re-run on 2026-09-17 -- i.e. the fix had never actually been deployed
+#      anywhere it would run. Re-run that installer's `--check` mode after
+#      any change to this file; nothing does so automatically.
+#
 # F86, PART (b) -- `branch -M <src> <dst>` WHERE <dst> PRE-EXISTS WITH
 # DIVERGING HISTORY (2026-09-17): the falsify pass that opened this card
 # asserted "today only <src>'s prior tip gets anchored; <dst>'s prior tip does
@@ -514,14 +538,24 @@ _write_rename_recovery_anchor() {
 # shapes are handled at their respective call sites below; see the header
 # for why the SAME code cannot also anchor `stash drop`/`stash pop` of a
 # non-last entry -- those never produce a transaction for this hook to see
-# in the first place, so there is no call site for them). Best-effort, same
-# reasoning as `_write_rename_recovery_anchor`: a failure here is logged but
-# does not itself block the stash push.
+# in the first place, so there is no call site for them).
+#
+# NOT best-effort (2026-09-17 correction, second falsify pass on this
+# function): a nested `git update-ref` cannot run inside the reftable
+# backend's transaction (`git init --ref-format=reftable`), so on that
+# backend this call ALWAYS fails -- silently warning and allowing the push
+# anyway would mean F86(a) protects nothing at all there while claiming to.
+# Sets $_ANCHOR_FAILED=1 instead; callers must turn that into BLOCK+REASON
+# so the push is refused rather than silently unprotected. The files backend
+# (this project's actual backend, `git rev-parse --show-ref-format`) is
+# unaffected -- this only fires on reftable, which is exercised by
+# verify-reference-transaction.sh's reftable negative control.
 _write_stash_push_anchor() {
   _sp_oid=$1
   _sp_anchor="refs/stash-anchor/${_sp_oid}-$(date +%s)-$$"
   if ! git update-ref "$_sp_anchor" "$_sp_oid" 2>/dev/null; then
-    echo "reference-transaction: WARNING failed to write stash anchor $_sp_anchor for refs/stash (was $_sp_oid) -- allowing the push anyway, see F86(a) correction in this file's header" >&2
+    echo "reference-transaction: refused -- could not write stash anchor $_sp_anchor for refs/stash (was $_sp_oid); this backend (see 'git rev-parse --show-ref-format') cannot anchor a stash push inside this hook, so F86(a) cannot protect it -- see this file's header" >&2
+    _ANCHOR_FAILED=1
   fi
 }
 
@@ -569,10 +603,15 @@ while [ "$_i" -lt "$COUNT" ]; do
       # is the only place a brand-new stash's oid is ever seen; anchor it
       # here rather than trusting stdin's OLD field to tell create from
       # update.
+      _ANCHOR_FAILED=
       _write_stash_push_anchor "$NEW"
+      if [ -n "$_ANCHOR_FAILED" ]; then
+        BLOCK=1
+        REASON="could not anchor new refs/stash entry $NEW before allowing the push (see stderr above) -- refusing rather than allowing an unprotected stash"
+      fi
     fi
     _i=$((_i + 1))
-    continue   # ref did not exist before this transaction: creation, allow
+    continue   # ref did not exist before this transaction: creation (or BLOCK set above), either way go to next line
   fi
   if [ "$NEW" = "$ZERO" ]; then
     # Same-transaction rename check -- refs/heads/* only, see header above.
@@ -634,7 +673,12 @@ while [ "$_i" -lt "$COUNT" ]; do
     # unconditionally here is harmless even if some other git version ever
     # routes a drop/pop through this line, since pinning an oid that was
     # about to be dropped anyway costs nothing and only helps.
+    _ANCHOR_FAILED=
     _write_stash_push_anchor "$NEW"
+    if [ -n "$_ANCHOR_FAILED" ]; then
+      BLOCK=1
+      REASON="could not anchor updated refs/stash entry $NEW (was $RESOLVED) before allowing the push (see stderr above) -- refusing rather than allowing an unprotected stash"
+    fi
     _i=$((_i + 1))
     continue
   fi
