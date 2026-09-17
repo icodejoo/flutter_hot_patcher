@@ -7261,3 +7261,40 @@ F46 本身仍 `open`，且新增 F86 承接这两处缺陷的独立修复。
       或在 prune 前被拒绝（`rc=128`）；(b) `branch -M <src> <已存在且历史不同的 dst>`
       必须被拒绝，或为被顶替的 `dst` 也写一份 rename-recovery 锚点（现在只锚 `src`）。
       负控制：撤回修复后两条性质必须能实测翻回坏的那一侧。
+
+### 2026-09-17（新会话，人工单轮，`.loop/PAUSE` 在位）：清账 `.loop/UNREVIEWED_FIX` 的 Q0 停摆
+
+心跳 round-start：三棵工作树 `git status --porcelain` 除既有未跟踪历史遗留外干净；
+`d7215a9`（CLAUDE.md 规则 4）与 `cdec300`（F82 attempt 5，`fix_queue.py` 的 OWED 语义修复）
+是本会话之前留下的 HEAD，`git show --stat -- memo.md` 核实这两笔**都没有碰 `memo.md`**。
+
+队列磁盘实况：`.loop/UNREVIEWED_FIX` 四行（F46/F52/F67/F86）与它旁边的孤儿快照
+`.loop/UNREVIEWED_FIX.before.orphan.20260917T115229`（`ls -la` 时间戳 11:05，
+`Q0` 那行记的正是它）**逐字节内容相同**——即从快照时刻到本轮开始，队列文件本身
+一次都没被改过；卡在 `Q0` 里的"上一轮没跑完关卡"这件事，唯一缺的就是这次人工核对。
+
+逐行核对，不是复述上一节（6965-6981 行）的结论，是照 `git show <sha>:memo.md`
+的行数与 `git log --oneline` 的 subject 重新推一遍：
+
+- **F46**：队列行引用的 `4995a6b/6e1194c/c3b03a5` 是这条修补丁链最早的一段，链条本身
+  后续又经过 `b5b3853`/`ed5d68e`（1332ead 判 FALSIFIED (fix)）、再到 `6e29543`
+  对整条 HEAD 状态做的第三次证伪（本文件 7200-7249 行，VERDICT FALSIFIED，拆出 F86）。
+  三次证伪、最新一次已记录在案且是本文件当前内容的一部分——**这一行是
+  `fix_queue.py` 按 commit subject 重扫的噪声，账已经用更晚的判决结清**。
+- **F52**：`cards.tsv` state=`closed`（`644da5c`），`7133f91` 只是"checklist 与
+  cards.tsv 同步"这类记账改动，本身不是需要再审的"修补丁"。噪声，理由同 6966-6968 行。
+- **F67**：`cards.tsv` state=`built`（不是 closed），`0fac727` 记的是**卡片自身**的
+  PARTIAL 判决，不是"某个修补丁"的判决——F67 从未自称是谁的 fix。噪声，理由同
+  6969-6972 行。
+- **F86**：队列行把它标成"fixed after verdict"，但引用的 `6e29543`/`bb4be82`
+  正是**创建**这张卡（记录 F46 的 FALSIFIED 判决并拆卡）的那两笔提交，不是对
+  F86 自身问题的修复——`cards.tsv` 与本文件里 F86 的 checklist 仍是 `- [ ]`，
+  从未有人往它上面提交过实现。这是与 F85 当初（6978-6981 行）同一类"投机 commit
+  subject 误判为 fix commit"的噪声，**F86 现在的真实状态是"待实现的 open 卡"，
+  不是"待复核的修补丁"**。
+
+**处理**：四行全部认定为队列重建噪声，均已写明理由（上）。`.loop/UNREVIEWED_FIX`
+清空；孤儿快照 `.loop/UNREVIEWED_FIX.before.orphan.20260917T115229` 予以保留
+（证据链，不是活状态）。改动：本节 + 清空 `.loop/UNREVIEWED_FIX`。三棵树除既有
+未跟踪历史遗留外干净。按"一次一件事"，本轮到此结束；**下一轮**：F86 是当前
+唯一未实现的新开卡，需要真正派发一次实现（不是又一次队列诊断）。
