@@ -93,6 +93,36 @@ check allow "branch -m renamed $CUR_BRANCH (rename back)"                       
 check allow "branch -M $CUR_BRANCH renamed (force-rename form, -M)"                 branch -M "$CUR_BRANCH" renamed
 check allow "branch -M renamed $CUR_BRANCH (force-rename form, rename back)"        branch -M renamed "$CUR_BRANCH"
 
+echo "rename-recovery anchor (F85 fix, 2026-09-17): a branch -m must pin the"
+echo "old oid under refs/rename-recovery/* before allowing the delete, and"
+echo "that anchor ref must itself be undeletable through this same hook (same"
+echo "NS=strict protected namespace as refs/heads/*/refs/tags/*/refs/wip/*):"
+RR_OLD_OID="$(git -C "$SCRATCH" rev-parse "$CUR_BRANCH")"
+rc_rr_rename="$(py_git branch -m "$CUR_BRANCH" rr-check-target)"
+ANCHOR="$(git -C "$SCRATCH" for-each-ref refs/rename-recovery --format='%(refname) %(objectname)' | awk -v oid="$RR_OLD_OID" '$2==oid {print $1; exit}')"
+if [ "$rc_rr_rename" = 0 ] && [ -n "$ANCHOR" ]; then
+  printf '  ok   anchor rc=%-4s refs/rename-recovery/* pins old oid %s after branch -m (%s)\n' "$rc_rr_rename" "$RR_OLD_OID" "$ANCHOR"
+else
+  printf '  FAIL anchor rc=%-4s expected a refs/rename-recovery/* ref pinning %s after branch -m (anchor=%s)\n' "$rc_rr_rename" "$RR_OLD_OID" "${ANCHOR:-<none>}"
+  fail=$((fail+1))
+fi
+# Rename back so $CUR_BRANCH stays valid for the rest of this script -- this
+# is git's own native rename (not through py_git) purely to restore state; it
+# is not itself part of what's being checked here.
+git -C "$SCRATCH" branch -m rr-check-target "$CUR_BRANCH" >/dev/null 2>&1 || true
+
+if [ -n "$ANCHOR" ]; then
+  rc_rr_del="$(py_git update-ref -d "$ANCHOR")"
+  if [ "$rc_rr_del" != "0" ]; then
+    printf '  ok   block  rc=%-4s delete of %s refused (rename-recovery anchors are protected, matching refs/heads/* policy)\n' "$rc_rr_del" "$ANCHOR"
+  else
+    printf '  FAIL block  rc=%-4s delete of %s should have been refused\n' "$rc_rr_del" "$ANCHOR"
+    fail=$((fail+1))
+  fi
+else
+  echo "  SKIP block  no anchor found to test deletion against (anchor check above already failed and counted)"
+fi
+
 echo "adversarial: a real deletion must NOT be smuggled past the same-"
 echo "transaction rename check by pairing it with an unrelated same-"
 echo "transaction create at a DIFFERENT oid (must still be blocked):"
