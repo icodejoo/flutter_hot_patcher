@@ -336,15 +336,25 @@ say_once() {
 # both of them print nothing.
 FIX_QUEUE=$STATE/UNREVIEWED_FIX
 FIX_QUEUE_BEFORE=$STATE/UNREVIEWED_FIX.before
-# The fallback must not fabricate an EMPTY snapshot. An empty before-file reads
-# as "nothing was owed at round start", which hides a disappearance just as well
-# as no snapshot at all -- measured 2026-09-16 during verification: with the
-# snapshot missing, a vanished entry and no verdict produced silence and exit 0.
-# The sentinel makes "the snapshot was not taken" a state fix_queue.py reddens on.
-if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
-  printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
-fi
-FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
+# Only the PATHS are set here. The snapshot itself is taken further down, after
+# the lock -- see "round-start snapshot" below.
+#
+# It used to be taken right here, 144 lines before /usr/bin/shlock, and the
+# fourth falsification pass of F82 measured what that costs: a tick that skips
+# because a round is already running still reached this line and rewrote the
+# `.before` of the round IN FLIGHT. Live evidence at the time: `.before` mtime
+# 18:31 against the queue's 17:59, byte-identical -- harmless only because the
+# queue had not changed, which is to say harmless except exactly when the gate
+# matters. When it HAS changed, the round in flight loses the only record of
+# what it started with.
+#
+# Everything between here and the lock is read-only on the queue, so nothing is
+# lost by waiting: the prompt block below only renders it.
+FIX_QUEUE_BEFORE_SHA=""
+# 0 once the snapshot exists, 1 once the gate has compared it. Read by the EXIT
+# trap so that "the round ended without ever running the gate" is a printed
+# WARNING rather than a silence indistinguishable from "nothing was owed".
+FQ_GATE_RAN=
 if ! python3 "$REPO/tools/loop/fix_queue.py" --self-test >/dev/null 2>&1; then
   say "WARNING: fix_queue.py --self-test fails -- the fix-patch gate is OFF"
   PROMPT="$PROMPT
@@ -483,7 +493,15 @@ if ! /usr/bin/shlock -f "$LOCK" -p $$; then
   say_once "skip: round already running (pid $(cat "$LOCK" 2>/dev/null))"
   exit 1
 fi
-trap 'rm -f "$LOCK"' EXIT
+# The second clause is the outermost backstop on the fix-queue gate, and it
+# covers the one case no amount of care inside the gate can: the gate never
+# runs. $FQ_GATE_RAN is empty until the round-start snapshot is taken, 0 from
+# then until the gate has compared it, and 1 afterwards -- so this fires only
+# for a round that snapshotted the queue, handed it to a session that was
+# allowed to edit it, and then left without comparing. The snapshot is
+# deliberately NOT removed in that case: it is the only surviving record of what
+# the round started with.
+trap 'rm -f "$LOCK"; if [ "${FQ_GATE_RAN:-}" = 0 ]; then say "WARNING: round ended WITHOUT running the fix-queue gate -- the round-start snapshot ($FIX_QUEUE_BEFORE) was never compared, so a queue line deleted during this round is unrecorded; owed is UNKNOWN, not 0. Reconcile $FIX_QUEUE by hand."; fi' EXIT
 
 # ---- cooldown between rounds -----------------------------------------------
 # The lock alone paces this loop at essentially 100% duty cycle: the next round
@@ -639,6 +657,55 @@ fingerprint() {
 say "round start (permission-mode=$PERMISSION_MODE)"
 round_started_at=$(date +%s)
 idle_before=$(fingerprint)
+
+# ---- round-start snapshot of the fix queue ---------------------------------
+# HERE, and not at the FIX_QUEUE assignment 300 lines up, because everything
+# between the two is a way for a tick to exit without running a round: PAUSE,
+# quota backoff, the LOCK, the cooldown, the resume guard. Taken at the old site
+# every one of those ticks rewrote the `.before` of whichever round was actually
+# in flight. Taken here it is written once per round that really starts, by the
+# process holding the lock, and still well before the claude invocation.
+#
+# AFTER `round_started_at`, not before it, and that is not cosmetic. This block
+# spends a python3 startup on the sha256, and round_started_at is the lower
+# bound round_dispatch_stats() uses to decide which session transcript is this
+# round's -- by BIRTH time, at 1-second resolution. Placing the snapshot first
+# pushed round_started_at later and the round's own transcript fell outside its
+# own window: the S6 control (an honest round with a genuine verdict) went from
+# `drain F41, 1 dispatch` to `hold F41, 0 dispatch`. A gate that stops draining
+# is a gate that holds an entry forever, so this ordering is load-bearing.
+#
+# A `.before` that already exists means the PREVIOUS round ended without its
+# gate ever running. Say so rather than overwrite quietly: overwriting is what
+# makes a deletion by that round permanently invisible, and it is the only
+# remaining way to lose one.
+if [ -e "$FIX_QUEUE_BEFORE" ]; then
+  # Preserved, not overwritten, and then the debt is parked. Probe E6/E7 against
+  # this patch measured the cost of only warning: a SIGKILLed round takes the
+  # EXIT trap with it, its queue line vanishes, and the next round printed a
+  # warning naming no entry and then destroyed the only record -- owed back to
+  # 0, which is the one answer this card exists to forbid.
+  fq_orphan=$FIX_QUEUE_BEFORE.orphan.$(date +%Y%m%dT%H%M%S)
+  if mv -f "$FIX_QUEUE_BEFORE" "$fq_orphan" 2>/dev/null; then
+    say "WARNING: a fix-queue round-start snapshot from an earlier round was still on disk -- that round ended without ever comparing it, so any queue line it deleted is unrecorded. Preserved as $fq_orphan; it holds $(grep -ac . "$fq_orphan" 2>/dev/null || echo '?') entr(ies) that were owed when that round started."
+    python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+      --park "a previous round ended without running the fix-queue gate; its round-start snapshot is $fq_orphan and the queue is not known to be complete" \
+      2>&1 | while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
+  else
+    say "WARNING: a fix-queue round-start snapshot from an earlier round is on disk ($FIX_QUEUE_BEFORE) and could NOT be preserved -- that round's queue edits are unrecorded and this round is about to overwrite the evidence"
+  fi
+  unset fq_orphan
+fi
+# The fallback must not fabricate an EMPTY snapshot. An empty before-file reads
+# as "nothing was owed at round start", which hides a disappearance just as well
+# as no snapshot at all -- measured 2026-09-16 during verification: with the
+# snapshot missing, a vanished entry and no verdict produced silence and exit 0.
+# The sentinel makes "the snapshot was not taken" a state fix_queue.py reddens on.
+if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
+  printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
+fi
+FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
+FQ_GATE_RAN=0
 # Counted here so that "a card was closed this round" is a fact rather than a
 # claim in the round's own report. The gate rule is in the prompt, but a rule in
 # a prompt is a request; this is the part that notices when it was not followed.
@@ -744,6 +811,132 @@ PY
     printf '0 0 - - none'
   fi
 }
+
+# >>> F82 fix-queue gate <<<
+# ---- gate: the fix patches themselves ---------------------------------------
+# The closure gate asks whether a CLOSURE was reviewed. This one asks the
+# question the contract's own last paragraph raises and nothing enforced: was
+# the PATCH that answered a red verdict ever reviewed itself? On 2026-09-09 the
+# answer was no, four times in one round, and the only record was a sentence in
+# memo.md saying so.
+#
+# A FUNCTION, and not the inline block it used to be, for one reason: the
+# quota-block path at the bottom of this file `exit 2`s before the gate ever
+# ran. A round that hit the wall had already been handed the queue and was
+# already allowed to edit it, so its deletions went unexamined -- a two-round
+# sequence was measured at zero output, 0 owed, no WARNING, and CLAUDE.md
+# records that exact state as production-observed on 2026-09-10 20:46. Both
+# endings of a round now go through this, so there is one gate rather than two
+# spellings of one.
+#
+# Everything it reads comes from the machine's side of the round -- the memo
+# lines git can see, the commit subjects the round produced, and the dispatch
+# count from its own transcript. Never the round's report of itself. It computes
+# those inputs itself rather than taking them as arguments, because the two call
+# sites reach it at different points and a "use them if they are set" argument
+# would be one more thing that can silently be the wrong value.
+fix_queue_gate() {
+  local g_agents g_memo g_subjects g_cards fq_memo fq_commits fq_out fq_rc
+  local fq_reported fq_file_n fq_owed fq_why fq_commits_n _n _g
+
+  read -r g_agents _ _ _ _ <<<"$(round_dispatch_stats)"
+  case "${g_agents:-}" in ''|*[!0-9]*) g_agents=0 ;; esac
+
+  g_memo=$( { git -C "$REPO" diff "${memo_rev_before:-HEAD}" -- memo.md 2>/dev/null;
+              git -C "$REPO" diff -- memo.md 2>/dev/null; } | grep '^+' )
+  g_subjects=$(for pair in ${heads_before:-}; do
+      t=${pair%%=*}; h=${pair#*=}
+      [ "$h" = none ] && continue
+      git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
+    done)
+  # An id is only an id if the card table lists one. Unfiltered, the pattern
+  # reads prose as cards: attack 4's replay over 120 commits touching memo.md
+  # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
+  # If the table is named and unreadable, fix_queue.py refuses to enqueue and
+  # prints a WARNING rather than filling the queue with phantoms.
+  g_cards=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
+
+  fq_memo=$(mktemp 2>/dev/null) || fq_memo=
+  fq_commits=$(mktemp 2>/dev/null) || fq_commits=
+  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ]; then
+    rm -f "$fq_memo" "$fq_commits" 2>/dev/null
+    FQ_GATE_RAN=1
+    say "fix-queue: OWED UNKNOWN -- could not create a temp file to run the gate with"
+    say "WARNING: the fix-queue gate did not run (no temp file) -- owed is UNKNOWN, not 0; reconcile $FIX_QUEUE by hand"
+    return 0
+  fi
+  printf '%s\n' "$g_memo" >"$fq_memo"
+  printf '%s\n' "$g_subjects" >"$fq_commits"
+
+  fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+      --before "$FIX_QUEUE_BEFORE" \
+      ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
+      --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
+      --cards "$g_cards" 2>&1)
+  fq_rc=$?
+  printf '%s\n' "$fq_out" | while IFS= read -r l; do
+    [ -n "$l" ] && say "fix-queue: $l"
+  done
+  rm -f "$fq_memo" "$fq_commits" "$FIX_QUEUE_BEFORE"
+  FQ_GATE_RAN=1
+
+  # ---- how much is owed, from two sources that can disagree ----------------
+  # This line was `fq_owed=$(grep -c . "$FIX_QUEUE" 2>/dev/null); fq_owed=${fq_owed:-0}`
+  # until 2026-09-17, and F82's fourth falsification pass named it as the
+  # outermost layer of the same defect the card exists for: it reads "cannot
+  # read the queue" as "nothing owed". Three reachable triggers were each
+  # measured to produce no RED, 0 owed and no WARNING -- an unreadable queue
+  # file, an unwritable queue directory, and the queue path replaced by a
+  # directory. `set -uo pipefail` has no -e, and fq_rc was printed but nothing
+  # gated on it. Of the six inputs the comparison depends on, the checksum,
+  # snapshot, memo, commits and agent count were all fail-closed; the queue
+  # itself was the permissive one.
+  #
+  # Two readings now, and they come from different places on purpose --
+  # instrument defect 10 (F60) was a check whose numerator and denominator were
+  # the same expression, so it could not go red at all:
+  #   fq_reported  the count fix_queue.py computed in memory and printed
+  #   fq_file_n    a count of the file, taken here, after that process exited
+  # Any of {no report, an "unknown" report, an unreadable file, two readings
+  # that disagree} is UNKNOWN. UNKNOWN is not a number and is never compared
+  # with -gt; it prints its own WARNING, so "we could not tell" can never again
+  # be rendered as "0".
+  fq_reported=$(printf '%s\n' "$fq_out" | sed -n 's/^OWED \(.*\)$/\1/p' | tail -1)
+
+  fq_file_n=UNKNOWN
+  if [ -f "$FIX_QUEUE" ] && [ -r "$FIX_QUEUE" ]; then
+    _n=$(grep -c . "$FIX_QUEUE" 2>/dev/null); _g=$?
+    # grep -c exits 1 when the count is zero and >=2 on a real error, and the
+    # old line could not tell those apart because it discarded the status.
+    if [ "$_g" -le 1 ]; then
+      case "$_n" in ''|*[!0-9]*) ;; *) fq_file_n=$_n ;; esac
+    fi
+  fi
+
+  fq_owed=UNKNOWN
+  fq_why=
+  if [ -z "$fq_reported" ]; then
+    fq_why="fix_queue.py printed no OWED line (rc=$fq_rc) -- it did not reach the end of its own run"
+  elif [ "$fq_reported" = unknown ]; then
+    fq_why="fix_queue.py could not settle the round (rc=$fq_rc) -- see its RED above"
+  elif [ "$fq_file_n" = UNKNOWN ]; then
+    fq_why="$FIX_QUEUE is not a readable regular file, so the queue cannot be counted"
+  elif [ "$fq_reported" != "$fq_file_n" ]; then
+    fq_why="two readings disagree -- fix_queue.py wrote $fq_reported entr(ies), the file holds $fq_file_n line(s); something changed it after the gate ran"
+  else
+    fq_owed=$fq_reported
+  fi
+
+  fq_commits_n=$(printf '%s\n' "$g_subjects" | grep -c . || true)
+  say "fix-queue: $fq_owed owed, $fq_commits_n commit(s), $g_agents dispatch(es), rc=$fq_rc"
+  if [ "$fq_owed" = UNKNOWN ]; then
+    say "WARNING: the fix-queue gate could not establish what is owed -- $fq_why. Treating it as owed: a human must reconcile $FIX_QUEUE. This is NOT the same as 0."
+  elif [ "$fq_owed" -gt 0 ] 2>/dev/null; then
+    say "WARNING: $fq_owed fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
+  fi
+  return 0
+}
+# <<< F82 fix-queue gate >>>
 
 closed_ids() {
   # Ids of closed cards, sorted. Counting was not enough: see the gate below.
@@ -1074,6 +1267,26 @@ PY
     echo $(( $(date +%s) + BACKOFF )) >"$BLOCKED"
     say "round BLOCKED on quota; no reset time in the message -- falling back to ${BACKOFF}s"
   fi
+  # Run the gate before leaving. THIS PATH IS WHY fix_queue_gate IS A FUNCTION.
+  # It used to `exit 2` here, which returned before the gate AND before the
+  # `rm -f` of the round-start snapshot, so the next round's `cp` overwrote it
+  # and any queue line this round deleted became permanently invisible. A
+  # two-round sequence was measured at zero output, 0 owed, no WARNING.
+  #
+  # RUN THE GATE rather than "leave the snapshot alone for the next round to
+  # use", which was the other option the card allowed. Two reasons: the next
+  # round would have to decide whether an existing `.before` belongs to it or to
+  # its predecessor, and a conditional snapshot is precisely the shape that has
+  # failed open four times on this card; and the dispatch count, memo lines and
+  # commit subjects that the comparison needs are the ones from THIS round --
+  # a later round cannot reconstruct them, so a verdict this round legitimately
+  # recorded before it hit the wall would be lost and the entry held forever.
+  # Running it here costs one transcript parse on a path that is already
+  # exiting.
+  if [ "${FQ_GATE_RAN:-}" = 0 ]; then
+    say "fix-queue: running the gate on the quota-block path before exiting"
+    fix_queue_gate
+  fi
   rm -f "$out"
   exit 2
 fi
@@ -1303,57 +1516,23 @@ fi
 # has to answer. It is now removed only above, when a verdict actually appears.
 
 # ---- gate: the fix patches themselves ---------------------------------------
-# The gate above asks whether a CLOSURE was reviewed. This one asks the question
-# the contract's own last paragraph raises and nothing enforced: was the PATCH
-# that answered a red verdict ever reviewed itself? On 2026-09-09 the answer was
-# no, four times in one round, and the only record of it was a sentence in
-# memo.md saying so.
+# The body now lives in fix_queue_gate(), defined next to round_dispatch_stats()
+# so that the quota-block path can reach it too. See the long note there.
 #
-# Same discipline as above: everything here comes from the machine's side of the
-# round -- the added memo lines read above, the commit subjects the round
-# produced, and the dispatch count from its own transcript. Never its report.
-round_subjects=$(for pair in $heads_before; do
-    t=${pair%%=*}; h=${pair#*=}
-    [ "$h" = none ] && continue
-    git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
-  done)
-# Runs every round, including rounds that committed nothing. The first
+# Unconditional, including on rounds that committed nothing. The first
 # production firing, 2026-09-09 20:16, is why: the gate ran, correctly found
 # nothing owed, and said nothing -- so "it ran and the queue is empty" and "the
 # block never executed" were indistinguishable in the log, with the 0-byte
-# UNREVIEWED_FIX the only trace either way. That is the failure class this file
-# is full of, and it was guarded for the self-test above and not for the gate
-# itself. So the summary line below is unconditional.
-if true; then
-  # An id is only an id if the card table lists one. Unfiltered, the pattern
-  # reads prose as cards: attack 4's replay over 120 commits touching memo.md
-  # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
-  # If the table is named and unreadable, fix_queue.py refuses to enqueue and
-  # prints a WARNING rather than filling the queue with phantoms.
-  CARDS_TSV=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
-  fq_memo=$(mktemp) && fq_commits=$(mktemp)
-  printf '%s\n' "$memo_added" >"$fq_memo"
-  printf '%s\n' "$round_subjects" >"$fq_commits"
-  fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
-      --before "$FIX_QUEUE_BEFORE" \
-      ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
-      --memo-added "$fq_memo" --commits "$fq_commits" --agents "$agent_calls" \
-      --cards "$CARDS_TSV" 2>&1)
-  fq_rc=$?
-  printf '%s\n' "$fq_out" | while IFS= read -r l; do
-    [ -n "$l" ] && say "fix-queue: $l"
-  done
-  rm -f "$fq_memo" "$fq_commits" "$FIX_QUEUE_BEFORE"
-  # NOT `grep -c ... || echo 0`: grep -c already prints 0 and *exits 1* when the
-  # count is zero, so the fallback fired too and $fq_owed became "0\n0" -- the
-  # summary line then arrived split in two. Caught by the case below, which is
-  # the only reason it is not in the log for a week.
-  fq_owed=$(grep -c . "$FIX_QUEUE" 2>/dev/null); fq_owed=${fq_owed:-0}
-  fq_commits_n=$(printf '%s\n' "$round_subjects" | grep -c . || true)
-  say "fix-queue: $fq_owed owed, $fq_commits_n commit(s), $agent_calls dispatch(es), rc=$fq_rc"
-  if [ "$fq_owed" -gt 0 ] 2>/dev/null; then
-    say "WARNING: $fq_owed fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
-  fi
+# UNREVIEWED_FIX the only trace either way.
+#
+# Guarded on FQ_GATE_RAN only so that a round which already ran it on the
+# quota-block path does not run it twice against a snapshot the first run
+# already consumed -- which would refuse, park, and report a debt that is not
+# real. An empty FQ_GATE_RAN means no snapshot was ever taken, which cannot
+# happen on this path, and the guard fails CLOSED on it: the gate still runs and
+# fix_queue.py reddens on the missing snapshot.
+if [ "${FQ_GATE_RAN:-}" != 1 ]; then
+  fix_queue_gate
 fi
 
 if [ "$(fingerprint)" = "$idle_before" ]; then
