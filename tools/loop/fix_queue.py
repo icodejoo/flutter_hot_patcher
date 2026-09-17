@@ -22,12 +22,42 @@ Rules (ids are only ids if cards.tsv lists them; see --cards):
 
   neg(X)        an added memo line or a commit subject carries X and FALSIFIED|PARTIAL
   fix(X)        a commit subject from this round carries X
-  pos_same(X)   X and SURVIVES anywhere this round, AND >=2 dispatches
-  pos_drain(X)  X, SURVIVES and a fix marker (`(fix)`/`修补丁`), AND >=1 dispatch
+  claim(X)      X, SURVIVES and a fix marker (`(fix)`/`修补丁`) in the ROUND'S OWN
+                writing -- its memo lines or its commit subjects
+  reply_pos(X)  a SUBAGENT REPLY received this round names X and carries a green
+                verdict and no red one
+  pos_same(X)   X and SURVIVES in the round's writing, AND >=2 distinct dispatches
+                replied about X, AND at least one of those replies is green
+  pos_drain(X)  claim(X) AND reply_pos(X)
 
   enqueue  neg & fix & !(pos_same | pos_drain)
   drain    queued & pos_drain
   hold     queued & !pos_drain     re-reported every round, never expires by itself
+
+The second half of pos_drain is the 2026-09-17 change, and it exists because the
+first half is not evidence of anything. Until then the two bars were
+
+    pos_same  = surv     if agents >= 2 else set()
+    pos_drain = surv_fix if agents >= 1 else set()
+
+under the comment "a verdict the round wrote itself does not count, at either
+bar" -- which was false, and the code was why. `agents` is a bare count of Agent
+tool_use blocks in the round's own transcript. It carries no card identity and no
+relation to any verdict. The round writes the memo line AND authors the dispatch
+prompt, so it satisfied both halves by itself: one self-written line naming five
+entries plus one dispatch drained all five at OWED 0, with no RED and no WARNING,
+measured against the live queue on 2026-09-17 (control C7).
+
+Raising the bar to `agents >= 2` was considered and rejected: a round that can
+write one self-serving line can write two, and a bar that only LOOKS higher is
+the failure this file keeps being falsified for.
+
+What the round CANNOT author is the dispatched agent's reply. So the drain now
+needs a sentence the round did not write: a reply, from one of this round's own
+non-Explore pass dispatches, that names the card and carries a green verdict.
+The round's own `(fix)` line is still required -- it is what says WHICH debt is
+being settled -- but it is no longer sufficient. Two sources, one of them outside
+the round's pen; see --replies and run_round.sh's round_dispatch_replies().
 
 Two bars rather than one, and that was the first version's defect. It demanded
 the marker in both places, and attack 4's replay over 120 commits touching
@@ -49,7 +79,7 @@ drain costs an unreviewed fix nobody looks at again.
 
 Usage:
   fix_queue.py --queue F --before F --before-sha SHA --memo-added F \\
-               --commits F --agents N [--now TS]
+               --commits F --agents N --replies F [--now TS]
   fix_queue.py --self-test
 
 The commits file holds one commit per line, "<sha> <tree> <subject>". Actions
@@ -58,6 +88,20 @@ are printed one per line, followed by a final `OWED <n>` or `OWED unknown`.
 --before is REQUIRED for a settling run. Without it this program cannot tell a
 vanished entry from an entry that was never there, and it now says so rather
 than answering "nothing owed" -- see the note on update()'s `settled`.
+
+--replies is the round's subagent replies, one JSON object per line,
+`{"id": "<tool_use_id>", "text": "<the agent's reply>"}`, or a single
+`{"unavailable": "<reason>"}` line when they could not be collected. JSON Lines
+and not a delimiter-separated dump on purpose: a reply is attacker-adjacent text
+(the round writes the prompt that produced it), and with a text delimiter a
+reply could print the delimiter itself and split into two, which is exactly the
+input pos_same counts. JSON escaping makes that unrepresentable.
+
+Omitting --replies is NOT an error, because "no reply was collected" is a real
+state a round can be in -- but it is fail-closed and loud: nothing drains, every
+standing entry holds, and a line says so. The opposite convention is what this
+card has been falsified for four times; `else: before_rows = rows` was a public
+interface answering "nothing wrong" when it had not been given what it needed.
 
 Exit codes (rc was a constant 0 on every non-self-test path until 2026-09-17,
 so 41 production prints of it carried no information at all):
@@ -72,6 +116,7 @@ condition to check.
 import argparse
 import hashlib
 import io
+import json
 import os
 import re
 import sys
@@ -275,8 +320,108 @@ def polarity(line):
     return 1 if last_pos > last_neg else -1
 
 
-def scan(memo_lines, subjects, agents, known=None):
-    """Returns (neg, fix, pos_same, pos_drain) as sets of ids.
+# The mirror of POS_VERDICT: a STRUCTURED red verdict, as opposed to the word
+# turning up in prose. Both are needed to read a whole reply, and they answer
+# different questions than NEG_RE does on a single line.
+#
+# A subagent reply is a document, not a line. It recounts history ("this card
+# was FALSIFIED four times", "pass 1 came back PARTIAL") while its own verdict
+# sits on one line at the top. NEG_RE on the whole document would read every
+# such reply as red and nothing would ever drain -- and a queue that cannot
+# drain is the wallpaper failure this file's docstring already describes. So the
+# red question is asked of the structured forms only.
+#
+# Case-insensitive, like NEG_RE and for the same reason: missing a red verdict
+# lets a fix out of review, and that is the direction that cannot be generous.
+RED_VERDICT = re.compile(
+    r"(?:"
+    r"\bVERDICT\s*[:：]\s*(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
+    r"|判决\s*[:：]\s*(?:(?:\*{1,2}|_{1,2})?[A-Z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s+)?(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
+    r"|(?<![0-9A-Za-z])(?:证伪\s+)?pass\s*\d+\s*(?:[:：]|->|→)\s*(?:(?:\*{1,2}|_{1,2})?VERDICT\s*[:：]\s*)?(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
+    r"|证伪(?:\s+pass)?(?:\s*\d+)?\s*[:：]\s*(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
+    r"|(?<![0-9A-Za-z])pass\s+\d+\s+(?:FALSIFIED|PARTIAL)\b"
+    r")", re.IGNORECASE)
+
+
+def reply_polarity(text):
+    """The verdict a whole subagent reply records: +1 green, -1 red, 0 neither.
+
+    Asymmetric in the same direction as everything else here, and the asymmetry
+    is between the two questions rather than between the two words:
+
+      "did this reply go red"   -- asked of the RAW text. A structured red
+                                   anywhere disqualifies it, even if a green
+                                   verdict also appears. A reply that contains
+                                   both is a reply this program cannot read, and
+                                   the safe reading of "cannot read" is "no
+                                   drain".
+      "is this reply green"     -- asked of the STRIPPED text, so that a reply
+                                   which merely QUOTES the template --
+                                   `report VERDICT: SURVIVES/FALSIFIED/PARTIAL`,
+                                   which is the literal wording of
+                                   tools/loop/prompts/falsify.md and therefore
+                                   the single most likely thing to appear in a
+                                   reply that has not reached a verdict -- does
+                                   not read as an approval. TOKEN_LIST removes
+                                   the slash-joined run; POS_VERDICT then finds
+                                   `VERDICT:` with nothing after it.
+    """
+    if RED_VERDICT.search(text):
+        return -1
+    return 1 if POS_VERDICT.search(strip_meta(text)) else 0
+
+
+class RepliesUnavailable(Exception):
+    """The round's subagent replies could not be established.
+
+    A separate state from "there were none", for the same reason QueueUnreadable
+    is separate from "the queue is empty". Both collapse into a permissive answer
+    if they are allowed to, and every previous falsification of this card was one
+    layer of exactly that collapse.
+    """
+
+
+def read_replies(path):
+    """Returns [(tool_use_id, text)]; raises RepliesUnavailable.
+
+    One JSON object per line. A `{"unavailable": reason}` line is the sentinel
+    run_round.sh writes when it could not identify this round's transcript or the
+    extractor failed -- the same shape as SNAPSHOT_FAILED, and for the same
+    reason: an EMPTY file would read as "the round dispatched nothing and got
+    nothing back", which is a legitimate state and therefore hides the failure.
+    """
+    if not path:
+        raise RepliesUnavailable("--replies was not supplied")
+    if not os.path.exists(path):
+        raise RepliesUnavailable("%s does not exist" % path)
+    try:
+        raw = io.open(path, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        raise RepliesUnavailable(str(e))
+    out = []
+    for n, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError as e:
+            # Fail closed on a line this program cannot parse. Skipping it would
+            # silently shrink the evidence set, and the evidence set shrinking
+            # is indistinguishable from "the agent said nothing".
+            raise RepliesUnavailable("line %d is not JSON (%s)" % (n, e))
+        if not isinstance(d, dict):
+            raise RepliesUnavailable("line %d is not a JSON object" % n)
+        if "unavailable" in d:
+            raise RepliesUnavailable(str(d["unavailable"]))
+        rid, text = d.get("id"), d.get("text")
+        if not isinstance(rid, str) or not isinstance(text, str):
+            raise RepliesUnavailable("line %d has no id/text pair" % n)
+        out.append((rid, text))
+    return out
+
+
+def scan(memo_lines, subjects, agents, known=None, replies=()):
+    """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
 
     Two questions, two bars. Requiring the `(fix)` marker for both was the first
     version's defect: replayed over 120 commits touching memo.md, five of six
@@ -290,9 +435,15 @@ def scan(memo_lines, subjects, agents, known=None):
     So the marker is required only where the demand is specific: draining an
     entry that an EARLIER round put in the queue, where what is owed is a pass
     on the patch itself. Within one round, a second SURVIVES already means the
-    fix was re-attacked -- provided there were two dispatches, because one
-    dispatch cannot be both the pass that found the flaw and the pass that
-    re-attacked the repair.
+    fix was re-attacked -- provided two separate dispatches replied about the
+    card, because one dispatch cannot be both the pass that found the flaw and
+    the pass that re-attacked the repair.
+
+    Both bars now also require reply evidence, and that is the 2026-09-17
+    change. `agents >= 2` and `agents >= 1` were a count of the round's own
+    Agent tool_use blocks -- no card identity, no relation to any verdict -- so
+    the round satisfied them by authoring the dispatch prompt and then satisfied
+    the verdict half by writing the memo line. See the module docstring.
     """
     neg, fix, surv, surv_fix = set(), set(), set(), set()
     for line in list(memo_lines) + list(subjects):
@@ -323,12 +474,39 @@ def scan(memo_lines, subjects, agents, known=None):
                 surv_fix |= here_pos
     for line in subjects:
         fix |= ids_on(line, known)
-    # A verdict the round wrote itself does not count, at either bar. Same
-    # condition the closure gate grew on 2026-09-09, after its first production
-    # firing turned out green on a review that never happened.
-    pos_same = surv if agents >= 2 else set()
-    pos_drain = surv_fix if agents >= 1 else set()
-    return neg, fix, pos_same, pos_drain
+
+    # ---- the half the round cannot author -----------------------------------
+    # Everything above this line came out of the round's own pen: memo.md lines
+    # it wrote and commit subjects it wrote. Below, the only input is the text
+    # subagents sent back, keyed by the dispatch that asked for it.
+    #
+    # Counted by DISPATCH and not by reply: `the same task-id may notify more
+    # than once` is in the notification's own note, so one agent resumed twice
+    # yields two replies, and letting that satisfy "two passes happened" would
+    # rebuild the bar this change is removing.
+    named, greenlit = {}, {}
+    for rid, text in replies:
+        pol = reply_polarity(text)
+        here = set()
+        for line in text.splitlines():
+            here |= ids_on(line, known)
+        for x in here:
+            named.setdefault(x, set()).add(rid)
+            if pol > 0:
+                greenlit.setdefault(x, set()).add(rid)
+
+    # `agents` is deliberately no longer consulted by either bar. It is still
+    # taken and still printed, because "1 subagent(s)" in the log is how a human
+    # reads what happened -- but a count with no card identity and no relation to
+    # any verdict decides nothing here any more. That is the whole change.
+    pos_same = {x for x in surv
+                if len(named.get(x, ())) >= 2 and greenlit.get(x)}
+    pos_drain = {x for x in surv_fix if greenlit.get(x)}
+    # What the round CLAIMED settled, whether or not a reply supports it. update()
+    # reports the difference rather than swallowing it: an unsupported claim is
+    # the thing this card exists to make visible, so it prints a RED that names
+    # the entry instead of a silent hold that looks like an ordinary one.
+    return neg, fix, pos_same, pos_drain, set(surv_fix)
 
 
 def read_queue(path):
@@ -426,7 +604,8 @@ def parked(rows, now, reason):
 
 
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
-           allow_enqueue=True, before_path=None, before_sha=None):
+           allow_enqueue=True, before_path=None, before_sha=None,
+           replies_path=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -554,39 +733,95 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             "fix-queue snapshot cannot be read as a queue (%s) -- the pre-round "
             "contents are unrecoverable; the round is NOT settled" % e)
 
-    neg, fix, pos_same, pos_drain = scan(memo_lines, subjects, agents, known)
+    # The round's subagent replies. NOT a refusal when they are missing: "no
+    # reply came back" is a state an honest round is in all the time, and it is
+    # fully settleable -- nothing drains, everything holds, a disappearance is
+    # still RED, and the owed count is knowable (an over-count at worst). What it
+    # must never be is silent, because a reply extractor that quietly returns
+    # nothing turns this gate into one that never drains, and a demand that is
+    # never satisfiable stops being read.
+    replies, replies_gap = (), None
+    try:
+        replies = read_replies(replies_path)
+    except RepliesUnavailable as e:
+        replies_gap = str(e)
+
+    neg, fix, pos_same, pos_drain, claimed = scan(
+        memo_lines, subjects, agents, known, replies)
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
+
+    if replies_gap:
+        actions.append(
+            "%sfix-queue could not read this round's subagent replies (%s) -- "
+            "no entry can drain this round, and the round's own SURVIVES lines "
+            "are not evidence on their own"
+            # RED only when something was actually standing. `before_rows` and
+            # not `rows`: a round that emptied the queue leaves rows == [], and
+            # taking that as "nothing was at stake" is the identical mistake one
+            # layer along.
+            % ("RED " if (before_rows or rows) else "note: ", replies_gap))
+
+    def unsupported(cid):
+        """Why a card the round claimed to have settled did not drain.
+
+        Actionable on purpose. Measured over the 470 transcripts in the project
+        directory on 2026-09-17: of 25 green subagent replies, 21 named a card
+        from cards.tsv and 4 did not -- all 4 answered a dispatch that named one,
+        but answered it without ever writing the id (one such reply contains the
+        string "F85" zero times). So roughly one honest pass in six will land
+        here, and the human reading rounds.log needs to be told that re-running
+        the pass, or reconciling the file between rounds, is the way out. It is
+        NOT resolved by letting the dispatch prompt supply the identity: the
+        round writes that prompt, and putting the card name back in the round's
+        own pen is the defect this change removes.
+        """
+        if replies_gap:
+            return "no subagent reply could be read this round (%s)" % replies_gap
+        return ("no reply from this round's dispatches names it with a green "
+                "verdict; re-run the pass, or reconcile the queue by hand "
+                "between rounds")
 
     kept = []
     seen_ids = set()
 
+    def settle(cid, seen, reason, vanished):
+        if cid in pos:
+            actions.append("drain %s (fix pass recorded by a subagent reply, "
+                           "%d dispatch(es))" % (cid, agents))
+            return
+        kept.append((cid, seen, reason))
+        if vanished and cid in claimed:
+            actions.append(
+                "RED %s (disappeared, and the round's own SURVIVES (fix) line "
+                "is unsupported: %s)" % (cid, unsupported(cid)))
+        elif vanished:
+            actions.append("RED %s (disappeared with no recorded verdict)" % cid)
+        elif cid in claimed:
+            # The C7 shape, and the reason this branch is a RED rather than an
+            # ordinary hold: the round DID write a green fix verdict for this
+            # entry, and on 2026-09-17 that line plus one self-authored dispatch
+            # drained it at OWED 0 with nothing printed. A silent hold here would
+            # leave the round's claim and the gate's refusal looking identical in
+            # rounds.log, which is how the last four repairs of this card were
+            # found to have failed.
+            actions.append(
+                "RED %s (the round recorded SURVIVES (fix) for it, but %s -- "
+                "held)" % (cid, unsupported(cid)))
+        else:
+            actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
+
     for cid, seen, reason in before_rows:
         seen_ids.add(cid)
-        if cid in queued:
-            if cid in pos:
-                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
-            else:
-                kept.append((cid, seen, reason))
-                actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
-        else:
-            # The entry was in the queue at round start, but disappeared from
-            # the queue file before round end.
-            if cid in pos:
-                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
-            else:
-                kept.append((cid, seen, reason))
-                actions.append("RED %s (disappeared with no recorded verdict)" % cid)
+        # Not in `queued` means the entry was in the queue at round start and
+        # disappeared from the queue file before round end.
+        settle(cid, seen, reason, cid not in queued)
 
     # Any entry in rows that was not in before_rows
     for cid, seen, reason in rows:
         if cid not in seen_ids:
             seen_ids.add(cid)
-            if cid in pos:
-                actions.append("drain %s (fix pass recorded, %d subagent(s))" % (cid, agents))
-            else:
-                kept.append((cid, seen, reason))
-                actions.append("hold %s (since %s) -- %s" % (cid, seen, reason))
+            settle(cid, seen, reason, False)
 
     for cid in sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []:
         shas = " ".join(
@@ -625,9 +860,25 @@ def self_test():
     cases = []
 
     def case(name, queue_in, memo, subjects, agents, expect_actions, expect_queue,
-             known=None, allow_enqueue=True, before_in=None):
+             known=None, allow_enqueue=True, before_in=None, replies=()):
+        # `replies` is a list of (tool_use_id, text) -- the sentences the round
+        # did not write. A case that omits it is a round that got nothing back,
+        # which after 2026-09-17 is a round in which nothing can drain.
         cases.append((name, queue_in, memo, subjects, agents, expect_actions,
-                      expect_queue, known, allow_enqueue, before_in))
+                      expect_queue, known, allow_enqueue, before_in, replies))
+
+    # Reply texts the cases below reuse. Shaped like the real thing: a verdict
+    # line at the top and prose under it, taken from the corpus survey of
+    # 2026-09-17 (134 completed agent notifications, 77 synchronous results).
+    def green(cid, extra=""):
+        return ("VERDICT: SURVIVES\nATTACK RESULTS:\n1. Re-ran the %s fix "
+                "under every shape in the card; all rc=128.\nFLAW: none "
+                "found.%s" % (cid, extra))
+
+    def red(cid):
+        return ("VERDICT: FALSIFIED\nATTACK RESULTS:\n1. The %s fix still "
+                "falls to the python invocation shape.\nFLAW: (a) two "
+                "categories are uncovered." % cid)
 
     # 1. The gap this file exists for: a pass came back red, the round fixed it,
     #    and no pass ran on the fix.
@@ -652,6 +903,10 @@ def self_test():
         2,
         [],
         [],
+        # Two dispatches replied about F39 and the second came back green. The
+        # bar used to be the bare count `agents >= 2`, which the round satisfied
+        # by writing two prompts.
+        replies=[("t1", red("F39")), ("t2", green("F39"))],
     )
     # 3. The contract's other legal ending: report the red verdict and stop.
     #    Nothing was fixed, so there is no fix patch to review.
@@ -673,6 +928,7 @@ def self_test():
         1,
         ["drain F41"],
         [],
+        replies=[("t1", green("F41"))],
     )
     # 5. Negative control for 4, and the reason the marker is required at all:
     #    a verdict about the CARD must not drain the queue entry for its FIX.
@@ -684,15 +940,25 @@ def self_test():
         1,
         ["hold F41"],
         ["F41"],
+        # The reply is present and green, so the ONLY thing holding this entry
+        # is the missing fix marker. Without the reply the case would pass for
+        # the wrong reason and stop testing what it is named for.
+        replies=[("t1", green("F41"))],
     )
-    # 6. Negative control for 4: a fix verdict the round wrote with no dispatch.
+    # 6. Negative control for 4, and after 2026-09-17 the case this whole change
+    #    is about: the round wrote the verdict itself and no subagent replied.
+    #    NINE dispatches, not zero -- the old bar was `agents >= 1` and the
+    #    obvious repair was `agents >= 2`, so the case is written at a count no
+    #    plausible bar would reject, to show the count is not what decides. The
+    #    expected action is RED and not a silent hold: the round made a claim and
+    #    the gate refused it, and those two must not look alike in rounds.log.
     case(
-        "hold: fix verdict with zero subagents",
+        "RED: a self-written fix verdict does not drain, at any dispatch count",
         [("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")],
         ["🟢 F41 修补丁 VERDICT: SURVIVES (fix)"],
         [],
-        0,
-        ["hold F41"],
+        9,
+        ["RED F41"],
         ["F41"],
     )
     # 7. It must not expire on its own. The closure marker used to be cleared by
@@ -745,11 +1011,14 @@ def self_test():
         2,
         [],
         [],
+        replies=[("t1", red("F38")), ("t2", green("F38"))],
     )
-    # 11. Negative control for 10: the same text with a single dispatch. One
-    #     pass cannot have found the flaw and re-attacked the repair.
+    # 11. Negative control for 10: the same text, but only ONE dispatch replied
+    #     about the card. One pass cannot have found the flaw and re-attacked
+    #     the repair -- and note the reply it does have is GREEN, so the case
+    #     fails for the cardinality and not for the verdict.
     case(
-        "enqueue: same-round SURVIVES with only one dispatch",
+        "enqueue: same-round SURVIVES with only one dispatch replying",
         [],
         ["🔴 pass 1：FALSIFIED", "🟢 **F38 pass 2：SURVIVES**"],
         ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
@@ -757,6 +1026,7 @@ def self_test():
         ["enqueue F38"],
         ["F38"],
         {"F38"},
+        replies=[("t1", green("F38"))],
     )
     # 13b. The misfire pass 2 constructed: two dispatches, a SURVIVES that
     #      names the card, and nothing about it is a verdict on the repair.
@@ -772,6 +1042,7 @@ def self_test():
         ["enqueue F42"],
         ["F42"],
         {"F42"},
+        replies=[("t1", red("F42")), ("t2", green("F42"))],
     )
     # 13c. Both polarities on one line, in the two forms the corpus really
     #      contains. The rejected-SURVIVES form must count as red; the
@@ -785,6 +1056,7 @@ def self_test():
         ["enqueue F49"],
         ["F49"],
         {"F49"},
+        replies=[("t1", red("F49")), ("t2", green("F49"))],
     )
     case(
         "no enqueue: \"FALSIFIED then SURVIVES\" is a green summary",
@@ -795,6 +1067,7 @@ def self_test():
         [],
         [],
         {"F38"},
+        replies=[("t1", red("F38")), ("t2", green("F38"))],
     )
     # 13d. The two real lines pass 4 found: the verdict is at column 62 and a
     #      mention of the token list sits hundreds of columns later. Shortened
@@ -809,6 +1082,7 @@ def self_test():
         [],
         [],
         {"F42"},
+        replies=[("t1", red("F42")), ("t2", green("F42"))],
     )
     case(
         "no enqueue: criteria prose naming PARTIAL/FALSIFIED is not a red verdict",
@@ -820,6 +1094,7 @@ def self_test():
         [],
         [],
         {"F49"},
+        replies=[("t1", red("F49")), ("t2", green("F49"))],
     )
     # 13e. Pass 5's escape: a verdict written as a slash-joined pair. Stripping
     #      it for both questions erased the red verdict itself, and the fix
@@ -835,6 +1110,7 @@ def self_test():
         ["enqueue F42"],
         ["F42"],
         {"F42"},
+        replies=[("t1", red("F42")), ("t2", green("F42"))],
     )
     # 13f. Pass 6's lead, which is where it died: the red test was a
     #      case-sensitive substring, so a verdict written in lower case left
@@ -848,6 +1124,7 @@ def self_test():
         ["enqueue F42"],
         ["F42"],
         {"F42"},
+        replies=[("t1", red("F42")), ("t2", green("F42"))],
     )
     # 13g. The bound that keeps 13f from costing noise: an ordinary English word
     #      containing a token is not a verdict.
@@ -873,6 +1150,7 @@ def self_test():
         ["enqueue F42"],
         ["F42"],
         {"F42"},
+        replies=[("t1", red("F42")), ("t2", green("F42"))],
     )
     # 12. The phantom card. PATCHED_V2 occurs 332 times in memo.md's history and
     #     used to yield the id "V2"; `_` is not alphanumeric.
@@ -951,6 +1229,7 @@ def self_test():
         ["drain F41"],
         [],
         before_in=[("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")],
+        replies=[("t1", green("F41"))],
     )
 
     cli_cases = [
@@ -976,6 +1255,7 @@ def self_test():
         (name, queue_in, memo, subjects, agents, want_actions, want_queue, known,
          allow_enq) = item[:9]
         before_in = item[9] if len(item) > 9 else None
+        replies_in = item[10] if len(item) > 10 else ()
         path = os.path.join(tmpdir, "queue")
         write_queue(path, queue_in)
         # The snapshot is MANDATORY as of 2026-09-17, so a case that left it out
@@ -993,10 +1273,18 @@ def self_test():
         # never takes. Three cases broke this way when the refusal was added.
         with io.open(before_path, "rb") as fh:
             before_sha = hashlib.sha256(fh.read()).hexdigest()
+        # Through the file and the JSON parser, not handed to scan() as a list.
+        # Case 12c is this suite's own recorded lesson about the difference: it
+        # handed update() the decision already made, so removing the branch that
+        # decides left every case green.
+        replies_path = os.path.join(tmpdir, "replies.jsonl")
+        io.open(replies_path, "w", encoding="utf-8").write(
+            "".join(json.dumps({"id": i, "text": t}, ensure_ascii=False) + "\n"
+                    for i, t in replies_in))
         actions, kept, _settled = update(
             path, memo, subjects, agents, "2026-09-09 17:00",
             known, allow_enq, before_path=before_path,
-            before_sha=before_sha)
+            before_sha=before_sha, replies_path=replies_path)
         got_actions = sorted(a.split(" (")[0].split(" --")[0].strip() for a in actions)
         got_queue = [r[0] for r in read_queue(path)]
         ok = got_actions == sorted(want_actions) and got_queue == want_queue
@@ -1061,8 +1349,15 @@ def self_test():
         return deco
 
     def run_cli(d, queue_rows, memo=(), subjects=(), agents=0, before=True,
-                cards=None, extra=()):
-        """Runs the real CLI in a fresh directory. Returns (rc, stdout, stderr)."""
+                cards=None, extra=(), replies=(), replies_raw=None,
+                replies_flag=True, replies_chmod=None):
+        """Runs the real CLI in a fresh directory. Returns (rc, stdout, stderr).
+
+        `replies` is [(id, text)] written as JSON Lines; `replies_raw` writes the
+        file verbatim instead, which is how the malformed-input probes reach the
+        parser; `replies_flag=False` omits --replies entirely, which is the
+        omission probe.
+        """
         qp = os.path.join(d, "queue")
         if queue_rows is not None:
             write_queue(qp, list(queue_rows))
@@ -1084,9 +1379,30 @@ def self_test():
             with io.open(bp, "rb") as fh:
                 bp_sha = hashlib.sha256(fh.read()).hexdigest()
             cmd.extend(["--before", bp, "--before-sha", bp_sha])
+        if replies_flag:
+            rp = os.path.join(d, "replies.jsonl")
+            io.open(rp, "w", encoding="utf-8").write(
+                replies_raw if replies_raw is not None else
+                "".join(json.dumps({"id": i, "text": t}, ensure_ascii=False)
+                        + "\n" for i, t in replies))
+            if replies_chmod is not None:
+                os.chmod(rp, replies_chmod)
+            cmd.extend(["--replies", rp])
         cmd.extend(extra)
         r = subprocess.run(cmd, capture_output=True, text=True)
         return r.returncode, r.stdout, r.stderr
+
+    # A reply in the shape the corpus really contains: the verdict on its own
+    # line at the top, prose under it. Written once here so every probe attacks
+    # the same string the honest path uses.
+    def reply_green(cid):
+        return ("VERDICT: SURVIVES\nATTACK RESULTS:\n1. Re-ran every control "
+                "the %s card names; all hold.\nFLAW: none found." % cid)
+
+    def reply_red(cid):
+        return ("VERDICT: FALSIFIED\nATTACK RESULTS:\n1. The %s fix falls to "
+                "the python invocation shape.\nFLAW: (a) uncovered category."
+                % cid)
 
     F41 = ("F41", "2026-09-09 16:40", "fixed after FALSIFIED verdict")
 
@@ -1117,7 +1433,15 @@ def self_test():
             d, [park],
             memo=["\U0001f7e2 %s 修补丁 VERDICT: SURVIVES (fix) -- "
                   "human reconciled the queue" % PARK_ID],
-            agents=1, cards=["F41", "F46", "F82"])
+            agents=1, cards=["F41", "F46", "F82"],
+            # The parking entry is NOT exempt from the reply requirement, and
+            # that is deliberate: exempting it would leave the one entry a round
+            # can mint for itself as the one entry it can also clear for itself,
+            # which is escape E5 on this card's own list. A human who wants it
+            # gone edits .loop/UNREVIEWED_FIX BETWEEN rounds -- the round-start
+            # snapshot is taken after the lock, so an edit made while no round
+            # holds it is in the snapshot and reads as no change at all.
+            replies=[("t1", reply_green(PARK_ID))])
         ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return ("drain %s" % PARK_ID in out and ids == [] and rc in (0, 1)), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
@@ -1207,7 +1531,8 @@ def self_test():
         rc2, out2, _ = run_cli(
             d, None,
             memo=["%s 修补丁 VERDICT: SURVIVES (fix)" % PARK_ID],
-            agents=1, cards=["F41", "F82"])
+            agents=1, cards=["F41", "F82"],
+            replies=[("t1", reply_green(PARK_ID))])
         ids2 = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return (("drain %s" % PARK_ID) in out2 and ids2 == []), \
                "stage 2: rc=%s ids=%s out=%r" % (rc2, ids2, out2)
@@ -1232,6 +1557,220 @@ def self_test():
         return (all(rc == 2 for rc, _ in outs)
                 and all("OWED 2" in o for _, o in outs)
                 and ids == ["F41", PARK_ID]), "outs=%r ids=%s" % (outs, ids)
+
+    # ---------------------------------------------------------------- P9-P18
+    # Added 2026-09-17 with the reply requirement. P9 is the acceptance
+    # criterion this change exists for, reduced to one entry and run through the
+    # real CLI; P17 is its mirror and is the more important of the two, because
+    # a gate nobody has seen go GREEN is a gate that will be deleted the first
+    # time it holds an honest round's entry.
+    CARDS3 = ["F41", "F46", "F52"]
+    F46 = ("F46", "2026-09-16 21:49", "fixed after FALSIFIED verdict")
+    CLAIM46 = "\U0001f7e2 F46 修补丁 VERDICT: SURVIVES (fix) -- 复跑通过"
+
+    # P9. Control C7, in miniature. One memo line the round wrote itself, NINE
+    #     dispatches it also authored, no reply. Before this change the same
+    #     input at ONE dispatch printed `drain`, `OWED 0`, no RED and no
+    #     WARNING, measured against the live queue.
+    @probe("CLI: a self-written verdict + N self-authored dispatches cannot drain")
+    def _p9():
+        d = tempfile.mkdtemp(prefix="fq_p9.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=9, cards=CARDS3)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("RED F46" in out and "drain F46" not in out and "OWED 1" in out
+                and ids == ["F46"] and rc == 1), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P10. The public interface, which is where every previous version of this
+    #      defect survived: an input the caller simply did not pass must not read
+    #      as "the condition was not met, quietly". `else: before_rows = rows`
+    #      was unreachable only by the single caller's convention.
+    @probe("CLI: --replies omitted is fail-closed and says so")
+    def _p10():
+        d = tempfile.mkdtemp(prefix="fq_p10.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies_flag=False)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("could not read this round's subagent replies" in out
+                and "drain F46" not in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P11. The file exists and cannot be read. Distinct from "it is empty", and
+    #      the whole of this card is that distinction.
+    @probe("CLI: an unreadable replies file is fail-closed, not an empty one")
+    def _p11():
+        if os.geteuid() == 0:
+            return False, "cannot be exercised as root -- mode bits do not apply"
+        # Byte-identical inputs to P17, the green control, except that the file
+        # cannot be opened. If this went green while P17 also goes green, the
+        # reply set would be read as empty rather than as unknown -- the exact
+        # collapse `grep -c . 2>/dev/null` performed one layer out.
+        d = tempfile.mkdtemp(prefix="fq_p11.")
+        try:
+            rc, out, err = run_cli(d, [F46], memo=[CLAIM46], agents=1,
+                                   cards=CARDS3,
+                                   replies=[("t1", reply_green("F46"))],
+                                   replies_chmod=0)
+        finally:
+            try:
+                os.chmod(os.path.join(d, "replies.jsonl"), 0o600)
+            except OSError:
+                pass
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("could not read this round's subagent replies" in out
+                and "RED F46" in out and "drain F46" not in out
+                and ids == ["F46"] and "Traceback" not in err), \
+               "rc=%s ids=%s out=%r err=%r" % (rc, ids, out, err[-200:])
+
+    # P12. A line the parser cannot read is a refusal, not a skip. Skipping it
+    #      would shrink the evidence set silently, and a silently smaller
+    #      evidence set is indistinguishable from an agent that said nothing.
+    @probe("CLI: a malformed replies line is fail-closed, not skipped")
+    def _p12():
+        d = tempfile.mkdtemp(prefix="fq_p12.")
+        raw = (json.dumps({"id": "t1", "text": reply_green("F46")}) + "\n"
+               + "{this is not json\n")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies_raw=raw)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("is not JSON" in out and "drain F46" not in out
+                and ids == ["F46"]), "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P13. The sentinel run_round.sh writes when it cannot identify this round's
+    #      transcript. An EMPTY file would have been the obvious choice and is
+    #      the wrong one: empty is a legitimate state (the round dispatched
+    #      nothing), so it hides the failure. Same reason SNAPSHOT_FAILED exists.
+    @probe("CLI: the replies-unavailable sentinel is fail-closed and quotes why")
+    def _p13():
+        d = tempfile.mkdtemp(prefix="fq_p13.")
+        raw = json.dumps({"unavailable": "no transcript identified"}) + "\n"
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies_raw=raw)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("no transcript identified" in out and "drain F46" not in out
+                and ids == ["F46"]), "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P14. Identity, not presence. A reply arrived, it is green, and it is about
+    #      a different card -- the same-cardinality-different-composition attack
+    #      that the snapshot comparison already survives, applied to the verdict.
+    @probe("CLI: a green reply about another card does not drain this one")
+    def _p14():
+        d = tempfile.mkdtemp(prefix="fq_p14.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies=[("t1", reply_green("F52"))])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("RED F46" in out and "drain F46" not in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P15. The single most likely non-verdict a reply can contain: the template's
+    #      own wording. `tools/loop/prompts/falsify.md` asks for
+    #      `VERDICT: SURVIVES/FALSIFIED/PARTIAL`, so an agent that quotes its
+    #      instructions and stops must not read as an approval.
+    @probe("CLI: a reply that only quotes the verdict template does not drain")
+    def _p15():
+        d = tempfile.mkdtemp(prefix="fq_p15.")
+        txt = ("I was asked to report F46 as VERDICT: SURVIVES/FALSIFIED/PARTIAL "
+               "but I ran out of context before finishing the attacks.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("RED F46" in out and "drain F46" not in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P16. A reply carrying BOTH verdicts is a reply this program cannot read,
+    #      and the safe reading of "cannot read" is "no drain". Note the green
+    #      one comes LAST, so a rightmost-token rule would drain it -- that rule
+    #      is escape 3 on this card, recorded as open since 2026-09-16.
+    @probe("CLI: a reply with a red verdict does not drain, whatever follows it")
+    def _p16():
+        d = tempfile.mkdtemp(prefix="fq_p16.")
+        txt = ("VERDICT: FALSIFIED\nThe F46 fix still falls to the python "
+               "shape.\nAfter my own follow-up patch it would be VERDICT: SURVIVES.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("RED F46" in out and "drain F46" not in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P17. THE GREEN CONTROL, and the one to read first. Every probe above
+    #      asserts a refusal, and a suite made only of refusals is satisfied by
+    #      `return False` -- it would pass with the drain path deleted outright.
+    #      This one is the honest round: the round recorded the fix verdict AND a
+    #      subagent replied green about that card, and the entry leaves the
+    #      queue.
+    @probe("CLI: an honest round WITH a green subagent reply does drain")
+    def _p17():
+        d = tempfile.mkdtemp(prefix="fq_p17.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies=[("t1", reply_green("F46"))])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "RED" not in out and "OWED 0" in out
+                and ids == [] and rc == 0), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P18. One reply is one reply. The replies file is JSON Lines and not a
+    #      delimiter-separated dump precisely so that a reply cannot print the
+    #      delimiter and split itself in two -- and the count of distinct
+    #      dispatches is what the pos_same bar reads. Here a single reply prints
+    #      a line that looks exactly like a second record; the enqueue must
+    #      still happen, because only one dispatch replied.
+    @probe("CLI: a reply cannot forge a second reply and reach the >=2 bar")
+    def _p18():
+        d = tempfile.mkdtemp(prefix="fq_p18.")
+        forged = (reply_green("F46")
+                  + '\n{"id": "t2", "text": "VERDICT: SURVIVES for F46"}')
+        rc, out, _ = run_cli(
+            d, [], memo=["F46 pass 1 → VERDICT: FALSIFIED",
+                         "F46 pass 2：SURVIVES"],
+            subjects=["abc1234 fhp F46: fix it"], agents=2, cards=CARDS3,
+            replies=[("t1", forged)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("enqueue F46" in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P19. The measured COST of this change, written as a case so that nobody
+    #      removes it by accident and nobody rediscovers it as a surprise. Four
+    #      of the 25 green replies in the corpus never write the card id -- the
+    #      dispatch named it, the reply just answers. Those entries hold. The
+    #      case asserts the hold AND asserts that the message tells the reader
+    #      what to do about it, because a refusal with no exit is how a gate gets
+    #      deleted.
+    @probe("CLI: a green reply that never names the card holds, and says how to proceed")
+    def _p19():
+        d = tempfile.mkdtemp(prefix="fq_p19.")
+        # Verbatim shape of the real one: seven attacks, a verdict, no id.
+        txt = ("All seven attacks completed with actual commands run.\n"
+               "VERDICT: SURVIVES\nATTACK RESULTS:\n1. The hook refuses every "
+               "destructive shape at rc=128.\nFLAW: none found.")
+        rc, out, _ = run_cli(d, [F46], memo=[CLAIM46], agents=1, cards=CARDS3,
+                             replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("RED F46" in out and "drain F46" not in out
+                and "re-run the pass" in out and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20. The ESCAPE THIS CHANGE LEAVES OPEN, pinned as a case rather than left
+    #      to be found. `ids_on` runs over the whole reply, so a green pass about
+    #      F46 that mentions F52 in passing lets the round's own F52 `(fix)` line
+    #      drain F52 as well. 7 of the 21 corpus green replies that name a card
+    #      name three or more. Binding the id to the verdict LINE instead was
+    #      measured and rejected: real verdict lines carry no id at all
+    #      ("VERDICT: FALSIFIED (model: Opus)"), so that rule drains nothing.
+    #      If a later change closes this, this case FAILS and must be rewritten
+    #      deliberately -- which is the point of writing it down.
+    @probe("CLI: KNOWN ESCAPE -- a card merely mentioned by a green reply can drain")
+    def _p20():
+        d = tempfile.mkdtemp(prefix="fq_p20.")
+        txt = ("VERDICT: SURVIVES\nATTACK RESULTS:\n1. The F46 fix holds.\n"
+               "2. Note this is the same shape as F52, which I did not test.\n"
+               "FLAW: none found.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "drain F52" in out and ids == []), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
 
     for name, fn in probes:
         try:
@@ -1258,6 +1797,11 @@ def main():
     ap.add_argument("--memo-added")
     ap.add_argument("--commits")
     ap.add_argument("--agents", type=int, default=0)
+    ap.add_argument("--replies", default="",
+                    help="JSON Lines of this round's subagent replies; a "
+                         "{\"unavailable\": reason} line means they could not "
+                         "be collected. Omitting it is fail-closed: nothing "
+                         "drains and the refusal is printed.")
     ap.add_argument("--cards", default="",
                     help="cards.tsv; ids absent from it are not treated as cards")
     ap.add_argument("--now", default="")
@@ -1336,9 +1880,20 @@ def main():
         args.queue, lines(args.memo_added), lines(args.commits),
         args.agents, now, known, allow_enqueue,
         before_path=args.before or None,
-        before_sha=args.before_sha or None)
+        before_sha=args.before_sha or None,
+        replies_path=args.replies or None)
     for a in actions:
         print(a)
+
+    # How much evidence this round actually had, printed whether or not it
+    # changed anything. Without it, a reply extractor that silently returns
+    # nothing looks exactly like a long run of rounds that dispatched nothing:
+    # every entry just holds, which reads as the queue working. Printed BEFORE
+    # the OWED line, which the shell matches anchored and takes the last of.
+    try:
+        print("replies %d" % len(read_replies(args.replies or None)))
+    except RepliesUnavailable as e:
+        print("replies unavailable (%s)" % e)
 
     # The owed count, from THIS process, as its last line. run_round.sh's
     # backstop used to be a single `grep -c . "$FIX_QUEUE" 2>/dev/null` -- one

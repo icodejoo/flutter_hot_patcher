@@ -765,13 +765,8 @@ round_dispatch_stats() {
   # right now, which during supervision is a human's interactive session. That
   # was the first version's bug, and it failed in the safe direction only by
   # luck.
-  local newest="" f b
-  for f in "$PROJ_DIR"/*.jsonl; do
-    [ -e "$f" ] || continue
-    b=$(stat -f '%B' "$f" 2>/dev/null) || continue
-    [ "$b" -ge "$round_started_at" ] 2>/dev/null || continue
-    if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest=$f; fi
-  done
+  local newest
+  newest=$(round_transcript)
   if [ -n "$newest" ]; then
     python3 - "$newest" <<'PY' 2>/dev/null || printf '0 0 - - none'
 import json, sys, io, re
@@ -824,6 +819,156 @@ PY
   fi
 }
 
+round_transcript() {
+  # This round's session transcript, or nothing. Factored out of
+  # round_dispatch_stats() on 2026-09-17 because round_dispatch_replies() below
+  # has to select the SAME file, and two copies of a selection rule is two
+  # copies that can drift -- the birth-time-not-mtime rule here already failed
+  # once by being written the other way, and it failed in the safe direction
+  # only by luck.
+  local newest="" f b
+  for f in "$PROJ_DIR"/*.jsonl; do
+    [ -e "$f" ] || continue
+    b=$(stat -f '%B' "$f" 2>/dev/null) || continue
+    [ "$b" -ge "$round_started_at" ] 2>/dev/null || continue
+    if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest=$f; fi
+  done
+  printf '%s' "$newest"
+}
+
+round_dispatch_replies() {
+  # $1: a file to write this round's subagent replies to, as JSON Lines.
+  #
+  # WHY THIS EXISTS. Until 2026-09-17 the fix queue's two bars were
+  # `agents >= 2` and `agents >= 1` -- a count of Agent tool_use blocks in the
+  # round's own transcript, under a comment claiming "a verdict the round wrote
+  # itself does not count". The comment was false and this was why: the round
+  # writes the memo line AND authors the dispatch prompt, so it satisfied both
+  # halves by itself. Measured against the live queue that morning, one
+  # self-written line naming five entries plus one dispatch drained all five at
+  # OWED 0, with no RED and no WARNING.
+  #
+  # What the round cannot author is the dispatched agent's REPLY. Two shapes
+  # carry one, and both were measured over the 470 transcripts in $PROJ_DIR on
+  # 2026-09-17 rather than assumed:
+  #
+  #   asynchronous (187 launch acks, 134 completed agent notifications)
+  #       the Agent tool_result is a fixed "Async agent launched successfully"
+  #       ack, and the report arrives LATER as a user message whose content is a
+  #       plain STRING holding <task-notification> ... <result>. Every such
+  #       notification whose <tool-use-id> matched an Agent tool_use carried a
+  #       <result>; the 94 with no tool-use-id at all were Monitor events and
+  #       the 88 pointing elsewhere were background Bash tasks.
+  #   synchronous (77)
+  #       the Agent tool_result IS the report.
+  #
+  # The string-content test is load-bearing and not incidental. A round can put
+  # arbitrary text into the transcript -- it need only `cat` a file it wrote --
+  # but everything it produces arrives either as an assistant message or as a
+  # tool_result, and a tool_result's content is a LIST. It cannot emit a
+  # user-role message whose content is a bare string. So a forged
+  # <task-notification> echoed through a tool the round controls is not read
+  # here, which is control C12.
+  local ts
+  ts=$(round_transcript)
+  if [ -z "$ts" ]; then
+    # NOT an empty file. Empty is a legitimate state -- a round that dispatched
+    # nothing and got nothing back -- so writing it here would hide the failure
+    # inside a normal reading, which is the collapse this card has been
+    # falsified for four times at four different layers.
+    printf '{"unavailable": "no session transcript from this round could be identified"}\n' \
+      >"$1" 2>/dev/null || true
+    return 0
+  fi
+  # `if !` rather than `cmd || fallback`, so that the heredoc body is not
+  # sitting after a line-continuation where a reader has to work out where it
+  # begins. The fallback rewrites the file whole: a python that died partway may
+  # have left a truncated one.
+  if ! python3 - "$ts" "$1" <<'PY' 2>/dev/null
+import io, json, re, sys
+
+src, dst = sys.argv[1], sys.argv[2]
+# The same filter round_dispatch_stats() applies to the dispatch count, so the
+# two readings are of the same population: not Explore, and the prompt the round
+# wrote actually asks for a pass. It narrows what counts as evidence; it cannot
+# widen it.
+PASS_RE = re.compile(r"(?<![0-9A-Za-z])pass(?![0-9A-Za-z])|证伪|VERDICT|falsif",
+                     re.IGNORECASE)
+ACK = "Async agent launched successfully"
+
+qualifying = set()
+out, seen = [], set()
+for line in io.open(src, encoding="utf-8", errors="replace"):
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    m = d.get("message")
+    if not isinstance(m, dict):
+        continue
+    c = m.get("content")
+    if isinstance(c, str):
+        if m.get("role") != "user" or "<task-notification>" not in c:
+            continue
+        tu = re.search(r"<tool-use-id>(.*?)</tool-use-id>", c, re.S)
+        st = re.search(r"<status>(.*?)</status>", c, re.S)
+        if not tu or tu.group(1) not in qualifying:
+            continue
+        # A killed or failed agent's partial output is not a verdict. 2 failed
+        # and 1 killed notification in the corpus still carried a <result>.
+        if not st or st.group(1).strip() != "completed":
+            continue
+        i, j = c.find("<result>"), c.rfind("</result>")
+        if i < 0 or j <= i:
+            continue
+        txt = c[i + len("<result>"):j]
+        key = (tu.group(1), txt)
+        if key in seen or not txt.strip():
+            continue
+        seen.add(key)
+        out.append({"id": tu.group(1), "text": txt})
+        continue
+    if not isinstance(c, list):
+        continue
+    for b in c:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "tool_use" and b.get("name") == "Agent":
+            inp = b.get("input") or {}
+            sub = str(inp.get("subagent_type") or "").lower()
+            desc = str(inp.get("description") or "").lower()
+            is_explore = (sub == "explore" or "explore" in sub
+                          or "explore" in desc)
+            has_pass = any(PASS_RE.search(str(inp.get(k) or ""))
+                           for k in ("prompt", "description"))
+            if not is_explore and has_pass and b.get("id"):
+                qualifying.add(b.get("id"))
+        elif b.get("type") == "tool_result" and b.get("tool_use_id") in qualifying:
+            cont = b.get("content")
+            if isinstance(cont, list):
+                txt = "".join(x.get("text", "") for x in cont
+                              if isinstance(x, dict))
+            else:
+                txt = "" if cont is None else str(cont)
+            if ACK in txt or not txt.strip():
+                continue
+            key = (b.get("tool_use_id"), txt)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"id": b.get("tool_use_id"), "text": txt})
+
+# Built whole, then written once: a partial write would be a partial evidence
+# set, and a partial evidence set reads as "the agent said less than it did".
+io.open(dst, "w", encoding="utf-8").write(
+    "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in out))
+PY
+  then
+    printf '{"unavailable": "the reply extractor failed to run"}\n' \
+      >"$1" 2>/dev/null || true
+  fi
+}
+
 # >>> F82 fix-queue gate <<<
 # ---- gate: the fix patches themselves ---------------------------------------
 # The closure gate asks whether a CLOSURE was reviewed. This one asks the
@@ -849,7 +994,7 @@ PY
 # would be one more thing that can silently be the wrong value.
 fix_queue_gate() {
   local g_agents g_memo g_subjects g_cards fq_memo fq_commits fq_out fq_rc
-  local fq_reported fq_file_n fq_owed fq_why fq_commits_n _n _g
+  local fq_reported fq_file_n fq_owed fq_why fq_commits_n _n _g fq_replies
 
   read -r g_agents _ _ _ _ <<<"$(round_dispatch_stats)"
   case "${g_agents:-}" in ''|*[!0-9]*) g_agents=0 ;; esac
@@ -870,8 +1015,9 @@ fix_queue_gate() {
 
   fq_memo=$(mktemp 2>/dev/null) || fq_memo=
   fq_commits=$(mktemp 2>/dev/null) || fq_commits=
-  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ]; then
-    rm -f "$fq_memo" "$fq_commits" 2>/dev/null
+  fq_replies=$(mktemp 2>/dev/null) || fq_replies=
+  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ] || [ -z "$fq_replies" ]; then
+    rm -f "$fq_memo" "$fq_commits" "$fq_replies" 2>/dev/null
     FQ_GATE_RAN=1
     say "fix-queue: OWED UNKNOWN -- could not create a temp file to run the gate with"
     say "WARNING: the fix-queue gate did not run (no temp file) -- owed is UNKNOWN, not 0; reconcile $FIX_QUEUE by hand"
@@ -879,17 +1025,32 @@ fix_queue_gate() {
   fi
   printf '%s\n' "$g_memo" >"$fq_memo"
   printf '%s\n' "$g_subjects" >"$fq_commits"
+  # The half of the drain decision the round did not write. Collected here
+  # rather than passed in, for the same reason the memo lines and commit
+  # subjects are: the two call sites reach this function at different points,
+  # and an argument that is "used if set" is one more thing that can silently be
+  # the wrong value.
+  #
+  # Seeded with the sentinel FIRST. mktemp leaves an empty file, and an empty
+  # replies file legitimately means "this round got no replies" -- so if every
+  # write below failed, the reader would be told a falsehood in the one grammar
+  # it has no way to question. Seeding inverts that: the file says "unknown"
+  # until something succeeds in saying otherwise.
+  printf '{"unavailable": "the reply extractor did not run"}\n' \
+    >"$fq_replies" 2>/dev/null || true
+  round_dispatch_replies "$fq_replies"
 
   fq_out=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
       --before "$FIX_QUEUE_BEFORE" \
       ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
+      --replies "$fq_replies" \
       --cards "$g_cards" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
-  rm -f "$fq_memo" "$fq_commits" "$FIX_QUEUE_BEFORE"
+  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$FIX_QUEUE_BEFORE"
   FQ_GATE_RAN=1
 
   # ---- how much is owed, from two sources that can disagree ----------------
