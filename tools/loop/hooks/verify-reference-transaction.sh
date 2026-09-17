@@ -256,23 +256,33 @@ sys.exit(r.returncode)
 fi
 
 echo
-echo "== F86(a): stash-drop + reflog-expire + gc-prune data loss (documented"
-echo "   gap, NOT pass/fail here -- see reference-transaction's own header,"
-echo "   'F86, PART (a)', for why no git-native hook can close this; this"
-echo "   section keeps the finding falsifiable by re-running it, not by"
-echo "   asserting it) =="
-f86a_repro() { # invocation label, invocation shape: bash|python
-  local label="$1" shape="$2"
+echo "== F86(a): stash-push anchors survive drop + reflog-expire + gc-prune"
+echo "   -- see reference-transaction's own header, 'F86(a) CORRECTION', for"
+echo "   why this closes criterion (a) for the stash-push shape. THIS IS A"
+echo "   REAL GATING CHECK (not NOTE-only): the ORDERING here matters and was"
+echo "   previously wrong -- the hook must be installed into .git/hooks BEFORE"
+echo "   the stash pushes happen, or it never sees them and never anchors"
+echo "   anything, which would silently make this check pass for the wrong"
+echo "   reason (the dropped object surviving by accident, not by anchor) or"
+echo "   fail outright depending on gc timing. Install first, push second =="
+f86a_repro() { # invocation label, invocation shape: bash|python, hook path
+  local label="$1" shape="$2" hook="$3"
   local s; s="$(mktemp -d "${TMPDIR:-/tmp}/rt-verify-f86a.XXXXXX")"
   (
     cd "$s"
     git init -q .
     git commit --allow-empty -m base -q
+    # Hook installed BEFORE any stash push -- this is the ordering fix.
+    # The original repro (83fc66c) copied the hook in AFTER both `stash
+    # push` calls, so the hook was never listening when the pushes it was
+    # supposed to anchor actually happened; any anchor-on-push mechanism
+    # would have silently never fired and this repro would have kept
+    # printing "unretrievable" regardless of whether the fix worked.
+    mkdir -p .git/hooks
+    cp "$hook" .git/hooks/reference-transaction
+    chmod +x .git/hooks/reference-transaction
     echo one >f1.txt; git add f1.txt; git stash push -q -m s1
     echo two >f2.txt; git add f2.txt; git stash push -q -m s2
-    mkdir -p .git/hooks
-    cp "$HOOK_SRC" .git/hooks/reference-transaction
-    chmod +x .git/hooks/reference-transaction
     dropped="$(git rev-parse stash@{0})"
     if [ "$shape" = python ]; then
       python3 -c '
@@ -286,15 +296,56 @@ for args in (["stash","drop","stash@{0}"], ["reflog","expire","--expire=now","--
       git gc --prune=now -q >/dev/null 2>&1
     fi
     if git cat-file -t "$dropped" >/dev/null 2>&1; then
-      echo "  NOTE  $label: dropped object SURVIVED (would mean the gap narrowed -- re-check the header's F86(a) claim if this ever prints)"
+      echo "  info f86a   $label: dropped object $dropped SURVIVED drop+expire+gc (anchor held)"
+      echo 0 >"$s/.f86a-rc"
     else
-      echo "  NOTE  $label: dropped object UNRETRIEVABLE afterward (confirms the documented, unclosed F86(a) gap -- rc=128 on cat-file -t, reproduced $(date -u +%Y-%m-%d))"
+      echo "  info f86a   $label: dropped object $dropped UNRETRIEVABLE afterward (rc=128 on cat-file -t) -- anchor did not hold"
+      echo 1 >"$s/.f86a-rc"
     fi
   )
+  local rc; rc="$(cat "$s/.f86a-rc" 2>/dev/null || echo 1)"
   rm -rf "$s" 2>/dev/null
+  return "$rc"
 }
-f86a_repro "bash-invoked git"                     bash
-f86a_repro "python3 subprocess.run(['git', ...])" python
+# The "info" lines above are neutral (they just report survived/lost); it is
+# the caller below that turns that observation into ok/FAIL, because the
+# SAME outcome (object lost) is a FAIL for the main check and the expected,
+# correct outcome for the negative control immediately after it -- printing
+# a bare "FAIL" tag unconditionally from inside the shared function would
+# make the negative control's expected-and-correct loss look like a real
+# failure to anything scanning this output for the substring "FAIL".
+if f86a_repro "bash-invoked git" bash "$HOOK_SRC"; then
+  echo "  ok   f86a   bash-invoked git: anchor held (see info line above)"
+else
+  echo "  FAIL f86a   bash-invoked git: anchor did NOT hold (see info line above)"
+  fail=$((fail+1))
+fi
+if f86a_repro "python3 subprocess.run(['git', ...])" python "$HOOK_SRC"; then
+  echo "  ok   f86a   python3 subprocess.run(['git', ...]): anchor held (see info line above)"
+else
+  echo "  FAIL f86a   python3 subprocess.run(['git', ...]): anchor did NOT hold (see info line above)"
+  fail=$((fail+1))
+fi
+
+# Negative control: same repro against the hook exactly as it stood before
+# this F86(a) correction (no _write_stash_push_anchor call at all) -- proves
+# the check above is not a tautology and that the anchor is actually what
+# closes the gap, not some other side effect of the ordering fix. Here the
+# EXPECTED outcome is that the object is LOST (f86a_repro returns non-zero),
+# so the ok/FAIL polarity is deliberately inverted from the two calls above.
+PRE_ANCHOR_HOOK="$(mktemp "${TMPDIR:-/tmp}/rt-verify-pre-anchor.XXXXXX")"
+if git -C "$HERE" show 83fc66c:tools/loop/hooks/reference-transaction >"$PRE_ANCHOR_HOOK" 2>/dev/null && [ -s "$PRE_ANCHOR_HOOK" ]; then
+  chmod +x "$PRE_ANCHOR_HOOK"
+  if f86a_repro "negctl: pre-anchor hook (83fc66c)" bash "$PRE_ANCHOR_HOOK"; then
+    echo "  FAIL negctl f86a: expected the pre-anchor hook (83fc66c) to LOSE the object (proving this check can fail); it survived instead"
+    fail=$((fail+1))
+  else
+    echo "  ok   negctl f86a: pre-anchor hook (83fc66c) loses the object as expected -- confirms the check above is not a tautology"
+  fi
+else
+  echo "  SKIP negctl  could not extract tools/loop/hooks/reference-transaction@83fc66c (not fatal, environment-dependent)"
+fi
+rm -f "$PRE_ANCHOR_HOOK" 2>/dev/null
 
 echo
 echo "== F86(b): branch -M src dst where dst pre-exists with diverging"

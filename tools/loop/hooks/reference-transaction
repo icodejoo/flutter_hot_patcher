@@ -290,8 +290,11 @@
 #     mechanism's contract is "no permanent unrecoverable loss of history",
 #     not "the rename always finishes".
 #
-# F86, PART (a) -- STASH-DROP + REFLOG-EXPIRE + GC-PRUNE IS UNCLOSABLE BY ANY
-# GIT-NATIVE HOOK (2026-09-17, empirically exhausted, not guessed):
+# F86, PART (a) -- STASH-DROP + REFLOG-EXPIRE + GC-PRUNE (2026-09-17,
+# empirically exhausted, not guessed; CORRECTED 2026-09-17, see the
+# "F86(a) CORRECTION" block immediately after this one -- read both, the
+# analysis below is still accurate, the CONCLUSION it originally reached is
+# not):
 # The three-step sequence (drop a non-last stash entry, `git reflog expire
 # --expire=now --all`, `git gc --prune=now`) permanently deletes the dropped
 # object. Verified end to end in a scratch repo, WITH this hook installed,
@@ -335,23 +338,81 @@
 #     `--prune=now` from git's own safe default (`gc.pruneExpire`, 2 weeks) --
 #     it takes no arguments -- so it would not usefully gate this specific
 #     threat model even where it applies.
-# CONCLUSION: with `stash drop`/`reflog expire` invisible to every git hook
-# and `git gc`'s object-pruning phase invisible to every git hook (including
-# the one hook, `pre-auto-gc`, that sounds adjacent but is scoped to the
-# `--auto` code path only, per git's own docs and confirmed empirically), F86
-# criterion (a) as phrased -- close this via a git-native hook -- is
-# UNSATISFIABLE by any mechanism this file's own architecture can house. The
-# only remaining lever is a `git` wrapper/alias/PATH shim, which this project
-# has already rejected elsewhere (deny-destructive.sh's own header: string/
-# argv scanning is known-bypassable and this project does not pretend
-# otherwise) and which would not actually be more robust here than
-# deny-destructive.sh's existing (bypassable, documented-as-such) string match
-# on "git stash drop"/"pop"/"clear" and "git reflog expire"/"git gc --prune=".
-# No fix is implemented for this part; fabricating a check that cannot
-# actually prevent the loss would itself be exactly the kind of false-green
-# instrument this project's CLAUDE.md already catalogs dozens of. See
-# verify-reference-transaction.sh's F86(a) section for the runnable repro that
-# keeps this finding falsifiable rather than a prose claim.
+# CONCLUSION AS ORIGINALLY WRITTEN (2026-09-17, morning pass -- KEPT FOR THE
+# RECORD, BUT SEE THE CORRECTION BLOCK BELOW, WHICH SUPERSEDES IT): with
+# `stash drop`/`reflog expire` invisible to every git hook and `git gc`'s
+# object-pruning phase invisible to every git hook, F86 criterion (a) as
+# phrased -- "the sequence must either be refused, or must leave the dropped
+# object retrievable afterward" -- was judged UNSATISFIABLE, because every
+# analysis above was scoped to REFUSING or intercepting the destructive
+# steps themselves. That framing missed the criterion's own second clause:
+# the object does not need to be protected AT drop/expire/gc time if it was
+# already durably pinned under a DIFFERENT ref BEFORE any of those three
+# steps ran -- the exact same idea already shipped for `branch -m` earlier
+# in this file (RENAME RECOVERY ANCHOR) was not applied here on the first
+# pass. It should have been; see the correction immediately below.
+#
+# F86(a) CORRECTION (2026-09-17, later same day, falsify pass): the original
+# analysis above is still accurate on every point it actually measured --
+# `stash drop`/`reflog expire` genuinely fire zero reference-transaction
+# events, and `git gc --prune=now`'s object-pruning phase genuinely fires
+# none either. What was wrong is the CONCLUSION drawn from those facts: this
+# hook does not need to see or refuse the drop/expire/gc steps at all if it
+# durably anchors the stash commit at PUSH time, before any of those steps
+# exist to run. `git stash push` DOES fire this hook -- empirically
+# confirmed (2026-09-17, logging-stub harness, hook installed BEFORE either
+# push): a `refs/stash` transaction fires for the FIRST push into an empty
+# stash (case handled at the "ref did not exist before this transaction"
+# site above) and, separately, for every subsequent push on top of an
+# existing entry (the `NS = stash`, non-zero -> non-zero case handled
+# further below) -- and BOTH shapes report OLD=all-zeroes on stdin
+# regardless of whether a prior stash value truly existed (same
+# force-update-hides-old-value quirk this file already documents for
+# `branch -f`), which is why the code below decides create-vs-update via
+# `git rev-parse --verify` (RESOLVED) rather than trusting stdin's OLD
+# field, exactly like the refs/heads/* logic already does.
+# `_write_stash_push_anchor` (defined below, mirroring
+# `_write_rename_recovery_anchor`'s shape) is called from BOTH of those
+# sites and pins the pushed commit under `refs/stash-anchor/<oid>-<epoch>-
+# <pid>` -- a durable, ordinary ref, not a reflog entry, so it is untouched
+# by `reflog expire` and is a real (reachable) reference by the time `git gc
+# --prune=now` runs its object-pruning phase, which only deletes objects
+# unreachable from ANY ref. Verified end to end (2026-09-17, scratch repo,
+# hook installed BEFORE the stash pushes -- see the ordering-bug note in
+# verify-reference-transaction.sh's F86(a) section for why that ordering
+# matters and was originally wrong there too): push two stash entries, drop
+# the non-last one, `git reflog expire --expire=now --all`, `git gc
+# --prune=now`, and `git cat-file -t <dropped-oid>` still succeeds --
+# because the anchor ref, not the stash's own reflog entry, is what keeps it
+# reachable.
+# WHAT THIS DOES AND DOES NOT COVER, stated as plainly as the rest of this
+# file's other anchor mechanisms:
+#   - It only anchors stash entries created AFTER this corrected hook was
+#     installed. A stash pushed under the OLD hook (or with no hook at all)
+#     was never anchored and drop+expire+gc still destroys it exactly as
+#     the original analysis found -- this is not retroactive.
+#   - It recovers the COMMIT, not stash's place in the stash list or its
+#     message metadata associated only with the reflog entry (e.g. branch
+#     name it was stashed from, if that is not otherwise recoverable from
+#     the commit itself) -- same "commit survives, friendly framing does
+#     not" contract as RENAME RECOVERY ANCHOR above. A human recovers it via
+#     `git stash apply <anchor-oid>` or `git branch <name> <anchor-oid>`.
+#   - Anchors accumulate forever and are NOT garbage collected by anything
+#     in this repo, same accepted tradeoff as refs/rename-recovery/* above --
+#     every legitimate `stash push`, not just ones that later get dropped,
+#     leaves a permanent anchor ref behind. A human who wants to prune
+#     confirmed-safe old anchors does so manually.
+#   - This closes criterion (a) for the STASH-PUSH shape specifically. It
+#     does nothing for `reflog expire` run against non-stash reflogs (e.g.
+#     `refs/heads/*` reflogs) losing a commit that was ONLY reachable via
+#     that reflog and no live ref -- that is a materially different
+#     scenario (no corresponding "creation" transaction analogous to `stash
+#     push` to hang an anchor off of in the general case) and is not claimed
+#     to be covered here.
+# See verify-reference-transaction.sh's F86(a) section for the runnable,
+# now-gating (not NOTE-only) check that keeps this finding falsifiable, plus
+# its negative control (hook with the anchor call removed still loses the
+# object).
 #
 # F86, PART (b) -- `branch -M <src> <dst>` WHERE <dst> PRE-EXISTS WITH
 # DIVERGING HISTORY (2026-09-17): the falsify pass that opened this card
@@ -444,6 +505,26 @@ _write_rename_recovery_anchor() {
   fi
 }
 
+# See "F86, PART (a) -- STASH-PUSH ANCHOR" header comment above. Writes a
+# durable ref pinning $1 (an oid that a `refs/stash` transaction just made
+# the new value, i.e. a `git stash push` result) under a new, never-reused,
+# never-deleted name -- called for EVERY refs/stash transaction line this
+# hook sees with a real (non-zero) NEW value, whether that line is the very
+# first push into an empty stash or a push on top of an existing one (both
+# shapes are handled at their respective call sites below; see the header
+# for why the SAME code cannot also anchor `stash drop`/`stash pop` of a
+# non-last entry -- those never produce a transaction for this hook to see
+# in the first place, so there is no call site for them). Best-effort, same
+# reasoning as `_write_rename_recovery_anchor`: a failure here is logged but
+# does not itself block the stash push.
+_write_stash_push_anchor() {
+  _sp_oid=$1
+  _sp_anchor="refs/stash-anchor/${_sp_oid}-$(date +%s)-$$"
+  if ! git update-ref "$_sp_anchor" "$_sp_oid" 2>/dev/null; then
+    echo "reference-transaction: WARNING failed to write stash anchor $_sp_anchor for refs/stash (was $_sp_oid) -- allowing the push anyway, see F86(a) correction in this file's header" >&2
+  fi
+}
+
 if [ "$STATE" != "prepared" ]; then
   cat >/dev/null   # drain stdin for committed/aborted calls, then no-op
   exit 0
@@ -456,7 +537,7 @@ declare -a REFS NEWS
 COUNT=0
 while read -r _OLD_FIELD NEW REF; do
   case "$REF" in
-    refs/heads/*|refs/tags/*|refs/wip/*|refs/stash|refs/rename-recovery/*) : ;;
+    refs/heads/*|refs/tags/*|refs/wip/*|refs/stash|refs/rename-recovery/*|refs/stash-anchor/*) : ;;
     *) continue ;;
   esac
   case "$NEW" in
@@ -474,12 +555,22 @@ while [ "$_i" -lt "$COUNT" ]; do
   REF=${REFS[$_i]}
   NEW=${NEWS[$_i]}
   case "$REF" in
-    refs/heads/*|refs/tags/*|refs/wip/*|refs/rename-recovery/*) NS=strict ;;
+    refs/heads/*|refs/tags/*|refs/wip/*|refs/rename-recovery/*|refs/stash-anchor/*) NS=strict ;;
     refs/stash) NS=stash ;;
   esac
 
   RESOLVED=$(git rev-parse --verify --quiet "$REF" 2>/dev/null)
   if [ -z "$RESOLVED" ]; then
+    if [ "$NS" = "stash" ] && [ "$NEW" != "$ZERO" ]; then
+      # First-ever `stash push` into an empty stash -- empirically (see F86
+      # header) this git reports OLD=all-zeroes on stdin for EVERY refs/stash
+      # transaction, creation or update alike (the same force-update-hides-
+      # old-value quirk already documented above for `branch -f`), so this
+      # is the only place a brand-new stash's oid is ever seen; anchor it
+      # here rather than trusting stdin's OLD field to tell create from
+      # update.
+      _write_stash_push_anchor "$NEW"
+    fi
     _i=$((_i + 1))
     continue   # ref did not exist before this transaction: creation, allow
   fi
@@ -534,10 +625,18 @@ while [ "$_i" -lt "$COUNT" ]; do
     continue
   fi
   if [ "$NS" = "stash" ]; then
+    # Non-zero -> non-zero on refs/stash: push/pop/drop, no ancestor
+    # relationship required even for legitimate use -- see the header and
+    # the "HOW IT DECIDES" refs/stash section for why. Anchor $NEW before
+    # allowing: the only shape empirically observed to reach this line is a
+    # `stash push` on top of an existing entry (see F86 header) -- dropping
+    # a non-last entry never fires this hook at all -- but anchoring
+    # unconditionally here is harmless even if some other git version ever
+    # routes a drop/pop through this line, since pinning an oid that was
+    # about to be dropped anyway costs nothing and only helps.
+    _write_stash_push_anchor "$NEW"
     _i=$((_i + 1))
-    continue   # non-zero -> non-zero on refs/stash: push/pop/drop, no ancestor
-               # relationship required even for legitimate use -- see the
-               # header and the "HOW IT DECIDES" refs/stash section for why.
+    continue
   fi
   if ! git merge-base --is-ancestor "$RESOLVED" "$NEW" 2>/dev/null; then
     BLOCK=1
