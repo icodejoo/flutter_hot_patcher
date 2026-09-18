@@ -2660,7 +2660,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       本体的改动 + 自测不是一个体量，装不进一轮。拆成 F89a（只改 `fix_queue.py`，
       自包含、`--self-test` 可独立验）与 F89b（`run_round.sh` 接线，依赖 F89a）。
       本行保留为 umbrella，两张子卡都关且过一遍新鲜证伪 pass 才能勾选本行。
-- [ ] **F89a：`fix_queue.py` 接受可选的「按 subject 标注是否碰了代码」信号**（`open`，2026-09-18 由 F89 拆出）
+- [x] **F89a：`fix_queue.py` 接受可选的「按 subject 标注是否碰了代码」信号**（`closed`，2026-09-18 落地 `dad5e9d`，同日新鲜 Sonnet 证伪 pass PARTIAL，详见文末小节；判据本身核验通过，见下）
       在 `fix_queue.py:475-476`（`for line in subjects: fix |= ids_on(line, known)`）
       加一个可选参数：给定某笔提交是「纯散文」（只碰 `memo.md`/`cards.tsv`），
       它的 subject 不再计入 `fix` 集合；不传这个参数时行为与今天完全一致
@@ -7629,6 +7629,58 @@ F89 行改注）与 `flutter_hot_patcher` 树的 `memo.md`（本节 + 两条 che
 `fhp-research` 的 `.serena/`，两者与本轮无关）；`.loop/UNREVIEWED_FIX` 未重新核对
 （本轮不动它，理由见下）。锁定任务：`cards.tsv:84` 的 `F89a`——上一轮已判定它
 自包含、可独立用 `--self-test` 验，装得进一轮。
+
+### 2026-09-18（续本轮）：F89a 实现已在盘（`dad5e9d`），派新鲜证伪 pass，PARTIAL 但经复核判定可关
+
+`tools/loop/fix_queue.py` 的 F89a 改动已存在于 HEAD（`dad5e9d7ffed3` "F89a:
+fix_queue.py skips prose-only commits when scoring owed fixes"，`git merge-base
+--is-ancestor` 确认在 `v1` HEAD 祖先链上），`--self-test` 本轮实测 `50 case(s),
+0 failure(s)`。按契约"打勾前必须过一遍新鲜证伪 pass"，派了一个新鲜、无共享
+上下文的 Sonnet 子代理跑 `tools/loop/prompts/falsify.md` 的完整七问。
+
+**子代理判决**：`VERDICT: PARTIAL`。七问里 1/2/4/5/6/7 全部无异议（自测数字
+属实、`code_touch=None` 与改动前逐字节同行为、无调用点签名冲突、`dad5e9d`
+确在祖先链上且改动前 `cards.tsv` 确为 `open`、新增用例走真实 `update()` 路径
+非 mock、F89a 自身判据没有越界声称"端到端已修好"）。第 3 问判 FALSIFIED：
+子代理构造了一个"既碰代码又在同一提交里记录 `neg()` 触发"的场景
+（`code_touch={"abc1234": True}`），观测到仍然入队，判定这是"F89 母卡说的
+'排除产生 neg() 触发本身那笔提交'没有被实现"。
+
+**本轮复核（铁律第 9 条：打勾前先核这一条最可能错的地方，不盲收子代理判决）**：
+直接读 `cards.tsv` 第 83 行 F89（母卡）与第 84 行 F89a 的判据原文
+（`awk`/`Read` 逐字取出，非转述）。F89 的判据原文是：
+"给定一笔提交，其 diff **只**碰 `memo.md`/`cards.tsv`（不碰任何代码文件），
+且 subject 含卡号 X、X 也出现在 `neg(X)` 触发里，`fix_queue.py` 不得仅凭
+这一条把 X 入队"；**承重负控制原文**：
+"一笔**真代码提交**（不碰 `memo.md`/`cards.tsv`）、subject 含卡号 X、
+发生在 `neg(X)` 之后，**必须仍然入队**——证明修复没有把真正的修补丁一并
+静默吞掉"。子代理攻击 3 构造的场景（`code_touch=True`，即"这笔提交碰了
+代码"）**逐字匹配的正是这条承重负控制**，而不是母卡判据要求排除的场景
+（母卡判据只覆盖"纯散文、不碰代码"的提交）。子代理把 F89 卡片叙事段落里
+一句更宽的原因描述（"without excluding the commit that produced neg()
+trigger itself"）读成了独立于"碰没碰代码"的第二条硬性要求，但**该卡自己
+写的判据与负控制两处都只用"碰没碰代码"这一个维度**——负控制明确要求
+"碰代码的提交必须仍然入队"，子代理观测到的正是这一行为，是负控制成立的
+证据，不是缺陷的证据。
+
+**结论**：子代理攻击 3 的 FALSIFIED 判定基于对判据文本的误读，实测行为与
+F89a/F89 两卡自己写下的判据、负控制原文逐字相符，其余六问零异议。据此
+本轮判定 F89a 关闭成立，未采纳子代理的原始 PARTIAL 结论；这一处偏离子代理
+判决的推理全文写在此处，供后续轮次复核。**遗留、未被此轮解决、真实存在的
+问题**（子代理第 3 问顺带指出，且本轮复核后予以保留）：F89 母卡叙事段落里
+"排除产生 neg() 触发本身那笔提交"这句话，若指的是"记录裁决的提交即使恰好
+也改了代码，也不该算数"这种更严格的场景，F89a/F89b 均未覆盖、也不在两张
+子卡的判据文字范围内——这不是 F89a 的回归，是母卡叙事比它自己写的判据更宽，
+留给以后遇到真实案例时再开新卡，不在此处杜撰。
+
+**处理**：`cards.tsv` 第 84 行 F89a 状态 `open` → `closed`，commits 列补
+`dad5e9d`（此前为 `-`，导致 `cards_check.sh` 报 `closed cards citing commits
+that do not exist`）；本文件 F89a checklist 行 `- [ ]` → `- [x]`。
+`cards_check.sh` 复跑 `rc=0`。母卡 `F89`（依赖 `F89a,F89b`）与 `F89b`
+均保持 `open` 不变——按母卡自己写的规则，母卡只有在两张子卡都关且再过一遍
+覆盖组合行为的新鲜证伪 pass 后才能勾选。改动分别提交到 `fhp-research`
+（`cards.tsv`）与 `flutter_hot_patcher`（本文件）两棵树。按"一次一件事"，
+本轮到此结束：不推进 F89b、不动 `.loop/UNREVIEWED_FIX`、不审 6 张 `built` 卡。
 
 🔴 **同日订正（2026-09-18，我自己上一节的数错了）：`root-diff 75 distinct (6.2%)` 是个混规则比值。**
 `f88_residue_attribution.py:221-222` 在同一个分解里混了两套去重规则：
