@@ -420,8 +420,14 @@ def read_replies(path):
     return out
 
 
-def scan(memo_lines, subjects, agents, known=None, replies=()):
+def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
+
+    `code_touch`, when given, is {sha: bool} saying whether that commit's diff
+    touched code. Absence of a sha is treated as True on purpose -- a caller
+    that only knows about SOME commits must not have the rest silently exempted.
+    `None` (the default) skips the filter entirely and reproduces the prior
+    behavior byte-for-byte, so every existing caller is unaffected.
 
     Two questions, two bars. Requiring the `(fix)` marker for both was the first
     version's defect: replayed over 120 commits touching memo.md, five of six
@@ -473,6 +479,15 @@ def scan(memo_lines, subjects, agents, known=None, replies=()):
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here_pos
     for line in subjects:
+        # F89a: a commit that only edits prose (memo.md, cards.tsv) and
+        # happens to mention a card id was being counted as a code fix owed a
+        # falsify pass. `code_touch` lets a caller that knows the diff say so;
+        # a sha the caller never mentions still counts, since ignorance of a
+        # commit's diff is not evidence it was prose-only.
+        if code_touch is not None:
+            sha = line.split(" ", 1)[0]
+            if code_touch.get(sha, True) is False:
+                continue
         fix |= ids_on(line, known)
 
     # ---- the half the round cannot author -----------------------------------
@@ -605,7 +620,7 @@ def parked(rows, now, reason):
 
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
-           replies_path=None):
+           replies_path=None, code_touch=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -747,7 +762,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         replies_gap = str(e)
 
     neg, fix, pos_same, pos_drain, claimed = scan(
-        memo_lines, subjects, agents, known, replies)
+        memo_lines, subjects, agents, known, replies, code_touch)
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
 
@@ -860,12 +875,17 @@ def self_test():
     cases = []
 
     def case(name, queue_in, memo, subjects, agents, expect_actions, expect_queue,
-             known=None, allow_enqueue=True, before_in=None, replies=()):
+             known=None, allow_enqueue=True, before_in=None, replies=(),
+             code_touch=None):
         # `replies` is a list of (tool_use_id, text) -- the sentences the round
         # did not write. A case that omits it is a round that got nothing back,
         # which after 2026-09-17 is a round in which nothing can drain.
+        # `code_touch` (F89a) is {sha: bool}; omitted, it reproduces the old
+        # "every subject line counts" behavior so no existing case's expected
+        # outcome moves.
         cases.append((name, queue_in, memo, subjects, agents, expect_actions,
-                      expect_queue, known, allow_enqueue, before_in, replies))
+                      expect_queue, known, allow_enqueue, before_in, replies,
+                      code_touch))
 
     # Reply texts the cases below reuse. Shaped like the real thing: a verdict
     # line at the top and prose under it, taken from the corpus survey of
@@ -890,6 +910,32 @@ def self_test():
         1,
         ["enqueue F39"],
         ["F39"],
+    )
+    # 1a. F89a: a commit that only touched prose (memo.md/cards.tsv) and
+    #     happens to mention the card id must NOT be treated as a code fix
+    #     owed a pass, when the caller tells us so via code_touch.
+    case(
+        "no enqueue: commit mentioning the id is prose-only (code_touch=False)",
+        [],
+        ["📋 **F46 pass 1 → PARTIAL（haiku-4-5）**"],
+        ["a1b2c3d fhp-research F46: prose fix"],
+        1,
+        [],
+        [],
+        code_touch={"a1b2c3d": False},
+    )
+    # 1b. Negative control for 1a: same shape, but code_touch says this sha DID
+    #     touch code -- the enqueue must still happen, so 1a is not passing
+    #     because code_touch blanket-suppresses everything.
+    case(
+        "enqueue: commit mentioning the id touched code (code_touch=True)",
+        [],
+        ["📋 **F46 pass 1 → PARTIAL（haiku-4-5）**"],
+        ["e4f5a6b fhp-research F46: code fix"],
+        1,
+        ["enqueue F46"],
+        ["F46"],
+        code_touch={"e4f5a6b": True},
     )
     # 2. Negative control for 1: the same round, with a pass on the fix.
     case(
@@ -1256,6 +1302,7 @@ def self_test():
          allow_enq) = item[:9]
         before_in = item[9] if len(item) > 9 else None
         replies_in = item[10] if len(item) > 10 else ()
+        code_touch = item[11] if len(item) > 11 else None
         path = os.path.join(tmpdir, "queue")
         write_queue(path, queue_in)
         # The snapshot is MANDATORY as of 2026-09-17, so a case that left it out
@@ -1284,7 +1331,8 @@ def self_test():
         actions, kept, _settled = update(
             path, memo, subjects, agents, "2026-09-09 17:00",
             known, allow_enq, before_path=before_path,
-            before_sha=before_sha, replies_path=replies_path)
+            before_sha=before_sha, replies_path=replies_path,
+            code_touch=code_touch)
         got_actions = sorted(a.split(" (")[0].split(" --")[0].strip() for a in actions)
         got_queue = [r[0] for r in read_queue(path)]
         ok = got_actions == sorted(want_actions) and got_queue == want_queue
