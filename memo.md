@@ -7623,3 +7623,9 @@ fix |= ids_on(line, known)`：这一行按 subject 裸子串把任何提到卡�
 F89 行改注）与 `flutter_hot_patcher` 树的 `memo.md`（本节 + 两条 checklist）
 各自提交。按"一次一件事"，本轮到此结束：不实现 F89a/F89b，不重派 5 个证伪
 子代理，不动 `.loop/UNREVIEWED_FIX`，不审 6 张 `built` 卡。
+
+心跳 2026-09-18T07:53:55+0800 round-start：三棵工作树 `git status --porcelain`
+均干净（除既有未跟踪历史遗留：`flutter_hot_patcher` 的 `tools/*` 一批、
+`fhp-research` 的 `.serena/`，两者与本轮无关）；`.loop/UNREVIEWED_FIX` 未重新核对
+（本轮不动它，理由见下）。锁定任务：`cards.tsv:84` 的 `F89a`——上一轮已判定它
+自包含、可独立用 `--self-test` 验，装得进一轮。
