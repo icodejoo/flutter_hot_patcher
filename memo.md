@@ -7942,3 +7942,56 @@ theirs 12 处（padded 12）`，而三个受影响函数是 `2 + 5 + 5 = 12` ⇒
 🔑 **它只在对方走捷径时命中，在对方认真做事时几乎总是错的。**
 ⇒ 预登记仍要写（它强制我把「我错了」说出来），**但不能当风险评估用，更不能据它分配核验力度**。
 真正起作用的一直是那几个钝动作：**重算一遍、自己跑一遍、自己数一遍、比两个产物谁的 mtime 更新。**
+
+### 2026-09-18：F67 段 6d 落地 —— 我的核对判定 **SURVIVES**，外加一个当场长出来的陈旧假绿
+
+**规则 0 的正面工作，今天第一件真正改了 SDK 的。** SDK 提交 `003f2759a68`；
+判据侧四笔 `3c54cd5`（段1基线）· `2be5d4d`（段3主判据）· `bf1ba43`（段4负控制）· `07c5604`（段5收尾）。
+
+**改动本体（我读了 diff，11 行、1 文件）**：
+`Assembler::LoadDFromOffset` 包一层 `PadLoadStore`，门控 `if (FLAG_precompiled_mode && base == PP)`，
+其余走原样 `emit()`。⇒ **恰好是上一位受派方自己点名的那两道闸门**，非 PP（堆对象/栈）与非 AOT（JIT/debug）不受影响。
+
+**读数（它报的，见下方「我没能独立复算的」）**：
+`self_pp 9617 → 9619` 对他们 `9619`；`missing 2 → 0`；`fn1580 / fn1633` 各 `14 → 15` 槽；
+`ldr Dt,[x27,#imm]` 我们 12 处 `padded 0 → 12`（他们 12/12）；`run_vm_tests 152/152`；
+探针 `ProductSim 0 · Release 0 · ProductARM64 71 VOIDED`（如实写明钉子已废、省下 570s）。
+四个负控制齐备，**其中两个值得点名**：`ctrl_3` 撤回填充 ⇒ 两个槽重新消失（**改坏看变红成立**）；
+`ctrl_4` 非 PP 路径 `total=27 padded=0` 并**点名三处具体站点**（`off=0x123c0,rn=x4,rt=d1` 等）
+⇒ **那条已点名的风险被直接检验，不是被论证掉的**。
+⚠️ `ctrl_2` 处置正确：派单写「必须精确回到 8263」，它报了**两个值**（未填充 8263 / 已填充 8265，+2 即新增的两槽），
+**把偏差摆出来而不是悄悄放宽判据**。
+
+**我独立核实的**：diff 与门控（读源码）；重建**真的发生了**
+（源码 `18:05:58` 改 → `ProductSimARM64/gen_snapshot` `18:07:01`、`ReleaseARM64` `18:27`，增量 38s / 40s）；
+三探针我自己跑；`f76_build_pin.tsv` 确被更新；保鲜守卫谓词
+（`ninja -n -C ReleaseARM64 gen_snapshot analyze_snapshot dartaotruntime run_vm_tests`）实测 **0**。
+
+🔑 **一条我追到底然后落空的假设，记下来免得别人再追**：
+新代码把 `kDWord` 传给发射器的 `PrepareLargeOffset`，却把 `kEightBytes` 传给 `PadLoadStore`
+（后者喂给 `InstructionCountForLoadStoreFromOffset`，而那里有一条 **`RELEASE_ASSERT`** 比对预测与实际发射）。
+两个不同的枚举值 ⇒ 看起来是计数器与发射器可能不一致。**实测不成立**：
+`Log2OperandSizeBytes` 里 `kEightBytes` 与 `kDWord` 落在**同一个 `return 3`**，
+而 `CanHoldOffset` 只通过这一个函数用到 `sz` ⇒ 两者行为完全相同。**是风格不齐，不是缺陷。**
+
+🔴 **当场长出来的真缺陷：`f67_segment6c_verify.sh` 现在是一个会给绿的陈旧检查。**
+我拿**改动之前**写的那个普查脚本跑了一遍想独立复算，它输出**与改动前一字不差**
+（`Ours total isolate double-loads: 12 (padded: 0)`）并报 **`VERDICT: CONFIRMED`**。原因：
+
+    out_f88/as.prog.ours.norm.so    09-18 14:30   ← 旧 gen_snapshot 产的
+    out_pm/as.prog.theirs.so        09-17 11:47
+    ProductSimARM64/gen_snapshot    09-18 18:07   ← 新的
+
+段 3 用的是它自己在 `out_pm/` 下生成的一组产物，**共享的 `out_f88/` 没有刷新**。
+⇒ **任何人跑那个脚本都会拿到一个自信的、错的 `CONFIRMED`**，它宣称我们这侧 12 处全未填充 —— 那已经不是事实。
+⚠️ **这是今天第三次同科**：F76 建完后 `out_f88` 过期（我抓到）、`f76_build_pin.tsv` 差点挂着失效 SHA（派单要求处置、已照做）、
+现在 `out_f88` 再次过期**而这次没人处置**。
+🔑 **值钱的修法不是刷新产物，是给读产物的脚本加一道新鲜度守卫**：读之前比 artifact mtime 与 `gen_snapshot` mtime，
+旧了就 `rc=2 BLOCKED`，**而不是照常算完报 CONFIRMED**。刷新只解决这一次，守卫让这一科不再复发。
+
+⚠️ **我没能独立复算的，必须说明**：`9619 / missing 0` 这个主判据**我没有自己重新推导出来** ——
+我的复算尝试撞上了上面那批陈旧产物，**那次检查作废**。所以主判据目前**只有交付方的读数**。
+其余未核：四个负控制我只读了产出表、未亲手驱；`run_vm_tests 152/152` 未重跑（但保鲜谓词为 0，这个绿不是继承的）。
+
+**环境**：SDK 干净，`fhp-research` 干净，未推送。**F67 / F88 卡状态未动，仍 `open`。**
+**我今天的预判总账再添三条全错**（56 分钟的算术错在拿了追平基线、门控、`kDWord` 假设），累计约 **1/12**。
