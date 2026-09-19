@@ -2676,7 +2676,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       `git show --stat` 与判定结果一致。承重负控制：一笔**同时**碰了 `memo.md`/`cards.tsv`
       **和**代码文件的混合提交，必须判成「碰代码」不是「纯散文」——否则一次真修复
       顺手带了记账，会被这条规则连带放过。
-- [ ] **F90：`f67_segment6c_verify.py` 读一份不会跟着重建刷新的共享产物
+- [x] **F90：`f67_segment6c_verify.py` 读一份不会跟着重建刷新的共享产物
       （`out_f88/as.prog.ours.norm.so`），在数据陈旧时照样打印自信的
       `VERDICT: CONFIRMED`**（`open`，2026-09-19 由 F67 段 6d 修补丁的新鲜证伪
       pass 独立复现，同科缺陷本会话 2026-09-18 就已发现但当时未立卡）
@@ -8459,3 +8459,33 @@ FALSIFIED/PARTIAL 则下一轮当场修、重跑一遍。
 **改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
 
 本仓 `memo.md`（F90 复选框 + 本节）。
+
+### 2026-09-19（续本轮）：pass 4 返回 SURVIVES——F90 落盘关闭
+
+新鲜 general-purpose 子代理（15 次工具调用）跑完七项攻击，**VERDICT: SURVIVES**。
+关键实测：整树重放被当天真实的增量重建混淆（其他配置目录已经因为今天的真实
+重建而"自然陈旧"，会用错误的理由抓到旧 bug），子代理改为**只隔离在
+`DebugARM64` 一个配置上做对照重放**：用修复前（`79e026f`）的单层 glob 对
+`DebugARM64` 重放，复现 `rc=0`（绕过成立）；用修复后（`b5c85d8`）的双层 glob
+对完全相同的文件系统状态重放，得到 `rc=2`（被挡住）——这把"这个修补丁到底
+改变了什么"从"今天巧合发生的真实重建"里剥离了出来，是本轮四条负控制里
+方法论上最扎实的一条。另确认：`exe.stripped/` 之外没有更深一层目录、没有
+`gen_snapshot*` 之外的别名产物、没有胖二进制路径；`.dSYM` 目录被 `isfile()`
+正确排除，`.sym` 文件被 glob 命中但只会导致"更容易误判为陈旧"（安全方向的
+误报），不构成绕过；`git merge-base --is-ancestor b5c85d8 HEAD` 为真；两棵树
+收尾 `git status --porcelain` 干净（除既有 `?? .serena/`，与本次审查无关）。
+
+**`STILL OPEN`（原文抄录）**：This pass only checked binaries under xcodebuild/
+as it exists today. If Xcode/ninja is ever reconfigured to emit a
+gen_snapshot-family artifact under a new directory shape (e.g. a future
+`.dSYM/Contents/Resources/DWARF/gen_snapshot` unstripped copy that gets
+independently touched, or a build-mode rename), the fix would need a fifth
+round. Not falsifiable further without inducing such a build change, which is
+out of scope (no ninja allowed).
+
+F90 本轮总计 **四轮证伪 pass**（pass1/2/3 FALSIFIED/PARTIAL 逐次修补，pass4
+SURVIVES）落盘关闭：`cards.tsv` F90 行 `state`→`closed`，criterion 列追加
+pass4 全文；`memo.md:2679` 的 `- [ ]`→`- [x]`；`cards_check.sh` 现场 rc=0，
+21 open / 34 closed 两侧 agree。**收尾**：`fhp-research` 树提交 `cards.tsv`；
+本仓提交 `memo.md`。`~/dart-3122/sdk` 未改动（子代理的 mtime 负控制已核对
+还原）。子代理本轮花费 subagent_tokens 约 82k，tool_uses 15。
