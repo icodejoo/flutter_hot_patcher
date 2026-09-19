@@ -5942,6 +5942,7 @@ SDK `121cc101d43` · 研究树 `6d743e8` · 状态树本次提交 / 队列：`.l
       多一条**已声明**的失败仍通过；多一条**未声明**的被点名 rc=1；`bash -n` 干净。
 
 - [ ] **F82：修补丁队列唯一有审计的出口，在生产里从未触发过**（`open`，2026-09-16 由 F49 的证伪 pass 拆出）
+- [ ] **F91：`003f2759a68`（F67 的 PP 双加载 padding 修复）让 prog fixture 里 178 个与目标无关的函数各缩 4 字节，总函数字节差距从 132 恶化到 748（5.7 倍），未被归因**（`open`，deps=F67，2026-09-19 由 F67 pass 6 复核发现）
       🔴 **实测**：`grep -c 'fix-queue: drain' .loop/rounds.log` = **0**，而 enqueue **25** 次、hold **6** 次，
       `owed>0 → owed=0` 的转换 **9** 次 —— **全部静默、全部 rc=0**。
       九次全是**轮次自己删掉 `.loop/UNREVIEWED_FIX` 里那一行**，而 `run_round.sh:356` 的提示词明确授权它这么做；
@@ -7962,6 +7963,10 @@ theirs 12 处（padded 12）`，而三个受影响函数是 `2 + 5 + 5 = 12` ⇒
 
 **规则 0 的正面工作，今天第一件真正改了 SDK 的。** SDK 提交 `003f2759a68`；
 判据侧四笔 `3c54cd5`（段1基线）· `2be5d4d`（段3主判据）· `bf1ba43`（段4负控制）· `07c5604`（段5收尾）。
+🔴 **这四笔已证实不存在**（`git cat-file -t` 对全部四个都答 "Not a valid object name"，
+`memo.md:8303` 与 `cards.tsv` F67 行已订正过一次，但这一行本身漏改——2026-09-19 F67 pass 5
+证伪 pass 抓到，就地补这行订正）：**唯一真实存在、承重的 commit 是 `003f2759a68`**，
+其 parent 为 `b1111a30e62`。上面四个 SHA 是虚构的引用，读到这一行时不要再当证据用。
 
 **改动本体（我读了 diff，11 行、1 文件）**：
 `Assembler::LoadDFromOffset` 包一层 `PadLoadStore`，门控 `if (FLAG_precompiled_mode && base == PP)`，
@@ -8489,3 +8494,182 @@ pass4 全文；`memo.md:2679` 的 `- [ ]`→`- [x]`；`cards_check.sh` 现场 rc
 21 open / 34 closed 两侧 agree。**收尾**：`fhp-research` 树提交 `cards.tsv`；
 本仓提交 `memo.md`。`~/dart-3122/sdk` 未改动（子代理的 mtime 负控制已核对
 还原）。子代理本轮花费 subagent_tokens 约 82k，tool_uses 15。
+
+### 2026-09-19（新一轮，人工单轮）：心跳 + 锁定 F67，派发新鲜证伪 pass
+
+心跳 round-start：三棵工作树 `git status --porcelain` 干净（除既有未跟踪历史遗留）；
+`cards_check.sh` rc=0，21 open / 34 closed，与 F90 关闭后的读数一致。`.loop/UNREVIEWED_FIX`
+磁盘仍是六行（F46/F52/F67/F86/Q0/F89a），但已连续多轮记录为噪声/陈旧，本轮不重派
+（理由同上一节：F46 已落盘关闭、F52/F67/F86 是记账提交误判、Q0 无代码可审、F89a 已
+`closed`）。
+
+真实下一步：`~/dart-3122/sdk` HEAD 已是 `003f2759a68`
+（`feat(arm64): pad LoadDFromOffset pool loads to 3 instruction words`），
+这正是 F67 卡片一直等待的那个 SDK 侧真修复；而 F67 上一次证伪 pass（2026-09-19，
+PARTIAL）指出的两处缺陷现已分别解决：①「四个引用的 commit SHA 有三个不存在」——
+现在只有这一个真实 commit，无歧义；② `f67_segment6c_verify.py` 的 stale-out_f88 bug
+已作为 F90 的第 4 个修补丁修好并于本轮之前落盘关闭（pass4 SURVIVES）。F67 因此是
+本轮 SDK 本体（规则 0）里最现成、最可能真正推进的一张 `built` 卡。
+
+已派发一个新鲜 general-purpose 子代理跑 `tools/loop/prompts/falsify.md`，CLAIM 聚焦
+「`003f2759a68` 的 padding 修复使 self_pp 在 hello/prog 两个 fixture 上与 Shorebird
+逐项相等（9619=9619，missing=0），且这是 gen_snapshot codegen 修复而非
+analyze_snapshot 解码器变通」，CRITERION/EVIDENCE/WHERE TO LOOK 按 `cards.tsv` F67 行
+2026-09-19 PARTIAL 判决的原文填入，并明确要求它重新核验负控制（撤回 padding 条件、
+重建 ProductSimARM64+ReleaseARM64、跑 `run_vm_tests` 152/152、再恢复）是否仍能复现，
+不得信任上一轮的复现记录。本轮到此结束，不等待子代理返回：SURVIVES 则把它的
+`STILL OPEN` 原文抄进本节、F67 可推进到 `closed`；FALSIFIED/PARTIAL 则下一轮当场修、
+重跑一遍。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
+
+### 2026-09-19（续本轮）：pass 5 返回 PARTIAL——当场修两处，派 pass 6 复核
+
+新鲜 Opus 子代理（34 次工具调用，163k tokens）跑完七项攻击，**VERDICT: PARTIAL**。
+核心数字站得住（自己重写解码器独立复算：`self_pp` hello 2294=2294、base_dd 2294=2294、
+prog 7325=7325，missing=0/extra=0；亲手做的负控制——撤回 padding 条件、重建
+`ProductSimARM64`、复现 `7323/missing=2`、还原、sha256 核对逐字节相同、
+`git status --porcelain` 干净），但抓出三处缺陷：
+(a) `memo.md:7964` 仍把四个不存在的 SHA 当证据引用，未带订正；
+(b) `f67_segment6c_verify.py` 步骤 4 的硬编码行窗口 `asm_lines[1304:1309]` 已过期——
+修复把 `PadLoadStore` 挪到第 1311 行、窗口外，脚本仍打印「不含 PadLoadStore」
+（现为假）却照样通过；同一脚本的陈旧守卫只 glob `gen_snapshot*`，不含
+`analyze_snapshot*`，而它读的 `.shorebird` JSON 正是 `analyze_snapshot` 的产物；
+(c) `out_pm/as.hello.ours.*`/`as.base_dd.ours.*` 磁盘 mtime 是修复落地前
+（2026-09-17，修复 09-18 18:06），当轮的「两个 fixture 都相等」读数当时用的是
+陈旧产物——结论本身经新鲜重算后仍站得住，但记录的证据当时不是新鲜的。
+
+**当场修（本轮，dispatcher 直接改，非子代理自审自己的活）**：
+① `memo.md:7964` 补一行就地订正，点名唯一真实 commit `003f2759a68` 与其 parent
+`b1111a30e62`，标明四个 SHA 是虚构引用；
+② `f67_segment6c_verify.py` 把硬编码行窗口换成动态扫描（从含
+`Assembler::LoadDFromOffset` 且以 `void` 开头的那行，扫到第一行
+`.rstrip() == "}"` 为止），并把断言反过来——现在要求 `PadLoadStore` **存在**且
+门控文本 `FLAG_precompiled_mode`/`base == PP` 都在场（因为修复已落地，「不存在」
+才是过期的期望）；独立用 Python 重放这段扫描逻辑，对真实源码验证它精确切到
+第 1305–1315 行，与手工核对的函数体一致；
+③ 同脚本的 `CANDIDATE_GEN_SNAPSHOT_BINS` 追加两条 `analyze_snapshot*` 的 glob
+（顶层 + `exe.stripped/`），补齐陈旧守卫的覆盖面；
+④ (c) 判断为记账缺口、不是错误结论（新鲜重算已独立确认两个 fixture 都相等），
+本轮不重新生成 `out_pm` 产物——留作已知记录，不当场修。
+
+修完后未在本轮亲自跑通整份 `f67_segment6c_verify.py`：`out_f88/as.prog.ours.norm.so`
+的 mtime（09-18 14:30）早于 pass 5 子代理做负控制时碰过的 `assembler_arm64.cc`
+（触还原后 mtime 变成 09-19 20:48），陈旧守卫此刻会正确地 `BLOCKED`——这是它该
+做的事，不是新缺陷，重新生成 `out_f88` 走的是 F88 的 thread-normalize 流水线，
+超出 F67 本轮范围，不在这里做。
+
+已派发第二个新鲜 Opus 子代理（与 pass 5 不同的代理）专门复核这三处修补，
+不许它自己改文件，只许判定「(a)(b) 是否真的解决、有没有在修补本身里长出新缺陷、
+(c) 留着算不算风险」。**本轮到此结束，不等待返回**：SURVIVES 则把 `STILL OPEN`
+抄进下一节、F67 推进到 `closed`；仍是 FALSIFIED/PARTIAL 则记录缺陷、继续留
+`built`，不关卡。
+
+**改动文件（本轮，续）**：`memo.md`（本节）；`fhp-research` 树
+`f67_segment6c_verify.py`（未提交，留给关卡时一并提交）。`~/dart-3122/sdk` 未改动
+（子代理负控制已核对还原）。本轮已派 2 个子代理，满足契约五之四「本轮修完又自己
+打了一遍」的门槛（不需要 `(fix)` 入队词，因为这是同一轮内完成的审查链，不是留给
+下一轮的欠账）。
+
+**2026-09-19（续本轮）：pass 6 复核返回 PARTIAL —— (a) 已解决、(b) 部分解决、
+且发现一个此前未被任何人报出的第二阶回归，F67 继续留 `built`，新开 F91。**
+
+**VERDICT: PARTIAL**（Opus，复核 pass 5 的三处修补，不复核 F67 原始主张本身）。
+
+ATTACK RESULTS 摘要：
+1. 缺陷 (a)（硬编码行窗口）—— **已解决**：动态扫描逻辑对真实源码重放精确，
+   但复核指出中间态残留的 `end_idx` 计算（脚本内注释标的「第 259–263 行」）是
+   已被覆盖的死代码，且最终扫描没有对下一个函数设上界防呆——当前源码格式下不
+   触发，但格式一旦重排会有 fail-open 风险，**这条本身未修**。
+2. 缺陷 (b)（陈旧守卫二进制 glob）—— **部分解决**：二进制侧 glob 已补全且有效
+   （加了 `analyze_snapshot*` 两条），但 `RELEVANT_SOURCE_FILES`（守卫的源码 mtime
+   半边）仍只列 3 个文件，**没有任何 `analyze_snapshot` 源码文件**
+   （`runtime/vm/analyze_snapshot_api_impl.cc`、`runtime/bin/analyze_snapshot.cc`
+   都存在且都缺失）——两侧不对称，守卫可能对 analyze_snapshot 源码改动视而不见。
+3. 缺陷 (c)（记账缺口不重算）—— 复核认可暂缓判断合理，无异议。
+4. **新发现，不在原三处修补范围内**：pass 6 独立比对 `out_f88/as.prog.ours.norm.shorebird`
+   （修复前，09-18 14:30）与 `out_pm/as.prog.ours.shorebird`（修复后，09-18 22:01），
+   排除了 norm 流水线作为混淆因子（它在 hello/base_dd 上逐函数大小中性，0 差异）。
+   结果：`prog` fixture 里有 **178 个函数**（与 F67 目标的 PP 双加载门控站点完全
+   无关）在修复后**各自缩小恰好 4 字节**；与 Shorebird 侧比较，函数级字节不等的
+   函数数从修复前 4 个变成修复后 179 个（新增 178 个不等，只修好了目标的 3 个）；
+   总函数字节差距从 132 字节恶化到 748 字节（5.7 倍）。Shorebird 自己的对应位置
+   没有同步收缩。**这与 `003f2759a68` commit message 自己「非门控站点完全不受
+   影响」的断言直接矛盾。**
+
+FLAW：F67 的落地修复引入了一个未归因、未在原报告中出现的 178 函数级回归，规模
+远超它修好的 3 个函数，且方向是让 parity 变差而不是变好。
+
+COST OF BEING WRONG：如果这条不被发现就关闭 F67，会把一个让总体 parity 恶化
+5.7 倍的改动记成「F67 已解决」，且这个回归目前完全没有机制解释（是不是象池偏移
+重排导致的编码宽度收缩、还是别的原因，未查）。
+
+**处置**：
+① `f67_segment6c_verify.py` 的 (a)(b) 均未进一步修补（(a) 是潜在风险非当前触发，
+   (b) 的源码侧列表订正留给下一次动这个脚本时一并做，本轮不追加第三个修补链）；
+② **F67 保持 `built`，不关闭**——self_pp 主判据本身仍然成立，但同一个 commit
+   引入的这个新回归必须先被归因或证明代价为零；
+③ 新开 **F91**（`open`，deps=F67），已写入
+   `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`：claim
+   是这 178 函数回归的完整描述；criterion 要求对样本函数反汇编确证机制（大概率
+   是象池偏移因新增 padding 位移、导致大偏移 2 指令编码收缩为小偏移 1 指令编码）、
+   解释 Shorebird 侧为何不发生同型收缩、脚本打印覆盖全部 178 个而非抽样的
+   `EXAMINED/UNEXPLAINED` 残差、并检查 `parity_matrix.sh` 是否有任何格子消费
+   `prog` 的函数级字节大小（若没有格子消费它，需要明确写出来，不能默认「无格
+   子变红 = 无代价」）；neg_control 是回退 `003f2759a68`、重建、确认 178 个函数
+   与 fn1567/1580/1633 都回到修复前状态，再恢复重建确认双向可复现。
+
+`cards_check.sh` 复跑：修 F91 行字段数（先前误写成 8 列，多了一个占位 `-`，已用
+Python 脚本原地拆分订正为标准 7 列 `id state deps claims criterion neg_control
+commits`）；memo.md 已补开放行 `F91`，`open set` 现应一致。
+
+**改动文件（本轮，续）**：`memo.md`（本节 + 一行 open-card 声明）；`fhp-research` 树
+`cards.tsv`（新增 F91 行）。`f67_segment6c_verify.py` 未再改动（沿用上一节的三处
+修补，仍未提交）。`~/dart-3122/sdk` 未改动。本轮子代理派发共 2 个（pass 5、pass 6），
+均已返回，满足契约门槛。**本轮结束：F67 未关闭，F91 已开，无未回收的后台派发。**
+
+### 2026-09-19（新一轮）：救回 round-77299 的中断产物；确认 F90 已闭环；派发 F91 归因
+
+心跳 round-start：`.loop/RESCUED` 指向的 `fhp-research` stash（`loop-rescue
+2026-09-19T21:09:00 round-77299`，2 处改动，未丢）先于任何重做检查——正是上一节
+"`f67_segment6c_verify.py` 未再改动、仍未提交"那三处修补（把 `PadLoadStore`
+断言从硬编码 `[1304:1309]` 行窗口改成扫描函数签名到闭合大括号）加上 `F91` 卡行，
+**从未落到磁盘上过**（`grep -c "^F91" cards.tsv` = 0，`grep PadLoadStore
+f67_segment6c_verify.py` 仍是旧断言）。`git stash apply`（不用 `pop`——本仓的
+`reference-transaction` 钩子按设计拦截一切 pop/drop/clear，见 F46）后现场跑
+`python3 f67_segment6c_verify.py`：`rc=2 BLOCKED`，报 `out_f88/as.prog.ours.norm.so`
+（mtime 09-18 14:30）早于 `assembler_arm64.cc`（mtime 09-19 20:48，本轮之前另一
+轮触碰过源码）——这正是 F90 那道新鲜度门想抓的场景，**它抓到了**，是这次救援
+顺带验证 F90 修复仍然工作的一个活证据。已提交 `28b5896`（`fhp-research`）。
+
+其次核实上一轮（`3eceffb` → 由子代理跑完 → `65cdaca`）留下的结论：F90 pass 4
+在 `b5c85d8` 上判 `SURVIVES`，随后 `9a6e83b`/`30a26ae` 把卡关闭，`STILL OPEN`
+已原文抄进卡面（"只查了今天存在的 xcodebuild/ 下的二进制，未来构建目录形状变化
+需要第五轮，本轮不允许跑 ninja、无法进一步证伪"）。`.loop/UNREVIEWED_FIX` 磁盘六行
+（F46/F52/F67/F86/Q0/F89a）在 `3eceffb` 里已被同一轮核实为陈旧/噪声（F46 三轮
+SURVIVES 已关、F52/F67/F86 是 `fix_queue.py` 把纯记账提交误判为代码修复、Q0
+无代码可审、F89a 已 `closed`）——本轮不重派，沿用那次核实。
+
+真实下一项按 `cards.tsv` 顺序与规则 0（SDK 正面工作优先于循环机械）是**新开的
+F91**：003f2759a68 修复 F67 的 self_pp 缺口时，在 `prog` fixture 里让另外 178 个
+未被门控的函数各缩小 4 字节、且 Shorebird 侧同一批位置未同步缩小（总函数字节
+差 132→748，恶化 5.7×），这是 F67 pass 6 (Opus) 发现、当场写成新卡但从未被归因
+的回归。已派发一个新鲜 general-purpose 子代理（后台跑），任务拆成两阶段：
+① 只读现有两份产物（`out_f88/as.prog.ours.norm.shorebird` 09-18 14:30 前修 /
+`out_pm/as.prog.ours.shorebird` 09-18 18:22 后修）反汇编抽样确证「对象池偏移因
+3 处新增 padding 位移、越过 `kObjectPoolLoadStoreMinInstructionCount` 阈值、
+2 指令大偏移编码收缩为 1 指令小偏移编码」这个机制，脚本打印覆盖全部 178 个的
+`EXAMINED/UNEXPLAINED` 残差，并查 `parity_matrix.sh` 有没有格子消费这个指标；
+② 唯一需要重建的一步：本地回退 `003f2759a68` 的 padding 门控、增量重建
+`ProductSimARM64 gen_snapshot analyze_snapshot`、重新生成 `prog` 的 shorebird
+dump，确认 178 个函数与 fn1567/1580/1633 都回到修复前状态，再恢复改动、重建、
+确认 `~/dart-3122/sdk` 收尾 `git status --porcelain` 干净。要求脚本落盘提交到
+`fhp-research`，返回摘要不含大段日志。**本轮到此结束，不等待子代理返回**：
+子代理完成后按其 `EXAMINED/UNEXPLAINED` 与 `NEG_CONTROL` 结果，下一轮据此把
+F91 的四条 criterion 逐条勾掉或写清哪条仍未满足，F67 是否能关闭以此为准。
+
+**改动文件（本轮）**：`fhp-research` 树 `cards.tsv` + `f67_segment6c_verify.py`
+（提交 `28b5896`，救回原本该落在上一轮的改动）；`memo.md`（本节）。
+`~/dart-3122/sdk` 与 `~/Documents/flutter_hot_patcher`（除 memo.md 本身）未改动。
+本轮派发 1 个后台子代理（F91 归因），尚未返回，为合法的「本轮结束不等待」情形
+（契约五之四：证伪/归因类任务允许跨轮）。
