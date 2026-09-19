@@ -2669,7 +2669,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       一笔标「碰代码」，两笔都在 `neg(X)` 之后；纯散文那笔不得入队，碰代码那笔必须入队。
       承重负控制：完全不传新参数时，现有全部 `--self-test` 用例逐条必须原样通过
       （不回归）。验证命令：`python3 tools/loop/fix_queue.py --self-test`。
-- [ ] **F89b：`run_round.sh` 把「这笔提交碰没碰代码」接进 F89a 的新参数**（`open`，2026-09-18 由 F89 拆出，依赖 F89a）
+- [x] **F89b：`run_round.sh` 把「这笔提交碰没碰代码」接进 F89a 的新参数**（`closed`，2026-09-18 由 F89 拆出，依赖 F89a；2026-09-19 落地 `7db1abb`，同日两遍新鲜 Sonnet 证伪 pass：第一遍 PARTIAL、修补 `3405a86`、第二遍 SURVIVES (fix)，详见文末小节）
       对 `subjects` 里已经列出的每个 sha 跑一次 `git diff-tree --no-commit-id --name-only -r <sha>`，
       判定是否只碰 `memo.md`/`cards.tsv`，按 F89a 定的格式传给 `fix_queue.py`。
       判据：挑几个真实 sha（一笔已知纯记账、一笔已知碰代码）跑新逻辑，手工核对
@@ -8047,3 +8047,45 @@ memo.md/cards.tsv」并按 F89a 定义的 `code_touch` 格式传给 `fix_queue.p
 ⚠️ **我没做的**：没有让 `run_round.sh` 完整跑一整轮去验证接线在真实调用路径里生效
 （那需要真机器 `.loop` 环境，判据里写的是"打印分类、手工核对"，已满足）；没有
 派新鲜子代理跑证伪 pass——按契约五之四，这一步排在下面，落地与证伪分两步写。
+
+### 2026-09-19（续）：F89b 两遍证伪 pass，第一遍 PARTIAL → 当场修 → 第二遍 SURVIVES (fix)
+
+**第一遍**（新鲜 Sonnet，不带共享上下文，HEAD `7db1abb`）：**VERDICT: PARTIAL**。
+七项攻击里六项确认判对（自测 51/51、负控制精确命中 P21、三笔真实提交手工分类
+`dfdb444→0 / dad5e9d→1 / ed5d68e→1` 全对、临时文件四处创建/清理路径一致、
+基名匹配的已知局限在 F89a 就已披露），**第七项抓到一个真缺口**：
+`run_round.sh` 新增的 `g_code_touch` 循环跑
+`git diff-tree --no-commit-id --name-only -r <sha>`（**没带 `-m`**），
+而 git 对合并提交的默认行为是「组合 diff 为空」——一个真的带了非记账代码改动的
+合并提交会被**静默判成 `code_touch=0`（纯散文）**，恰好是 F89b 自己那条
+「混合提交必须判成碰代码」负控制想防的那类逃逸，只是走的是合并提交而不是
+普通提交，落地时选的三笔真实提交（`dfdb444`/`dad5e9d`/`ed5d68e`）恰好全是
+非合并提交，从未测到这条路径。
+
+**当场修**（`3405a86`）：给那一行 `git diff-tree` 加 `-m`。我自己核实：
+`bash -n` 语法通过；三笔真实提交重跑分类结果不变（`0`/`1`/`1`）；
+`fix_queue.py --self-test` 仍 51/51；并在 `/tmp` 一次性 scratch 仓里独立验证
+不加 `-m` 合并提交打印 0 个文件、加了之后打印出真实改动的文件。
+
+**第二遍**（新鲜 Sonnet，不带共享上下文，HEAD `3405a86`，专门审这个修补丁）：
+**VERDICT: SURVIVES (fix)**。它在自己的 scratch 仓独立复现了合并提交场景
+（不加 `-m` → 0 文件 / 加了 `-m` → 正确列出真实文件），确认三笔非合并提交
+分类无回归，额外测了 4 父八爪鱼合并、两侧都只碰 memo.md 的合并（确认没有
+反向过纠正——不会把所有合并都错判成碰代码）、以及 `fix_queue.py --self-test`
+未受影响仍 51/51。**STILL OPEN（原文照抄）**：
+"merge legitimately touches a code file identically already merged via
+another ancestor path (a genuine no-op diff against all parents despite
+non-memo content existing) could theoretically still print nothing even
+with -m in some exotic history shape (e.g. a merge that resolves to
+content byte-identical on both parents via a cherry-pick already applied
+on both sides) -- not reproduced in this pass, remains a theoretical edge
+case worth a targeted follow-up if it ever surfaces in real .loop history."
+
+本轮派了 2 个子代理（两遍证伪 pass），第二遍那句判决含 `VERDICT` 与
+`SURVIVES (fix)`，满足契约五之四「本轮修完又自己打了一遍、不想入队」的两个
+条件，故不写入 `.loop/UNREVIEWED_FIX`。`cards.tsv:85` 的 F89b 已改 `closed`，
+第 7 列（commits）已改回真实 sha 列表 `7db1abb,3405a86`（此前误把判决全文写进
+了那一列，被 `cards_check.sh` 检查 5「commits-not-sha」当场抓到——检查本身
+起了作用，判决全文已搬回本节）。**环境**：SDK 未动；`fhp-research`
+（`cards.tsv` 改动）与本仓（`memo.md`/`run_round.sh` 改动）均待各自提交，
+两遍证伪 pass 的 scratch 仓全在 `/tmp`，未落进任何真实工作树。
