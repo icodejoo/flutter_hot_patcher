@@ -1023,7 +1023,7 @@ fix_queue_gate() {
           if [ "$fb" != "memo.md" ] && [ "$fb" != "cards.tsv" ]; then
             touched=1
           fi
-        done < <(git -C "$t" diff-tree --no-commit-id --name-only -r "$sha" 2>/dev/null)
+        done < <(git -C "$t" diff-tree --no-commit-id --name-only -r -m "$sha" 2>/dev/null)
         printf '%s %s\n' "$sha" "$touched"
       done
     done)
