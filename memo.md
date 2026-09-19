@@ -8428,4 +8428,34 @@ falsify pass，其中一项攻击应专门检查"是否还有比 `exe.stripped/`
 `~/Documents/flutter_hot_patcher` 未改动（除 memo.md 本身），三棵树收尾均干净。
 子代理本轮花费 subagent_tokens 约 80k，tool_uses 14。
 
+### 2026-09-19（新一轮，人工单轮）：先核 `.loop/UNREVIEWED_FIX` 六行，锁定真正未审项 = F90 的 `b5c85d8`
+
+心跳 round-start：三棵工作树 `git status --porcelain` 干净（除既有未跟踪历史遗留）；
+`cards_check.sh` rc=0，22 open / 33 closed。`.loop/UNREVIEWED_FIX` 磁盘仍是六行
+（F46/F52/F67/F86/Q0/F89a），但上面已连续记录过：F46 已三轮证伪 SURVIVES 落盘关闭、
+F52/F67/F86 三行是 `fix_queue.py` 把"记账提交"误判成"代码修复"的仪器噪声（commit
+正文只含判决记录，未改代码）、Q0 无代码可审、F89a 已 `closed`——这六行不是本轮的
+真实任务，本轮不重派。真实未审项是**上一轮末尾明写的下一步**：F90 的第 4 个修补丁
+`b5c85d8`（`fhp-research`，给 `f67_segment6c_verify.py` 的 `CANDIDATE_GEN_SNAPSHOT_BINS`
+追加 `xcodebuild/*/exe.stripped/gen_snapshot*` 这第二层 glob）从未被新鲜子代理审过——
+上一轮只派了 1 个子代理（判的是被修对象 `79e026f`，不是这个修补丁本身），不满足
+契约五之四"本轮修完又自己打了一遍"的门槛，F90 维持 `built`。
+
+先手工枚举了真实构建树核对上下文（六个配置目录，非此前记的五个：新增
+`ProductIosARM64`，当前为空目录，无 `gen_snapshot` 产物，不构成绕过）：
+`DebugARM64`/`DebugSIMARM64` 各有 `gen_snapshot`+`exe.stripped/gen_snapshot`；
+`ProductARM64`/`ProductSimARM64`/`ReleaseARM64` 各有 `gen_snapshot`+`gen_snapshot_product`
+及各自的 `exe.stripped/` 副本，双层 glob 目测覆盖当前全部已知产物。
+
+已派发一个新鲜 general-purpose 子代理（异步，后台跑），CLAIM/CRITERION/EVIDENCE/WHERE
+均已填入完整四轮修补链历史，要求它专门排查"比 `exe.stripped/` 更深一层"、符号链接、
+`gen_snapshot*` 之外的其他产物命名、`.dSYM`/`.sym` 误伤为假阳性的可能，并要求亲手用
+`os.utime()` 做活体负控制（只许动 `~/dart-3122/sdk/xcodebuild/` 下的 mtime，做完必须
+核对并还原，结束时两棵树 `git status --porcelain` 必须干净；不许跑构建、不许改
+`f67_segment6c_verify.py`/`cards.tsv`/`memo.md`、不许提交）。**本轮到此结束，不等待
+子代理返回**：SURVIVES 则把它的 `STILL OPEN` 原文抄进本节，F90 可推进到 `closed`；
+FALSIFIED/PARTIAL 则下一轮当场修、重跑一遍。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
+
 本仓 `memo.md`（F90 复选框 + 本节）。
