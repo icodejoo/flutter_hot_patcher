@@ -8148,3 +8148,48 @@ F52/F67/F86 三行本来就该 `hold`，不改代码也不影响正确性，只�
 队列文件）；FALSIFIED/PARTIAL 则本轮或下一轮当场修、重跑一遍。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树的 git 状态未变。
+
+### 2026-09-19（续本轮）：F46 证伪 pass #1 返回 PARTIAL——技术结论 SURVIVES，账目本身是假的
+
+新鲜 Sonnet 子代理跑完七项攻击，**VERDICT: PARTIAL**。七项攻击本身全部
+SURVIVES：未构造出新的绕过形态（`git update-ref -d`、非快进 plumbing
+update-ref、`git tag -f` 倒退全部被挡）；hook 在 flutter_hot_patcher、
+`~/dart-3122/sdk`、`~/Documents/fhp-research`（以及一个之前未记录在案的
+第四棵树 `shorebird_engine`）的 `.git` 公共目录里确认**当前实际已安装、
+可执行、内容匹配**；`verify-deny.sh` 50/50 rc=0；`verify-reference-
+transaction.sh` 现场重跑 exit 0、25 项 ok、"ALL OK"；`6e1194c` 确认是
+当前 HEAD 的祖先；两条已披露的残留缺口（不移动 ref 的工作区销毁、
+卸载/删除 hook 本身）现场复现，与卡片自陈一致，**不是新发现**。
+
+**唯一的 FLAW，且是账目性质，不是技术性质**：`spikes/shorebird_linkinfo_
+oracle/cards.tsv` 里 F46 那一行的 state 列此前仍是 `open`、commits 列仍是
+`-`，与卡片自由文本里"PASS 2026-09-16"叙事矛盾——`cards_check.sh` 是这个
+项目对"是否 closed"的权威判据（机器可查），而这行从 2026-09-16 起、经过
+包括今天在内的多次 `cards.tsv` 编辑，state 列从未被真的翻转成 `closed`。
+子代理指出的风险原话："the risk is a phantom closure in prose/dispatch
+summaries that the machine-checked ledger (`cards_check.sh`) does not
+corroborate"。
+
+**先试改、验证判据、再撤回（按契约"PARTIAL ⇒ 不许标 closed，先修、重跑，
+SURVIVES 后才关"）**：用 `awk` 把 `cards.tsv` F46 行的 state 改成 `closed`、
+commits 列填 `6e1194c,c3b03a5`（`diff` 确认这一行之外零改动），跑
+`cards_check.sh` 暴露出配套的第二处不一致：`memo.md:2895` 的
+`- [ ] **F46...**` 尚未同步翻成 `- [x]`——`cards_check.sh` 报
+`memo.md cards.tsv disagree on open/closed: F46`，rc=1。这一步**不在
+子代理报告范围内**（它只审了 `cards.tsv`，没审 `memo.md` 的复选框），是
+跑闸门自己带出来的第二个真实不一致，按此记录不隐藏。**随即把 `cards.tsv`
+还原回 `open`/`-`**（`cp /tmp/cards.tsv.bak` 覆盖回去，`cards_check.sh`
+确认 rc=0、22 open/32 closed 两侧agree）——因为契约要求"重跑后是 SURVIVES
+才允许标 [x]"，我还没重跑，不该抢先把账翻正。**待办（不在本轮做，留给
+拿到 pass #2 SURVIVES 之后的那一刻）**：state→`closed`、commits→
+`6e1194c,c3b03a5`、`memo.md:2895` 的 `- [ ]`→`- [x]`，三处必须同一次提交
+一起改，否则 `cards_check.sh` 会再报一次同型的账目不一致。
+
+已派发第二个新鲜子代理（Sonnet），只审这一处发现："cards.tsv 的
+state/commits 与卡片自己叙述的 PASS 是否一致"以及"pass #1 的七项技术性
+结论是否有遗漏"——不重跑全部七项攻击（会议价过重且信息量为零，pass #1
+的技术结论没被质疑），而是给它 pass #1 的完整判决文本 + 上面这条修法草案，
+要求它确认：(a) 这条 ledger 不一致是唯一 flaw，没有被 pass #1 漏掉的第二个；
+(b) 提议的三处同改是否真的会让 `cards_check.sh` 转绿（要求它自己在
+`/tmp` 的 `cards.tsv`/`memo.md` 副本上试跑，不许只读代码猜结论）。本轮到
+此结束，不等待返回。
