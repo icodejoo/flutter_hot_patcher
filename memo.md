@@ -8394,4 +8394,38 @@ SURVIVES 则 F90 可推进到 `closed`（把 `STILL OPEN` 原文抄进本节）�
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
 
+### 2026-09-19（续本轮）：F90 pass 3 返回 FALSIFIED——`79e026f` 的单层 glob 仍漏 `exe.stripped/`
+
+新鲜 Sonnet 子代理（14 次工具调用）跑完七项攻击，**VERDICT: FALSIFIED**：
+
+`79e026f` 的 `glob("xcodebuild/*/gen_snapshot*")` 只探一层目录，而全部 5 个配置目录
+各自还有一份 `exe.stripped/gen_snapshot`（以及 3 个配置里的 `exe.stripped/gen_snapshot_product`）——
+与顶层同名二进制**inode/size/mtime 均不同**的独立构建产物（如 `ProductARM64/gen_snapshot`
+inode 51022695 对 `exe.stripped/gen_snapshot` inode 51022963）。子代理活体复现：只把
+`exe.stripped/gen_snapshot` 的 mtime 改新（顶层二进制不动），`check_staleness()`
+仍返回 `rc=0`（放行），未捕获——正是 F90 系列此前两次已堵过的同一族缺口的更深一层。
+`.sym` 文件那条开放问题被排除（只会更保守、不构成绕过）；负控制做完后 mtime 已核对还原，
+两棵树收尾 `git status --porcelain` 干净（除既有 `?? .serena/`）。
+
+**本轮当场修复**：对 `check_staleness()` 前面的 `CANDIDATE_GEN_SNAPSHOT_BINS` 追加
+第二个 glob `xcodebuild/*/exe.stripped/gen_snapshot*`，提交 `b5c85d8`
+（`fhp-research`）。**本会话自己**用与子代理相同的复现步骤验证：改新
+`exe.stripped/gen_snapshot` 的 mtime、确认现在返回 `rc=2 BLOCKED`、随后核对并还原
+mtime（改前 `1788921509.0017781`，改后 `stat` 确认逐字节相同）。`cards.tsv` F90 行
+`criterion` 列追加本次 FALSIFIED 全文、`commits` 列追加 `b5c85d8`，`cards_check.sh`
+现场 rc=0（22 open/33 closed 两侧 agree），提交 `9a6e83b`（`fhp-research`）。
+
+**`b5c85d8` 本身仍未经新鲜子代理审查**——本轮只派了 1 个子代理（那次返回的是对
+`79e026f` 的判决，不是对这个新修补丁的），不满足契约五之四"本轮修完又自己打了一遍"
+的两条门槛之一（需 ≥2 个子代理派发）；也没有第二个子代理给出含 `(fix)`/判决措辞的
+复核。**F90 状态维持 `built`，不推进 `closed`**。参照上一轮的判断（追这一族缺口有
+陷入无限回归的迹象：目录一层→两个配置→一个二进制变体→glob→glob 又漏一层目录），
+**本轮到此为止，不再派第 4 轮证伪**；下一轮的第一件事应是对 `b5c85d8` 跑一次新鲜
+falsify pass，其中一项攻击应专门检查"是否还有比 `exe.stripped/` 更深的一层"。
+
+**改动文件（本轮，续）**：`fhp-research` 的 `f67_segment6c_verify.py`（`b5c85d8`）与
+`cards.tsv`（`9a6e83b`）；`memo.md`（本节）。`~/dart-3122/sdk` 与
+`~/Documents/flutter_hot_patcher` 未改动（除 memo.md 本身），三棵树收尾均干净。
+子代理本轮花费 subagent_tokens 约 80k，tool_uses 14。
+
 本仓 `memo.md`（F90 复选框 + 本节）。
