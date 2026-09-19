@@ -8242,3 +8242,33 @@ hook 文件本身，这一层检测不到也防不住——两条都是卡片自
 
 **收尾**：`fhp-research` 树提交 `cards.tsv`；本仓提交 `memo.md`。三个子代理
 本轮总花费 subagent_tokens 约 115k+74k+42k，tool_uses 24+19+7=50。
+
+### 2026-09-19（新一轮，人工单轮）：F46 已确认闭环，锁定 F67 段 6d 修补丁的独立证伪 pass
+
+心跳 round-start：三棵工作树 `git status --porcelain` 干净。`.loop/UNREVIEWED_FIX`
+磁盘仍是旧的六行（F46/F52/F67/F86/Q0/F89a）——这是已知行为，不是新判决：
+真正的出队只发生在 `run_round.sh` 的 `fix_queue_gate()`，人工单轮不会触发它，
+上一轮（结束于本文件上方 `pass #3 SURVIVES`）已把 F46 判完；F52/F67/F86 已由更早的
+轮次判定为 `fix_queue.py` 的卡号误报（提交只是记账，不是代码修复）；Q0 无代码可审；
+F89a 已 `closed`——本轮不重派这六项。
+
+按 `cards.tsv` 现读（`cards_check.sh` rc=0，21 open / 33 closed 双方一致）核对 6 张
+`built` 卡：F80/F49/F53/F54/F65/F67。逐张查过往证伪记录：F80 已两轮 PARTIAL 且与
+F37 互锁（本身自带完整历史，不适合再派一次通用 pass）；F49 已 SURVIVES；F53
+已 PARTIAL 并把两个真缺陷拆给 F83；F65 已被连续证伪三次（第三次抓到 `$HOME`
+未被守卫名单覆盖）；F54 依赖尚未 `closed` 的 F53。**F67 是这六张里最值得排的一张**：
+它上一次的真实代码修补（SDK 提交 `003f2759a68`，`Assembler::LoadDFromOffset`
+包一层 `PadLoadStore`）只经过**本会话自己**核对（"我的核对判定 SURVIVES"，
+2026-09-18 记录），从未有**新鲜子代理**审过——按契约五之四，这不算数，
+且 F67 是规则 0 的 SDK 本体工作，优先于循环机械类卡片。
+
+已派发一个新鲜 general-purpose 子代理（异步，后台跑），按
+`tools/loop/prompts/falsify.md` 七项攻击审 `003f2759a68`。派发提示词已写明：
+`f67_segment6c_verify.sh` 读 `out_f88/` 的已知陈旧假绿缺陷（本会话自己发现，未修）、
+`self_pp 9619/missing 0` 这个主判据此前未被独立复算过、以及三棵树在结束时必须
+`git status --porcelain` 干净的收尾要求。**本轮到此结束，不等待子代理返回**：
+SURVIVES 则把它的 `STILL OPEN` 原文抄进 memo、F67 卡片状态维持 `built`
+（除非它同时确认 `self_pp` 主判据可独立复算，那时才考虑推进到 `closed`）；
+FALSIFIED/PARTIAL 则下一轮当场处理。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
