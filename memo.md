@@ -2676,6 +2676,21 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       `git show --stat` 与判定结果一致。承重负控制：一笔**同时**碰了 `memo.md`/`cards.tsv`
       **和**代码文件的混合提交，必须判成「碰代码」不是「纯散文」——否则一次真修复
       顺手带了记账，会被这条规则连带放过。
+- [ ] **F90：`f67_segment6c_verify.py` 读一份不会跟着重建刷新的共享产物
+      （`out_f88/as.prog.ours.norm.so`），在数据陈旧时照样打印自信的
+      `VERDICT: CONFIRMED`**（`open`，2026-09-19 由 F67 段 6d 修补丁的新鲜证伪
+      pass 独立复现，同科缺陷本会话 2026-09-18 就已发现但当时未立卡）
+      2026-09-18 落地 `003f2759a68`（padding 修复）后，该脚本用陈旧的
+      `out_f88/` 产物报「`LoadDFromOffset` 里没有 `PadLoadStore` 调用」，
+      而 HEAD 上这句话已经是假的；2026-09-19 的新鲜子代理独立复现同一现象
+      （`out_f88` mtime 18:30:06 早于源码改动 18:05:58）。同族已记录的第 38/41
+      种仪器缺陷（`git status` 干净不代表钉住的产物仍新鲜）在这里又长出一例。
+      判据：脚本在打判决前必须比对它要读的每个 `out_f88/` 产物的 mtime，
+      与产生它的 `gen_snapshot` 二进制、以及相关 SDK 源文件的 mtime；
+      任一输入更旧就必须打印 `rc=2 BLOCKED` 并点名具体哪个路径陈旧，
+      不许照常算完给判决。承重负控制：把驱动某个产物的 SDK 源文件 mtime
+      改到比 `out_f88/` 里的产物更新（不改内容），脚本必须报 BLOCKED；
+      刷新 `out_f88/` 后必须能重新算出一个真判决。
 - [ ] **F87：DD 判别器的负控制不可能失败，它的期望也没有被断言**（`open`，2026-09-17 由 F36 首次证伪 pass 拆出）
       `measure_dd_emission.sh` 写的控制是「拿掉判别器,计数回到 92」—— **算术上恒真**:
       `native_patched + dd_dispatch` 恒等于命中数,合并两桶必然得到和。
@@ -8272,3 +8287,39 @@ SURVIVES 则把它的 `STILL OPEN` 原文抄进 memo、F67 卡片状态维持 `b
 FALSIFIED/PARTIAL 则下一轮当场处理。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
+
+### 2026-09-19（续本轮）：F67 pass 返回 PARTIAL——核心技术结论 SURVIVES，抓出两处真缺陷
+
+新鲜 Sonnet 子代理（77 次工具调用，无共享上下文）跑完七项攻击，**VERDICT: PARTIAL**。
+
+**核心结论 SURVIVES，且做到了本会话自己没做到的独立复算**：它在**没有用那份
+已知陈旧的 `out_f88/`** 的前提下，从 `out_pm/*.shorebird` 重新算出 `self_pp`
+主判据——hello 2294=2294、prog 7325=7325、总计 **9619=9619**、missing=0、
+fn#1580/fn#1633 均 14→15——这正是上一位受派方自称"没能独立复算"的那个数。
+它还亲手做了一遍负控制（撤回 padding 条件→重建→12 处填充变 0→恢复→重建两个配置→
+`ninja -n` 0 pending、`run_vm_tests` 152/152），不是读旧结果。
+
+**两处真缺陷，因此判 PARTIAL 不是 SURVIVES**：
+1. **memo.md 里引用的四个"段"提交（`3c54cd5`/`2be5d4d`/`bf1ba43`/`07c5604`）在仓库里根本不存在**
+   （`git cat-file -t` 四个全部报不存在）——唯一存在的是 `003f2759a68` 本身（HEAD，
+   父提交 `b1111a30e62`，diff 与描述的 11 行/1 文件精确吻合）。这是一条**编造出来的
+   提交号**，本会话 2026-09-18 那次自我核对时写下的，从未有人核对过它们是否真的存在。
+2. **`f67_segment6c_verify.py` 的陈旧产物假绿现场复现，且仍未修**：它在当前 HEAD 上
+   读 `out_f88/as.prog.ours.norm.so`（mtime 18:30:06，早于 18:05:58 的源码改动），
+   打印 `VERDICT: CONFIRMED` 并断言"`LoadDFromOffset` 里没有 `PadLoadStore` 调用"——
+   这句话在 HEAD 上是假的。已按此拆出新卡 **F90**（`memo.md` 复选框已加、
+   `cards.tsv` 已加行，`cards_check.sh` 现场 rc=0，22 open/33 closed 两侧 agree）。
+
+**本轮当场处理（按契约"能修的当场修"）**：`cards.tsv` F67 行的 `criterion` 列追加了
+这次 PARTIAL 判决全文，`commits` 列从 `-` 改成真实的 `003f2759a68`（不再引用编造的
+四个 SHA）。**F67 状态维持 `built`，不推进到 `closed`**——SDK 代码改动本身现已被独立
+证实，但引用准确性与 F90 这个新发现的工具缺陷仍是未闭合的债，按契约不许因为核心结论
+SURVIVES 就整卡放行。
+
+**STILL OPEN**（子代理原文，抄录）：那四个"段"提交描述的离散基线/测量/负控制/收尾
+提交流程本身无法核实（那些 SHA 在仓库里不存在），即使**落地的 diff 与它的效果**已被
+独立复现；`f67_segment6c_verify.py` 的陈旧数据 bug 仍未修，仍在打假的 `CONFIRMED`。
+
+**三棵树收尾**：子代理自报三棵树 `git status --porcelain` 干净（除既有未跟踪历史遗留），
+未做任何提交。**本轮改动**：`fhp-research` 的 `cards.tsv`（F67 行更新 + 新增 F90 行）、
+本仓 `memo.md`（F90 复选框 + 本节）。
