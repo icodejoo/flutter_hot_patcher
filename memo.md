@@ -8322,4 +8322,58 @@ SURVIVES 就整卡放行。
 
 **三棵树收尾**：子代理自报三棵树 `git status --porcelain` 干净（除既有未跟踪历史遗留），
 未做任何提交。**本轮改动**：`fhp-research` 的 `cards.tsv`（F67 行更新 + 新增 F90 行）、
+`memo.md`（本节）。
+
+### 2026-09-19（新一轮，人工单轮）：F90 三连证伪链——每修一次，暴露下一层更窄的同类缺口
+
+心跳 round-start：三棵工作树干净（`git status --porcelain` 除既有未跟踪文件外为空）；
+`cards_check.sh` rc=0，22 open / 33 closed。锁定任务：card F90（`f67_segment6c_verify.py`
+读陈旧共享产物打假 `VERDICT: CONFIRMED` 的仪器缺陷，上一轮已开卡但未修）。1.5 拆卡检查：
+判据是给一个脚本加 mtime 新鲜度守卫，不含「干净重建/全量重跑/逐个提交二分」字样，装得进一轮。
+
+**派发 1（实现，general-purpose，异步）**：修 `f67_segment6c_verify.py`，在打印任何 verdict
+前比较 artifact / SDK 源文件 / 产出该 artifact 的 `gen_snapshot` 二进制三者 mtime，
+任一更旧则 `BLOCKED` + rc=2。自测：对当前真实陈旧的 `out_f88/as.prog.ours.norm.so`
+（早于 18:05:58 的源码修复）复现 `BLOCKED`；`touch` 成新鲜后确认放行并打印真 `VERDICT: CONFIRMED`；
+mtime 已还原。提交 `c393a9c`（`fhp-research`）。三棵树收尾干净。
+
+**派发 2（证伪 pass 1，fresh Sonnet 5）对 `c393a9c`**：**VERDICT: PARTIAL**。核心机制
+SURVIVES——七项攻击里的攻击①②⑥独立复算：亲手 `stat` 验证陈旧场景真会 `BLOCKED`（rc=2），
+亲手把 artifact 改新后真会放行（rc=0）。**但抓出一处真缺口**：`CANDIDATE_GEN_SNAPSHOT_BINS`
+硬编码只列了 5 个实际存在的 `xcodebuild/*/gen_snapshot` 配置目录里的 3 个，漏了
+`DebugSIMARM64`、`ProductSimARM64`——单独重建这两个配置之一（源码不动）会绕过守卫，
+正是 F90 本要堵的那类假绿。**同一 pass 当场自修**为 `6f8c53b`（补齐两个路径），
+并显式声明「这个修补丁我自己没审过」。
+
+**派发 3（证伪 pass 2，fresh Sonnet 5）对 `6f8c53b`**：**VERDICT: PARTIAL**。同样先亲手复算
+（`find` 重新列出磁盘上的真实集合，不信任提交信息里的「5」），复现出**更窄的同族缺口**：
+`CANDIDATE_GEN_SNAPSHOT_BINS` 是按二进制名 `"gen_snapshot"` 硬编码的列表，而 5 个配置目录
+中的 3 个（`ReleaseARM64`/`ProductARM64`/`ProductSimARM64`）**各自还有一个独立的 ninja 产物
+`gen_snapshot_product`**（inode/size/mtime 均不同，证实是两个不同的构建产物），从未在名单里
+——单独 `ninja gen_snapshot_product`（源码不动）仍会绕过守卫。活体复现：`os.utime()` 改真实
+`ProductARM64/gen_snapshot_product` 到当前时刻、源码打桩后，`check_staleness()` 真的没有拦截。
+**同一 pass 当场自修**为 `79e026f`（改用 `glob(xcodebuild/*/gen_snapshot*)` 取代硬编码列表），
+复核了该修补丁解决了这一层的坑，**同时明确声明该修补丁本身未经审查**，并留下两个待查项：
+glob 会不会误吃 `.sym` 文件、`exe.stripped/gen_snapshot*`（深一层目录，glob 未覆盖）是否也该纳入。
+
+**本轮到此为止，不再派第四轮证伪**：`79e026f` 仍是 `built`（unreviewed），
+按契约"一件事 + 它的审查结论"已经交了三对，继续追下去有陷入同族缺口无限回归的迹象
+（硬编码枚举 → 补两个目录 → 补一个二进制名变体 → 换成 glob → glob 覆盖面本身还没被攻击过）。
+**`cards.tsv` F90 行已更新**：状态 `open`→`built`，`commits` 列写入三个真实 SHA
+（`c393a9cb26d3f5c7e315b9aa488da23ef7138c93,6f8c53be103f929b4e2e35215c894669608c2eab,
+79e026f0865e6a9563d4cc4bb14288b81017bf92`），`criterion` 列追加完整链路记录，
+明写 **STILL OPEN：pass 3（针对 `79e026f` 本身）尚未跑，F90 在那之前不许标 `closed`**。
+`cards_check.sh` 复跑 rc=0（22 open / 33 closed，F90 计入 `built`）。
+
+**核心结论没有被推翻**：三次攻击①每次都独立验证了"守卫真的能报红、也真的能放行"，
+不是恒真式或恒假式；被推翻的只是"枚举覆盖是不是完整"这个更窄的问题，而且每次都当场修了。
+这本身是五之二那条通则的又一实例——**一个真机制不等于它解释/覆盖了全部情形**，
+这里是"覆盖了全部构建产物路径"而非"解释了全部差异"，但形状相同：机制对，边界窄。
+
+**改动文件（本轮）**：`fhp-research` 的 `f67_segment6c_verify.py`（`c393a9c` → `6f8c53b` →
+`79e026f`）与 `cards.tsv`（`31698c7`）；`memo.md`（本节）。`~/dart-3122/sdk` 与
+`~/Documents/flutter_hot_patcher` 未改动，三棵树收尾均干净。三个子代理本轮总花费
+subagent_tokens 约 79k+131k+81k=291k，tool_uses 23+36+26=85。
+
+
 本仓 `memo.md`（F90 复选框 + 本节）。
