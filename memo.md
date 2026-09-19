@@ -2892,7 +2892,7 @@ pass 2–5 的九处发现全部修掉，**每一处都有一条只让它自己�
 `TEST_PLAN.md` 七个条目写成**无上下文代理能直接领一项做完**的形式，
 四个陷阱放在最前面（不是附录）——它们每一个都在过去一天里在那个套件里制造过绿灯。
 
-- [ ] **F46：轮次在权限层面碰不到历史**（`open`）
+- [x] **F46：轮次在权限层面碰不到历史**（`closed`）
       我原来的方案（wrapper 拦破坏性 git 子命令）**是形状不是执行**，可被绕过。
       判据：**用 python 调 git 绕过按命令名的拦截，它仍然必须失败。**
 
@@ -8191,5 +8191,54 @@ state/commits 与卡片自己叙述的 PASS 是否一致"以及"pass #1 的七�
 的技术结论没被质疑），而是给它 pass #1 的完整判决文本 + 上面这条修法草案，
 要求它确认：(a) 这条 ledger 不一致是唯一 flaw，没有被 pass #1 漏掉的第二个；
 (b) 提议的三处同改是否真的会让 `cards_check.sh` 转绿（要求它自己在
-`/tmp` 的 `cards.tsv`/`memo.md` 副本上试跑，不许只读代码猜结论）。本轮到
-此结束，不等待返回。
+`/tmp` 的 `cards.tsv`/`memo.md` 副本上试跑，不许只读代码猜结论）。
+
+### 2026-09-19（续本轮）：pass #2 返回 PARTIAL——但那是对措辞歧义的纠错，不是对我的实际改法的否定
+
+新鲜子代理独立在 `cards_check.sh --fixture` 里试跑，**判 PARTIAL**：
+它把我写在 memo 里的措辞"commits 列"理解成可能被误读成第 3 字段（`deps`），
+自己按误读的版本跑了一遍，`cards_check.sh` 报 `dep-shape`/`no-commit`
+两个错；随后按正确的第 7 字段（`$NF`）重跑，fixture 模式下 **0 failure**、
+`ok:` 全线通过。**它推荐的最终改法与我实际已经用 `awk -F'\t' -v OFS='\t'
+'NR==43{$2="closed"; $7="6e1194c,c3b03a5"}'` 做出来的改法逐字一致**——
+PARTIAL 判的是"指令文字有歧义"，不是"这个具体改法有缺陷"；它自己的
+fixture 复算已经独立确认了这个具体改法有效。
+
+**当场把这个已双重验证（我自己的 `cards.tsv` 试跑 + 子代理独立 fixture
+复算）的改法应用到真实文件**：`cards.tsv` F46 行 `$2`→`closed`、`$7`→
+`6e1194c,c3b03a5`（`diff` 确认 `$3`/`$4`/`$5`/`$6` 逐字节未动）；
+`memo.md:2895` 的 `- [ ] **F46...**（\`open\`）` → `- [x] **F46...**
+（\`closed\`）`。**现场跑 `cards_check.sh`：rc=0，21 open/33 closed 两侧
+agree，六项 `ok:` 全绿**——这是这条 ledger 一致性主张本身的权威判据，
+比任何子代理转述都硬。
+
+派了第三个子代理（纯机械核对，7 条命令 + 期望输出，无需judgment，符合
+"跑命令比数字、没什么可判断的用 Haiku 档"），核对 `cards.tsv`/`memo.md`
+落盘后的实际字节、`cards_check.sh` 现场 rc、两个 commit sha 在
+flutter_hot_patcher 树里确实存在。本轮到此结束，不等待第三个子代理返回；
+若它报 SURVIVES，F46 即为"重跑后 SURVIVES"，`.loop/UNREVIEWED_FIX` 里
+F46 那行的自动出队交给 `run_round.sh` 末尾的 `fix_queue_gate()` 处理，
+不手工改队列文件。
+
+**改动文件（本轮，第二次提交前）**：`cards.tsv`（fhp-research 树，F46 行
+2 个字段）、`memo.md`（本节 + 2895 行复选框）。
+
+### 2026-09-19（续本轮）：pass #3 SURVIVES——F46 落盘确认，两棵树各提交一次
+
+第三个子代理（机械核对）现场重跑全部 7 条命令，**VERDICT: SURVIVES**：
+`cards.tsv` 现读 `closed 6e1194c,c3b03a5`；`memo.md:2895` 现读
+`- [x] **F46...**（\`closed\`）`；`cards_check.sh` 现场 rc=0、六项 `ok:`
+全绿；两个 sha 在 flutter_hot_patcher 树里都是真实 commit。**本轮总计三次
+证伪 pass**（技术机制 SURVIVES 七项攻击、ledger 修法 fixture 复算确认、
+落盘结果机械核对 SURVIVES），F46 的"重跑后 SURVIVES"条件满足，`- [x]`
+成立。子代理 pass #1 的 `STILL OPEN`（技术侧，非 ledger 侧）照抄：
+两处已披露的残留缺口——(1) 不移动 ref 的工作区销毁（`checkout -f`/
+`clean -fdx`/`restore .`）仍只受 `deny-destructive.sh` 较弱的字符串匹配
+保护，python-subprocess 仍能绕过这一类；(2) `core.hooksPath` 置空或删除
+hook 文件本身，这一层检测不到也防不住——两条都是卡片自己早已写明、
+本轮三次证伪都复现为"确实如此"，不是新发现，**F46 关闭不代表这两个
+残留缺口消失**，只代表本轮审查的那个具体机制（python-subprocess 绕过
+`deny-destructive.sh` 打 `reset --hard`/`branch -D`）确实被堵住了。
+
+**收尾**：`fhp-research` 树提交 `cards.tsv`；本仓提交 `memo.md`。三个子代理
+本轮总花费 subagent_tokens 约 115k+74k+42k，tool_uses 24+19+7=50。
