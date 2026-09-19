@@ -8089,3 +8089,62 @@ case worth a targeted follow-up if it ever surfaces in real .loop history."
 起了作用，判决全文已搬回本节）。**环境**：SDK 未动；`fhp-research`
 （`cards.tsv` 改动）与本仓（`memo.md`/`run_round.sh` 改动）均待各自提交，
 两遍证伪 pass 的 scratch 仓全在 `/tmp`，未落进任何真实工作树。
+
+### 2026-09-19 心跳 13:55:11+0800 round-start
+
+三棵工作树 `git status --porcelain` 干净（除既有未跟踪历史遗留）。
+`.loop/UNREVIEWED_FIX` 磁盘实况仍是 F46/F52/F67/F86/Q0/F89a 六行。
+
+**本轮先核实这六行是否真的都是"欠审的修补丁"，而不是直接重派六次**（重派会
+把已经确认过的结论再买一遍）。逐个查了实际 commit 内容：
+
+- **F52 的"fix"commit `7133f91`**：`git show --stat` 只碰 `memo.md`，正文是
+  "memo: F52 checklist sync fix + F67 falsify pass PARTIAL round record"——
+  这不是一次代码修复，是一次证伪 pass 判决的记账提交。
+- **F67 的"fix"commits `0fac727`/`7133f91`**：`0fac727` 只碰
+  `spikes/shorebird_linkinfo_oracle/cards.tsv`，正文是记录 PARTIAL 判决、把
+  归因从"analyze_snapshot 解码器"改判"gen_snapshot 编译器欠 padding"，卡片
+  状态停在 `built`——同样是记账，不是代码修复。
+  `7133f91` 同 F52。
+- **F86 的"fix"commits `6e29543`/`bb4be82`**：`6e29543` 正文
+  "memo: F46 VERDICT FALSIFIED, F86 ..."，`bb4be82` 正文提到 "F46, FALSIFIED
+  verdict"——同样是判决记账，不是代码修复。
+- **F46 的"fix"commits `4995a6b`/`6e1194c`/`c3b03a5`**：`git show --stat
+  6e1194c` 显示新增三个文件、+347 行（`tools/loop/hooks/reference-transaction`、
+  `install-reference-transaction.sh`、`verify-reference-transaction.sh`）——
+  **这是真代码**（一个 git `reference-transaction` hook，阻止历史被销毁）。
+  `c3b03a5` 只改 `cards.tsv` 1 行。**F46 是六项里唯一有真实代码改动、
+  从未被新鲜子代理审过的一项。**
+- **Q0**：不是修补丁，是"上一轮结束时没跑 fix-queue gate"的记账条目，本身
+  没有可审的代码。
+
+⇒ **F52/F67/F86 是 `fix_queue.py` 的 `fix(X)` 检测把"记录证伪判决的提交"
+误判成"修复"产生的队列噪声**（这三项的 commit 正文都含卡号 + `FALSIFIED`/
+`PARTIAL` 字样，触发了 `neg(X) & fix(X)`，但那次提交没有改任何代码）。
+**这是一处新发现的仪器缺陷候选**：`fix(X)` 只问"这一轮某条 commit subject
+里出现了卡号"，不问"这条 commit 是不是只在记账"——同一类问题 F89a/F89b 已经
+解决过一半（`code_touch`），但那半解的是"跳过纯散文提交"，这次踩中的是
+"一条提交本身就是证伪 pass 的记录，而记录动作本身触发了它要记录的那个判决
+再次被当成新修补丁"——是同一根问题的另一种触发路径。**本轮不新开卡去修
+`fix_queue.py`**（改判据本身要走 F89 同款的判据+负控制，装不进本轮，且
+F52/F67/F86 三行本来就该 `hold`，不改代码也不影响正确性，只是队列会一直
+显示它们），只记录发现，避免下一轮重复这次排查。
+
+**本轮实际动作：对 F46 这唯一的真实待审修补丁派一个新鲜子代理跑
+`tools/loop/prompts/falsify.md`**，CLAIM 取自 `cards.tsv:43` F46 的
+`PASS 2026-09-16` 记录（`reference-transaction` hook 阻止 `git reset --hard`
+/`branch -D` 等销毁历史的操作，pre-push hook 独立挡强推，`verify-deny.sh`
+50/50 未回归，且已知残留缺口是"不移动 ref 的工作区销毁"与
+"卸载/删除 hook 本身"两类，卡片自己写明未覆盖）。
+
+已派发（Sonnet，异步子代理，agentId 见本轮工具调用记录，不重复贴在这里）。
+七项攻击 + 安全护栏（只许在 `/tmp` scratch repo 或卡片自带的
+`verify-reference-transaction.sh` 里做破坏性操作，不许对三棵真树跑
+`reset --hard`/`branch -D`/`push`）已写入派发提示词。**本轮到此结束，
+不等待子代理返回**——按契约第二步"派给独立子代理"与第三步"只接收摘要"，
+结果留给下一轮（或收到完成通知后）处理：SURVIVES 则把 `STILL OPEN` 原文
+抄进 memo 并将 F46 从 `.loop/UNREVIEWED_FIX` 的"待审"心智模型中解除（实际
+出队仍由 `run_round.sh` 的 `fix_queue_gate()` 在本轮末自动处理，不手工改
+队列文件）；FALSIFIED/PARTIAL 则本轮或下一轮当场修、重跑一遍。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树的 git 状态未变。
