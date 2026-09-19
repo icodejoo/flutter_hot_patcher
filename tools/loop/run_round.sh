@@ -1006,6 +1006,27 @@ fix_queue_gate() {
       [ "$h" = none ] && continue
       git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
     done)
+  # F89b: for each of the same commits, whether its diff touched anything
+  # besides memo.md/cards.tsv -- fix_queue.py's code_touch filter (F89a) needs
+  # this per-sha, and it must come from THIS tree's own git, not from prose,
+  # because prose is exactly what F89 was filed to stop trusting. A file with
+  # no changed paths (e.g. an empty commit) is treated as prose-only: it did
+  # not touch code, by the same logic that names memo.md/cards.tsv prose-only.
+  g_code_touch=$(for pair in ${heads_before:-}; do
+      t=${pair%%=*}; h=${pair#*=}
+      [ "$h" = none ] && continue
+      for sha in $(git -C "$t" log --format="%h" "$h..HEAD" 2>/dev/null); do
+        touched=0
+        while IFS= read -r f; do
+          [ -z "$f" ] && continue
+          fb=$(basename "$f")
+          if [ "$fb" != "memo.md" ] && [ "$fb" != "cards.tsv" ]; then
+            touched=1
+          fi
+        done < <(git -C "$t" diff-tree --no-commit-id --name-only -r "$sha" 2>/dev/null)
+        printf '%s %s\n' "$sha" "$touched"
+      done
+    done)
   # An id is only an id if the card table lists one. Unfiltered, the pattern
   # reads prose as cards: attack 4's replay over 120 commits touching memo.md
   # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
@@ -1016,8 +1037,9 @@ fix_queue_gate() {
   fq_memo=$(mktemp 2>/dev/null) || fq_memo=
   fq_commits=$(mktemp 2>/dev/null) || fq_commits=
   fq_replies=$(mktemp 2>/dev/null) || fq_replies=
-  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ] || [ -z "$fq_replies" ]; then
-    rm -f "$fq_memo" "$fq_commits" "$fq_replies" 2>/dev/null
+  fq_code_touch=$(mktemp 2>/dev/null) || fq_code_touch=
+  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ] || [ -z "$fq_replies" ] || [ -z "$fq_code_touch" ]; then
+    rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" 2>/dev/null
     FQ_GATE_RAN=1
     say "fix-queue: OWED UNKNOWN -- could not create a temp file to run the gate with"
     say "WARNING: the fix-queue gate did not run (no temp file) -- owed is UNKNOWN, not 0; reconcile $FIX_QUEUE by hand"
@@ -1025,6 +1047,7 @@ fix_queue_gate() {
   fi
   printf '%s\n' "$g_memo" >"$fq_memo"
   printf '%s\n' "$g_subjects" >"$fq_commits"
+  printf '%s\n' "$g_code_touch" >"$fq_code_touch"
   # The half of the drain decision the round did not write. Collected here
   # rather than passed in, for the same reason the memo lines and commit
   # subjects are: the two call sites reach this function at different points,
@@ -1044,13 +1067,13 @@ fix_queue_gate() {
       --before "$FIX_QUEUE_BEFORE" \
       ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
-      --replies "$fq_replies" \
+      --replies "$fq_replies" --code-touch "$fq_code_touch" \
       --cards "$g_cards" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
-  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$FIX_QUEUE_BEFORE"
+  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" "$FIX_QUEUE_BEFORE"
   FQ_GATE_RAN=1
 
   # ---- how much is owed, from two sources that can disagree ----------------

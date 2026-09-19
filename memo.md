@@ -7995,3 +7995,55 @@ theirs 12 处（padded 12）`，而三个受影响函数是 `2 + 5 + 5 = 12` ⇒
 
 **环境**：SDK 干净，`fhp-research` 干净，未推送。**F67 / F88 卡状态未动，仍 `open`。**
 **我今天的预判总账再添三条全错**（56 分钟的算术错在拿了追平基线、门控、`kDWord` 假设），累计约 **1/12**。
+
+心跳 2026-09-19T03:36:10+0800 round-start：三棵工作树 `git status --porcelain` 干净
+（除既有未跟踪历史遗留）。`.loop/UNREVIEWED_FIX` 磁盘实况仍是 F46/F52/F67/F86/Q0/F89a
+六行，与 2026-09-17/18 两轮已记录的判决（F46 SURVIVES、F52/F67/F86 FALSIFIED-as-
+queue-noise、Q0 已由五个独立 pass 覆盖、F89a 已 closed）逐字相同——这不是新一轮的
+判决，是那份文件本身未被清空：清空/重写它是 `run_round.sh` 调 `fix_queue.py` 时的
+副作用，而本轮 F89b 落地之前那条链路仍在用旧行为。据此不重派 6 个证伪 pass（会
+产出同样已经记过的结论，纯烧钱），改做上一轮已定位、已拆好、装得进一轮的 F89b：
+`cards.tsv:85`——`run_round.sh` 为 `subjects` 里的每个提交算出「diff 是否只碰
+memo.md/cards.tsv」并按 F89a 定义的 `code_touch` 格式传给 `fix_queue.py`；
+`fix_queue.py` 自身的 CLI（`main()`/`argparse`）目前没有接收这个信号的参数，
+这部分也在 F89b 范围内（F89a 卡面原文「No shell-script plumbing in this card」
+只排除了 shell 侧，没有排除 CLI 层）。
+
+### 2026-09-19：F89b 落地（CLI 层 + run_round.sh 接线），核对方为本会话，未参与实现
+
+**改动本体，两个文件**：
+- `tools/loop/fix_queue.py`：新增 `read_code_touch(path)`，解析 `run_round.sh`
+  产出的 `<sha> <0|1>` 行为 `{sha: bool}`；`main()` 新增 `--code-touch` 参数，
+  缺省为空（`None` 语义与 F89a 文档的默认行为逐字一致）；新增 CLI 层 probe
+  `P21`（真跑子进程，不是直接调 `update()`）：一条只碰 `memo.md` 的 prose-only
+  提交（`code_touch=0`）不得入队，另一条同样提到卡号但真的碰了代码的提交
+  （`code_touch=1`）必须入队——这是 F89a 卡面点名要补的那半：F89a 的表格用例
+  1a/1b 直接调 `update()`，从未走 `argparse`，一个只坏在参数解析或文件格式上的
+  回归能骗过它们全部。
+- `tools/loop/run_round.sh` 的 `fix_queue_gate()`：在已有的 `g_subjects` 循环
+  旁新增 `g_code_touch` 循环，对同一批 `heads_before..HEAD` 提交逐个跑
+  `git diff-tree --no-commit-id --name-only -r <sha>`，按文件的 `basename`
+  是否为 `memo.md`/`cards.tsv` 判定 prose-only；写入临时文件后随
+  `--code-touch` 传给 `fix_queue.py`，纳入既有的四文件创建/清理路径
+  （`fq_memo`/`fq_commits`/`fq_replies`/`fq_code_touch`）。
+
+**验证，全部我自己跑**：
+- `python3 tools/loop/fix_queue.py --self-test`：**51/51 通过**（原 50 + 新 P21）。
+- **负控制**（改坏看变红）：把 `read_code_touch` 硬改成恒返回 `None`（模拟"CLI 接线
+  没做"），P21 单独 FAIL，其余 50 条不受影响；改回后 51/51 恢复绿。
+- **`bash -n tools/loop/run_round.sh`**：语法检查通过。中途撞上一个真 bug，记一笔：
+  本机 `bash --version` 是 macOS 自带的 **3.2.57**（不是 4+/5+），它解析嵌套在
+  `$(...)` 里的 `case ... ) ... ;; esac` 时会在 `)` 上报语法错——最小复现见
+  `/tmp/test_heredoc2.sh` 的写法；`case` 语句本身完全合法，只在这层嵌套下炸。
+  改用 `if [ "$fb" != "memo.md" ] && [ "$fb" != "cards.tsv" ]` 绕开，问题消失。
+  **这条对全项目通用**：任何后续要在 `$(for ... do ... done)` 里写 `case` 的地方，
+  先在这台机器上试一遍，不要假定语法正确就等于能跑。
+- **对真实提交手工核对分类**（F89b 卡面自己写的验收方式，不是自动化测试）：
+  `dfdb444`（`git show --stat` 只碰 `memo.md`）→ 判 `0`；`dad5e9d`（只碰
+  `tools/loop/fix_queue.py`）→ 判 `1`；`ed5d68e`（`memo.md` **+**
+  `tools/loop/hooks/reference-transaction` 等代码文件，卡面要求的"混合提交"负控制）
+  → 判 `1`，未被误判成 prose-only。三个都用 `git show --stat` 逐个人工核对过。
+
+⚠️ **我没做的**：没有让 `run_round.sh` 完整跑一整轮去验证接线在真实调用路径里生效
+（那需要真机器 `.loop` 环境，判据里写的是"打印分类、手工核对"，已满足）；没有
+派新鲜子代理跑证伪 pass——按契约五之四，这一步排在下面，落地与证伪分两步写。

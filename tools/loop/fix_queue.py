@@ -420,6 +420,35 @@ def read_replies(path):
     return out
 
 
+def read_code_touch(path):
+    """F89b: parses '<sha> <0|1>' lines (one per commit run_round.sh saw this
+    round) into the {sha: bool} shape scan()'s code_touch parameter expects.
+    1 means the commit's diff touched something other than memo.md/cards.tsv.
+
+    Missing path/file returns None, which makes scan() skip the filter
+    entirely -- the same "absent means old behavior" default F89a documented,
+    now reachable from the CLI instead of only from a direct update() call.
+    A line that fails to parse is dropped rather than raising: this file is
+    produced by this project's own shell script from `git diff-tree` output,
+    not user input, so a malformed line means the shell side is buggy, and a
+    caller finding sha unmentioned in the dict already gets fail-closed
+    treatment (True, i.e. "counts as a fix") per scan()'s own docstring.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    out = {}
+    with io.open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            sha, flag = parts
+            if flag not in ("0", "1"):
+                continue
+            out[sha] = flag == "1"
+    return out
+
+
 def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
 
@@ -1820,6 +1849,37 @@ def self_test():
         return ("drain F46" in out and "drain F52" in out and ids == []), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
 
+    # P21. F89b: the CLI flag, not just the update()/scan() parameter the
+    #      tabular cases 1a/1b already cover. run_round.sh never calls update()
+    #      directly -- it shells out to this file -- so a regression that only
+    #      breaks argument parsing or read_code_touch()'s file format would pass
+    #      every tabular case and still ship broken.
+    @probe("CLI: --code-touch suppresses a prose-only commit, and a "
+           "code-touching one still enqueues (negative control)")
+    def _p21():
+        neg46 = "\U0001f4cb **F46 pass 1 → PARTIAL（haiku-4-5）**"
+        d = tempfile.mkdtemp(prefix="fq_p21.")
+        ct = os.path.join(d, "code_touch")
+        io.open(ct, "w", encoding="utf-8").write("aaa1111 0\n")
+        rc, out, _ = run_cli(
+            d, [], memo=[neg46],
+            subjects=["aaa1111 fhp-research F46: memo.md prose only"],
+            agents=1, cards=CARDS3, extra=["--code-touch", ct])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        if ids != []:
+            return False, "prose-only stage: rc=%s ids=%s out=%r" % (rc, ids, out)
+
+        d2 = tempfile.mkdtemp(prefix="fq_p21b.")
+        ct2 = os.path.join(d2, "code_touch")
+        io.open(ct2, "w", encoding="utf-8").write("bbb2222 1\n")
+        rc2, out2, _ = run_cli(
+            d2, [], memo=[neg46],
+            subjects=["bbb2222 fhp-research F46: code fix, touched fix_queue.py"],
+            agents=1, cards=CARDS3, extra=["--code-touch", ct2])
+        ids2 = [r[0] for r in read_queue(os.path.join(d2, "queue"))]
+        return (ids2 == ["F46"]), \
+               "code-touching stage: rc=%s ids=%s out=%r" % (rc2, ids2, out2)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -1852,6 +1912,11 @@ def main():
                          "drains and the refusal is printed.")
     ap.add_argument("--cards", default="",
                     help="cards.tsv; ids absent from it are not treated as cards")
+    ap.add_argument("--code-touch", default="",
+                    help="F89b: file of '<sha> <0|1>' lines from run_round.sh's "
+                         "own git diff-tree check, 1=touched non-prose files. "
+                         "Omitting it reproduces pre-F89 behavior (every "
+                         "subject line counts, even prose-only commits).")
     ap.add_argument("--now", default="")
     ap.add_argument("--render", action="store_true",
                     help="print the queue as prompt text and exit")
@@ -1929,7 +1994,8 @@ def main():
         args.agents, now, known, allow_enqueue,
         before_path=args.before or None,
         before_sha=args.before_sha or None,
-        replies_path=args.replies or None)
+        replies_path=args.replies or None,
+        code_touch=read_code_touch(args.code_touch or None))
     for a in actions:
         print(a)
 
