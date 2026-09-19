@@ -8375,5 +8375,23 @@ glob 会不会误吃 `.sym` 文件、`exe.stripped/gen_snapshot*`（深一层目
 `~/Documents/flutter_hot_patcher` 未改动，三棵树收尾均干净。三个子代理本轮总花费
 subagent_tokens 约 79k+131k+81k=291k，tool_uses 23+36+26=85。
 
+### 2026-09-19（新一轮，人工单轮）：F90 pass 3 派发中——审 `79e026f` 本身
+
+心跳 round-start：三棵工作树 `git status --porcelain` 干净（除既有未跟踪历史遗留）；
+`cards_check.sh` rc=0，22 open / 33 closed。锁定任务：上一轮明写的 **STILL OPEN**——
+「pass 3（针对 `79e026f` 本身）尚未跑，F90 在那之前不许标 `closed`」，也匹配
+`.loop/UNREVIEWED_FIX` 之外「built 卡欠证伪 pass」清单里的 F90。1.5 拆卡检查：判据是
+让一个新鲜子代理跑 `tools/loop/prompts/falsify.md` 七项攻击审一次 diff + 两处已知留白
+（`.sym` 文件、`exe.stripped/` 深一层路径），不含「干净重建/全量重跑/逐个提交二分」，装得进一轮。
+
+已派发一个新鲜 general-purpose 子代理（异步，后台跑），CLAIM/CRITERION/EVIDENCE/WHERE
+均已填入完整历史（三次修补链、两个未验证的开放问题），要求它对真实构建树跑 `find`
+枚举 `gen_snapshot` 族文件、对 `79e026f` 的实际 diff 做 `git show`、并亲手用
+`os.utime()` 做一次负控制（要求做完必须核对并还原 mtime，结束时两棵树
+`git status --porcelain` 必须干净）。**本轮到此结束，不等待子代理返回**：
+SURVIVES 则 F90 可推进到 `closed`（把 `STILL OPEN` 原文抄进本节）；FALSIFIED/PARTIAL
+则下一轮当场处理，F90 维持 `built`。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。三棵工作树未改动。
 
 本仓 `memo.md`（F90 复选框 + 本节）。
