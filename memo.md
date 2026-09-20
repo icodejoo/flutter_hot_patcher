@@ -8763,3 +8763,45 @@ revert-rebuild-restore 负控制（后者与卡面原文要求不完全等价，
 `~/Documents/fhp-research`（子代理为只读 pass，未提交）。本轮派发 1 个后台子代理
 （Sonnet，52 次工具调用，349s），已返回并记录完毕。**本轮到此结束**：不再派新任务，
 交由轮末 `fix_queue.py` 闸门依据本节的三条 `(fix)` 判决行出队。
+
+### 2026-09-20（人工交互轮，先读契约）：清一笔救援 stash 账，对 `.loop/UNREVIEWED_FIX` 剩下的 F46/F67/Q0 派发新鲜证伪
+
+心跳 round-start：确认自己就是 `ralph.sh`（PID 13260）当前这一轮（`run_round.sh`
+PID 5348，`round.lock` 内容 `5348`，启动 15:17:02，与本轮时间吻合）——按契约 2.5
+"看见循环在跑说明你正在正确地运行"，不是第二写方。
+
+**先处理 `.loop/RESCUED` 指向的 round-77299 救援 stash**（`fhp-research` `stash@{0}`
+`loop-rescue 2026-09-19T21:09:00`）：`git stash show -p` 只改两处——`cards.tsv` 新增
+F91 行、`f67_segment6c_verify.py` 把硬编码行窗口改成扫描函数体（同属 F90 那一类
+"脚本读旧 mtime 产物"缺陷的修法）。逐字节核对当前磁盘：`cards.tsv:87` 的 F91 行已是
+**该 stash 内容的严格超集**（当前多出 2026-09-19 UPDATE 的 phase-1 归因段落），
+`f67_segment6c_verify.py` 的对应改动逐字节相同（`git diff stash -- 该文件` 空）。
+⇒ 这份 stash 已被后续提交完全吸收，`git stash drop 'stash@{0}'` 是安全的（已执行，
+不是本轮新写的判断，是纯粹的"内容已在 HEAD 里"核对）。`fhp-research` 其余 3 笔
+stash（`WIP on v1` ×2、更早的 `loop-rescue` ×2）与本轮任务无关，未动。
+
+**`.loop/UNREVIEWED_FIX` 磁盘仍是 3 行（F46/F67/Q0）**，与派给本轮的提示词逐字相符。
+逐条核实（`git show --stat`，不是凭记忆）：
+- `c3b03a5`（队列文本里的 `c3b03a3` 是抄录笔误，真实 sha 是 `c3b03a5`）只改
+  `cards.tsv` 1 行；`6e1194c` 才是三个里唯一动真代码的（新增 `tools/loop/hooks/`
+  下 3 个文件 +347 行，git reference-transaction hook）——与 2026-09-19 那轮的
+  分析（memo.md:8132 起）一致，**F46 是队列里唯一有真实代码待审的一项**。
+- `0fac727` 只改 `cards.tsv` 2 行；`7133f91` 只改 `memo.md`（+62/-1，纯记账）
+  ——F67 队列项的两个 sha 都不含代码改动，是 `fix_queue.py` 把"记录证伪判决的
+  提交"误判成"修复"（同一缺陷 2026-09-19 已诊断，F52/F86/F89a 三行走的是同一条
+  路径，已用 `(fix)` 判决清过；F67 这两行当时漏记）。
+- `Q0` 本身不指向任何代码，是"某轮跳过 fix-queue 闸门"的记账条目；它引用的孤儿
+  快照（`UNREVIEWED_FIX.before.orphan.20260917T171530`）里的 F52/F86/F89a 已在
+  `adb93d9` 清账，唯一剩下有意义的成员就是 F46（同上）。
+
+**本轮派发 1 个新鲜后台子代理**（Sonnet，异步，agentId 见工具调用记录）：主任务是
+对 F46 的 `6e1194c` 跑 `falsify.md` 完整 7 项攻击（含在 `/tmp` scratch repo 里亲手
+做一次 bypass 尝试，不许只读代码下结论）；次任务是机械核对
+`0fac727`/`7133f91`/`adb93d9` 的文件列表（无需判断，只读 `git show --stat`）。
+**本轮到此结束，不等待子代理返回**——按契约第二步"派给独立子代理"、第三步
+"只接收摘要"：SURVIVES 则把 `STILL OPEN` 原文抄进本节，F46 连同 F67/Q0（两行本身
+无代码可审、真正待审的子集就是 F46）一起满足出队条件（`(fix)` + `SURVIVES` +
+本轮派发 ≥1）；FALSIFIED/PARTIAL 则当场修、重跑一遍。
+
+**改动文件（本轮）**：`memo.md`（本节）；`fhp-research` 树 drop 了 1 笔已吸收的
+stash（无文件内容变化，`git status --porcelain` 仍干净）。`~/dart-3122/sdk` 未碰。
