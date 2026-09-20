@@ -78,6 +78,22 @@
 #     repo -- it is a blast-radius limiter against an unattended round
 #     confidently doing the thing it always does (calling git), the same
 #     framing as deny-destructive.sh.
+#   - A raw filesystem write to `.git/refs/heads/<branch>` (or a packed-refs
+#     edit) that never invokes a `git` process at all bypasses this hook
+#     completely and silently -- no refusal is printed, no config is
+#     touched, the hook file itself is untouched and still looks fully
+#     installed. Empirically verified (F46 falsify pass, 2026-09-20, scratch
+#     repo): `open('.git/refs/heads/master', 'w').write(old_oid)` from Python
+#     rewound the branch pointer with zero reference-transaction events. This
+#     is a DIFFERENT and MORE SILENT mechanism than the hooksPath gap above
+#     (that one at least requires a detectable config/file change; this one
+#     requires neither) and a different mechanism than the working-tree
+#     gap two paragraphs up (that one discards content without touching
+#     refs at all; this one rewrites a ref directly on disk). The result
+#     lands in the same "reflog-only" state this file already discloses for
+#     `stash drop` above: `git reflog show <branch>` still lists the
+#     discarded commit, so the object is not unreachable, but no refusal
+#     fires and the destructive write itself succeeds.
 #
 # HOW IT DECIDES: for the "prepared" state of every transaction (the point at
 # which refusing still aborts cleanly -- see `man githooks`), for each queued

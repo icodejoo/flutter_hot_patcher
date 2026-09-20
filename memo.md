@@ -8805,3 +8805,47 @@ stash（`WIP on v1` ×2、更早的 `loop-rescue` ×2）与本轮任务无关，
 
 **改动文件（本轮）**：`memo.md`（本节）；`fhp-research` 树 drop 了 1 笔已吸收的
 stash（无文件内容变化，`git status --porcelain` 仍干净）。`~/dart-3122/sdk` 未碰。
+
+### 2026-09-20（续本轮）：F46 falsify pass 返回 PARTIAL——当场修两处发现，重派一遍
+
+子代理返回 **VERDICT: PARTIAL**（不是 SURVIVES，队列不能出队）。七项攻击全跑了
+（含在 scratch repo 里亲手做的两次活体 bypass，不是只读代码断言），核心机制
+（`verify-reference-transaction.sh` 25/25、`verify-deny.sh` 50/50 不变、hook 在
+三棵共享 `.git` 目录里都已安装且最新）**SURVIVES**，但两处发现挡住了收尾：
+
+- **(a) 引用缺陷（不是防护缺陷）**：`c3b03a5` 不在 `v1`（当前签出分支）的历史里
+  ——`git merge-base --is-ancestor c3b03a5 HEAD` 在 `v1` 上失败，它只存在于
+  `route-a-research`，而 `cards.tsv` 本身在 `v1` 上都不受版本控制。不致命，因为
+  `v1` 自己那份 hook 文件是更晚的提交（`3763f61`），实质防护仍在场——是本项目
+  已知的 v1/route-a-research 分叉（`project_research_branch_split` 记忆），是记账
+  精度问题，不是保护缺口。
+- **(b) 披露缺口（真发现）**：子代理自己设计的第 6 项攻击——**绕开 git 进程本身**，
+  直接用 Python 写 `.git/refs/heads/<branch>` 文件（不经 `subprocess`、不经
+  `os.system`，连一次 git 调用都没有）——**完全绕过这个 hook，无提示、无配置
+  改动、hook 文件本身毫发无损看起来仍完整安装**。这比已披露的 `hooksPath` 缺口
+  更隐蔽（那个至少要动配置或删文件，一个复核者可能注意到；这个什么都不用动），
+  且是当前两条已披露残留缺口都没点名的**第三种**机制。
+
+**当场修（本轮）**：
+1. `tools/loop/hooks/reference-transaction` 头部注释追加第三条披露的残留缺口，
+   照实写明机制（原始文件系统写、零 git 进程、静默生效、对象仍可经 reflog 找回但
+   不再是"可达"状态）——纯注释改动，`bash -n` 语法检查通过，重跑
+   `verify-reference-transaction.sh`（`ALL OK RC=0`）与 `verify-deny.sh`（50/50
+   `exit=0`）确认功能未受影响。
+2. `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 的 F46
+   行追加本轮 falsify pass 的完整记录（含 (a)(b) 两处发现、当场修法、以及子代理
+   点名的 STILL OPEN：`reftable` ref backend 的主拦截路径未测，只测过默认的
+   files backend）。`cards_check.sh` 现场只有 1 处 FAIL（`F91` 的 `commits` 字段
+   非 sha 格式，与本项无关，子代理上一轮已记过）。
+
+**本轮追加派发第 2 个子代理**（Haiku，异步，纯机械核对：跑上述两个 verify 脚本、
+`bash -n`、`grep` 确认披露文字落盘、`git status --porcelain` 确认改动在，重跑一次
+第 6 项 bypass 确认行为符合新披露的文字）。**本轮到此结束，不等待返回**：
+若它确认无误 ⇒ 把这轮的 SURVIVES 判决（连同两处发现已修、STILL OPEN 原文）写成
+`F46 修补丁 VERDICT: SURVIVES (fix) —— <引用本条实测>`，满足出队条件；若它发现
+新问题，下一轮当场再修一遍。
+
+**改动文件（本轮，本条目）**：`tools/loop/hooks/reference-transaction`（注释追加，
+flutter_hot_patcher 树，未提交）；`cards.tsv`（F46 行追加，fhp-research 树，
+未提交）；`memo.md`（本节）。两处代码/记账改动均未提交，留到收到子代理确认后
+与判决一起提交。
