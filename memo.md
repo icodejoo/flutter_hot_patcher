@@ -401,7 +401,7 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       **判据**：三处都改完后，脚本自己能在「把原生调用点冒充成 DD」时报红（负控制：拿掉判别器 → 数字回到 92）。
       ⚠️ **不许**用调常量的方式消红或制红。
 
-- [ ] **F80：先把干净的 `ProductARM64` 构建产出并钉住，并量出它要多久**（`built`，2026-09-16 立，从 F37 拆出）
+- [x] **F80：先把干净的 `ProductARM64` 构建产出并钉住，并量出它要多久**（`closed`，2026-09-16 立，从 F37 拆出；2026-09-21 两轮新鲜 Haiku 证伪 pass 后关闭）
       🟢 **2026-09-16 实测完成（欠一次证伪 pass）**，四项交付齐全，而且**订正了本卡自己的判据两处**：
       🔴 **① 卡里写的探针口径不可能满足**：ninja 1.13.2 把 `Entering directory` 与 `no work to do.`
           打到 **stdout**，所以「没活干」时 `ninja -n | grep -c .` 是 **2**，永远不是 0。
@@ -461,6 +461,47 @@ memo 里唯一的未完成项是人工持有的 F12，循环按契约§七停下
       要求 `ninja -n` 报 **>0** 步，还原后要求回到 **0**。
       ⚠️ 这恰恰是 F37 被重开的原因：39 个绿检查跑在比它们所测的源码**更旧**的二进制上，
       而 `SKIP_STALENESS_GUARD=1` 把本该报出来的那道守卫压掉了（见 F76）。
+
+      ### 2026-09-21：两轮新鲜 Haiku 证伪 pass，第一轮 FALSIFIED（真过期），修复后第二轮 SURVIVES，关闭
+
+      **第一轮**（新鲜 Haiku，机械核对，不共享上下文）判 **FALSIFIED**：
+      SDK HEAD 已从卡片钉住时的状态前进 2 个提交（当轮 HEAD `003f2759a68`，
+      `2026-09-18T18:06:34`），而二进制 mtime 是 `Sep 18 13:12`，晚了约 5 小时；
+      `ninja -n -C ProductARM64 | grep -vc '^ninja: '` 实测 **71**，不是卡片记的 0。
+      sha256 与 `dd_runtime_check.sh` 基线仍能独立复现（两者当时未受影响），
+      但判据 ① 的核心断言（"没有待办步骤"）在当前 HEAD 上是假的。
+
+      **本轮当场修复**：`ninja -C xcodebuild/ProductARM64 gen_snapshot dartaotruntime`
+      只需 3 步（`assembler_arm64.o` → `il_arm64.o` → `LINK gen_snapshot`，约 7 秒，
+      不是冷构建），重新钉住产物。新 sha256：
+      `gen_snapshot 719334e9d1d6c75aa81a5497c85e669899052f5f2b3001c308aceb54c78fee9a`
+      （变了，因为两个提交里含 `003f2759a68` 的 `LoadDFromOffset` padding 修复）、
+      `dartaotruntime 5ba4949e539165a078a7d4b3afda6a2f09847a1a6261d431684685b19da9eea0`
+      （**未变**，该二进制不依赖那次改动）。`dd_runtime_check.sh` 重跑：
+      `rc=0`、`0 failure(s)`、`CPU entry point count 1380 >= 1043`，绿。
+
+      🔴 **顺带定位一个卡片自身措辞的缺陷（不是构建缺陷）**：
+      卡片原判据①写的是裸命令 `ninja -n -C <dir> | grep -c .`（无目标名），
+      对 `ProductARM64` **无目标名的默认目标组**里含 73 个与
+      `gen_snapshot`/`dartaotruntime` 无关的待办步骤（`.aot_assembly`、示例
+      embedder、`libdart_engine_jit` 等），**永远不可能读到 0**——不是探针失灵，
+      是探针问的问题范围比卡片实际关心的宽。**改用点名目标的形式**
+      `ninja -n -C <dir> gen_snapshot dartaotruntime | grep -vc '^ninja: '`，
+      对这两个目标本身在重建后确实读 **0**。这条只是措辞订正，不需要新卡：
+      两轮 pass 都已改用点名形式并验证有效。
+
+      **第二轮**（新鲜 Haiku，核对修复后状态）判 **SURVIVES**：sha256 精确匹配、
+      `dd_runtime_check.sh` 绿、负控制现场重放（`touch il_arm64.cc` → 点名 ninja -n
+      从 0 变 2 → 真实重建 → 回到 0，sha256 不变，`git status --porcelain` 全程为空）
+      全部通过；裸命令与点名命令的差异被独立证实为**卡片措辞**而非**构建残留**。
+      **STILL OPEN**（原文抄录）：`ProductARM64` 的 `gen_snapshot`/`dartaotruntime`
+      + `dd_runtime_check.sh`（CSPRNG…；子代理返回被截断，完整性依赖于本条目
+      已记录的具体读数——sha256、rc、entry point count——这些已独立核验，不依赖
+      那句被截断的话）。
+
+      **改动文件（本轮）**：`~/dart-3122/sdk/xcodebuild/ProductARM64/{gen_snapshot,
+      dartaotruntime}`（重建产物，不受版本控制）；SDK 源码树 `git status --porcelain`
+      全程为空，无代码改动；`memo.md`（本节）。
 
 - [ ] **F37：复刻他们原生调用的降级形式（真缺口、可关、已配平）（2026-09-16：干净构建那半边已拆给 F80）**
       🔴 **2026-09-15 由 F79 重开**：它当初是靠一个**静态指令形状计数**关掉的
