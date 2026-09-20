@@ -8880,3 +8880,27 @@ has not been tested against the reftable ref backend (`git init
 
 **改动文件（本轮，本条目）**：仅 `memo.md`（本节）。**本轮到此结束**，交由轮末
 `fix_queue.py` 闸门依据本节判决行出队。
+
+### 2026-09-20T18:0x（新一轮）：F46/F67/Q0 判决已在 memo 落盘，但队列文件仍是 3 行——本轮补一次带回执的确认
+
+开工先核实：`.loop/UNREVIEWED_FIX` 磁盘仍是 3 行（F46/F67/Q0），与上一轮结尾"交由轮末
+`fix_queue.py` 出队"的预期不一致。读 `tools/loop/fix_queue.py:public update()/scan()`
+确认了根因：`pos_drain` 要求 `surv_fix`（本轮 memo 新增行里的 SURVIVES+`(fix)`/`修补丁`）
+**且** `greenlit`（本轮 `round_dispatch_replies` 收到的、点名该卡号且 polarity>0 的子代理回执）
+同时成立；两者都是**按本轮的 diff/回执窗口算的**，写在更早一轮（已落盘进 HEAD 的历史）
+里的判决行不会被这一轮的 gate 计入。F67/Q0 同理——它们能不能出队不取决于底层 commit
+是否真的碰代码，机制本身没有"仪器噪声豁免"这条路径，一律走 `pos_drain`。
+
+本轮判定：不重跑 F46 的完整七项攻击（那已经被两轮独立 pass 做过，`SURVIVES` 有详实证据，
+重打是浪费）。改为派一个**本轮新鲜**的 Haiku 子代理做**纯机械复核**：重跑
+`verify-reference-transaction.sh` / `verify-deny.sh` / `bash -n` / 披露文字 grep，
+并核对 F67 引用的两个 sha（`0fac727`/`7133f91`）确实只碰 `memo.md`/`cards.tsv`。
+这符合 `falsify.md` 的模型选择表（"run commands and compare numbers, nothing to judge → Haiku"）
+——本次不是首次判断，是复核既有判决在本轮仍然成立。
+
+**本轮到此结束，不等待返回**（后台派发，agentId 见工具调用记录）。收到回执后：
+STATUS=CONFIRMED ⇒ 把它给的 `F46 VERDICT: SURVIVES (fix)` 与 F67/Q0 噪声结论原样写进
+下一条目，让 `fix_queue.py` 在下一次轮末 gate 里同时看到本轮 memo 新增行与本轮回执，
+三项才能真正出队；STATUS=DISCREPANCY ⇒ 当场查那一处，不预判。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。
