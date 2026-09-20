@@ -8718,3 +8718,48 @@ revert-rebuild-restore 负控制（后者与卡面原文要求不完全等价，
 `f91_pool_reflow_residual.py`（子代理提交，`760d878`）。`memo.md`（本节）。
 `~/dart-3122/sdk` 未改动。**本轮到此结束，已向用户报告并行循环冲突，不再继续
 派发新任务，等待人类确认是否暂停 `ralph.sh`。**
+
+### 2026-09-20：`.loop/UNREVIEWED_FIX` 三项（F52/F86/F89a）修补丁证伪 pass
+
+本轮由 `ralph.sh` 派出（`round.lock` PID 与本会话父进程链一致，确认过是自己，
+不是并发写方——上一节记录的并行冲突是另一次人类交互式会话，与本轮无关）。
+`.loop/RESCUED` 指向的 `fhp-research` stash `round-77299` 核实为**已落地**：
+`stash show -p 'stash@{0}'` 的两处改动（`cards.tsv` F91 行 + `f67_segment6c_verify.py`
+三处修补）与当前 HEAD（`2c35806`）逐字节相同，此前用 `apply` 提交为 `28b5896`；
+`reference-transaction` 钩子按设计拦截 `stash pop/drop`（见 F46），条目留在
+`stash list` 里是预期状态，不代表未处理。
+
+`.loop/UNREVIEWED_FIX` 磁盘六行里，F46 与 Q0 留给专门一轮（F46 的负控制要清
+三棵树历史，Q0 无代码可审，且两者都不是"prose-only 误判"这一类）；派了一个
+新鲜 Sonnet 子代理（只读、不许提交/改 cards.tsv/memo.md）审剩下三项，均是
+"修补丁只碰了 memo.md/cards.tsv 记账文字，没碰代码"这一类：
+
+- **F52 修补丁 VERDICT: SURVIVES (fix)** — cards.tsv 在 `644da5c`（当天 02:56，
+  早 7133f91 五小时）已经把 F52 标 `closed`，`7133f91` 对 memo.md 的改动只有两处
+  hunk（勾选框 `- [ ]`→`- [x]` + 追加一段无关的 F67 pass 记录），`cards_check.sh`
+  当前跑无 F52 相关失败（唯一 1 处 FAIL 是 F91 的 commits 字段用了非 sha 文本，
+  与本项无关，另记）。
+- **F86 修补丁 VERDICT: SURVIVES (fix)** — `bb4be82` 是单文件单行的 `cards.tsv`
+  插入，新建 F86 独立行（`open`，deps `F46,F85`），描述的缺陷（reference-transaction
+  钩子不覆盖纯 reflog 操作如 `git stash drop`、以及 `branch -M` 目标覆盖）与
+  F46 已声明防护的范围不重复、不空洞；F46 当时文本保持一致（仍 `open`），当前
+  F46/F86 两行不互相矛盾。
+- **F89a 修补丁 VERDICT: SURVIVES (fix)** — `dad5e9d`（`code_touch` 标注机制的
+  实际代码提交）纯增量、`code_touch=None` 默认值逐字节复现旧行为；
+  `python3 tools/loop/fix_queue.py --self-test` 当前 51 例、`dad5e9d^` 上 48 例，
+  0 失败、用例数未缩水。子代理手造的对抗用例（`code_touch=True` 场景）经复核是
+  **对 F89 卡片本身判据的误读**——那正是卡片自己要求的负控制（真代码改动必须
+  仍然入队），不是 F89a 承诺要豁免的纯记账场景；子代理还指出任务提示词引用的
+  "fix_queue.py 475-480 行有 mixed-commit 警告注释"这句话是**假的**（全文件搜
+  `mixed` 零命中，那几行讲的是 `FIX_MARKERS`/派发计数门槛，不是 `code_touch`）
+  ——已在此记录订正，避免下一轮沿用这条编造的引用。子代理顺带发现一个**真实但
+  超出 F89a 范围**的缺口：`run_round.sh`（F89b）算 `code_touch` 时按文件 basename
+  而非全路径匹配，若真代码文件恰好叫 `cards.tsv`/`memo.md`（不同目录）会被误判
+  为纯记账——这是 F89b 的账，不在本条 F89a 范围内，留给以后专门一张卡。
+
+三项均满足队列出队条件（`(fix)` + `SURVIVES` + 本轮派发 1 个子代理 ≥1）。
+
+**改动文件（本轮）**：`memo.md`（本节）。未碰 `cards.tsv`、`~/dart-3122/sdk`、
+`~/Documents/fhp-research`（子代理为只读 pass，未提交）。本轮派发 1 个后台子代理
+（Sonnet，52 次工具调用，349s），已返回并记录完毕。**本轮到此结束**：不再派新任务，
+交由轮末 `fix_queue.py` 闸门依据本节的三条 `(fix)` 判决行出队。
