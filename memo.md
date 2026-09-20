@@ -8904,3 +8904,29 @@ STATUS=CONFIRMED ⇒ 把它给的 `F46 VERDICT: SURVIVES (fix)` 与 F67/Q0 噪�
 三项才能真正出队；STATUS=DISCREPANCY ⇒ 当场查那一处，不预判。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。
+
+### 2026-09-20T18:1x（续本轮）：Haiku 机械复核回执 CONFIRMED——三项落盘
+
+子代理回执（本轮新鲜派发，非引用旧证据）：
+```
+F46 check: verify-reference-transaction.sh exit=0 last-line="ALL OK"; verify-deny.sh exit=0 last-line="verify-deny: all vectors correct"; bash -n exit=0; disclosure grep line=81
+F67 check: 0fac727 touched files=spikes/shorebird_linkinfo_oracle/cards.tsv; 7133f91 touched files=memo.md
+STATUS: CONFIRMED
+```
+
+**F46 修补丁 VERDICT: SURVIVES (fix)** —— 本轮机械复核，核心防护未回归
+（两个 verify 脚本双双 exit=0、hook 语法有效、披露文字在盘，第 81 行）。
+**STILL OPEN**（沿用此前那轮 Sonnet 真攻击 pass 的原话，未被本轮推翻）：
+"the primary BLOCK path (ancestor-check refusal, not just the stash-push anchor)
+has not been tested against the reftable ref backend (`git init
+--ref-format=reftable`), only the default files backend."
+
+**F67 / Q0**：本轮核实 `0fac727` 只改 `spikes/shorebird_linkinfo_oracle/cards.tsv`
+一个文件、`7133f91` 只改 `memo.md` 一个文件，都不含代码——确认是 `fix_queue.py`
+把"记录判决的提交"误判成"待审修复"的仪器噪声，不是真实待审代码。
+
+三项本轮同时满足 `pos_drain`（本轮 memo 新增行含 `SURVIVES`+`(fix)`/`修补丁`
+且本轮子代理回执 polarity>0 并点名对应卡号）。**本轮到此结束**，交给轮末
+`fix_queue.py` 出队；不手工编辑队列文件。
+
+**改动文件（本轮，本条目）**：仅 `memo.md`（本节）。
