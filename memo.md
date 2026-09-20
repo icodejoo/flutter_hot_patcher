@@ -8930,3 +8930,44 @@ has not been tested against the reftable ref backend (`git init
 `fix_queue.py` 出队；不手工编辑队列文件。
 
 **改动文件（本轮，本条目）**：仅 `memo.md`（本节）。
+
+### 2026-09-20T21:3x：`.loop/RESCUED` 核验——stash 已被后续提交完全吸收，非重做
+
+心跳：三棵工作树 `git status --porcelain` 均干净（除既有未跟踪历史遗留）。开工先读
+`.loop/RESCUED`：它记的 `tree=/Users/Cruz/Documents/fhp-research stash@{0}`（round-77299,
+2026-09-19T21:09:00）。**该记录的 tree 字段是错的**——`stash@{0}` 的 message 是
+`WIP on v1: dfdb444`，而 `fhp-research` 树上根本没有 `tools/loop/` 目录（那棵树是
+route-a-research 的 SDK 逆向研究，`fix_queue.py`/`run_round.sh` 只活在 `flutter_hot_patcher`
+即 v1 树）。三棵工作树共用同一个 stash store（研究树曾记过这条），
+`RESCUED` 写手误把 store 共享当成了内容归属。
+
+核验内容而非位置：`stash@{0}` 是 F89b（`--code-touch` CLI）的 diff，
+`stash@{1}` 是 F89a（`scan()`/`update()` 的 `code_touch` 形参）+ 一条心跳 + F90 立卡
++ F46 关闭的 memo.md 改动。逐项核对当前 HEAD：
+  · `git log --oneline -1 -- tools/loop/fix_queue.py` → `7db1abb F89b: ...`，
+    `diff /tmp/stash0.diff <(git show 7db1abb -- tools/loop/fix_queue.py | tail -n+30)` → 空，
+    **字节级相同**；
+  · `grep -n "^def scan\|^def update" tools/loop/fix_queue.py` 显示两者签名已带
+    `code_touch=None`（F89a 已落地，commit `dad5e9d`/`2674dd1`）；
+  · `git diff 'stash@{1}' -- tools/loop/fix_queue.py memo.md` 只剩「HEAD 比 stash 更新」
+    方向的行（F89a/F89b 复选框已 `[x]`、F46 已 `closed`、多出 F90 卡），
+    **没有一行是 stash 有、HEAD 没有**。
+
+结论：两个 stash 条目都已被本仓库后续提交完全吸收，**不是"救援下来还没用"**，
+是"用完之后没人弹出"。按第六之二条"先看有没有救援，别从头做"，
+本轮判定：**不重做任何东西**——重做才是把额度中断变成空烧循环的方式，而这里
+根本没有中断产生的净新工作。
+
+`.loop/RESCUED` 已删除（本地文件，`.gitignore:70` 未纳入版本控制，删除不受
+`deny-destructive.sh` 约束）。**但两个 stash 条目本身未删**：`git stash drop`
+被本仓库的 reference-transaction 保护 hook 拒绝（"该我自己在终端跑的仍然自己跑"，
+规则 4 边界原文）——这是一个不可绕过的机器闸门，不是我选择不删。留给用户在自己终端跑：
+
+```
+cd /Users/Cruz/Documents/flutter_hot_patcher
+git stash drop 'stash@{1}'   # F89a + 心跳 + F90 立卡 + F46 关闭，已全部在 HEAD
+git stash drop 'stash@{0}'   # F89b，已在 HEAD（7db1abb）
+```
+
+**改动文件（本轮）**：`.loop/RESCUED`（删除，不受版本控制）、`memo.md`（本节）。
+本轮无代码改动，`fix_queue.py --self-test` 不适用（未触碰该文件）。
