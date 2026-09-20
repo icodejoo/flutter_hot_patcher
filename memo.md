@@ -8846,6 +8846,37 @@ stash（无文件内容变化，`git status --porcelain` 仍干净）。`~/dart-
 新问题，下一轮当场再修一遍。
 
 **改动文件（本轮，本条目）**：`tools/loop/hooks/reference-transaction`（注释追加，
-flutter_hot_patcher 树，未提交）；`cards.tsv`（F46 行追加，fhp-research 树，
-未提交）；`memo.md`（本节）。两处代码/记账改动均未提交，留到收到子代理确认后
-与判决一起提交。
+flutter_hot_patcher 树，commit `898d2d5`）；`cards.tsv`（F46 行追加，fhp-research
+树，commit `6bc40f8`）；`memo.md`（本节）。
+
+### 2026-09-20（续本轮）：第 2 个子代理（Haiku，机械核对）返回 SURVIVES——F46 落盘
+
+七项检查逐条核对：`verify-reference-transaction.sh` exit=0 `ALL OK`；
+`verify-deny.sh` exit=0 `verify-deny: all vectors correct`（50/50 不变）；
+`bash -n` exit=0；`grep -n "raw filesystem write" tools/loop/hooks/reference-transaction`
+命中第 81 行（披露文字确认落盘）；`cards.tsv` 里本轮 falsify pass 记录 grep 到 1 处
+（引用缺陷记录确认落盘）；`git status --porcelain` 确认 `tools/loop/hooks/
+reference-transaction` 已提交（对照上一条目提交号 `898d2d5`）；第三方独立重跑第 6
+项 bypass——`/tmp` scratch repo 里原始 Python `open().write()` 改 `.git/refs/
+heads/main`，HEAD 从 `40c09dd5` 静默倒回 `d9f2527e`，零 hook 输出、零 git 进程——
+**行为与新披露的文字完全一致**（文档修法本来就不改变这个结构性不可拦截的事实，
+只是让它被诚实记录），不是新发现。
+
+**F46 修补丁 VERDICT: SURVIVES (fix)** —— 两个子代理（Sonnet 真攻击 pass + Haiku
+机械复核）、本轮共 2 次派发，均确认：核心防护机制未回归（两个 verify 脚本双双
+不变），PARTIAL 阶段发现的两处（引用缺陷、raw-ref-write 披露缺口）已当场修并经
+第二次独立核对落盘无误。**STILL OPEN**（第一个子代理原话，照抄）：
+"the primary BLOCK path (ancestor-check refusal, not just the stash-push anchor)
+has not been tested against the reftable ref backend (`git init
+--ref-format=reftable`), only the default files backend."
+
+**F67/Q0 队列项**：本轮开头已核实两个被点名的 sha（`0fac727`/`7133f91`）都只改
+`cards.tsv`/`memo.md`，无代码——`fix_queue.py` 把"记录证伪判决的提交"误判成
+"修复"（与 2026-09-19 那轮诊断的 F52/F86 同一根因）。这两行本身没有可审的代码，
+**F46 是 6 项候选里唯一需要真实证伪 pass 的一项，且本轮已完成**。
+
+三项队列满足出队条件（`F46`：`(fix)` + `SURVIVES` + 本轮派发 2 个子代理 ≥1；
+`F67`/`Q0`：底层 sha 已核实无代码，是仪器误报，不构成待审修补丁）。
+
+**改动文件（本轮，本条目）**：仅 `memo.md`（本节）。**本轮到此结束**，交由轮末
+`fix_queue.py` 闸门依据本节判决行出队。
