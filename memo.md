@@ -9536,3 +9536,82 @@ nc4_f68_pool_skip_1332.sh`（不带参数即 measure 模式），读到
 
 ⚠️ **F83 卡状态未动，仍 `open`**（`a9ff5e6` 只记录不翻状态）：合并是**报告方自己做的未经审的新工作**，
 且证伪 pass 的 R1–R5 残留它一条没碰。
+
+---
+
+### 2026-09-21（续）：F67 整卡证伪 pass —— **VERDICT: FALSIFIED**，卡面头条结论已不可复现
+
+按契约「built 卡欠证伪 pass」派发（候选 F49/F53/F67，规则 0 要求 SDK 本体优先于循环机械，
+选 F67）。派一个**新鲜 Opus 子代理**（无共享上下文，26 次工具调用）对整张卡跑
+`tools/loop/prompts/falsify.md` 的七项攻击。**VERDICT: FALSIFIED**。**F67 不关闭，仍 `built`。**
+
+**子代理原文（未删减，逐字抄）：**
+
+```
+VERDICT: FALSIFIED
+
+ATTACK RESULTS:
+1. Read nc3/nc4/nc4b/nc6 source, then ran `WORK=out_pm ./nc4_f68_pool_skip_1332.sh --negctl` and `--negctl-missing`. Controls (a) byte-flip-ours and (b) stream-perturbation still fire red correctly (536→535 / 4060→4061; ORDERED-EQUAL 536→535, rc 48→51). But control (c), the F70 pin control, is now INOPERABLE: `--negctl-missing` prints `NEGCTL-C(del): GREEN-BUG` and exits rc=1, because its perturbers are hard-coded against a baseline of `missing=2` that no longer exists (`heal_one()` / `perturb_fill` raise "nothing to heal/fill -- already 0"). nc6's own controls are real: shortest-776 → SKEWED-TOWARD-SHORT, random-776(seed 1332) → REPRESENTATIVE, overlap 178/776, so the two control sets are not the same set. nc4b fires red correctly on the theirs side (rc=0, RESULT RED).
+2. `~/dart-3122/sdk` git status clean, HEAD `003f2759a68`; `ninja -n -C xcodebuild/ProductSimARM64 analyze_snapshot gen_snapshot` → 0 pending, so binaries are current w.r.t. source. `as.prog.ours.so` (e0fa353…, 1928488 B) vs `as.prog.theirs.so` (bd424e3…, 1928496 B) are genuinely different files. One real comparability hole: `out_pm/*.so` are 2026-09-21 06:29 but `ProductSimARM64/gen_snapshot` was relinked 2026-09-21 10:20 — the fixtures predate the producing binary, which `git status` cannot see (defect class #38).
+3. NOT ANSWERED — the question is moot and that is itself the finding. Fresh `WORK=out_pm ./nc4_f68_pool_skip_1332.sh` gives `SELF_PP SLOTS theirs 9619 ours 9619 missing 0 extra 0`, and an independent python re-read of the two `.shorebird` JSONs (hello 2294=2294, prog 7325=7325, ordered_mismatch 0, fn#1580 and fn#1633 both equal) confirms it. There are no 2 missing slots left to attribute. The script's own gate says so: `GATE RED(16)` / `GATE RED(32)`, `PRE-F70 GATE RC 0  COUNT-PIN GATE RC 48  POST-F70 GATE RC 48`, with the message "move the pin and update F68/F70 in cards.tsv in the same commit".
+4. `WORK=out_pm ./nc6_f67_representativeness_check.sh`: IDENT min=4 p25=24 median=36 max=640 vs ALL median=128 (prog); ident is indeed dominated by tiny functions. Attack 4 therefore does not overturn claim (3) — it reinforces it. Claim (3) survives.
+5. Reproduced independently: nc4 measure prints `BYTE-IDENTICAL-CODE FUNCTIONS 536`, nc6 prints prog ident=338 / hello ident=198 = 536, matching the recorded number. But the card's attribution of the 776→536 drift to vague "fixture/build changes" is under-specified: `git log -1 003f2759a68` is 2026-09-18 "feat(arm64): pad LoadDFromOffset pool loads to 3 instruction words" — a gen_snapshot codegen change listed in F67's own commits column. That commit is the drift cause and is also what erased the 2 missing slots.
+6. Ran nc6 fresh: `SHORTEST776_CONTROL_VERDICT: SKEWED-TOWARD-SHORT`, `RANDOM776_CONTROL_VERDICT: REPRESENTATIVE`, `OVERLAP shortest-776 vs random-776: 178 of 776`, `OVERLAP_SHORTEST_VS_REAL_IDENT: 223 of 776`. Matches the card. nc6's controls are real. But nc6 and nc4b are not registered in the harness: `grep -c nc6_f67_representativeness_check.sh verify_all.sh` = 0, same for nc4b — unlike F56/F58/F59, whose closures required harness registration.
+7. They are not the same question, and the gap is where the card breaks. Every named sub-item is resolved, yet the card's headline RESULT ("NO. 8263 → 9617 against 9619, missing=2, ordered-equal on 4594/4596, offenders prog fn#1580/#1633") is now inverted by measurement, and claim (2)'s partition restriction has become vacuous: `CODE-DIFFERS FUNCTIONS 4060  ORDERED-EQUAL 4060  NOT-ORDERED-EQUAL 0`. A statement that holds 100% on the partition and 100% off it says nothing about the partition.
+
+FLAW: Three defects, any one of which blocks built→closed.
+(a) Claim (1) does not reproduce. `cd ~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle && WORK=out_pm ./nc4_f68_pool_skip_1332.sh` → `SELF_PP SLOTS theirs 9619 ours 9619 missing 0 extra 0`, `PRE-F70 GATE RC 0 COUNT-PIN GATE RC 48 POST-F70 GATE RC 48` (exit 48). The card's own instrument declares the card's pinned numbers wrong and demands F68/F70 be updated in the same commit — that has not been done. The card cannot close while its primary evidence script exits non-zero *because of* the card's own stale figures.
+(b) The card's negative control (c) is now inoperable, not merely stale: `WORK=out_pm ./nc4_f68_pool_skip_1332.sh --negctl-missing` → `NEGCTL-C(del): GREEN-BUG ... missing=3`, exit 1. A card cannot close on "all negative controls fire red" when one of them can no longer run.
+(c) Claim (4)'s mechanism is stated backwards and is parked on an open card. The card's own 2026-09-17 pass FALSIFIED the "our analyze_snapshot decoder fixedly charges 3 words" framing and re-attributed it to *our gen_snapshot under-padding two sites*; the fix that actually landed is `003f2759a68 feat(arm64): pad LoadDFromOffset pool loads to 3 instruction words` — an emitter change in `assembler_arm64.{h,cc}`, not a `DecodePoolReference` change. F68 is still `open` and its card text still names the decoder (`awk -F'\t' '$1=="F68"{print $2, $5}' cards.tsv`). So claim (5) "no live unretracted mechanism claim" is false: there is a live mechanism claim, it is on F68, it contradicts the landed fix, and F67 inherits it by reference.
+Secondary: nc6 and nc4b are outside `verify_all.sh` (grep count 0 each), and `out_pm/*.so` (06:29) predate `ProductSimARM64/gen_snapshot` (10:20) on 2026-09-21.
+
+STILL OPEN: n/a (FALSIFIED). Minimum to re-offer for closing: regenerate out_pm with the current gen_snapshot; move nc4's `SELF_PP`/`SUBGRAPH_PP` missing pins from `{1332:2}`/`{1332:44}` to `{}` and repair control (c) so it can still go red against a zero baseline; rewrite F67's RESULT line to the measured answer (undeduped self_pp DOES reproduce theirs as an ordered multiset, 9619/9619, 4596/4596 ordered-equal) and re-derive the deduped 8263 figure under the current HEAD via `NC3_ALLOW_REBUILD=1 ./nc3_f67_pool_seen_multiset.sh` (not run here — 3 builds + 3 matrices, ~6 min, and it rewrites out_pm/, which would have destroyed the state the other attacks read); correct or close F68's decoder-vs-codegen mechanism text; register nc6 and nc4b in verify_all.sh.
+
+COST OF BEING WRONG: F62 wants to flip a parity-matrix cell from unknown/structural to `gap` using F55/F66/F67's containment chain; if F67 closes carrying an inverted headline result and a mechanism that contradicts the shipped fix, that ratchet moves on a retracted premise, and the phase-2 criterion ("every structural call must carry a residual row explaining *all* of the cell") gets satisfied by a number nobody can reprint.
+```
+
+⇒ **两张互相锁死的账**：F67 的头条结论（`missing=2`，池索引 1332）已被 SDK 树里
+**已经落地的一个提交**（`003f2759a68`，2026-09-18，`assembler_arm64.{h,cc}` 给
+`LoadDFromOffset` 池加载补齐到 3 条指令字）悄悄清零 —— `self_pp` 现在两侧
+**9619/9619，missing=0 extra=0**，`nc4` 自己的 gate 也这么说（`COUNT-PIN GATE rc=48`，
+提示语原文就是「把 pin 挪掉，在同一个提交里更新 F68/F70」）。而 F68（`open`）现在挂的
+「我们的解码器固定跳 3 个字」这句机制话，本身在 F67 自己 2026-09-17 那次证伪 pass 里
+已经被撤回过、改判是 `gen_snapshot` codegen 少填两处 —— 但 F68 卡面文字没有跟着改，
+**F67 通过引用 F68 继承了一句 F67 自己曾经推翻过的话**。
+
+**新开 F96** 记这批修复（regenerate `out_pm`、挪 pin、重写 F67 RESULT 行、
+同步修 F68 卡面文字、把 `nc6`/`nc4b` 接进 `verify_all.sh`），因为它需要自己的判据与
+负控制（尤其是「负控制 (c) 现在打不红」这条本身就是个要修的缺口，不能顺手改掉），
+不在本轮里直接动 SDK 树或 fhp-research 树。**F49/F53 仍是另外两张欠证伪 pass 的
+`built` 卡。**
+
+**改动文件（本轮）**：`memo.md`（本节，`v1` 分支）。未改 `cards.tsv`、未改 SDK 树、
+未改 fhp-research 树 —— 子代理确认自己 0 提交（`git status` 仅有既存的未跟踪 `.serena/`）。
+本轮到此结束。
+
+---
+
+- [ ] **F96：修复 F67 证伪 pass 揭出的三个缺口（pin 过期、负控制 (c) 打不红、F68 挂着一句 F67 自己撤回过的机制话）**
+      （`open`，2026-09-21 立，来自 F67 整卡证伪 pass 的 FALSIFIED 结论）
+      **判据**（四项都要满足，缺一不可）：
+      ① `WORK=out_pm ./nc4_f68_pool_skip_1332.sh` 干净退出（`rc=0`），不再报
+      `COUNT-PIN GATE`——即脚本里硬编码的 `SELF_PP`/`SUBGRAPH_PP` missing pin
+      从 `{1332:2}`/`{1332:44}` 改成与当前实测（`missing=0`）一致的值；
+      ② 负控制 (c)（`--negctl-missing`）能在**当前基线（missing=0）**上人为制造
+      一个缺失槽并让 gate 变红——不是继续假设 `missing=2` 已经存在再去"填平"它；
+      ③ `cards.tsv` 里 F67 的 RESULT 行改写为当前实测（`self_pp` 两侧 9619/9619，
+      `missing=0 extra=0`，`ordered-equal 4596/4596`），旧的 `8263→9617 vs 9619,
+      missing=2` 那句移进"已被推翻"区，不删除（保鲜期规则）；
+      ④ F68 卡面文字里"我们的 `DecodePoolReference` 解码器固定跳 3 个字"这句
+      改成与 F67 自己 2026-09-17 那次证伪 pass 一致的措辞（`gen_snapshot` 侧
+      `assembler_arm64.{h,cc}` 少填两处，已被 `003f2759a68` 修复，F68 该行动作
+      是"确认已修，考虑关闭"而不是继续挂着一个矛盾的机制描述）。
+      **负控制**：① 的负控制是回退 `003f2759a68`（或在 `/tmp` 副本上重现旧的
+      `missing=2` 状态）后重跑，pin 更新后的脚本必须能识别出"这不是当前 HEAD 该有的
+      读数"并给出不同于 `rc=0` 的信号（不能对两种状态都读 rc=0）；② 的负控制本身
+      就是判据 ②——它必须先在当前基线上验证自己能变红，再被信任。
+      **顺带**：`nc6_f67_representativeness_check.sh` 与 `nc4b_f67_theirs_partition_control.sh`
+      接进 `verify_all.sh`（当前 `grep -c` 两者皆 0）。
+      **依赖**：无（F67/F68 均已给出足够上下文，不需要等其他卡）。
+      **本卡不需要真机**，判据全在 `~/dart-3122/sdk`（`ProductSimARM64`，
+      增量构建即可，`ninja -n` 已确认 0 待办）与 `~/Documents/fhp-research` 两棵树上。
