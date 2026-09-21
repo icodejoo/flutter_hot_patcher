@@ -2725,7 +2725,8 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       🔑 **还要带一条元教训**：F41 第一次的负控制**没打响**（旧命名下两次快照恰好落在不同秒，什么都没撞）
       —— **时序依赖的控制不算控制**，要把 ref 名钉成常量才能精确复现。
 
-- [ ] **F53：通用版自己重新推导「有没有做事」，而权威源就在手边**（`open`，2026-09-10 立）
+- [x] **F53：通用版自己重新推导「有没有做事」，而权威源就在手边**（`closed`，2026-09-10 立，
+      2026-09-21 新鲜 Sonnet 证伪 pass 判 `SURVIVES` 关卡）
       🔴 **2026-09-16 证伪 pass 判 PARTIAL —— 本卡不得关闭，F54 也不许靠它。**
       审的代码其实在 **`/Users/Cruz/Documents/loop` @ `9939bf0`**，那是 **`ralph.sh` 看不见的第四棵树**，
       且有三个未提交文件。**卡片引用的是旧代码**：它写 `598a651,316ced3,755db13,7d2a105,24416f7`，
@@ -2745,6 +2746,31 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       但**没有任何东西拿它去和 `tools_observed` / `dispatch_stats.tsv` 交叉核对**
       （`grep -rn fingerprint` 在 `runner.py`/`finisher.py`/tests 上 rc=1、零命中），
       而那一个无法被反驳的答案驱动**三个**消费方。
+
+      🟢 **2026-09-21 关卡：新鲜 Sonnet 证伪 pass（45 次工具调用，无共享上下文，
+      `~/Documents/loop @ 6ecc469`，全部扰动只在 `/tmp/loop_falsify_28438` 一次性副本上做，
+      该副本 0 提交，四棵主工作树全程未被写入）判 `VERDICT: SURVIVES`。**
+      前提是上面记的两处真缺陷（a1 `outstanding()` fail-open、a2 `write_handoff` 按位置引用
+      stash）已随 **F83 的 merge（`6ecc469`）修复，且 F83 本身已过独立证伪 pass 关卡**。
+      七项攻击逐条实测：① 把 `finisher.outstanding()` 的 `raise StashError` 退回 `return 0`
+      → `test_stash_failopen.py` 8 处具名失败，领头一条是「the handoff note survives when
+      debt cannot be determined: got False, want True」；单独把 `runner.made_progress()`
+      退回朴素的 `bool(summary.get('tools'))` 兜底 → `test_runner.py` 40 处具名失败（如
+      「tool calls alone are not progress」「and it does not count as idle」）——两次扰动
+      各自独立变红，不是总数变了而已；② HEAD 确认 `6ecc469`，`git status --porcelain`
+      除三个既有操作者文件外干净；③ `runner.py:797-805` 的 `report_stash_debt()`
+      **仍然**是 `if rc != 0 or not out: continue`，逐字节确认原样还在，但没有任何测试文件
+      引用它，**与 F53 自己的 432 项判据无关**（是既有已披露的独立缺口，与上次 pass 的
+      STILL OPEN 一致）；④ 排查 `finisher.py`/`runner.py`/`guards.py` 里所有 `rc != 0` 分支，
+      只有 ③ 那处仍然吞错误，没找到新的同类回归；⑤ `git cat-file -t` +
+      `git merge-base --is-ancestor` 确认 `6ecc469`/`c3cdb3d`/`08b2591`/`678e59a` 均存在且是
+      当前 HEAD 的祖先；⑥ 两处回退都真的跑过 `run_tests.sh`，不是只读 diff；⑦ 两个谓词
+      分别独立验证——handoff 回退只红 `test_stash_failopen.py`，idleness 回退只红
+      `test_runner.py`，互不替代，判据要求的两半都测了。
+
+      **STILL OPEN（抄自子代理原句）**：`runner.report_stash_debt()` 对一次失败的
+      `git stash list` fail-open（既有、已披露、与 F53 判据正交）——能进一步**缩小**
+      （不是推翻）这条结论的测试是给那条周期性提示路径单独补测试覆盖。
 
 - [ ] **F88：那一格不是 23,320 个无法表达的单位，是 4,576 个函数被数了四遍**（`open`，2026-09-17 立）
       F62 答 (b) 并把一个选择交还上去:造一套能表示标量字段差异的口径,或判定这三格永久 unknown。
@@ -9709,3 +9735,34 @@ F53 本身仍是 `built`，留给下一轮重新核对。
 
 **改动文件（本轮，本条目）**：`fhp-research` 树 `cards.tsv`（F83 行 state→closed，追加
 VERDICT 原文）；`memo.md`（本节 + F83 复选框）。未改任何 SDK/引擎/主循环代码。
+
+### 2026-09-21T22:5x 心跳（本轮，claude-sonnet-5，调度器角色）：F53 证伪 pass 已派发
+
+先读了 `docs/LOOP_CONTRACT.md` 契约正文并核对了当前状态：`.loop/UNREVIEWED_FIX` 空、
+`.loop/PAUSE` 不存在、三棵主工作树 `git status --porcelain` 干净。仍欠证伪 pass 的
+`built` 卡原为 F49/F53/F67 三张，F49（13:11Z）与 F67（今日更早，`1f30bfe`）今天都已拿到
+新鲜结论，只剩 **F53**。上一条目已确认 F53 当年 PARTIAL 判决点名的两处真缺陷（a1
+`outstanding()` 对 `git` 失败静默读零、a2 `write_handoff` 按位置而非 label 引用 stash）
+已随 F83 的 merge（`~/Documents/loop` HEAD `6ecc469`）修复，且 F83 本身已过独立证伪
+pass 关卡 —— F53 因此具备了重新评估的前提。
+
+已按 `tools/loop/prompts/falsify.md` 原文填好四个占位符（CLAIM/CRITERION/EVIDENCE/
+WHERE TO LOOK），派发一个**新鲜**（无共享上下文）的 `general-purpose` 子代理、
+`model=sonnet`（依 falsify.md 的选型表：本次是"attack a claim, its evidence, and its
+controls"，不是纯机械核对，选 Sonnet 不选 Haiku），后台运行（`run_in_background=true`），
+agentId 已记录在本轮工具调用里（不写入 memo，按环境要求不得外泄）。指令中明确：
+① 七项攻击逐条要求命令+输出，尤其第 1/6 项要求在 `/tmp` 一次性副本上真的跑一遍
+`run_tests.sh`、把预测反转后的谓词跑红，不许只读 diff 就下结论；② 第 3 项专门追问
+F53 自己上次判决留下的 STILL OPEN 项（`runner.py` 的 `report_stash_debt()` 是否仍在吞
+`git stash list` 失败）在当前 HEAD 是否仍然成立；③ 明确禁止改动
+`~/dart-3122/sdk`/`~/Documents/fhp-research`/`~/Documents/flutter_hot_patcher` 三棵树，
+明确保护 `~/Documents/loop` 里三个既有未提交文件（`TEST_PLAN.md`/`TEST_REPORT.md`/
+`memo.md`，操作者在制品，与本任务无关）；④ 要求严格 `VERDICT/ATTACK RESULTS/FLAW/
+STILL OPEN/COST OF BEING WRONG` 格式，不许贴日志正文。
+
+**本轮到此结束，不等待返回**（后台派发，遵守契约第一节"每轮只做四步，做完立刻结束"）。
+收到回执后，下一轮把 VERDICT 写回 `cards.tsv` 的 F53 行——`SURVIVES` 才可关卡并把
+`memo.md` 里对应 `- [ ]` 改成 `- [x]`；`FALSIFIED`/`PARTIAL` 则当场修可修的部分、
+按契约五之四重跑一遍，修不完的拆成带判据与负控制的新卡。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
