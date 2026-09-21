@@ -9911,4 +9911,38 @@ CHANGED/BLOCKERS` 格式，不许贴日志正文。
 再按契约五之四派一个**新鲜**的证伪 pass，只有 `SURVIVES` 才把 F93 改成 `- [x]`；若
 `STATUS: partial/blocked` 或 `CRITERION MET: no`，如实记录卡面上的差异，不强行关卡。
 
+### 2026-09-22T05:0x 心跳（本轮，claude-sonnet-5，调度器角色）：F93 回执已入账（`built`），新一轮证伪 pass 已派发
+
+上一轮派的 F93 实现子代理已返回（`STATUS: partial`，`CRITERION MET: no`——字面判据 `23320`
+未达标，但重建、fixture 重生成、负控制全部真实执行）。已如实写回：`cards.tsv` F93 行
+`state=built`，`description` 列以 `||` 追加英文 `RESULT 2026-09-22` 结果块；`memo.md` F93
+卡（约 1603-1637 行）在原判据下追加同一份中文结果块，**未把复选框改成 `[x]`**。两处落盘后
+以一个提交合并本轮此前未提交的心跳编辑一起提交（`13caa93`）。
+
+**关键发现**：陈旧不是问题所在（那部分上一轮已诊断、这一轮已修好）；真正原因是 SDK HEAD 在
+F92 落地提交 `b1111a30e62`（2026-09-16）之后又推进了一个不相关提交 `003f2759a68`
+（2026-09-18，`gen_snapshot` arm64 代码生成改动），把两侧的 `diff_units.sh` 绝对基线一起
+移动了——当前 HEAD 读数是 `49807`（dedup ON，负控制实测）/`33702`（dedup OFF），
+不是卡面原写的 `39425`/`23320`；但两者的**差值精确等于 16105**，与
+`evidence_shorebird_field_dedup.sh` 独立算出的 `WORTH` 吻合，且两个 field_table 桶都归零，
+负控制在原树 sha256 复原的前提下可精确翻回。**建议判据从绝对数改判为 delta 形式**，本轮未
+自行改判据文字，留给证伪 pass 一并核。
+
+**已派发**（后台，`general-purpose` 子代理，与做 F93 实现的那个子代理不是同一个，无共享上下文）：
+按 `tools/loop/prompts/falsify.md` 模板，针对上面这条「纠正后的 delta 判据」跑七项攻击，
+prompt 里给了 CLAIM/CRITERION（原/纠正后两版都给）/EVIDENCE/WHERE TO LOOK 四段，指向
+`memo.md`（本卡）、`cards.tsv`（F93 行）、SDK 树宏定义、oracle 脚本与 fixture 目录；
+明确要求负控制的内部一致性核验（`git status --porcelain` 现状、revert 与 `checkout --` 的
+可逆性），允许但不强制它自己重跑一次完整重建来复演负控制；限定不改 `cards.tsv`/`memo.md`，
+不破坏 SDK 树干净状态。
+
+**本轮到此结束，不等待返回**。收到回执后，下一轮处理规则不变（契约五之四）：`SURVIVES` 才可
+把 F93 的绝对判据改写为 delta 形式并勾 `[x]`（连带把 `STILL OPEN` 行抄进 memo.md）；
+`FALSIFIED`/`PARTIAL` 则如实记录、能在本轮修的当场修、修不完的拆新卡，F93 保持 `built`。
+
+**改动文件（本轮）**：`memo.md`（本节 + F93 卡结果块，随附上一轮遗留的未提交心跳一并提交于
+`13caa93`）、`cards.tsv`（F93 行 `state` 与 `description`，未提交——按本项目惯例 `cards.tsv`
+位于研究树 `fhp-research`，不在本仓库提交范围内）。未改任何工作树代码；SDK 树 `git status`
+干净、HEAD 仍 `003f2759a68`。
+
 **改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
