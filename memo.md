@@ -2847,7 +2847,8 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **负控制**：判据换回 `bool(tools)` ⇒ 上面第一条与空转那条各自变红。
       ⚠️ 与 **F51** 是同一个决定的两个调用点，**要一起改**，否则只是把漂移换了个方向。
 
-- [ ] **F54：轮次边界上的三样可见性，通用版全是 0**（`open`，2026-09-10 立）
+- [x] **F54：轮次边界上的三样可见性，通用版全是 0**（`closed`，2026-09-10 立，
+      2026-09-21 独立新鲜 Sonnet 证伪 pass 判 **SURVIVES**，见本卡末尾判决）
       三项共用一套 e2e harness，所以合成一张卡；每项各自带判据与负控制。
       ① **stash 欠账报告**（命中 0 vs bash 1）：轮次开头要报出未 pop 的 `auto-stash-round-` **与** `loop-rescue`
          —— **两个标签都要**，只匹配前者正是 F50 的缺陷 A。
@@ -2866,6 +2867,29 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
          有进展先落地的轮次 ⇒ 截止线退休、轮次存活。
          **负控制**：把「有进展」判据改成恒真 ⇒ 第一条用例变红。
       ⚠️ 判定「有没有进展」要用 F53 的那条权威源，不要在这里再写第三遍。
+
+### F54 证伪 PASS（2026-09-21，新鲜 Sonnet，独立会话，无共享上下文）—— **VERDICT: SURVIVES**
+
+审的是 `~/Documents/loop` HEAD `9939bf0`（`64cc88e`/`9939bf0` 两个此前未被任何新鲜代理审过的提交）。
+**MANDATORY ITEM 实测**：`run_tests.sh` 当场重跑，`6 ran, 390 checks, 0 failed`，rc=0 ——
+这是自最后一批守卫落地后**第一次**真正重跑（此前记为「未复跑，不是假定绿」）。
+七项攻击：①在 `/tmp` 副本上亲手改坏 stash 匹配器，检查确实变红；②交易记账用的伪造 transcript
+与真实 Claude CLI wire schema 同构（不是更松的自定义格式）；③三条子判据（stash 双标签、
+tools 计数无常量回退、kill 前统一先 `anchor_wip()` 再 `kill_worker()`）逐条核实是同一段共享代码，
+不是分支特判；④故意混入一个无关 stash，计数仍稳在 2，证明子串匹配没有过匹配；⑤直接在
+HEAD `9939bf0` 的实际检出上改坏标记字符串，一次命中，非陈旧引用；⑥四条负控制
+（NC1b/NC1c/NC1d + 共享 pre-kill-anchor 那条）都是 `tests/test_runner.py` 里真实执行的
+`check()` 断言，这次绿跑里确实跑过，不是仅存在于 memo 叙述里；⑦零提交截止线用的是判据原文
+写的 `nocommit_s=2`，不是换了更容易过的数字。
+
+**STILL OPEN**（原文抄录，未改写）：The pre-kill-ordering negative control (line ~431) is
+exercised via the generic stall-watchdog path, not by triggering it specifically through the
+nocommit_s=2 branch; a test that forces the order-mutation through the zero-commit path itself
+(rather than relying on shared-code-path reasoning) would close this last gap.
+
+**COST OF BEING WRONG**（原文）：Low — a regression here would surface as silent stash debt
+or an un-terminated runaway round, both visible on the next round's own reporting, not a
+silent data-loss failure.
 
 ## 🔴 F52 / F53 / F54 的证伪 pass 已跑完（2026-09-14，三个全新 Opus，各带一个强制项）
 
