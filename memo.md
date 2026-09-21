@@ -1771,6 +1771,45 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       **第二条（较弱）**：制造一次 `gap_residual.sh` 重算分母与 `diff_units.sh` 的真实分歧，
       证明那条交叉守卫**存在可达的失败路径** —— 证伪 pass 实测它对任何良构 JSON **不可达**
       （因为 `gap_residual.sh` 是重实现了 `diff_units.sh` 的同一套方法学，不是调用它）。
+      🔴 **2026-09-21 拆卡（契约第 1.5 条）**：这张卡已被三次证伪 pass 攻破三次
+      （2026-09-16 三遍，最后一遍点名了第十个变量 `$HOME`、空 `--fixture` 逃逸、
+      `cards_check.sh` 自己的 `--self-test` 不绿、`GAP_RESIDUAL` 伪造未被拦），
+      第三遍留的 `MINIMUM TO CLOSE` 是六件独立的事，逐条重打属于"干净重建"同一类。
+      拆成五张各自一轮的子卡（`cards.tsv` 已同步新增 F65a–F65e，本行 deps 改列全部子卡），
+      本行保留为 umbrella，五张子卡全关且过一遍覆盖全部六个逃逸的新鲜证伪 pass 才能勾选本行。
+- [ ] **F65e：`cards_check.sh:71` 在 0-closed-cards 路径上打一句不影响 rc 的 stderr 报错**（`open`，2026-09-21 由 F65 拆出）
+      判据：空/零 closed 卡集合时 `cards_check.sh` 必须 rc=0 且无 stderr 输出。
+      负控制：还原这处修复，`0 0: expression expected` 必须重新出现。
+- [ ] **F65b：三个脚本都放行空的 `--fixture` 值，落到生产路径且不打 fixture 标记**（`open`，2026-09-21 由 F65 拆出）
+      `--fixture=` / `--fixture ""` 在 `gap_evidence_check.sh` / `structural_evidence_check.sh` /
+      `cards_check.sh` 里都会 rc=0、跑生产数据、不打任何 fixture-mode 标记——
+      一次打错字的负控制，看起来和一次干净的生产通过一模一样。
+      判据：三个脚本里任何解析成空字符串的 `--fixture` 拼写都必须是硬性用法错误（rc=2）。
+      负控制：还原修复，`--fixture=` 必须重新回到 rc=0、无标记。
+- [ ] **F65a：`structural_evidence_check.sh` 的九名变量清单漏了第十个 `$HOME`**（`open`，2026-09-21 由 F65 拆出）
+      `evidence_thread_offset_pool.sh` / `evidence_pool_perprocess.sh` / `evidence_field_table_order.sh`
+      都靠硬编码的 `$HOME/dart-3122/sdk/...` 解析它们要审的 SDK 源码位点，未被守卫。
+      第三次证伪 pass 实测：伪造 `$HOME` 指向 218 字节、不含真实 SDK 树的三个假文件，
+      仍然打出与真实运行逐字节相同的 `9 evidence row(s), 0 failure(s)`，rc=0。
+      判据：`HOME` 必须像现有九个一样被按名拒绝（非 fixture 模式下），或三处位点解析
+      改为不依赖 `$HOME`（例如钉住一个安装期解析出的绝对路径）。
+      负控制：第三次证伪 pass 里那个 218 字节伪造复现，必须变成非零退出。
+- [ ] **F65d：`gap_evidence_check.sh` 从不守卫 `GAP_RESIDUAL`**（`open`，2026-09-21 由 F65 拆出）
+      `GAP_RESIDUAL=/tmp/fakeres.sh` 指向一个打印 `EXAMINED 9470 of 9470 / UNEXPLAINED 0`
+      的伪造脚本，会让检查报 `ok ... residual closed`、rc=0，而不是像现有九个受守卫变量
+      那样拒绝这个覆盖。
+      判据：`GAP_RESIDUAL`（以及 `structural_evidence_check.sh` 里的等价开关，如果有）
+      在非 fixture 模式下必须被按名拒绝。
+      负控制：第三次证伪 pass 里那个 `GAP_RESIDUAL=/tmp/fakeres.sh` 伪造，必须变成非零退出。
+- [ ] **F65c：`cards_check.sh` 自己的 `--self-test` 对不上它自己的期望常量**（`open`，2026-09-21 由 F65 拆出，依赖 F65a/F65b/F65d）
+      第三次证伪 pass 记的原话："2 rc=2 EXPECTED_BLOCKED SELF_TEST=1 BLOCKED-SET MISMATCH"——
+      这个 harness 用来自证"能报红"的 `--self-test` 自己都不是绿的。
+      依赖 F65a/b/d 先落地，因为它们各加一种新受守卫场景，`--self-test` 的期望计数
+      要把这些也算进去——先修常量、后加场景，等于要再修一遍。
+      判据：F65a/b/d 落地后，`--self-test` 必须 rc=0 且打印的 BLOCKED / 用法错误计数
+      与 `EXPECTED_BLOCKED` / `EXPECTED_USAGE_ERROR_2` 相符。
+      负控制：单独还原 F65a/b/d 任意一处守卫，`--self-test` 的计数断言必须失败（rc≠0）——
+      证明它真的在测那些守卫，不是在凑一个写死的数字。
 
 ---
 
