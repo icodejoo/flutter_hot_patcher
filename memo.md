@@ -2844,7 +2844,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       判据：同一 poll-and-kill 负控制跑 ≥500 次，修复后 **0 次丢分支**；且不能引入新绕过——
       重跑 F46 的回归集（`branch -D` 已合并分支、`reset --hard`、`branch -f` 倒退、
       同事务不同 oid 的"冒充改名"smuggle case）全部仍须被拒绝（rc=128）。依赖 F46 保持 `open`。
-- [ ] **F83：`outstanding()` 在 `git` 失败时报「零笔未结」，且救援笔记按位置引用 stash**（`open`，2026-09-16 由 F53 的证伪 pass 拆出）
+- [x] **F83：`outstanding()` 在 `git` 失败时报「零笔未结」，且救援笔记按位置引用 stash**（`closed`，2026-09-16 由 F53 的证伪 pass 拆出；2026-09-21 merge `6ecc469` 经新鲜 general-purpose 子代理证伪 pass 判 `SURVIVES`，关卡）
       代码在 **`/Users/Cruz/Documents/loop`**（第四棵树，`ralph.sh` 看不见）。
       🔴 **(1) fail-open**：`finisher.py:97-100` 是 `rc, out, _ = _git(["stash","list"], path)` 然后
       `if rc != 0: return 0` ⇒ **「我判断不了」和「没有债」共用同一个返回值 `0`**。
@@ -9670,3 +9670,42 @@ merge（`6ecc469`）按 `tools/loop/prompts/falsify.md` 跑一次完整证伪 pa
 重派只会重复今天已经做过的工作。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
+
+### 2026-09-21T22:3x（续本轮）：子代理回执落盘——F83 `VERDICT: SURVIVES`，关卡
+
+后台子代理回执（`general-purpose`，无共享上下文，31 次工具调用，全部破坏性扰动只在
+`/tmp` 一次性副本上做，`~/Documents/loop`/`~/dart-3122/sdk`/`~/Documents/fhp-research`/
+`~/Documents/flutter_hot_patcher` 四棵树全程未被写入，0 提交）：七项攻击全部真做了一遍，
+不是复述卡面：
+
+1. R1（断 gitlink）在补丁前后各复现一次——补丁前 `outstanding()` 静默回 0，补丁后抛
+   `StashError`，一路追踪到 `runner.py` 的 `rescue_outstanding()` 走进保留笔记的分支；
+   顺带做了卡面提到但未测过的 R5（`.git/logs/refs/stash` 不可读）：`git stash list` 这种情况
+   **退出码是 0、输出为空**，不是非零，所以 `outstanding()` 在这一种情况下仍然读到 0——
+   但这条卡面自己早就记过、标了"已知未修的残差"，不是本次新发现的洞。
+2. 独立重跑测试套件（不是复用上一个子代理的输出），先确认工作树对 `finisher.py`/
+   `runner.py`/`run_tests.sh`/`tests/` 的 diff 为空（即真的在测 `6ecc469`），复现
+   `7 ran / 432 checks / 0 failed`。
+3. 核对 `678e59a` 的 diff，确认它真的把 `EXPECTED_CHECKS=390` 那处字面串自匹配改成了
+   前缀 + 布尔断言，三个合并进来的提交里没有新的自证式断言。
+4. `production_owed()` 的手抄版与 `run_round.sh:1593-1601` 的活谓词逐字比对，未漂移。
+5. 确认 `6ecc469` 确实是 `~/Documents/loop` `master` 的 HEAD，且确实是
+   `678e59a<-08b2591<-9939bf0` 并入 `c3cdb3d` 的真实 merge。
+6. R1/R3/R4 全部在 `/tmp` 一次性 repo 里真实搭建（断链接、共享 stash 仓两笔救援、在
+   `{0}` 插入一个使索引平移的 stash）并跑真代码，救援笔记按 label 找回、不受位置平移影响。
+7. 确认套件与子代理自己的复现都检查的是 handoff 笔记文件本身的存在与内容，不只是
+   `outstanding()` 的返回值——没有把问题换成更容易的那个。
+
+**STILL OPEN（抄自子代理原句）**："`runner.py` 的 `report_stash_debt()`（操作者可见的
+周期性提示，不同于笔记保留/删除的判定）据卡面自陈是补丁前后字节相同，仍然用
+`stash list 2>/dev/null | grep -c ... || true` 吞掉 `git stash list` 的失败；我没有独立
+执行这条路径——这是下一步能缩小（而非推翻）这个修复覆盖范围的测试，但它不影响本次
+审查的 a1/a2 这个主张本身。"
+
+⇒ **F83 判 `SURVIVES`，关卡**：`cards.tsv` 的 F83 行状态改为 `closed`（fhp-research 树），
+`memo.md` 里的对应 `- [ ]` 改为 `- [x]`（本节）。**F53 现在具备了重新评估的前提**——它当年
+PARTIAL 的两处真缺陷（a1 fail-open、a2 按位置引用 stash）已被 F83 修复且过了独立证伪 pass；
+F53 本身仍是 `built`，留给下一轮重新核对。
+
+**改动文件（本轮，本条目）**：`fhp-research` 树 `cards.tsv`（F83 行 state→closed，追加
+VERDICT 原文）；`memo.md`（本节 + F83 复选框）。未改任何 SDK/引擎/主循环代码。
