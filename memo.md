@@ -9766,3 +9766,48 @@ STILL OPEN/COST OF BEING WRONG` 格式，不许贴日志正文。
 按契约五之四重跑一遍，修不完的拆成带判据与负控制的新卡。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
+
+### 2026-09-22T03:0x 心跳（本轮，claude-sonnet-5，调度器角色）：F53 已在上一轮关卡；F92 发现疑似已做，派发证伪
+
+先读契约正文，确认 `.loop/UNREVIEWED_FIX` 空、`.loop/PAUSE` 不存在。核对 `cards.tsv`：F53 已是
+`closed`（上一轮 `10b704e`），memo.md 对应 `- [x]` 已勾（第 2728 行）——本轮外层模板仍列
+"built 卡欠证伪 pass：F49 F67"，但实测 F49（今日更早 PARTIAL，拆出 F82）与 F67（今日更早
+`FALSIFIED`，拆出 F96）都已在今天拿到新鲜结论，**不重派**（重派只会重复今天已做的工作）。
+
+按 memo.md 顺序锁定第一项未完成任务：`F55`（line 1275）。F55 本卡已在 2026-09-21 按契约 1.5
+拆成 F92/F93/F94/F95（外加已存在的 F91），本卡结论行不再碰，改看拆出来的第一张 `open` 卡
+**F92**（删掉 `field_seen`/`field_subgraph_seen` 两个单侧 dedup，纯代码不重建）。
+
+核对 `~/dart-3122/sdk` 时发现：F92 的判据（`grep -c ... == 0`）现在仍读 **2**（未过），但
+**该判据本身很可能是错的**——commit `b1111a30e62`（2026-09-16，比 2026-09-21 才立的 F92/F93
+早 5 天）已经照着 F92 卡面自己点名的 F66/`selector_subgraph_seen`、F67/`pool_seen` 先例，
+把两个 dedup 用 `#if F55_SELF_FIELD_TABLE_DEDUP` / `#if F55_SUBGRAPH_FIELD_TABLE_DEDUP`
+（默认 0，即 dedup 关闭）包起来，而**先例本身也不是字面删除，是宏开关**——`grep -n
+F66_SUBGRAPH_SELECTOR_DEDUP\|F67_POOL_SEEN_DEDUP` 命中同一文件、同一形状。提交信息里也
+明写了这个坑：旧的 `evidence_shorebird_field_dedup.sh` 的 LOCUS grep「仍会通过，因为它匹配的
+是 dedup 那几行的源码文本，而它们活在被关掉的 `#if` 里」——与 CLAUDE.md 第四十种仪器缺陷
+（去重代码在源码层面存在但被编译掉，grep 分不清）同型。该提交的日志里还带了一次已完成的
+重建测量（`dedup ON UNITS 39425` / `dedup OFF UNITS 23320`，ProductSimARM64），这也可能让
+F93（"先前没有人重建过"的前提）部分过期。
+
+⚠️ **没有自己下结论、没有改 `cards.tsv`/`memo.md` 的勾选**——这是一个「事情可能已经做完」的
+发现，不是我自己验完的结论，按关卡规则必须先过新鲜子代理的证伪 pass。已派发（后台，
+`general-purpose`，`model=sonnet`，因为要「攻击一个主张及其证据」不是纯机械核对，无共享上下文，
+`agentId` 已记录在本轮工具调用里、不写入 memo）：CLAIM 是"F92 已被 `b1111a30e62` 功能性满足，
+F92 自己的字面判据（grep 为 0）与它自己引用的 F66/F67 先例矛盾（先例也是宏开关不是删除）"。
+指令中明确：① 只读调查，禁止改动 `~/dart-3122/sdk`/`~/Documents/fhp-research`/
+`~/Documents/flutter_hot_patcher` 三棵树，任何扰动只许在 `/tmp` 或一次性 clone/worktree 做；
+② 七项攻击逐条要求命令+输出；③ 额外要求核实一个我没解释清楚的数字矛盾——`diff_units.sh shorebird`
+现在读 **33702**，既不是 39425（F92 之前）也不是 23320（`b1111a30e62` 日志里报的 dedup-OFF
+读数），要求查出原因（`out_pm/` 是不是相对当前 SDK HEAD 陈旧、还是 `003f2759a68` 那个无关的
+padding 修复动了这个数、还是 ProductSimARM64 根本没按当前源码重建过）；④ 要求严格
+`VERDICT/ATTACK RESULTS/FLAW/STILL OPEN/COST OF BEING WRONG` 格式外加一行
+`UNITS DISCREPANCY`，不许贴日志正文。
+
+**本轮到此结束，不等待返回**（后台派发）。收到回执后，下一轮：`SURVIVES` 则可以把 F92 判定为
+"判据本身错误、工作已完成"，更新 `cards.tsv` 的 F92 判据说明并关卡，同时依据 UNITS discrepancy
+的调查结果决定 F93 是要重新执行（若 33702 说明真的还没在当前 HEAD 上重建过）还是同样可判
+"大部分已做、只差记账"；`FALSIFIED`/`PARTIAL` 则说明 F92 确实还没做，按 F92 卡面原判据继续做
+字面删除。**不要在没有这次回执的情况下动 `cards.tsv`/`memo.md` 里 F92/F93 的勾选。**
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
