@@ -1546,6 +1546,49 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       这是没实现的功能，不是结构性不变量，而且正是 `--shorebird` 存在的理由
       （updater 要靠快照身份判断补丁能不能贴）。
 
+      🔴 **2026-09-21 拆卡**：最近 2 轮在这张卡上都没有提交（`round left no trace` 两次）。
+      判据：F55 判据要求「`UNEXPLAINED` 从下界变成闭合值，再逐分量给 locus」，
+      这个粒度装不进一轮。按 LOOP_CONTRACT 1.5 拆成五张（`cards.tsv` 已加，F55 的 `deps`
+      字段已改为 `F91,F92,F93,F94,F95`）：F92（拆掉 `field_seen`/`field_subgraph_seen`
+      两个单侧 dedup，纯代码，不带重建）→ F93（deps F92，重建 + 复测，把 16105 units 收掉，
+      对应 `field_table` 桶归零）；F94（定位 `offset` 4104-unit 桶的 locus，纯调查）；
+      F95（定位 `subgraph_hash` 归约后残留的 824-unit `self_hash` 桶，先查是否与 F91 的
+      「178 OTHER 未归因二阶回归」重合，重合就并卡不要查两遍）；外加已存在的 F91
+      （`self_pp` pool index 1332 padding，对应 Pass 11 STILL OPEN 里点名的 fn#1580/#1633）。
+      **F55 本卡的判据/负控制原样不动，在这五张全部 `closed` 之前不要再碰本卡的结论行。**
+
+---
+
+- [ ] **F92：拆掉 `field_seen` / `field_subgraph_seen` 两个单侧 dedup（纯代码，不重建）**（`open`，2026-09-21，F55 拆出）
+      仿 F66 / F67 先例，删掉 `runtime/vm/analyze_snapshot_api_impl.cc` 里
+      `std::set<intptr_t> field_seen`（:1342 声明 / :1393 用，喂 `self_field_table`）与
+      `std::set<intptr_t> field_subgraph_seen`（:1926 声明 / :1995 用，喂 `subgraph_field_table`）。
+      **只改代码，不重建**——重建是 F93 的事。
+      判据：`grep -c 'std::set<intptr_t> field_seen\|std::set<intptr_t> field_subgraph_seen' runtime/vm/analyze_snapshot_api_impl.cc` 改后为 0。
+      负控制：`git revert` 该提交后同一条 grep 必须回到 2。
+
+- [ ] **F93：重建 + 复测 F92 的效果**（`open`，deps=F92，2026-09-21，F55 拆出）
+      在 F92 落地的提交上重建 `ReleaseARM64`（`run_vm_tests`）与 `ProductARM64`（`gen_snapshot`
+      `dartaotruntime`），重跑 `./diff_units.sh shorebird` 与 `evidence_shorebird_field_dedup.sh`。
+      判据：`self_field_table`、`subgraph_field_table` 两个桶都归零，`UNITS` 精确减少 16105
+      （39425 → 23320，与 `evidence_shorebird_field_dedup.sh` 此前算出的 `EXPLAINED` 一致）；
+      记录重建后二进制的 sha256 与耗时（按 F80 的模型），接入 `verify_all.sh`。
+      负控制：在重建后的树上 revert F92 再重建一次，`UNITS` 必须精确回到 39425。
+
+- [ ] **F94：定位 `offset` 4104-unit 桶的 locus**（`open`，2026-09-21，F55 拆出）
+      纯调查，此前从未有任何证据脚本碰过这个桶。仿 `evidence_shorebird_field_dedup.sh` 的形状写一个
+      带 residual 行的脚本；找不到 locus 也算合格产出——**如实记录测量结果，不许为了让卡片看起来
+      完成而瞎猜一个 locus**（契约五之三）。
+      判据：脚本打印 `RESIDUAL offset 0`（若找到 locus）或明确记录「未找到，已测量到此」。
+      负控制：扰动被点名的构造，`offset` 桶计数必须变化；脚本要能被证明可以报红。
+
+- [ ] **F95：定位 `subgraph_hash` 归约后残留的 824-unit `self_hash` 桶**（`open`，2026-09-21，F55 拆出）
+      `evidence_shorebird_subgraph_hash.sh` 已把 18304 units 归约到 412 个函数的 824-unit
+      `self_hash` 残差，locus 仍是 `unknown`。**开工前先查这 412 个函数是否与 F91 记的
+      「prog fixture 178 OTHER 未归因二阶回归」重合**——重合就把本卡关成 F91 的重复，不要重新调查。
+      判据：脚本打印 `RESIDUAL self_hash 0`，或如实记录未找到。
+      负控制：扰动被点名的构造，824-unit 桶计数必须变化。
+
 ---
 
 - [ ] **F62：把 `shorebird` ×3 从 `unknown` 改判 `gap`，并动本阶段的棘轮**（`open`，2026-09-14 立）
