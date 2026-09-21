@@ -9095,3 +9095,43 @@ git stash drop 'stash@{0}'   # F89b，已在 HEAD（7db1abb）
 
 **改动文件（本轮）**：仅 `memo.md`（本节，拆卡产出，无代码改动）。
 `fix_queue.py --self-test` 不适用（未触碰该文件）。本轮到此结束。
+
+---
+
+- 心跳 2026-09-21T09:27:04+0800（本轮，claude-sonnet-5，交互式会话）：
+  1. **`.loop/RESCUED` round-67155 已接手，不是重做**：`fhp-research` 的 rescue stash
+     `stash@{0}`（`loop-rescue 2026-09-21T06:37:42 round-67155`）是给
+     `cards_check.sh` / `gap_evidence_check.sh` 补上 `$HOME` 覆盖拒收——
+     `fc481b8`（F65 attempt 4）当时只把这个守卫加进了 `structural_evidence_check.sh`，
+     这两个姊妹脚本被漏掉。实测两脚本**今天并不从 `$HOME` 解析任何路径**（守卫是防未来复发，
+     不是关一个当下可达的逃逸）；负控制：`HOME=/tmp/<218 字节伪造，无真 SDK 树>` 两脚本均从
+     rc=0/1 变为 **rc=2 refused**；生产无扰动跑照旧（`cards_check` rc=1 因 F91 的既有
+     `commits-not-sha` 缺陷、`gap_evidence_check` rc=1 因 `shorebird/prog` 既有未闭合
+     residual——两者与本改动无关，改动前后不变）。已提交 `c28bc66`（`route-a-research`）。
+     ⚠️ `git stash drop`/`pop` 被本机沙盒拒绝（"pops/drops/clears a stash entry ...
+     run it yourself"），stash@{0} 仍留在列表里但内容已落地，人可手动 `git stash drop 'stash@{0}'`。
+  2. **顺带核实：F65a/F65b/F65d 三张子卡的判据实测已经满足**（本轮直接跑的，不是记账）：
+     - F65a（`structural_evidence_check.sh` 缺第十个变量 `$HOME`）：`HOME=/tmp/fakehome_f65a`
+       伪造复现 → `rc=2`，`FAIL: EVIDENCE, WORK, ... , HOME environment override(s) are refused`。
+     - F65b（三脚本放行空 `--fixture`）：`--fixture=` 对三个脚本均 `rc=2 FAIL: --fixture requires
+       a non-empty argument`。
+     - F65d（`gap_evidence_check.sh` 从不守卫 `GAP_RESIDUAL`）：`GAP_RESIDUAL=/tmp/fakeres.sh`
+       （伪造 `EXAMINED 9470 of 9470 / UNEXPLAINED 0`）→ `rc=2 refused`，不是原卡描述的
+       `rc=0 residual closed`。
+     **这三张卡的负控制现在都是绿的，但本轮没有派新鲜子代理走满七项攻击，不许因此直接勾选** ——
+     按契约五之三/五之四，仍需一次独立证伪 pass 才能从 `built`（这几张严格说还是 `open`，
+     但代码状态已是 `built` 等级）标 `closed`。F65c 依赖 F65a/b/d，其 `--self-test` 目标
+     `cards_check.sh --self-test` **当前不存在**（`FAIL: unknown argument: --self-test`），
+     F65c 的判据本身需要先确认它引用的 `--self-test` 入口是否已改址到 `verify_all.sh`。
+  3. **本轮主任务：对 `built` 队列的 F54 派出新鲜证伪 pass**（子代理 `sonnet`，后台运行，
+     `agentId` 未记入此文档——按契约不把内部 ID 写进用户可见文本）。先用主上下文核对四张
+     built 卡（F49/F53/F54/F67）在 `cards.tsv` 里的既有记录：F49/F53/F67 各自都已有
+     `|| PASS 2026-09-16` / `FALSIFIED (PARTIAL) 2026-09-17` 判决尾并已拆出后续卡
+     （F49→F82、F67→F91、F53 指向"代码实际活在第四棵树 `~/Documents/loop`"），
+     **只有 F54 的 `cards.tsv` 行没有任何判决尾**——尽管 memo 正文里 2026-09-14 记过
+     F52/F53/F54 三张的证伪结果（F54 = FALSIFIED，两处根因，已修，`24416f7`），
+     但 `run_tests.sh` 在最后一批守卫落地后**从未重跑**（memo 原话："记为未复跑，不是假定绿"），
+     且 `64cc88e`/`9939bf0` 两个提交本身没有被任何新鲜代理审过。⇒ **F54 是四张里唯一
+     既缺账本记录、又缺最新代码审查的一张**，选它派发。派发提示词已把 mandatory item
+     钉死为"现在就跑一次 `run_tests.sh` 并报真实 summary 行"，另加标准七项攻击。
+     **结果未回收，等下一轮/下一次通知后写入判决行，本轮到此结束。**
