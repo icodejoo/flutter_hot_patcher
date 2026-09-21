@@ -1559,16 +1559,55 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F92：拆掉 `field_seen` / `field_subgraph_seen` 两个单侧 dedup（纯代码，不重建）**（`open`，2026-09-21，F55 拆出）
+- [x] **F92：拆掉 `field_seen` / `field_subgraph_seen` 两个单侧 dedup（纯代码，不重建）**（`closed`，2026-09-21，F55 拆出）
       仿 F66 / F67 先例，删掉 `runtime/vm/analyze_snapshot_api_impl.cc` 里
       `std::set<intptr_t> field_seen`（:1342 声明 / :1393 用，喂 `self_field_table`）与
       `std::set<intptr_t> field_subgraph_seen`（:1926 声明 / :1995 用，喂 `subgraph_field_table`）。
       **只改代码，不重建**——重建是 F93 的事。
-      判据：`grep -c 'std::set<intptr_t> field_seen\|std::set<intptr_t> field_subgraph_seen' runtime/vm/analyze_snapshot_api_impl.cc` 改后为 0。
-      负控制：`git revert` 该提交后同一条 grep 必须回到 2。
+      判据（**已作废**，见下）：`grep -c 'std::set<intptr_t> field_seen\|std::set<intptr_t> field_subgraph_seen' runtime/vm/analyze_snapshot_api_impl.cc` 改后为 0。
+      负控制（**已作废**，见下）：`git revert` 该提交后同一条 grep 必须回到 2。
 
-- [ ] **F93：重建 + 复测 F92 的效果**（`open`，deps=F92，2026-09-21，F55 拆出）
-      在 F92 落地的提交上重建 `ReleaseARM64`（`run_vm_tests`）与 `ProductARM64`（`gen_snapshot`
+      🟢 **2026-09-22 VERDICT: SURVIVES（新鲜 Sonnet 证伪 pass，29 次调用，无共享上下文，
+      只读调查 + 一次一次性 `/tmp` detached worktree 做负控制，三棵树零改动）**。
+      **卡片自己的字面判据被证伪，但不是对工作本身的否定**：攻 6 真的建了一个 detached
+      worktree、跑了 `git revert --no-edit b1111a30e62`，grep 计数**回退前后都是 2**——
+      回退前命中 `#if F55_SELF_FIELD_TABLE_DEDUP`/`#if F55_SUBGRAPH_FIELD_TABLE_DEDUP`
+      包住的声明，回退后命中恢复的无条件声明——**这条判据从设计上就不可能通过**，
+      分不清「dedup 还在」和「dedup 被宏关掉」。
+      **实质工作已经做完**：commit `b1111a30e62`（2026-09-16，比本卡拆出的日子早 5 天）
+      已经照着卡面自己点名的 F66/F67 先例，把两个 dedup 用默认为 0 的宏包住——
+      而**先例本身也是宏开关不是字面删除**（攻 2：直接读 F66 的
+      `#if F66_SUBGRAPH_SELECTOR_DEDUP`、F67 的 `#if F67_POOL_SEEN_DEDUP`，同一形状；
+      F66 本身就是照这种「功能等价」读法关闭的，`selector_subgraph_seen` 的声明文本至今仍在）。
+      攻 1 确认宏不是摆设（独立小复现：`DEDUP=0` 6 个元素、`DEDUP=1` 3 个元素）；
+      攻 3/4 确认 `runtime/` 里没有第三处这个字符串、也没有旁的东西污染这条 grep；
+      攻 5 确认 `b1111a30e62` 是当前 SDK HEAD（`003f2759a68`）的祖先，且后者只动
+      `assembler_arm64.cc`，field-dedup 那段代码没再变过；攻 7 指出卡面用词
+      「删掉」本身和它引用的先例（宏开关）矛盾——判据从立卡那天起就是错的，不是过期。
+      **STILL OPEN（原文照抄）**："(a) attack 1 was a minimal standalone repro of the guard
+      shape, not a full ProductSimARM64/ProductARM64 rebuild of analyze_snapshot_api_impl.cc
+      with F55_*_DEDUP=1 against real snapshot input -- that is the strongest remaining test;
+      (b) whether this functional-equivalence reading was ever formally ratified for F92
+      specifically (versus F66's precedent) was not independently confirmed beyond this pass."
+      **关卡**：判据从字面 grep 改判为「与 F66/F67 同型的功能等价」，`cards.tsv` 已同步。
+
+      🔴 **UNITS discrepancy（子代理顺带查出，直接影响 F93，不算 F92 判据的一部分）**：
+      当前 `./diff_units.sh shorebird` 读 **33702**，既不是 39425（dedup ON）也不是 23320
+      （`b1111a30e62` 日志里的 dedup OFF 读数）。根因**是 fixture 陈旧，不是 dedup 问题**：
+      `xcodebuild/ProductSimARM64/gen_snapshot` mtime 2026-09-21 10:20，而研究树
+      `out_pm/` 里 `diff_units.sh` 读的每个文件 mtime 都是 2026-09-21 06:29——**比
+      二进制早约 4 小时**。`analyze_snapshot` 本身是新鲜的（`ninja -n` 报无事可做，
+      也不受 `003f2759a68` 影响）。子代理按只读范围未重新生成 fixture。
+      **F93 开工前必须先在当前 HEAD 上重新生成 `out_pm/`**，否则任何 UNITS 读数都不可信。
+
+- [ ] **F93：重建 + 复测 F92 的效果**（`open`，deps=F92（已 `closed`），2026-09-21，F55 拆出）
+      🔴 **2026-09-22 前提更新**：F92 证伪 pass 顺带查出研究树 `out_pm/` fixture
+      （mtime 2026-09-21 06:29）比当前 `xcodebuild/ProductSimARM64/gen_snapshot`
+      （mtime 2026-09-21 10:20）**老约 4 小时**，当前 `./diff_units.sh shorebird` 读
+      33702，与 39425/23320 都对不上，**不可信**。本卡开工第一步必须是在当前 HEAD 上
+      重新生成 `out_pm/`，不能直接信任现有 fixture。
+      在 F92 落地的提交（`b1111a30e62`，已确认是当前 HEAD `003f2759a68` 的祖先）上重建
+      `ReleaseARM64`（`run_vm_tests`）与 `ProductARM64`（`gen_snapshot`
       `dartaotruntime`），重跑 `./diff_units.sh shorebird` 与 `evidence_shorebird_field_dedup.sh`。
       判据：`self_field_table`、`subgraph_field_table` 两个桶都归零，`UNITS` 精确减少 16105
       （39425 → 23320，与 `evidence_shorebird_field_dedup.sh` 此前算出的 `EXPLAINED` 一致）；
