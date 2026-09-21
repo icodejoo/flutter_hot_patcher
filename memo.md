@@ -1600,7 +1600,8 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       也不受 `003f2759a68` 影响）。子代理按只读范围未重新生成 fixture。
       **F93 开工前必须先在当前 HEAD 上重新生成 `out_pm/`**，否则任何 UNITS 读数都不可信。
 
-- [ ] **F93：重建 + 复测 F92 的效果**（`open`，deps=F92（已 `closed`），2026-09-21，F55 拆出）
+- [x] **F93：重建 + 复测 F92 的效果**（`closed`，deps=F92（已 `closed`），2026-09-21，F55 拆出，
+      2026-09-22 证伪 pass `SURVIVES` 后关卡）
       🔴 **2026-09-22 前提更新**：F92 证伪 pass 顺带查出研究树 `out_pm/` fixture
       （mtime 2026-09-21 06:29）比当前 `xcodebuild/ProductSimARM64/gen_snapshot`
       （mtime 2026-09-21 10:20）**老约 4 小时**，当前 `./diff_units.sh shorebird` 读
@@ -1635,8 +1636,25 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       `ReleaseARM64` 未重建（还剩 76 步 ninja 待办，未动）——不影响本次判据，
       `diff_units.sh` 与 `evidence_shorebird_field_dedup.sh` 都不读它，但原判据提到的
       「接入 `verify_all.sh`」与 `run_vm_tests` 未做，范围内已明确排除。
-      **仍是 `built`，不是 `closed`**：按契约五之四，需要一个新鲜的证伪 pass 核过（对纠正后的
-      delta 型判据）才能关卡。
+      🟢 **2026-09-22 证伪 pass `VERDICT: SURVIVES`**（新鲜 `general-purpose` 子代理，
+      Sonnet 档，27 次工具调用，不是做实现的那个代理）：现场独立重跑
+      `evidence_shorebird_field_dedup.sh`（当前 HEAD、新鲜 fixture）复现
+      `harness UNITS=33702`、`model dedup-reapplied UNITS=49807`、`WORTH=16105`，
+      两个桶 `0 -> 281/15824` 精确求和等于 16105，`RESIDUAL/COLLATERAL/ACCOUNTING` 全部
+      0 项失败；确认分子（`diff -d`）与归因（按 hunk 分桶）是两条独立算法而非共享同一公式；
+      确认 `b1111a30e62`（+112/-1，单文件）与 `003f2759a68` 都是当前 HEAD 的祖先；宏默认值与
+      行号与卡面描述吻合；SDK 树 `git status` 干净，二进制 sha256 前缀与回执一致。
+      **判据改判为 delta 形式**（`WORTH` 精确 16105 + 两桶归零，不再用绝对数 39425/23320）。
+      **`STILL OPEN`（按契约原文抄录）**："an actual from-scratch replay of the real-build
+      negative control (revert b1111a30e62 --no-commit, rebuild ProductARM64/ProductSimARM64
+      analyze_snapshot, regenerate fixtures, confirm UNITS reads exactly 49807) -- reviewer
+      verified internal consistency (clean tree, matching binary hashes) and independently
+      reproduced the equivalent no-rebuild model-transform figure (16105, live) but did not
+      redo the rebuild itself. That is the one remaining test that could overturn this if the
+      claimed rebuild-based 49807 turns out to have been fabricated rather than measured."
+      **关卡**：`self_field_table`/`subgraph_field_table` 两桶归零 + `WORTH=16105` 精确、
+      与独立归因吻合，`cards.tsv` 已同步为 `closed`。**不代表 F55/F62 的 `shorebird` 格关闭**
+      （该格仍是 `unknown`，本卡范围之外）。
 
 - [ ] **F94：定位 `offset` 4104-unit 桶的 locus**（`open`，2026-09-21，F55 拆出）
       纯调查，此前从未有任何证据脚本碰过这个桶。仿 `evidence_shorebird_field_dedup.sh` 的形状写一个
@@ -9945,4 +9963,29 @@ prompt 里给了 CLAIM/CRITERION（原/纠正后两版都给）/EVIDENCE/WHERE T
 位于研究树 `fhp-research`，不在本仓库提交范围内）。未改任何工作树代码；SDK 树 `git status`
 干净、HEAD 仍 `003f2759a68`。
 
-**改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
+### 2026-09-22T05:2x 心跳（本轮，claude-sonnet-5，调度器角色）：F93 证伪 pass `SURVIVES`，已关卡
+
+上一轮派的证伪 pass 已返回：`VERDICT: SURVIVES`（新鲜 `general-purpose` 子代理，27 次工具
+调用，独立于做 F93 实现的那个子代理）。已按契约五之四关卡：
+
+- `cards.tsv` F93 行 `state` 改为 `closed`，追加 `||` 分隔的英文 `FALSIFICATION PASS
+  2026-09-22` 结果块（研究树 `fhp-research`，尚未提交，此仓库不追踪该文件）。
+- `memo.md` F93 卡复选框改 `- [x]`，判据由绝对数（`39425`/`23320`）改写为 commit 无关的
+  delta 形式（`WORTH` 精确 16105 + 两桶归零），并把证伪 pass 的 `STILL OPEN` 行逐字抄录
+  （见上方卡内 🟢 段落，原文是英文，未翻译改写）。
+
+**关卡不代表 F55/F62 的 `shorebird` 矩阵格关闭**——那一格仍是 `unknown`，F93 只是移除了其中
+一个已归因的噪声源（16105 units），不在本卡范围内的判断留给 F62。
+
+回到 F55 拆出的子卡链：F91（`open`，deps=F67，F67 今天 `FALSIFIED` 拆出 F96、F67 本身仍未
+`closed`，前提仍不具备）、F94（`open`，无 deps，纯调查）、F95（`open`，无 deps，纯调查，
+卡面要求先查与 F91 的重叠）。三者均需先读卡面细节判断能否装进一轮，且本轮已完成一次完整的
+派发-回执-关卡循环（F93），按契约"每轮只做四步"没有余量再开一张新卡的调查与派发。
+**本轮到此结束**。
+
+**下一轮建议**：读 F94/F95 卡面全文（本文件 1617 行起）判断哪个当前无阻塞、按 1.5 拆分检查后
+派发；F91 暂不可派（deps 未满足）；F96/F82（F67/F49 今天拆出的修复卡）与 F94/F95 的优先级
+由下一轮按"SDK 正面工作优先于循环机械"权衡。
+
+**改动文件（本轮）**：`memo.md`（本节 + F93 关卡）；`cards.tsv`（F93 行，研究树，未提交）。
+未改任何工作树代码；SDK 树、研究树 `git status` 未被本轮修改（只读该子代理的报告文本）。
