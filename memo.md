@@ -9290,3 +9290,47 @@ STILL OPEN（代表性检验），或轮到 F49/F53，需先重读本节与 `car
 行文字与 commit 号）；`memo.md`（本节）。子代理另新增并提交的
 `nc4b_f67_theirs_partition_control.sh`（commit `de4af08`）已核验落地、可复跑。
 `fix_queue.py --self-test` 不适用（本轮未触碰该文件）。本轮到此结束。
+
+### 2026-09-21T11:2x 心跳（新一轮，先处理上一轮救援账，再挑下一项）
+
+先核对上一轮 `.loop/RESCUED` 指向的 `fhp-research` stash@{0}（`loop-rescue
+2026-09-21T06:37:42 round-67155`）：实测其内容（`cards_check.sh`/`gap_evidence_check.sh`
+的 `$HOME` 加固）已在 commit `c28bc66`（早于本轮 HEAD）逐字节落地——`git diff HEAD --
+<两个文件>` 为空，且反向尝试 `git apply --check <stash 的 diff>` 失败（"patch does not
+apply"，即内容已存在，不是待应用）。⇒ **判定为冗余，不是遗失的工作**：清空
+`.loop/RESCUED` 标记；stash 条目本身因仓库的 `pre-stash-drop` 钩子拒绝 `drop`
+（"reference-transaction cannot see this operation"）而原样留在 stash 列表里，
+留着无害（内容已冗余，不阻塞任何后续操作）。
+
+`.loop/UNREVIEWED_FIX` 为空、三棵工作树 `git status --porcelain` 干净。`cards_check.sh`
+rc=0（`25 open` / `36 closed`，与上一轮一致）。仍欠证伪 pass 的 `built` 卡：F49（open,
+deps -）· F53（built, deps F51）· F67（built, deps F66）。按 CLAUDE.md 规则 0（SDK 本体
+优先于循环机械）与契约 2.5④，选 F67——它是本表里唯一的 SDK 正面工作卡，且卡面已点名
+一条具体、可脚本化、能在一轮内完成的剩余测试："prog 上 776/4596 个字节相同函数是否
+对短/简单函数有选择偏向（size-stratified 尚未做）"。F49（元分析，11 个构造用例）与
+F53（代码活在第四棵树，需先审那棵树的最新提交）都更大，留给各自独立一轮。
+
+已派发（后台，`general-purpose` 子代理，自包含 prompt，未共享本轮上下文，
+`fhp-research` 树独占写方）：写 `spikes/shorebird_linkinfo_oracle/nc6_f67_representativeness_check.sh`，
+复用 `nc4_f68_pool_skip_1332.sh` 的 `partition()`/`load_fns`/`elf_map` 逻辑，对 prog（及
+hello，若同样有 fixture 文件）算出 BYTE-IDENTICAL-CODE 与 CODE-DIFFERS 两个分区的函数
+尺寸分布（min/p25/median/p75/max，以及各自 `<= 全体中位数` 的占比），给出显式
+REPRESENTATIVE / SKEWED-TOWARD-SHORT / SKEWED-TOWARD-LONG 判决与容差；并附强制负控制：
+① 用尺寸最短的 776 个函数构造的伪样本（预期判偏）与 ② 固定种子随机抽 776 个的伪样本
+（据实报告，不预设答案）跑同一套判据，证明检查本身分得清偏与不偏。同时要求它对自己的
+脚本做一次证伪攻击：分区计数与 `nc4_f68_pool_skip_1332.sh` 的既有读数交叉核对必须一致、
+中位数helper 用手算小样例自测、"最短 776" 与"真实分区 776"两个集合不能完全重合（打印重叠
+数）。严格返回格式已在派发提示词里钉死（STATUS/SCRIPT/PROG/HELLO/两个控制判决/交叉核对/
+自测/重叠数/COMMIT/FILES_TOUCHED/NOTES，禁止贴日志正文）。
+
+**本轮到此结束，不等待返回**（后台派发，agentId 未记入本文档）。收到回执后：
+若交叉核对 MATCH 且两个负控制按预期方向表现（最短 776 判偏、随机 776 大概率不判偏），
+则 F67 卡面第一条 STILL OPEN（代表性检验）可视为已用真实测量处理，把判决与脚本落盘位置
+写进 `cards.tsv` 的 F67 行（仍不因此把 F67 从 `built` 升级为 `closed`——按契约五之三，
+`built`→`closed` 需要一次独立的、针对整张卡的新鲜证伪 pass，而不是逐条 STILL OPEN 补完
+自动升级）；若交叉核对 MISMATCH 或某个负控制方向不对（GREEN-BUG），当场记下具体缺陷，
+不预判、不强行圆过去。
+
+**改动文件（本轮，本条目）**：仅 `memo.md`（本节）与 `.loop/RESCUED`（已删除，无
+git 版本控制、不入库）。`fhp-research` 树的改动（若有）在子代理回执落盘后另行记录提交号。
+`fix_queue.py --self-test` 不适用（未触碰该文件）。
