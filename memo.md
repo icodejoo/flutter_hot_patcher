@@ -1614,6 +1614,30 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       记录重建后二进制的 sha256 与耗时（按 F80 的模型），接入 `verify_all.sh`。
       负控制：在重建后的树上 revert F92 再重建一次，`UNITS` 必须精确回到 39425。
 
+      🟡 **状态改为 `built`（2026-09-22，新鲜子代理执行，40 次工具调用，非做 F92 的那个代理）**：
+      重建 + fixture 重生成 + 负控制全部真实执行完毕。先重新生成了陈旧的 `out_pm/`
+      （`./parity_matrix.sh` 全量跑 3 次，无 `--reuse`，各约 38–49s）。
+      `self_field_table`/`subgraph_field_table` 两个桶都读 **0**（判据里的这一半满足）；
+      `(fixture,field)` 6 对全部 ordered-equal，0 mismatch。
+      负控制：在工作树里 `git revert --no-commit b1111a30e62` + `git reset`（只改工作树不提交）、
+      重建 `analyze_snapshot`、重生成 fixture，`UNITS` 从 33702 变为 **49807**，
+      与 `evidence_shorebird_field_dedup.sh` 独立算出的 `WORTH` 精确对上（+16105）；
+      随后 `git checkout -- runtime/vm/analyze_snapshot_api_impl.cc` 完整还原，
+      `git status --porcelain` 空，HEAD 仍是 `003f2759a68`，重建后二进制 sha256 与实验前逐字节相同
+      （`gen_snapshot a35a6dc...`、`analyze_snapshot c21e38a...`、`dartaotruntime 0fa908e...`）。
+      🔴 **判据字面数字未达标**：卡面写的绝对值 `39425`（dedup ON）/`23320`（dedup OFF），
+      当前 HEAD 实测读数是 **49807 / 33702**——差的不是 fixture 陈旧（那部分已修好），
+      是 HEAD 在 F92 落地提交 `b1111a30e62`（2026-09-16）之后又推进了一个不相关提交
+      `003f2759a68`（2026-09-18，`gen_snapshot` arm64 代码生成改动：给 `LoadDFromOffset`
+      的池加载补齐到 3 条指令字），移动了 `diff_units.sh` 的绝对基线。
+      卡片实际关心的量——`WORTH=16105`、两个 field_table 桶归零——**可复现且与 commit 无关**。
+      **建议把判据从两个绝对数改成 delta 形式**（`WORTH` 精确 16105 + 两桶归零 + 负控制精确翻回）。
+      `ReleaseARM64` 未重建（还剩 76 步 ninja 待办，未动）——不影响本次判据，
+      `diff_units.sh` 与 `evidence_shorebird_field_dedup.sh` 都不读它，但原判据提到的
+      「接入 `verify_all.sh`」与 `run_vm_tests` 未做，范围内已明确排除。
+      **仍是 `built`，不是 `closed`**：按契约五之四，需要一个新鲜的证伪 pass 核过（对纠正后的
+      delta 型判据）才能关卡。
+
 - [ ] **F94：定位 `offset` 4104-unit 桶的 locus**（`open`，2026-09-21，F55 拆出）
       纯调查，此前从未有任何证据脚本碰过这个桶。仿 `evidence_shorebird_field_dedup.sh` 的形状写一个
       带 residual 行的脚本；找不到 locus 也算合格产出——**如实记录测量结果，不许为了让卡片看起来
@@ -9848,5 +9872,43 @@ padding 修复动了这个数、还是 ProductSimARM64 根本没按当前源码�
 的调查结果决定 F93 是要重新执行（若 33702 说明真的还没在当前 HEAD 上重建过）还是同样可判
 "大部分已做、只差记账"；`FALSIFIED`/`PARTIAL` 则说明 F92 确实还没做，按 F92 卡面原判据继续做
 字面删除。**不要在没有这次回执的情况下动 `cards.tsv`/`memo.md` 里 F92/F93 的勾选。**
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
+
+### 2026-09-22T04:1x 心跳（本轮，claude-sonnet-5，调度器角色）：F92 已 SURVIVES 关卡；F93 已派发
+
+先读契约正文，核对 `.loop/UNREVIEWED_FIX` 空、`.loop/PAUSE` 不存在，三棵主工作树
+`git status --porcelain` 干净（SDK HEAD `003f2759a68`）。上一轮派发的 F92 证伪 pass 已经
+落盘并关卡（`memo.md` 1562 行 `- [x]`，`STILL OPEN` 已逐字抄录）；`cards.tsv` 未再单独复核是否
+同步，下一轮开头应确认。
+
+外层模板列的 "built 卡欠证伪 pass：F49 F67" 今天已各拿到新鲜结论（F49 PARTIAL 拆出 F82，F67
+FALSIFIED 拆出 F96），不重派。按 memo.md 顺序回到 F55 拆出的子卡链：F91（`open`，deps=F67，
+F67 未 closed，暂不具备前提）、F92（已 `closed`）、**F93**（`open`，deps=F92 已 closed，具备
+前提；且 F92 证伪 pass 顺带发现 `out_pm/` fixture 比当前二进制老约 4 小时，`diff_units.sh
+shorebird` 现读 33702——F93 卡面自己已把"先重新生成 out_pm/"列为开工第一步）。锁定 **F93**。
+
+**契约 1.5 检查**：判据要求增量重建（`ninja -n` 此前已报 0 待办）+ 重跑两个证据脚本，不含
+"干净重建/全量重跑/逐个提交二分"字样，且 F92 的证伪 pass 已实测这批二进制是当前的——判为
+装得进一轮，不拆卡。
+
+**已派发**（后台，`general-purpose` 子代理，无共享上下文，`agentId` 已记录在本轮工具调用里、
+按环境要求不写入本文件）：完全自包含的 prompt，给了 SDK/oracle 两棵树的路径、F92 的
+macro-guard 细节（`F55_SELF_FIELD_TABLE_DEDUP`/`F55_SUBGRAPH_FIELD_TABLE_DEDUP` 默认 0）、
+两个候选 UNITS 读数（`39425` dedup ON / `23320` dedup OFF，见 `b1111a30e62` 提交信息）、F93
+卡面判据（重跑后 UNITS 精确到 `23320`，`self_field_table`/`subgraph_field_table` 两桶归零）与
+负控制（revert F92 效果后重建，UNITS 必须精确回到 `39425`，随后必须把 SDK 树完全恢复到
+`003f2759a68`、`git status` 干净）。明确限定改动范围：只许碰 `~/dart-3122/sdk`（负控制的临时
+改动必须最终撤销、树恢复干净）与 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle`
+的 `out_pm/` 构建产物；不许碰 `~/Documents/flutter_hot_patcher`（本仓库）分毫，不许碰
+`cards.tsv`/`memo.md`，不许 `git add -A`。要求严格 `STATUS/SDK HEAD/BUILD TIMES/BINARY
+SHA256/FIXTURE REGEN/UNITS/FIELD-TABLE BUCKETS/NEGATIVE CONTROL/CRITERION MET/FILES
+CHANGED/BLOCKERS` 格式，不许贴日志正文。
+
+**本轮到此结束，不等待返回**（后台派发，遵守契约第一节"每轮只做四步，做完立刻结束"）。
+收到回执后，下一轮：若 `CRITERION MET: yes` 且负控制确认变回 `39425`、SDK 树确认已恢复干净，
+则把这份实测结果写回 `cards.tsv`/`memo.md` 的 F93 行（仍标 `built`，不自行标 `[x]`），
+再按契约五之四派一个**新鲜**的证伪 pass，只有 `SURVIVES` 才把 F93 改成 `- [x]`；若
+`STATUS: partial/blocked` 或 `CRITERION MET: no`，如实记录卡面上的差异，不强行关卡。
 
 **改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
