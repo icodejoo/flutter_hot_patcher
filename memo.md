@@ -9422,3 +9422,38 @@ nc4_f68_pool_skip_1332.sh`（不带参数即 measure 模式），读到
 
 **剩下的**：① 操作者在终端从高位往低丢那 8 笔（README 有命令，patch 是后备）；
 ② 债务报告器的少报与盲区，要停机才能修。
+
+### 2026-09-21：修掉 stash 债务报告器（停机做的）—— 它少报一笔、对另两笔全盲
+
+`~/Documents/loop` `c3cdb3d`（第四棵树，master；操作者那三个未提交文件全程未碰）。
+停机理由写在 `.loop/PAUSE` 第一行：这是循环机械，不能边跑边改。
+
+**缺陷一，少报**：`finisher.py:outstanding()` 的谓词是 `RESCUE_PREFIX in l`，
+而 `RESCUE_PREFIX = "loop-rescue"` ⇒ **`auto-stash-round-` 那一笔从不进计数**。
+实测：日志 5，`git stash list | grep -cE 'auto-stash-round-|loop-rescue'` 是 6，漏的那笔已存在五天。
+🔑 **这是 `runner.report_stash_debt` 自己的文档注释里记过的那一科的镜像**：
+那条写着 *"Matching only the second is precisely the defect this replaces"* ——
+它修的是「只匹配 auto-stash」，而 `finisher.py` 带着「只匹配 loop-rescue」的另一半，**没人发现**。
+
+**缺陷二，全盲**：两笔 `WIP on v1`（各含 `fix_queue.py` 改动）**不匹配任一前缀，于是一个字都不打**。
+新增 `unlabelled()` 单独报它们，**不并进 rescue 计数** —— 把操作者自己的 stash 叫成 rescue 是另一种错读。
+
+**端到端实测**（真实路径，不是只测函数）：`--outstanding` 由 5 → **6**；
+`run()` 现在打两行，`6 + 2 = 8`，与逐笔清点一致。
+
+**它此前没有任何东西守着，现在有了**：`test_finisher` 加 5 条（全部用**增量**而非绝对值，
+因为上方插入用例会让绝对值漂移——文件里原有注释就为这个栽过），外加一条
+「两个函数必须把 stash 列表**恰好分区**」。
+**先驱红**：只回退 `outstanding()` 的谓词（保留 `unlabelled` 定义，让红来自断言而非 crash）⇒
+`outstanding counts an auto-stash too: got 0, want 1` 与
+`rescue + unlabelled accounts for every stash: got 4, want 5`，**两条具名断言**。
+
+⚠️ **`EXPECTED_CHECKS 390 → 395` 与改动同一提交**（棘轮规矩）。
+而这一抬会连带打红 `test_runner.py` 里一个**无关**的控制 —— 它把 `"EXPECTED_CHECKS=390"`
+当**字面串**匹配后再改写。🔑 **这就是 F83 记过的「一个控制键在一个预期会变的数字上，
+就内置了一次计划中的假红」**。已改为按名字取键（`(?m)^EXPECTED_CHECKS=\d+$`）并**断言替换计数为 1**
+—— 后者正是字面版做不到的：它分不出「改写成功」和「什么都没找到」。
+套件：`6 ran, 395 checks, 0 failed`。
+
+**仍未做**：F83 那条 fail-open（`outstanding()` 里 `rc != 0 → return 0`，「判不出」与「没有债」同值）
+**依旧在 master 上**。F83 的修复实现并证伪过，但在分支 `f83-stash-failopen`，**合并是操作者的决定**，本次不越界。
