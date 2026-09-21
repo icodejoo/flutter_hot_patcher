@@ -9334,3 +9334,45 @@ REPRESENTATIVE / SKEWED-TOWARD-SHORT / SKEWED-TOWARD-LONG 判决与容差；并�
 **改动文件（本轮，本条目）**：仅 `memo.md`（本节）与 `.loop/RESCUED`（已删除，无
 git 版本控制、不入库）。`fhp-research` 树的改动（若有）在子代理回执落盘后另行记录提交号。
 `fix_queue.py --self-test` 不适用（未触碰该文件）。
+
+### 2026-09-21T11:3x（续本轮）：子代理回执落盘——F67 最后一条 STILL OPEN 已用真实测量解决，且抓到一处数字过期
+
+子代理回执（新鲜 `general-purpose` 子代理，无共享上下文，18 次工具调用，
+`nc6_f67_representativeness_check.sh` commit `1f30bfe`）：对 prog（`total=3216
+ident=338`，10.5%）与 hello（`total=1380 ident=198`，14.3%）分别按尺寸分位数比较
+BYTE-IDENTICAL-CODE 与 CODE-DIFFERS 两个分区——`median_ident=36` 字节 对
+`median_differs=140` 字节，`<= 全体中位数` 占比 `84.0%`（ident）对 `46.6%`（differs，
+prog）、`86.4%` 对 `44.1%`（hello），双双超出脚本自己声明的容差（中位数相对 20%、
+占比 15 个百分点），**判决 `SKEWED-TOWARD-SHORT`**。负控制：用最短的 776 个函数构造的
+伪样本同样判偏（应当如此）；固定种子随机抽 776 个判 `REPRESENTATIVE`；两个 776 元素集合
+仅重叠 223 个（不是同一个集合）——**证明这个检查真的分得清偏与不偏，不是在回声自己的
+构造方式**。中位数 helper 用手算小样例（`[1,2,3,4,5]→3`）自测 PASS。
+
+**本轮独立复核**（不是照抄回执）：亲自重跑 `WORK=out_pm bash
+nc4_f68_pool_skip_1332.sh`（不带参数即 measure 模式），读到
+`BYTE-IDENTICAL-CODE FUNCTIONS 536`，与子代理报告的交叉核对数字
+（`338 prog + 198 hello = 536`）**逐位一致**——这是本轮承重的那一条（子代理的判决
+建立在"分区计数与既有脚本一致"之上，若不一致整个判决就地基不稳），核过了才写进
+`cards.tsv`，不是直接信子代理的自述。
+
+🔴 **顺带抓到一处过期断言**：F67 卡面此前写的是 `776/776`（占 4596 个函数的
+17%），而这一轮实测 `out_pm/` 现在的分区计数是 `338`（prog）/`536`（合并）——
+**与 `776` 对不上，但与 `nc4` 自己当前的实时基线逐位相同**，说明是 fixture/构建
+自 `776` 那个数字写下之后已经漂移，不是 `nc6` 的 bug。已按 CLAUDE.md 断言保鲜期规则
+在 `cards.tsv` 里原样记录这处矛盾，没有悄悄改成"合"的数字。
+
+⇒ **F67 卡面最后一条 STILL OPEN（分区是否有代表性）已用真实测量给出结论：确实偏向
+短/简单函数**。已写进 `cards.tsv` 的 F67 行（`fhp-research` commit `bb57f7f`，
+引用脚本 commit `1f30bfe`）。**F67 仍是 `built`，未升级为 `closed`**——按契约五之三，
+清完卡面点名的最后一条 STILL OPEN 不等于"整卡过了一次新鲜证伪 pass"，`built→closed`
+需要单独一次针对整张卡的证伪派发，这不是本轮做的事。
+
+**下一轮/下一次待办**：F67 现在没有卡面点名的剩余测试项了，具备派"整卡证伪 pass"
+关闭它的条件；另外两张欠证伪 pass 的 `built` 卡仍是 F49（元分析）与 F53（代码活在
+第四棵树）。三者选一，继续遵守契约 2.5④（不把 `built` 卡当前提合并处理）与
+规则 0（SDK 本体优先）。
+
+**改动文件（本轮，本条目）**：`fhp-research` 树 `cards.tsv`（commit `bb57f7f`）；
+`memo.md`（本节）。子代理新增并提交的 `nc6_f67_representativeness_check.sh`
+（commit `1f30bfe`）已核验其核心交叉核对数字、落地可复跑。`fix_queue.py --self-test`
+不适用（本轮未触碰该文件）。本轮到此结束。
