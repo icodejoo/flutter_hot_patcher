@@ -9635,3 +9635,38 @@ COST OF BEING WRONG: F62 wants to flip a parity-matrix cell from unknown/structu
   即证据来源必须换成轮次无法委托的一方，或排水不再自动，只在人或独立排期的复核者说话时才离开队列。
   **改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改 SDK 树、未改 fhp-research 树 —— 子代理确认
   自己 0 提交、只读。本轮到此结束。
+
+---
+
+### 2026-09-21T22:1x 心跳（本轮，claude-sonnet-5，由 ralph.sh 启动，round.lock PID 32599 已确认是本轮自己占的）
+
+`.loop/UNREVIEWED_FIX` 空、`.loop/RESCUED` 空、三棵主工作树 `git status --porcelain` 干净。
+`cards_check.sh` rc=0。仍是 `built` 的卡：F49/F53/F67——但 F49（13:11Z 本日）与 F67（13:24
+提交 `1f30bfe`）**都已在本日更早的轮次拿到新鲜证伪 pass**（见本文件上方两节），只有 **F53**
+今天还没被碰过。F53 卡面点名"代码实际活在第四棵树 `~/Documents/loop`，需要先审那棵树的最新
+提交"——核对发现那棵树已经推进到 `6ecc469`（"Merge f83-stash-failopen"，2026-09-21T16:37:51+0800），
+比 F53 卡面引用的 `598a651..24416f7` 新出十几个提交，而其中 `c3cdb3d`/`08b2591`/`678e59a`/`6ecc469`
+正是 F53 自己拆出的 **F83**（同样在 `cards.tsv`，状态仍是 `open`）的实现与合并。F83 卡面最后一条
+自陈"MERGED ... STILL OWES: the merge itself is unreviewed work by the party reporting it, and
+R1-R5 from the falsification pass are untouched by it"——即 F83 已实现+自测（"7 ran / 432 checks /
+0 failed"）但从未被新鲜代理跑过 `falsify.md`，其自定义的四条负控制（R1 断链接 gitlink 后 handoff
+笔记必须保留、R2 真空 stash 允许删除、R3 共享 stash 仓两笔救援必须按 label 而非位置索引区分、R4 在
+`{0}` 插入一个使索引平移的 stash 后原笔记指向不能变）一次都没被真正执行过。**F53 若要重新被评估，
+前提是 F83 先过一遍——否则 F53 的复核会建立在一个自己都没被审过的修补丁上**，与契约五之四"修完的
+东西同样是未经审的"直接对应。
+
+已派发（后台，`general-purpose` 子代理，自包含 prompt，未共享本轮上下文，仅在 `/tmp` 一次性副本上
+做破坏性扰动，指令中明确禁止改动 `~/Documents/loop`/`~/dart-3122/sdk`/`~/Documents/fhp-research`/
+`~/Documents/flutter_hot_patcher` 四棵树中的任何一棵，且明确保护该树里三个既有未提交文件
+`TEST_PLAN.md`/`TEST_REPORT.md`/`memo.md`——那是与本任务无关的操作者在制品，不许碰）：对 F83 的
+merge（`6ecc469`）按 `tools/loop/prompts/falsify.md` 跑一次完整证伪 pass，逐条执行 R1-R5 与卡面
+自带的另外两条遗留问题（`production_owed()` 手抄而非 import `run_round.sh` 的谓词是否已漂移；
+`tools/loop/tests/test_stash_debt_e2e.sh` 是否真的跑过修补后的 finisher），要求返回严格
+`VERDICT/ATTACK RESULTS/FLAW/STILL OPEN/COST OF BEING WRONG` 格式，不许贴日志正文。
+
+**本轮到此结束，不等待返回**（后台派发）。收到回执后，下一轮先把结论写回 `cards.tsv` 的 F83 行
+（不代它翻状态，除非回执明确 SURVIVES 且七项攻击全部实测通过），再决定 F53 是否具备重新评估的前提。
+在那之前**不要重派 F49/F53/F67 的证伪 pass**——F49/F67 今天已有新鲜结论，F53 卡在 F83 上，
+重派只会重复今天已经做过的工作。
+
+**改动文件（本轮）**：仅 `memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码。
