@@ -9218,3 +9218,75 @@ git stash drop 'stash@{0}'   # F89b，已在 HEAD（7db1abb）
 
 **处置**：`cards.tsv` 里 F91 的状态需要改（核心主张已被自己的负控制推翻），
 **但翻卡状态留给操作者点头，我不自行改。** F67 / F91 本次均未动状态。
+
+### 2026-09-21T11:0x 心跳（本轮开始，claude-sonnet-5，由 ralph.sh 启动，round.lock 已确认是本轮自己占的）
+
+三棵工作树 `git status --porcelain` 干净（除既有未跟踪历史遗留）。`.loop/UNREVIEWED_FIX`
+空、`.loop/RESCUED` 已在上一轮处理完（stash 已被吸收，未重做）。挑卡：仍欠证伪 pass 的
+`built` 卡是 F49/F53/F67（F54/F65a/F65b/F65d/F80 均已在更早的轮次核验或关闭）。三张里
+F67 的卡面已经写明两条具体的 STILL OPEN 测试（"选取分区是否有代表性"、"theirs 侧
+offset/size 是否独立解出、还是从我们这边抄来的（会使分区判据循环论证）"），后者卡面自己
+给了可执行的方案（"perturb a size field only in a /tmp copy of the theirs .so and confirm
+both partition and self_pp comparison move"）——比 F49（元分析、11 个构造用例）和 F53（代码
+实际活在第四棵树、需要先审那棵树的最新提交）都更小、更适合装进一轮。F49/F53 留給后续各自
+一轮，不在本轮合并处理（契约 2.5 节④：不把 built 卡当前提合并做）。
+
+本轮做的不是"复核已有结论"，是**F67 卡面点名过、从未有人跑过的那条测试**：现有的
+`nc4_f68_pool_skip_1332.sh --negctl` 负控制只翻转 OURS 侧 `.so` 的一个字节来证明"字节相同
+分区"读的是真字节，从未在 THEIRS 侧 `.so` 上做过镜像版本。静态读 `parity_matrix.sh` 确认
+`THEIR_GS`/`THEIR_AS`（Shorebird 自己的 `gen_snapshot`/`analyze_snapshot` 二进制）分别生成
+`theirs_so` 与 `as.$name.theirs.shorebird`，即 theirs 侧 JSON 是他们自己的工具读他们自己的
+二进制产出，链路上看不出抄自 ours；但本仓库的规范是"测量而非断言"，静态读代码不能替代一次
+真实翻转字节后观察分区数字是否响应。
+
+已派发（后台，Sonnet，自包含 prompt，未共享本轮上下文）：写一个新的独立脚本
+`nc4b_f67_theirs_partition_control.sh`（`fhp-research/spikes/shorebird_linkinfo_oracle/`
+下，不改动既有的 `nc4_f68_pool_skip_1332.sh`），复用其 `elf_map`/`partition`/victim-picker
+逻辑，选中一个当前判定为"字节相同"的 victim 函数，在一份 THEIRS `.so` 的**副本**（不碰
+`out_pm/` 本体）里翻转它内部一个字节，重算分区计数，要求 BYTE-IDENTICAL-CODE -1 且
+CODE-DIFFERS +1（与既有 ours 侧负控制的响应方向一致）；同时重跑既有 `--negctl` 做 ours 侧
+对照 sanity check；核对 `out_pm/as.hello.theirs.so` 全程未被写入。严格返回格式（STATIC
+CHECK / VICTIM / BEFORE / AFTER / THEIRS-CONTROL RESULT / OURS-SIDE SANITY / RESTORE CHECK /
+VERDICT / COMMIT / FILES TOUCHED），不许贴日志正文。
+
+**本轮到此结束，不等待返回**（后台派发，agentId 未记入本文档）。收到回执后：若
+THEIRS-CONTROL RESULT 为 RED 且 RESTORE CHECK 确认未污染 `out_pm/`，则 F67 卡面第二条
+STILL OPEN（循环论证疑虑）可视为已用真实测量排除，把结论与新脚本落盘位置写进 `cards.tsv`
+的 F67 行（不翻整张卡的状态，因为第一条 STILL OPEN——776/776 样本代表性——仍未测）；若
+GREEN-BUG 或 ERROR，当场记下具体缺陷，不预判。
+
+**改动文件（本轮，本条目）**：仅 `memo.md`（本节）；`fhp-research` 树的改动（若有）
+在子代理回执落盘后另行记录提交号。`fix_queue.py --self-test` 不适用（未触碰该文件）。
+
+### 2026-09-21T11:1x（续本轮）：子代理回执落盘——F67 第二条 STILL OPEN 已解决，卡片状态不变
+
+子代理回执（本轮新鲜派发，无共享上下文，14 次工具调用）：新脚本
+`nc4b_f67_theirs_partition_control.sh` 落盘（commit `de4af08`，`fhp-research`），在
+THEIRS 侧 `.so` 的**副本**上镜像了既有 `nc4_f68_pool_skip_1332.sh --negctl` 的翻字节做法：
+victim 取 hello、`index_in_entries=6`、theirs 侧文件偏移 392260、size 144；翻转前
+`BYTE-IDENTICAL-CODE=536 CODE-DIFFERS=4060`，翻转后 `535/4061`——与 ours 侧既有负控制
+同方向的 `-1/+1`。同一遍里重跑既有 `--negctl` 做 ours 侧 sanity，`NEGCTL-A`/`NEGCTL-B`
+均按预期变红、两次还原都对回基线。`out_pm/as.hello.theirs.so` 经 `cmp` 确认全程未被
+写入（副本改的是 scratch 目录里的拷贝），对未扰动的 `out_pm/` 重跑分区计数也回到
+536/4060。静态检查同时复核：`parity_matrix.sh:317` 跑 Shorebird 自己的 `gen_snapshot`
+（`--elf=$theirs_so`）、`:556` 跑 Shorebird 自己的 `analyze_snapshot`（`--shorebird` 于
+`$theirs_so` 之上）产出 `theirs.so`/`theirs.shorebird`，与我们的工具/数据无关。
+
+⇒ **F67 卡面第二条 STILL OPEN（theirs 侧 `offset/size` 是否独立解出、还是抄自
+ours——会使分区判据循环论证）已用真实测量排除**：一个只碰 THEIRS 字节的翻转，让分区计数
+按预期方向精确移动 `-1/+1`，证明该分区确实是从 theirs 自己的字节读出来的，不是抄来的常量。
+**已把这条结论、victim 细节、还原核验与提交号写进 `cards.tsv` 的 F67 行**（`fhp-research`
+commit `75bb797`），**未翻整张卡的状态**：F67 卡面第一条 STILL OPEN（776/776 字节相同样本
+是否具代表性，还是偏向短/简单函数的选择效应，全 4596 个函数里只占 17%）仍未测，按契约
+五之三"只有自己写的判据实测通过才能打勾"，F67 仍是 `built`，不升级为 `closed`。
+
+**这不是给 F67 打勾的动作，本轮没有关闭任何卡片**，所以不适用契约五之四要求的"关卡前
+新鲜证伪 pass"闸门——那道闸门管的是"把 `- [ ]` 改成 `- [x]`"，本轮只是给一张已知仍是
+`built` 的卡追加了一条已核验的子结论，状态字段本身未变。下一轮若要处理 F67 剩下那条
+STILL OPEN（代表性检验），或轮到 F49/F53，需先重读本节与 `cards.tsv` 现状，不要重跑本轮
+已经解决的这一条。
+
+**改动文件（本轮，本条目）**：`fhp-research` 树 `cards.tsv`（commit `75bb797`，追加 F67
+行文字与 commit 号）；`memo.md`（本节）。子代理另新增并提交的
+`nc4b_f67_theirs_partition_control.sh`（commit `de4af08`）已核验落地、可复跑。
+`fix_queue.py --self-test` 不适用（本轮未触碰该文件）。本轮到此结束。
