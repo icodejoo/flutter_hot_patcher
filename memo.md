@@ -10265,6 +10265,114 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
           （一张一跑，不是跑一次就算）；
       (b) 「26 个复选框里 0 个命名这些 flag」这句话的那条落盘命令，**必须先拿 `shorebird` 跑一遍
           并见到它返回非零**，才承认它在另外七个上的零是证据（规则 4 第一关）。
+      🟢 **F98 实现完成（2026-09-22，操作员手动执行）**：
+      F99–F105 七张卡已建立（见下），分母均抄自已关闭的卡（F56–F61），未重测。
+      负控制 (b) 当场通过：`grep -n "^- \[ \]" memo.md | grep -i "shorebird" | wc -l` 返回 2（非零）；
+      七个 flag 名各返回 0，命令有效。负控制 (a) 留给证伪 pass 逐张确认。
+
+- [ ] **F99：`print_field_table_link_info_to` ×3 —— 100,273 bytes**（`open`，2026-09-22，F98 拆出）
+      **分母**（来自 F61，不许重测）：hello 22,612 + base_dd 22,612 + prog 55,049 = **100,273 B**。
+      **已知**：F61 因「主张是 structural 但 structural_evidence.tsv 里没有 G-e 合规 locus」将本格降级为
+      unknown。矩阵 note 写明：「heap traversal order differs between VMs; content-equal expected」
+      ——即两侧的 field_table 记录集合相同，只是顺序不同，顺序由堆遍历序决定，而两个 VM
+      的堆遍历序因 Thread/Isolate 字段布局差异而不同。
+      **判据**（G-e 合规）：在 `structural_evidence.tsv` 里添加一行，给出驱动堆遍历序差异的
+      具名结构 + 字段/偏移（`Thread` 还是 `ObjectStore`，还是另一个结构），并附一条 residual 行
+      证明它解释了这一格的全部 100,273 B（不是「解释了一部分」）。
+      若堆遍历序差异确实属于 CLAUDE.md 列出的「结构性不可达」（即两侧 VM 只要存在字段布局差，
+      顺序就必然不同且**内容集合完全相等**），则判据退化为：用一条命令证明两侧产物的
+      field entry 集合逐字节相同、只有顺序不同，再附 locus。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**——locus 找到后，由 F62 的同类推论或新卡决定是否改判。
+      **负控制**：在产物内任意调换一个 entry 的顺序 → 该格残差脚本报红且只有该格变红。
+
+- [ ] **F100：`print_field_table_link_debug_info_to` ×3 —— 6,408 lines**（`open`，deps=F99，2026-09-22，F98 拆出）
+      **分母**（来自 F61，不许重测）：hello 1,470 + base_dd 1,470 + prog 3,468 = **6,408 lines**。
+      **已知**：与 F99 同根。矩阵 note：「same (id,hash) multiset as non-debug flag; order within
+      heap traversal order, which differs between VMs」——entry 集合与非 debug flag 的集合一致，
+      差异纯粹来自顺序。
+      **判据**：deps=F99。F99 找到的 locus 直接复用。追加一条证明：两侧 debug flag 产物的
+      (id,hash) 对集合逐对相同（multiset 相等，只有序列不同）的落盘命令，且命令结果变异时报红。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
+      **负控制**：翻转一对 entry 顺序 → 残差脚本报红且只有该格变红。
+
+- [ ] **F101：`dump_object_pool` ×3 —— 10,782 units**（`open`，2026-09-22，F98 拆出）
+      **分母**（来自 F56，不许重测）：hello 2,450 + base_dd 2,450 + prog 5,882 = **10,782 units**。
+      **已知（F56 B-2 路径，三项 UNEXPLAINED 已点名）**：
+      (1) `[Stub] _iso_stub_ArrayWriteBarrierStub` —— 我方多 +9 words（stub 实现差异）
+      (2) `[Optimized] ThreadLocal._getValue` —— word 1：`0xf9447822` vs `0xf944b822`，
+          imm delta 0x80，Thread 结构偏移差异（0x678 vs 0x688）
+      (3) `[Optimized] ThreadLocal._hasValue` —— 同上，imm delta 0x80
+      F56 的分区恒等式 `entries + code_infos = UNITS` 在全部三个 fixture 上成立（98 per-process
+      entries 已归因，3 UNEXPLAINED 来自上述三项）。
+      **判据**：在 `structural_evidence.tsv` 里为上述三项各添一行 G-e 合规 locus：
+      ① ArrayWriteBarrierStub：给出 stub body 里驱动尺寸差的具名字段/偏移；
+      ② ③ ThreadLocal 两个 accessor：locus = `Thread`，field/offset = 实测的偏移（0x678 vs 0x688 区间，
+      实际字段名需查 `thread.h`）。残差行证明三项之和 == 全部 10,782 units（含 per-process 98 entries
+      和全部 code_info 其余行的 EXPLAINED）。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
+      **负控制**：删掉任意一条 structural_evidence.tsv 行 → 只有这一格变红（其他格不动）。
+
+- [ ] **F102：`dump_object_pool_link_data` ×3 —— 964,686 units**（`open`，2026-09-22，F98 拆出）
+      **分母**（来自 F57，不许重测）：hello 173,778 + base_dd 173,778 + prog 617,130 = **964,686 units**。
+      **已知（F57 B-2 路径）**：
+      · 262 B 文件尺寸差已物理分解（varint 字母/数字宽度差 + self_pp/subgraph_pp 元素数差），
+        EXAMINED 262 / 964,686；
+      · 964,424 B 内容差：「driven by self_hash/op_hash 差异」——与 shorebird ×3 同根，
+        是 gen_snapshot 写出的哈希值本身不同，不是工具提取缺口（F58 交叉测试已证）。
+      **判据**：为 262 B 的各物理分量写 G-e 合规 locus（varint encoding：不需要具名结构，
+      但需要说明是哪个 CodeInfo 字段的编码差异，e.g. `ObjectPoolLinkData::self_hash` 编码长度）；
+      为 964,424 B 内容差找到与 shorebird 格同一根的 locus（gen_snapshot 序列化路径上的
+      具名函数/字段），或先等 F55 子卡（F88/F94/F95）拿到 locus 后复用。
+      残差行：物理分量之和 + 内容差之和 == 964,686。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
+      **负控制**：改变 self_pp 或 subgraph_pp 的一个元素 → 262 B 分量行报红且只有该格变红。
+
+- [ ] **F103：`dump_blobs` ×3 —— 2,471,135 units**（`open`，2026-09-22，F98 拆出）
+      **分母**（来自 F58，不许重测）：hello 585,829 + base_dd 585,829 + prog 1,299,477 = **2,471,135 units**。
+      **已知（F58 B-2 路径）**：
+      · 4,410 B 文件尺寸差已按 ELF 四区域分解：R1(VmData) −6B · R2(IsolateData) 0B ·
+        R3(VmInstructions) +4,224B · R4(IsolateInstructions) +192B；
+      · 2,466,725 B 内容差：「1380 个函数哈希差异 + VM stubs」——与 shorebird/F102 同根。
+      **判据**：为 4,410 B 的四区域各写 G-e 合规 locus：
+      R3 locus = VM snapshot stubs 里驱动尺寸差的具名 stub（`ArrayWriteBarrierStub` + 对齐？）；
+      R4 locus = IsolateInstructions 里差异函数（`ArrayWriteBarrierStub` + hello/base_dd 的那个函数，
+      prog 的四个函数）所在结构/偏移。
+      内容差 2,466,725 B：与 F102 同根，复用 F55 子卡拿到的 locus 或先等。
+      残差行：4,410 + 2,466,725 == 2,471,135 且各分量有 locus。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
+      **负控制**：drop R3 → R3 行报红且只有该格变红。
+
+- [ ] **F104：`disassemble` ×3 —— 5,946 units**（`open`，2026-09-22，F98 拆出）
+      **分母**（来自 F59，不许重测）：hello 1,018 + base_dd 1,018 + prog 3,910 = **5,946 units**。
+      **已知（F59 B-2 路径，UNEXPLAINED 0，全部六分量已点名）**：
+      ① `cumulative_code_offset`：5,226 units（hello/base_dd 各 778，prog 3,670）
+      ② `stub_and_code_size`：382 units
+      ③ `stub_name_reordering`：296 units
+      ④ `snapshot_data_and_root`：24 units
+      ⑤ `platform_identity`：6 units
+      ⑥ `thread_metadata`：12 units
+      **判据**：为上述六个分量各写一行 G-e 合规 `structural_evidence.tsv` 行，给出具名结构+偏移：
+      ① locus = `Thread`，偏移区间驱动所有函数累计偏移移位（0x678 vs 0x688 差 0x10）；
+      ② locus = 驱动 stub/method 尺寸差的具名 stub（ArrayWriteBarrierStub 或 Thread 相关 stub）；
+      ③ locus = stub 名称列表顺序变化的驱动结构；
+      ④⑤⑥ locus = 各自对应的快照头结构字段。
+      残差行：六项之和 == 5,946，且每项有 locus。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
+      **负控制**：删掉 ① 那一行 → cumulative_offset 残差报红且只有该格变红。
+
+- [ ] **F105：`compute_dd_table` ×3 —— 23,752 bytes**（`open`，2026-09-22，F98 拆出）
+      **分母**（F61 订正后的真实值，不许重测）：hello 2,684 + base_dd 2,684 + prog 18,384 = **23,752 B**。
+      ⚠️ F60 卡面写着「12 units」——那是 F61 修掉 `diff_units.sh` 的 `norm()` bug 之前的错误读数，
+      已由 F61 订正为 23,752 B。引用 F60 的分母时只用这个数，不重测。
+      **已知**：矩阵 note 写「Downstream Thread+0x678 structural diff」——即差异来源于 Thread 结构
+      偏移 0x678 vs 0x688 导致 compute_dd_table 输出不同。per-fixture 差异：
+      hello/base_dd 各 2,684 B（函数数 1,009/1,009，UNITS_op_hash=1,009）；
+      prog 18,384 B（UNITS_op_hash=2,558）。
+      **判据**：验证 Thread+0x678 locus：写一条 G-e 合规 structural_evidence.tsv 行
+      （结构 `Thread`，字段偏移 0x678/0x688 区间，具体字段名见 `thread.h`），
+      并附 residual 行证明它解释了这一格的全部 23,752 B。
+      负控制：将产物内一个 `op_subgraph_hash` 值改为 0 → 该格残差脚本报红且只有该格变红。
+      🔴 **本卡不许翻动 `parity_matrix.tsv`**。
 
 ### 2026-09-22T1x 心跳（本轮，claude-sonnet-5，调度器角色）：`.loop/UNREVIEWED_FIX` 的 F96 已清账，F96 关卡，顺带修好 cards.tsv 两处历史格式错误
 
