@@ -170,8 +170,9 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 
 🔴 **待办以 `memo.md` 为准，不是本文件。**
 
-**当前账面（2026-09-17 实测，判据 = `cards_check.sh` rc=0）：`open 16 · built 6 · closed 28 ·
-closed-unreviewed 1`，共 51 张。** 矩阵 `na 35 / unknown 24`，与 2026-09-11 同 —— **六天没动。**
+**当前账面（2026-09-22 实测，判据 = `cards_check.sh` rc=0）：`open 26 · closed 42`，共 68 张。**
+矩阵 `na 35 / unknown 24`（与 2026-09-11 同，`unknown` 十一天没动）。
+🔴 **循环已手动停机（2026-09-22 17:21）**：Claude CLI 登录态过期，恢复需先 `/login` 再重启 ralph.sh。
 ```
 SDK 正面工作  9   F37 F55 F62 F67 F68 F69 F72 F80 F88
 仪器/闸门/循环 13  F46 F49 F53 F54 F65 F71 F76 F81 F82 F83 F84 F86 F87

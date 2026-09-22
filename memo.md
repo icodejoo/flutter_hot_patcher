@@ -10346,3 +10346,14 @@ F96 行；`memo.md` 复选框已在同一轮改为 `[x]`（提交 `29d2d77`）�
 **改动文件（本轮）**：`memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码、未新派子代理。
 
 **本轮到此结束**。下一轮：F98（21 格 `unknown` 补卡）是 `memo.md` 里下一个可派的 `- [ ]`。
+
+### 2026-09-22T17:21 操作员停机（手动）
+
+**停机原因**：Claude CLI 登录态过期（`Not logged in`），循环连续跑出 `<synthetic>` 空轮（16:07 rc=0 无产出、17:09 rc=1 snapshot失败），已无法正常派发。操作员重新登录后确认 `.loop/PAUSE` 已由 `auto-idle` 升级为 `manual-stop`，ralph.sh 与 wip_snapshot 进程全部终止。
+
+**当前账面（2026-09-22 17:21 实测）**：
+- `cards_check.sh`：0 failures，open 26 / closed 42
+- `.loop/UNREVIEWED_FIX`：F96 仍挂账（两轮认证失败，fix_queue.py 未能清账）
+- 下一轮任务：F98（21 格 `unknown` 补卡恢复可达性）
+
+**恢复**：确认 `~/.local/bin/claude /login` 已生效后，删除 `.loop/PAUSE`，在终端里跑 `./tools/loop/ralph.sh`。
