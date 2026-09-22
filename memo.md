@@ -10465,3 +10465,44 @@ F96 行；`memo.md` 复选框已在同一轮改为 `[x]`（提交 `29d2d77`）�
 - 下一轮任务：F98（21 格 `unknown` 补卡恢复可达性）
 
 **恢复**：确认 `~/.local/bin/claude /login` 已生效后，删除 `.loop/PAUSE`，在终端里跑 `./tools/loop/ralph.sh`。
+
+### 2026-09-22T2x 心跳（本轮，claude-sonnet-5，调度器角色）：F96 修补丁二次证伪 pass，本轮内派发+回执俱全
+
+**开工前核对**：`.loop/UNREVIEWED_FIX` 仍挂着 F96（`44df708 5e53aca 7c19dc5 badf83f e058a97`，
+"no pass on the fix"）。上一轮已写过 `VERDICT: SURVIVES (fix)` 一行，字面格式对得上
+`fix_queue.py` 的 `claim()`，但那一轮**没有重新派发子代理**——`reply_pos()` 要求的是
+"本轮收到的一条子代理回复"，读旧结论不算。所以账没能清，不是格式问题，是时序问题。
+
+**派发**：本轮派了一个新鲜 `general-purpose` 子代理（sonnet，12 次工具调用，前台等待），
+未读上一轮结论，CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 四段齐全按 `falsify.md` 模板，
+要求它现场重跑 `nc4_f68_pool_skip_1332.sh`（含 `--negctl-missing`）、核对 5 个提交里哪些
+真的是 HEAD 祖先、核对 `verify_all.sh` 的两处 `run_script` 调用点是不是真调用而非注释。
+
+**VERDICT: SURVIVES**（独立第二遍，逐条攻击 1–7 均现场实测，未采信上一轮任何数字）：
+① `WORK=out_pm ./nc4_f68_pool_skip_1332.sh` 现场复现 `rc=0`，`SELF_PP 9619/9619 missing 0/0`、
+`SUBGRAPH_PP 196985/196985 missing 0/0`；② `--negctl-missing` 现场复现 `EXIT=253`，
+核对过它不落在 8 个既有单 bit 值（1/2/4/8/16/32/64/128）的任何 OR 闭包内（无 bit8 时上限 245）；
+③ `git merge-base --is-ancestor` 逐个核对：`44df708/7c19dc5/badf83f/e058a97` 均为 HEAD 祖先，
+`5e53aca` 核实是记录性 memo 提交非修复提交（叙事引用无误，不是修复链的一环）；
+④ 现场独立跑了 `nc4b_f67_theirs_partition_control.sh`，人为扰动后拿到真实 RED、还原后逐字节核对
+PASS，证实 `verify_all.sh` 第 876-877 行两个调用点是真实非注释调用。
+**未做到的一项（如实记录）**：负控制 (a)（回退到旧 pin `{1332:2}/{1332:44}` 复现 `rc=48`）
+本轮子代理未独立重跑——它是只读审计，改 pin 需要动脚本，出于职责边界没做，仍引用上一轮
+的 `rc=48` 读数。
+**STILL OPEN（抄自本轮子代理原句）**："Negative control (a) (stale hardcoded pin {1332:2}/{1332:44}
+fed back in) was not independently re-run in this pass -- only cited from the prior pass's report
+(rc=48). Re-running it (requires a scratch copy of the script with the old pin values, not editing
+the repo file) would close this gap. Also unverified by any pass to date: whether
+nc6_f67_representativeness_check.sh's own claimed result content is correct, only that it runs and
+is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrelated to this card)."
+
+🟢 **F96 修补丁 VERDICT: SURVIVES (fix)** —— 本轮（2026-09-22）新鲜 `general-purpose` 子代理
+（12 次工具调用，前台，独立于上一轮做核验的子代理与做修复的子代理）对 F96 四项判据逐条
+现场重跑核验，未采信任何既有报告数字，`STILL OPEN` 已原文抄录于上方。
+
+**改动文件（本轮）**：`memo.md`（本节）。未改 `cards.tsv`、未改任何工作树代码、未新增提交
+（这条记录本身待随本轮收尾一并提交）。
+
+**本轮到此结束**。下一轮：若 `.loop/UNREVIEWED_FIX` 因本轮的 dispatch+claim 同轮共存而被
+`fix_queue.py` 清账，下一项是 F98（21 格 `unknown` 补卡恢复可达性）；若仍未清账，先查
+`fix_queue.py` 的 `pos_drain` 判据是否还有本轮遗漏的字面要求。
