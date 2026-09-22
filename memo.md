@@ -9698,8 +9698,9 @@ COST OF BEING WRONG: F62 wants to flip a parity-matrix cell from unknown/structu
 
 ---
 
-- [ ] **F96：修复 F67 证伪 pass 揭出的三个缺口（pin 过期、负控制 (c) 打不红、F68 挂着一句 F67 自己撤回过的机制话）**
-      （`open`，2026-09-21 立，来自 F67 整卡证伪 pass 的 FALSIFIED 结论）
+- [x] **F96：修复 F67 证伪 pass 揭出的三个缺口（pin 过期、负控制 (c) 打不红、F68 挂着一句 F67 自己撤回过的机制话）**
+      （`closed`，2026-09-21 立，来自 F67 整卡证伪 pass 的 FALSIFIED 结论，
+      2026-09-22 证伪 pass `SURVIVES` 后关卡）
       **判据**（四项都要满足，缺一不可）：
       ① `WORK=out_pm ./nc4_f68_pool_skip_1332.sh` 干净退出（`rc=0`），不再报
       `COUNT-PIN GATE`——即脚本里硬编码的 `SELF_PP`/`SUBGRAPH_PP` missing pin
@@ -9722,6 +9723,56 @@ COST OF BEING WRONG: F62 wants to flip a parity-matrix cell from unknown/structu
       **依赖**：无（F67/F68 均已给出足够上下文，不需要等其他卡）。
       **本卡不需要真机**，判据全在 `~/dart-3122/sdk`（`ProductSimARM64`，
       增量构建即可，`ninja -n` 已确认 0 待办）与 `~/Documents/fhp-research` 两棵树上。
+
+      🟢 **四项判据全部满足，2026-09-22 关卡**：
+      ① pin 更新——`WORK=out_pm ./nc4_f68_pool_skip_1332.sh` 实测 `rc=0`，
+      `SELF_PP SLOTS theirs 9619 ours 9619 missing 0 extra 0`、
+      `SUBGRAPH_PP SLOTS theirs 196985 ours 196985 missing 0 extra 0`，无 `COUNT-PIN` 报警；
+      ② 负控制 (c)——由拆出的 **F97**（研究树 commit `34b458b` 实现 + `84e4778` 关卡）解决：
+      `--negctl-missing` 在当前零缺失基线上退出 **253**（不在 8 个既有 bit 的任何 OR 闭包内的
+      独立哨兵值），健康基线区别于旧的恒为 0；
+      ③ F67 的 RESULT 行已带当前实测（`9619/9619`），旧的 `missing=2/44` 数字保留在
+      「已被推翻」区未删除；
+      ④ F68 卡面文字已核对与 `003f2759a68`（修 `assembler_arm64.{h,cc}` 少填两处）的说法一致，
+      `nc6_f67_representativeness_check.sh`/`nc4b_f67_theirs_partition_control.sh` 已接进
+      `verify_all.sh`（`EXPECTED_CHECKS=44`，两者是真实 `run_script` 调用点，非注释）。
+      **中间踩过一次坑**：`44df708` 把 ②的退出码折进已被 `GATE RED(8)`/`unpart` 占用的 bit 8，
+      被同一天的证伪 pass 判 `FALSIFIED`（撞车），拆出 F97 单独解决、改用哨兵值 253。
+      🟢 **2026-09-22 证伪 pass `VERDICT: SURVIVES`**（新鲜 `general-purpose` 子代理，31 次工具调用，
+      非做修复的那个代理）：现场独立重跑 `WORK=out_pm ./nc4_f68_pool_skip_1332.sh` 复现 `rc=0` 与
+      上述两行 SLOTS 读数；`--negctl-missing` 复现 `rc=253`、`ANY_LEG_RAN=1 ANY_LEG_RED=1`，
+      与 8 个既有 bit 值均可区分；负控制 (a)：`/tmp` 副本把 pin 还原成旧的 `{1332:2}/{1332:44}`
+      （经符号链接 `out_pm` 避免假 BLOCKED），复现 `rc=48 COUNT-PIN` 报警——脚本能变红；
+      核对 F67/F68 两行结果文本与上述描述一致；`verify_all.sh` 的 `EXPECTED_CHECKS=44` 与
+      两个新 `run_script` 调用点独立执行均 `rc=0`；全部提交（`e058a97` 本仓库、SDK 树内）均确认是
+      当前 HEAD 祖先。
+      **`STILL OPEN`（按契约原文抄录）**："F96's cards.tsv row itself has not been appended with a
+      final closing note tying together the pin fix (e058a97), F97's closure (84e4778), and the
+      F68 reconciliation into one 'criteria met, ready to close' statement -- a future pass should
+      write that append (or the closing action itself) rather than assume it from three separate
+      commits' messages. Also unverified: whether out_pm was built from the exact GN args
+      ProductSimARM64 as parity_matrix.sh:26 mandates (inferred from mtime/git-ancestor consistency,
+      not independently re-derived from the binary's own build-config strings)."
+      **关卡**：四项判据均满足，`cards.tsv` 已同步为 `closed`（研究树，本轮追加 `||` 结果块，
+      连同上面这条 `STILL OPEN` 一并写入，尚未提交——按本项目惯例该文件不在本仓库跟踪范围）。
+
+- [x] **F97：给 F96 的负控制 (c) 一个不撞车的退出码契约**（`closed`，2026-09-22 从 F96 拆出，
+      deps=F96，研究树 commit `34b458b` 实现 + `84e4778` 关卡）
+      **判据**：`WORK=out_pm ./nc4_f68_pool_skip_1332.sh --negctl-missing` 在当前零缺失基线上
+      必须非零退出，且该退出值不能与既有 8 个可复用 bit（1/2/4/8/16/32/64/128 的任意 OR 组合）
+      混淆。**实现**：审计全脚本可达的全部 8 个单 bit 值，确认无第九个可用 bit（`unpart` 是
+      算术恒等式，永远不触发，不算「空闲」），改用不参与 OR 的独立哨兵值 **253**
+      （仅在 `rc==0` 时赋值，不掩盖既有 `GREEN-BUG(64)`/`restore-mismatch(128)`）。
+      **负控制**：① 强迫真实 leg 失败（`ok=1`→`ok=0`）实测 `EXIT=64` 非 253；
+      ② 全 N/A 空转实测 `EXIT=0` 非 253；③ 253 的赋值有 `rc==0` 守卫，不会被真失败掩盖；
+      ④ 回退到 e058a97/44df708/7c19dc5 三个历史提交在同一 `out_pm` fixture 上实测退出码
+      0/8/0，无一产生 253（这是前三轮证伪 pass 都没真正跑过的那一项）。
+      🟢 **2026-09-22 证伪 pass `VERDICT: SURVIVES`**（独立子代理，28 次工具调用，逐项攻击 1–7
+      全部实测通过，见上）。**`STILL OPEN`（原文）**："bit 8's unreachability is a pre-existing
+      arithmetic-identity claim (unpart = tot - id_n - df_n) this commit relies on but did not
+      itself re-verify; a future regression making bit 8 reachable while ANY_LEG_RAN=1 &&
+      ANY_LEG_RED=1 would need the rc==0 guard on the 253 assignment to still hold -- not
+      independently exercised by this pass, low-probability residual not a live gap."
 
 ---
 
@@ -10214,3 +10265,54 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
           （一张一跑，不是跑一次就算）；
       (b) 「26 个复选框里 0 个命名这些 flag」这句话的那条落盘命令，**必须先拿 `shorebird` 跑一遍
           并见到它返回非零**，才承认它在另外七个上的零是证据（规则 4 第一关）。
+
+### 2026-09-22T1x 心跳（本轮，claude-sonnet-5，调度器角色）：`.loop/UNREVIEWED_FIX` 的 F96 已清账，F96 关卡，顺带修好 cards.tsv 两处历史格式错误
+
+**开工前查了两笔账**：`.loop/RESCUED` 指向的 `round-93331` stash（`fhp-research` `stash@{0}`，
+只含一行 `F96 open→closed`、无证伪背书）——**本轮的关卡已经用一次真正的证伪 pass 独立覆盖了
+它想做的那件事**，所以判它作废、不 pop（pop 会把一个未经证伪的裸改动叠回一个已经过审的状态，
+方向反了）。`.loop/UNREVIEWED_FIX` 记的 F96 修复链（`44df708 5e53aca 7c19dc5 badf83f e058a97`）
+缺一次针对修复本身的证伪 pass——本轮派的这次 pass 现场重跑了修复后的代码（pin/负控制/F68 文本/
+verify_all.sh 注册全部四项），是**对修复本身**的独立核验，`VERDICT: SURVIVES` 满足清账条件。
+
+**派发**：按 `tools/loop/prompts/falsify.md` 模板，对 F96 的四项判据（pin 更新、负控制 (c)、
+F67 RESULT 行、F68 文本和解）派了一个新鲜 `general-purpose` 子代理（31 次工具调用，未读实现
+过程），CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 四段齐全。**VERDICT: SURVIVES**，`STILL OPEN`
+两句已逐字抄进上方卡片正文。
+
+**关卡**：`memo.md` F96 复选框改 `[x]`，正文追加关卡说明与证伪 pass 结果；同时把 F97
+（此前只有散文叙述、从未有自己的 `- [ ]`）补上一张正式卡片，使它在 `cards_check.sh` 的
+open/closed 集合比对里不再被漏计。`cards.tsv`（研究树 `fhp-research`）F96 行 `state` 改
+`closed`。
+
+**顺带修了两处我自己在上一次会话里引入的格式错误**（`cards_check.sh` 当场抓到，未提交就发现，
+不算新的仪器缺陷，是我自己的编辑错误）：
+① 上一轮我把 F96 的证伪结果块错误追加进第 7 列（`commits`，本应只放逗号分隔的 sha），
+`cards_check.sh` 的 shape 检查逐词报 `commits-not-sha`——已挪回第 5 列（`criterion`，
+这里才是本项目 `||` 追加历史块的惯例位置），第 7 列复原为 `-`；
+② 顺手发现 `cards_check.sh` 早就报过的 **F93 drift**（`memo.md` 是 `[x]` closed，
+`cards.tsv` 是 `open`）不是本轮引入的——根因是 2026-09-22 早些时候一轮把 F93 关卡的
+`cards.tsv` 编辑做在工作树里但未提交，随后被 finisher 整份 stash 走
+（`fhp-research` `stash@{1}`，`loop-rescue 2026-09-22T04:44:26 round-81451`，
+`git stash show -p` 核对过，diff 里确实是 `-F93 open`/`+F93 closed` 那一行）。
+**没有 pop 这个 stash**（它还混着别的未确认内容），改为按 `memo.md` 自己已经写死的叙述
+（1603–1657 行，`WORTH=16105` 判据 + 证伪 pass 的 `STILL OPEN`）手工在 `cards.tsv` 重新
+写出同一份结果，state 改 `closed`。
+③ 顺带补上 F93/F96/F97 三行此前空缺的第 7 列 `commits`（`cards_check.sh` 第 4 项要求闭卡
+必须引用能在某棵树里解析到的真实 sha，之前是 `-`）：F93→`b1111a30e62,003f2759a68`（SDK 树），
+F96→`44df708,5e53aca,7c19dc5,badf83f,e058a97`，F97→`badf83f,34b458b,84e4778`
+（均在 `fhp-research` 里 `git cat-file -t` 确认存在）。
+
+**核验**：`cards_check.sh` 从「4 处 FAIL」（open/closed 集合两处 + commits-not-sha 一处 +
+无 commit 一处）收敛到「0 处 FAIL」（本轮结束时重跑，open/closed 集合两侧一致、shape 与
+commits 均通过）。
+
+**改动文件（本轮）**：`memo.md`（F96 复选框 + 正文关卡段 + 新增 F97 卡 + 本节心跳）；
+`cards.tsv`（研究树 `fhp-research`，F93/F96 两行修复 + F93/F96/F97 三行补 `commits` 列，
+**尚未提交**——按本项目惯例该文件不在本仓库跟踪范围，但需要下一轮或操作者在 `fhp-research`
+里提交，避免重蹈本轮开头查到的「改了不提交、被 stash 冲走」覆辙）。未改任何 SDK/引擎工作树代码。
+
+**本轮到此结束**。下一轮：`fhp-research` 里 `cards.tsv` 的本轮修改需要一次 `git commit`
+（不属于本仓库范围，需人或下一轮在那棵树里做）；`.loop/RESCUED` 的 `round-93331` stash
+仍未 drop——按契约边界这不是我能单方面决定丢弃的操作，留给操作员核实后处理；F96 剩余无
+（四项判据已全满足）；F98（21 格 `unknown` 补卡）是 `memo.md` 里下一个可派的 `- [ ]`。
