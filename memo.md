@@ -10049,3 +10049,104 @@ pass（2026-09-21，全卡 `FALSIFIED`）已把真正的缺陷拆成 `F96`（`op
 
 **本轮到此结束**。下一轮：F97（`open`，deps=F96）目前是这条子链上唯一可派的新任务；
 F49→F82、F67→F96 仍各自等它们的修复卡先落地，不要在修复卡关闭前重新审 F49/F67 本身。
+
+### 2026-09-22T08:06 心跳（本轮，claude-sonnet-5，调度器角色）：F96 修补丁 pass 证伪 pass 判决：FALSIFIED（未关卡，队列挂账）
+
+`.loop/UNREVIEWED_FIX` 里挂着一条账：F96 的三次修复提交（`e058a97`/`44df708`/`7c19dc5`）
+"no pass on the fix"，按契约五之四与派发纪律的关卡规则，本轮开工前必须先派一个**新鲜**子代理
+对它跑一遍 `tools/loop/prompts/falsify.md`，不能沿用上一轮自己写的分析当审查。
+
+派了一个新鲜 `general-purpose` 子代理（11 次工具调用，独立于做 F96 三次修复的那几个子代理），
+CLAIM 为「F96 的修补丁真的修掉了它自己被证伪 pass 报出的那处破绽」，即
+`nc4_f68_pool_skip_1332.sh --negctl-missing` 在健康零缺失基线上是否真的报红且不与既有位撞位。
+
+**F96 修补丁 VERDICT: FALSIFIED**（独立子代理，未读上一轮分析，逐条核实）：
+
+- 实测复现：`cd spikes/shorebird_linkinfo_oracle && WORK=out_pm
+  ./nc4_f68_pool_skip_1332.sh --negctl-missing; echo $?` 在 `fhp-research` HEAD `badf83f`
+  上打印 `0`——与上一轮记录的现象独立复现一致（非抄录）。
+- FLAW（子代理原文）：`7c19dc5` 把 negctl-missing 信号只折进 `ANY_LEG_RAN=1 &&
+  ANY_LEG_RED=0` 这个**失败**分支的既有 bit 64（GREEN-BUG），却把 `44df708` 里成功分支
+  （腿真的正确报红，`ANY_LEG_RAN=1 ANY_LEG_RED=1`，正是健康基线该走的那条）原有的
+  `rc |= 8` 整段删掉、**没有等价替换**——`nc4_f68_pool_skip_1332.sh:1038-1041` 的
+  `else` 分支明确不碰 `rc`。逐腿内部打印的 `pin_read` 读数（16/32）从未 OR 进脚本自身
+  的 `rc`/退出码——第七项攻击判定为"问题被换成了更容易的那个"：判据要求的是**进程退出码**
+  非零，修补丁只证明了"内部变量 `ANY_LEG_RED` 算对了"。
+- 攻击 4（位撞位审计）：子代理自行审计脚本全部 `rc |=`/`exit` 位点（1/2/4/8/16/32/64/128
+  全部已被占用），确认当前状态下**没有新位承载这个信号**，不是"位存在但没触发"。
+- 攻击 5（新鲜性）：`badf83f` 为当前 HEAD，三个提交均 `merge-base --is-ancestor` 为真，
+  不是过期引用。
+- 攻击 6（负控制真实性）：子代理本轮亲自重跑两次（非抄录上一轮输出），`EXIT=0` 两次一致。
+- STILL OPEN：不适用（FALSIFIED，不是 SURVIVES）。
+
+**这与前一轮（本文件上方，`badf83f` 心跳）记录的第三轮证伪 pass 结论完全独立复现一致** ——
+两次都是新鲜子代理、都未沿用彼此的分析，说明这不是单次误判。
+
+**处置**：不关卡、不修补。F96 的三处缺陷已在 `F97`（`open`，deps=F96，`fhp-research`
+commit `badf83f`）里立卡，要求先写清退出码契约表再动代码，本轮不重复開一轮局部修补
+（同型：`CLAUDE.md` 记录的"先把答案说准，再造检查"）。`.loop/UNREVIEWED_FIX` 里 F96
+那一行保持挂账（`hold`，不是 `drain`）——这是诚实的结果：F96 的修复链条确实没修好，
+队列继续追这笔账直到 F97 把它真正解决。
+
+**改动文件（本轮）**：`memo.md`（本节，新鲜证伪 pass 结果记入）。未改任何代码；研究树
+`fhp-research`、SDK 树均未改动。
+
+**本轮到此结束**。下一轮：F97（`open`，deps=F96）是这条子链上唯一可派的新任务；
+F96/F49→F82、F67 仍各自等各自的修复卡先落地。
+
+### 2026-09-22T09:48 心跳（本轮，claude-sonnet-5，调度器角色）：F97 已关闭（研究树 `84e4778`），F96 保持 open
+
+**开工前先处理救援**：`.loop/RESCUED` 指向的研究树 stash `loop-rescue 2026-09-22T04:44:26
+round-81451` 未重做，只做了核验：内容是 F93 关闭（`ede6946`）已叙述的 cards.tsv/parity_matrix.tsv
+更新，但从未落到 research 树磁盘上（`git show HEAD:.../cards.tsv` 的 F93 行仍是 `open`）。
+本轮尝试把这份 stash 落盘的 git 操作被仓库自带的 `deny-destructive.sh` 钩子拦下（这是它的
+设计意图，按 CLAUDE.md 规则 4 边界"该我自己在终端里跑的仍然自己跑"，未绕过）。**已在本轮对话
+里把具体命令告知操作员，需要人在自己终端里执行**（研究树 `git stash list` 里那条
+`round-81451` 记录，配 `stash show -p` 核对内容后 `stash pop` 落盘）。本轮未动这个 stash。
+
+**本轮任务**：按上一轮心跳，F97（open, deps=F96）是链上唯一可派任务。派了一个新鲜
+`general-purpose` 子代理（49 次工具调用）实现修复：`nc4_f68_pool_skip_1332.sh` 的
+`--negctl-missing` 在健康零缺失基线上此前退出 0（`7c19dc5` 的回归），现改为退出 **253**——
+一个不在 8 个可复用 bit（1/2/4/8/16/32/64/128）任何 OR 组合闭包内的独立哨兵值（新增
+`f97_exit_code_contract.md` 写明该契约），只在 `rc==0` 时赋值，不会掩盖既有的
+GREEN-BUG(64) 或 restore-mismatch(128)。实测：`--negctl-missing`(健康)=253、无 flag 平跑=0
+（改前改后一致）、`--self-test`=0（改前改后一致）。提交 `34b458b`，cards.tsv F97 置 `built`。
+
+**按契约五之四**，派了第二个新鲜 `general-purpose` 子代理（28 次工具调用，未读实现代理的分析）
+跑证伪 pass，专攻卡片自己要求的负控制（回退到 e058a97/44df708/7c19dc5 三次提交、在同一
+`out_pm` fixture 上实测退出码，这是链上前三次证伪 pass 都没真正跑过的那一项）：
+
+**F97 VERDICT: SURVIVES**（独立子代理，逐项攻击）：
+- 攻击 1：把 `ok=1` 改成 `ok=0`强迫真实 leg 失败，实测 `EXIT=64`（GREEN-BUG），不是 253；
+  `ANY_LEG_RAN=1` 空转（全 N/A）实测 `EXIT=0`，均非 253——赋值不是恒真。
+- 攻击 2：算术核验 253=`0b11111101` 必须含 bit 8；bit 8 结构性不可达（`unpart` 恒等式）；
+  `--negctl-missing` 模式下 7 个可复用 bit 的最大 OR 组合为 245，永远到不了 253。
+- 攻击 3：253 的赋值有 `[ "$rc" = 0 ]` 守卫，真实 leg 失败（攻击 1 已证）不会被 253 掩盖。
+- 攻击 4：`grep -n '253'` 全脚本只有一处真实赋值（:1098），其余为注释/文档引用。
+- 攻击 5：`git merge-base --is-ancestor 34b458b HEAD` 为真；三条命令独立重跑，读数与提交
+  信息一致（253 / 0 / 0）。
+- 攻击 6（**卡片本身要求、前三轮从未真正跑过的负控制**）：对 e058a97/44df708/7c19dc5
+  三个提交的脚本各做 detached 副本、在同一个 `out_pm` fixture 上实跑 `--negctl-missing`，
+  实测退出码 0 / 8 / 0——没有一个产生 253，与 HEAD 的 253 并列对照。
+- 攻击 7：确认卡片判据原文只要求"可区分"而非"必须是新 bit"，253 作为脱离 8-bit OR 闭包的
+  哨兵值是合法读法；同时核对 254/255 两个既有"非 bitmask"保留值与 253 互不冲突（`rc=0` 在
+  253 赋值点之前已初始化，254/255 只在参数解析阶段的 usage-error/BLOCKED 分支触发，路径不重合）。
+
+**STILL OPEN（原文抄入 cards.tsv，逐字）**：「bit 8's unreachability is a pre-existing
+arithmetic-identity claim (unpart = tot - id_n - df_n) this commit relies on but did not
+itself re-verify; a future regression making bit 8 reachable while ANY_LEG_RAN=1 &&
+ANY_LEG_RED=1 would need the rc==0 guard on the 253 assignment to still hold -- not
+independently exercised by this pass, low-probability residual not a live gap.」
+
+**处置**：F97 已在 cards.tsv 置 `closed`（研究树提交 `84e4778`），STILL OPEN 原文已写入卡片。
+**F96 保持 `open`**——F97 只解决了 F96 三项子缺陷里的第 (2) 项（negctl-missing 负控制）；
+第 (1) 项（pin 更新为 9619/9619）与第 (3) 项（F68 文本与 003f2759a68 的和解、
+nc6/nc4b 脚本注册进 verify_all.sh）本轮未动，F96 不能据此关卡。
+
+**改动文件（本轮）**：`memo.md`（本节）。研究树 `fhp-research` 两次提交（`34b458b` 实现 +
+`84e4778` 关卡），未 push。SDK 树、本仓库 `flutter_hot_patcher` 除 `memo.md` 外未改动。
+
+**本轮到此结束**。下一轮：F96 剩余两项子缺陷（pin 更新 + F68 文本和解/verify_all.sh 注册）
+是这条子链上下一个可派任务；`.loop/RESCUED` 里的 round-81451 stash 仍待人工落盘处理（已在本
+轮对话里提示，未处理不算本轮失败——该操作在钩子边界之外）。built 卡欠证伪 pass 队列
+（F49→F82、F67→F96）依旧各自等父修复卡先落地，不要在其父卡关闭前重新审 F49/F67 本身。
