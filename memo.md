@@ -10579,3 +10579,26 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 1. `dump_object_pool`（F101）、`dump_object_pool_link_data`（F102）、`disassemble`（F104）、`dump_blobs`（F103）仍无 residual 行，仍是 unknown（12 格）。
 2. `shorebird` ×3 格仍是 unknown（F55/F62）。
 3. 矩阵还有 15 unknown，阶段未结束。
+
+---
+
+## 2026-09-23 会话进度总结（claude-sonnet-4-6 交互式循环驱动）
+
+**本次会话完成**：F98（已于前序会话，补记）→ F67（whole-card SURVIVES）→ F99+F100（field_table ×6 格 structural）→ F105（compute_dd_table ×3 格 structural）。
+
+**矩阵变化**：
+| 时间点 | na | unknown | structural | gap |
+|--------|-----|---------|-----------|-----|
+| 会话开始（从上次总结继承） | 35 | 24 | 0 | 0 |
+| F99+F100 关闭后 | 35 | 18 | 6 | 0 |
+| F105 关闭后 | 35 | 15 | 9 | 0 |
+
+**剩余 15 unknown 的阻断原因**：
+- `shorebird` ×3（F55/F62）：F62 明确决定保留 unknown；取决于 F88/F94/F95 找到 locus
+- `dump_object_pool` ×3（F101）：`measure_pool_residual.sh` 报 UNEXPLAINED 88（87 个 +1 word 函数 + 1 个 ArrayWriteBarrierStub），可能与 F37 有关
+- `dump_object_pool_link_data` ×3（F102）：`evidence_pool_link_data_residual.sh` 失败（stale 二进制，文件 delta 不一致）
+- `dump_blobs` ×3（F103）：`evidence_dump_blobs_residual.sh` 失败（stale，size delta 不一致）
+- `disassemble` ×3（F104）：`diff_units.sh` 返回 209,532（normalized JSON lines），而卡面分母是 5,946 semantic 行；stale 二进制导致全局快照 JSON 变化
+- **共同根因**：F76（重建 ReleaseARM64/ProductARM64）未完成，out_pm/ 里有 stale 文件
+
+**cards 状态**：open 28 / closed 47（含本次关闭的 F99/F100/F105）。
