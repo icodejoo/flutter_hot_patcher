@@ -2088,8 +2088,8 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
 
 ---
 
-- [ ] **F67：第三处单侧去重 —— `pool_seen` / `self_pp`，以及「走的是不是同一条路」**
-      （**`built`**，2026-09-14 立、2026-09-15 实现并实测；2026-09-16 证伪 pass **VERDICT: FALSIFIED**，新鲜 Sonnet 代理）
+- [x] **F67：第三处单侧去重 —— `pool_seen` / `self_pp`，以及「走的是不是同一条路」**
+      （**`closed`**，2026-09-14 立、2026-09-15 实现并实测；2026-09-23 关，整卡 SURVIVES）
       🔴 **本卡的「机制」结论已被自己后续两次 CORRECTION 撤回，只有原始计数还站得住 ——
       引用本卡时只能引用计数，不能引用「我们的 walk 走的路不一样」这句话。**
       证伪 pass 的破绽（2026-09-16）：把 CLAIM 原样交给一个新鲜代理复核时，
@@ -10522,3 +10522,21 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 3. F100 的 deps=F99——若循环要求 deps 已 closed 才能选，F100 能否被选到尚未测试。
 
 **关卡**：`memo.md` F98 复选框改 `[x]`；`cards.tsv`（fhp-research）F98 行 state 改 `closed`。
+
+### 2026-09-23T10:xx 心跳（交互会话，claude-sonnet-4-6）：F67 整卡证伪 pass SURVIVES，关卡
+
+**F67 VERDICT: SURVIVES** —— 新鲜 claude-sonnet-5 子代理（13 次工具调用）对 F67 七项检查逐条现场执行：
+- 检查 1：`WORK=out_pm bash nc4_f68_pool_skip_1332.sh` rc=0，`SELF_PP 9619/9619 missing=0 extra=0`，COUNT-PIN 门 `{}/{}`（与期望完全一致）
+- 检查 2：`--negctl`（ours 侧单字节翻转 + self_pp 槽改值）双双变红，restore 回基线
+- 检查 3：`--negctl-missing` rc=253（F97 哨兵，不是崩溃）；del/sg_del 子测试分别报 `missing 0→1` / `sg_missing 0→1`，fill/compose/del_heal 打印 N/A（零缺口基线，正确行为）。**F96 的绿色 bug 已消失。**
+- 检查 4：nc6 两个 fixture 均 `SKEWED-TOWARD-SHORT`；负控制 shortest-776→SKEWED，random-776→REPRESENTATIVE
+- 检查 5：nc4b theirs 侧翻转 fn#6，BYTE-IDENTICAL-CODE 536→535，restore 字节级全同
+- 检查 6：nc6/nc4b 均在 fhp-research `verify_all.sh` 第 400–401 行（expected_rc 表）和第 876–877 行（run_script 调用），EXPECTED_CHECKS=44
+- 检查 7：8263 历史基线落盘在 `f67_segment4_negctl.py` 与 `f67_segment4_negctl.tsv`，nc4 脚本本身无可执行路径（不是阻断性缺陷）
+
+**STILL OPEN（子代理原句抄录）**：
+1. F68 仍 open：F67 已证差异源于 gen_snapshot NOP-padding，gen_snapshot 修复（003f2759a68）已 landed；parity_matrix 该格的 gap/structural 分类尚未从 F68 角度独立验证。
+2. nc4 脚本没有自包含的「dedup-on → 8263」可执行路径；该数字的仪器在 f67_segment4_negctl.py 里，未连入 verify_all.sh。若 analyze_snapshot 行为回退，nc4 不会直接抓到 8263→9619 这条轨迹。
+3. nc6 确认 536 个 byte-identical-code 函数偏向短函数（median 36 vs population median 128），self_pp ordered-equal 在该样本上成立的结论对长/复杂函数的推广性仍是开口。
+
+**关卡**：`memo.md` F67 复选框改 `[x]`；`cards.tsv`（fhp-research）F67 行 state 改 `closed`。
