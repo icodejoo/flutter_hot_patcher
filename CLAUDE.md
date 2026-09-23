@@ -170,12 +170,17 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 
 🔴 **待办以 `memo.md` 为准，不是本文件。**
 
-**当前账面（2026-09-22 实测，判据 = `cards_check.sh` rc=0）：`open 26 · closed 42`，共 68 张。**
-矩阵 `na 35 / unknown 24`（与 2026-09-11 同，`unknown` 十一天没动）。
+**当前账面（2026-09-23 实测，判据 = `cards_check.sh` rc=0）：`open 26（含 built 1）· closed 49（含 closed-unreviewed 1）`，共 75 张。**
+矩阵 `na 35 / unknown 12 / structural 12 / gap 0`（2026-09-23 直接数 `parity_matrix.tsv`）。
 🔴 **循环已手动停机（2026-09-22 17:21）**：Claude CLI 登录态过期，恢复需先 `/login` 再重启 ralph.sh。
+🟢 **2026-09-23 进展**：F76（重建 ReleaseARM64）· F99/F100/F105（field_table + compute_dd_table structural）已在上次会话关闭；
+本次会话：F102（dump_object_pool_link_data ×3 → structural，unexplained_funcs=0）关闭。
+`unknown` 从 24 降至 12（本次 -3），`structural` 从 0 升至 12。
+**剩余 12 unknown**：shorebird ×3（F55/F62）· dump_object_pool ×3（F101，UNEXPLAINED 88 bytes）·
+dump_blobs ×3（F103，content diff 含 PC-relative 级联效应）· disassemble ×3（F104，EXAMINED/UNITS 不匹配）。
 ```
 SDK 正面工作  9   F37 F55 F62 F67 F68 F69 F72 F80 F88
-仪器/闸门/循环 13  F46 F49 F53 F54 F65 F71 F76 F81 F82 F83 F84 F86 F87
+仪器/闸门/循环 12  F46 F49 F53 F54 F65 F71 F81 F82 F83 F84 F86 F87
 ```
 🔑 **待办面已经倒过来了：修仪器的比做正事的多，而 `unknown` 六天没动。**
 每做一次证伪 pass 就会长出新的仪器卡 —— 这不是坏事（那些债本来就在，只是原先不可见），
