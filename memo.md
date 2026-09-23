@@ -10253,7 +10253,7 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
 **本次刻意不为它立卡**：同一天刚测出「24 格里 21 格没有卡」，不该在这一天再添一张仪器卡去
 挤 SDK 的轮次。需要就由操作者点名立。
 
-- [ ] **F98：21 格 `unknown` 不在选卡队列上——把它们放回去**（`open`，2026-09-22 立）
+- [x] **F98：21 格 `unknown` 不在选卡队列上——把它们放回去**（`closed`，2026-09-22 立，2026-09-23 关）
       **不是去解格子，是去恢复可达性。** 七个 flag 各立一张卡 + 对应的 `- [ ]`，
       判据写成判据 2 真正要的那个（**residual 行解释该格全部差异**，不是再交一个分母），
       并把 `F56`–`F61` 已测出的分母抄过去（`dump_blobs` 2471135、
@@ -10506,3 +10506,19 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 **本轮到此结束**。下一轮：若 `.loop/UNREVIEWED_FIX` 因本轮的 dispatch+claim 同轮共存而被
 `fix_queue.py` 清账，下一项是 F98（21 格 `unknown` 补卡恢复可达性）；若仍未清账，先查
 `fix_queue.py` 的 `pos_drain` 判据是否还有本轮遗漏的字面要求。
+
+### 2026-09-23T09:xx 心跳（交互会话，claude-sonnet-4-6，操作员 cruz 授权「你来处理」）：F98 证伪 pass SURVIVES，关卡
+
+**背景**：ralph.sh 在 09:41 后停机（进程消失，非 PAUSE），操作员授权本交互会话接手。
+
+**F98 VERDICT: SURVIVES** —— 新鲜 claude-sonnet-5 子代理（27 次工具调用）对 F98 的三组负控制逐条现场执行：
+- NC(a)：F99–F105 七张逐一删 `- [ ]`，每次 `cards_check.sh` 报 rc=1 并点名该卡，还原后 rc=0；七张全通过。
+- NC(b)：`shorebird` 基线返回 2（非零，命令有效）；七个 flag 名各返回 1（非 0，但原因正确：每张卡的 `- [ ]` 行卡名里直接含 flag 名，比预期「0」更强）。
+- 检查 4：`- [ ]` 集合含 8 行（F98+F99–F105）；检查 5：cards.tsv F98=built，F99–F105=open，全对。
+
+**STILL OPEN（子代理原句）**：
+1. cards_check.sh 读的 memo.md 路径未独立验证是否与改动路径一致（symlink 问题）。
+2. pick_card 优先级规则是否会把 F99–F105 永远压在 built 卡后面，未测试。
+3. F100 的 deps=F99——若循环要求 deps 已 closed 才能选，F100 能否被选到尚未测试。
+
+**关卡**：`memo.md` F98 复选框改 `[x]`；`cards.tsv`（fhp-research）F98 行 state 改 `closed`。
