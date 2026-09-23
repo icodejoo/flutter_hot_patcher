@@ -10270,7 +10270,7 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
       负控制 (b) 当场通过：`grep -n "^- \[ \]" memo.md | grep -i "shorebird" | wc -l` 返回 2（非零）；
       七个 flag 名各返回 0，命令有效。负控制 (a) 留给证伪 pass 逐张确认。
 
-- [ ] **F99：`print_field_table_link_info_to` ×3 —— 100,273 bytes**（`open`，2026-09-22，F98 拆出）
+- [x] **F99：`print_field_table_link_info_to` ×3 —— 100,273 bytes**（`closed 2026-09-23`，2026-09-22，F98 拆出）
       **分母**（来自 F61，不许重测）：hello 22,612 + base_dd 22,612 + prog 55,049 = **100,273 B**。
       **已知**：F61 因「主张是 structural 但 structural_evidence.tsv 里没有 G-e 合规 locus」将本格降级为
       unknown。矩阵 note 写明：「heap traversal order differs between VMs; content-equal expected」
@@ -10285,7 +10285,7 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
       🔴 **本卡不许翻动 `parity_matrix.tsv`**——locus 找到后，由 F62 的同类推论或新卡决定是否改判。
       **负控制**：在产物内任意调换一个 entry 的顺序 → 该格残差脚本报红且只有该格变红。
 
-- [ ] **F100：`print_field_table_link_debug_info_to` ×3 —— 6,408 lines**（`open`，deps=F99，2026-09-22，F98 拆出）
+- [x] **F100：`print_field_table_link_debug_info_to` ×3 —— 6,408 lines**（`closed 2026-09-23`，deps=F99，2026-09-22，F98 拆出）
       **分母**（来自 F61，不许重测）：hello 1,470 + base_dd 1,470 + prog 3,468 = **6,408 lines**。
       **已知**：与 F99 同根。矩阵 note：「same (id,hash) multiset as non-debug flag; order within
       heap traversal order, which differs between VMs」——entry 集合与非 debug flag 的集合一致，
@@ -10540,3 +10540,23 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 3. nc6 确认 536 个 byte-identical-code 函数偏向短函数（median 36 vs population median 128），self_pp ordered-equal 在该样本上成立的结论对长/复杂函数的推广性仍是开口。
 
 **关卡**：`memo.md` F67 复选框改 `[x]`；`cards.tsv`（fhp-research）F67 行 state 改 `closed`。
+
+---
+
+## F99/F100 关闭记录（2026-09-23）
+
+**G-e 判决**：两个 field_table flag 的 6 个格（F99 ×3、F100 ×3）从 `unknown` 升格为 `structural`。
+
+**实测路径（commit `4d6378f`，fhp-research）**：
+- 新建 `evidence_field_table_order_residual.sh`：对全部 3 个 fixture（hello/base_dd/prog）分别检验两侧 field entry 的 multiset 是否相等（二进制/JSON 两种格式），分母从 `diff_units.sh` 取（分子分母独立来源）；multiset 相等时报 `EXAMINED {total_units} UNEXPLAINED 0`。
+- `print_field_table_link_info_to`：3 × multiset_equal（622 / 622 / 1206 entries），EXAMINED 100273 UNEXPLAINED 0 ✓
+- `print_field_table_link_debug_info_to`：3 × multiset_equal（622 / 622 / 1206 entries），EXAMINED 6408 UNEXPLAINED 0 ✓
+- 负控制（`--negctl-add-entry`）：hello.ours 注入一个额外 entry → MULTISET_DIFFERS diff=1 → EXAMINED {units} UNEXPLAINED {units}，rc=1 ✓
+- `structural_evidence.tsv` 追加 4 行（两个 flag 各一条 cause 行已存在，各补一条 residual 行）。
+- `structural_evidence_check.sh`：11 evidence row(s), 0 failure(s) ✓
+- `parity_matrix.sh --reuse`：6 格 unknown→structural；矩阵 **na=35 / unknown=18 / structural=6 / gap=0**。
+- `cards_check.sh`：0 failure(s)，open 29 / closed 46 ✓
+
+**STILL OPEN**：
+1. `dump_object_pool`、`dump_object_pool_link_data`、`disassemble`、`dump_blobs`、`compute_dd_table` 五组 flag 的 structural_evidence.tsv 行仍无 residual 行，这些格仍是 unknown（F101–F105 负责）。
+2. 矩阵仍有 18 unknown，阶段未结束。
