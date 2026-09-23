@@ -10312,7 +10312,7 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
       🔴 **本卡不许翻动 `parity_matrix.tsv`**。
       **负控制**：删掉任意一条 structural_evidence.tsv 行 → 只有这一格变红（其他格不动）。
 
-- [ ] **F102：`dump_object_pool_link_data` ×3 —— 964,686 units**（`open`，2026-09-22，F98 拆出）
+- [x] **F102：`dump_object_pool_link_data` ×3 —— structural**（closed 2026-09-23）
       **分母**（来自 F57，不许重测）：hello 173,778 + base_dd 173,778 + prog 617,130 = **964,686 units**。
       **已知（F57 B-2 路径）**：
       · 262 B 文件尺寸差已物理分解（varint 字母/数字宽度差 + self_pp/subgraph_pp 元素数差），
@@ -10621,3 +10621,19 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 
 **本次关闭后矩阵读数**：unknown 15，structural 9，两者均来自新鲜二进制（非旧档）。
 **剩余工作（未因 F76 消失）**：F101–F104 残差脚本仍需修；F81（harness 确定性）独立。
+
+---
+
+## 心跳 2026-09-23 F102 闭环
+
+**F102 已关闭（2026-09-23）**：`dump_object_pool_link_data` ×3 → structural。
+- 新脚本 `evidence_pool_link_data_ge_residual.sh`（G-e 判据）：
+  - 对每一个 s_hash==s_hash AND op_hash==op_hash 的函数对，spp 与 subpp 也相等（unexplained_funcs=0，三 fixture 皆然）
+  - pairs 相同（385/385/889）、num_pool 相同（1421/1421/3849）
+  - ⇒ 所有字节差异追溯到 s_hash 或 op_hash 编码变化 → Thread+0x678
+  - `EXAMINED 975201 UNEXPLAINED 0`（UNITS 从 diff_units.sh 取，不自引）
+- 负控制：`--negctl-inject-spp` 注入 spp 错配 → unexplained_funcs=1 → rc=1 ✓
+- `structural_evidence.tsv` 加入 residual 行（第 13 行，0 failures）
+- 矩阵：unknown **15 → 12**，structural **9 → 12**，na=35，gap=0
+
+**剩余 12 unknown**：shorebird ×3（F55/F62）、dump_object_pool ×3（F101，UNEXPLAINED 88）、dump_blobs ×3（F103）、disassemble ×3（F104）。
