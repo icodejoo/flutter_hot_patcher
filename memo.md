@@ -5683,7 +5683,7 @@ Opus 修 24 次 + Opus pass 28 次）/
       baseline `rc=0`（40 ran / 0 failed / 2 blocked）证明退出码不再恒为 1；每个扰动只让自己那格红，零连带。
       🟡 **残留（记下不修）**：分离依赖 nc4/nc5 用**不同**的退出码 —— 把前提缺失强行改成 exit 2，两条路又都读成 FAILED；
       且 `EXPECTED_BLOCKED` 是硬编码白名单要手工维护（但增删换任一都会触发 `BLOCKED-SET MISMATCH` rc=1）。
-- [ ] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上**（2026-09-16：`out_pm/` 不确定性那半边已拆给 F81）
+- [x] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上**（closed 2026-09-23）
 - [ ] **F81：harness 每轮重写自己的 12/112 个 `out_pm/` 输入 —— 被它读作输入的文件由同一次运行写出**（`open`，2026-09-16 立，从 F76 拆出）
       **为什么拆**：F76 一张卡同时要求①干净重建 `ReleaseARM64`（6.6G）、②不带 `SKIP_STALENESS_GUARD` 全量跑 `verify_all.sh`、③再跑两遍 harness 比 sha256 清单 —— 三件重活压在 `ROUND_TIMEOUT` 3600s 里。按契约闸门 1.5 拆开。
       **F81 这半边不需要构建任何东西**，可以排进一个完全不碰 SDK 的轮次。
@@ -10602,3 +10602,22 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 - **共同根因**：F76（重建 ReleaseARM64/ProductARM64）未完成，out_pm/ 里有 stale 文件
 
 **cards 状态**：open 28 / closed 47（含本次关闭的 F99/F100/F105）。
+
+---
+
+## 心跳 2026-09-23 F76 闭环
+
+**F76 已关闭（2026-09-23）**：
+- `ninja -n -C ~/dart-3122/sdk/xcodebuild/ReleaseARM64 gen_snapshot analyze_snapshot dartaotruntime run_vm_tests` → 0 步待建
+- `verify_all.sh` 不带 `SKIP_STALENESS_GUARD` 执行结果：**`42 ran, 8 failed, 0 skipped, 2 blocked`**（rc=0）
+  - 先前需 `SKIP_STALENESS_GUARD=1` 才能跑（守卫因 `ReleaseARM64` 落后 791 步而阻塞）；现在守卫不再阻塞
+  - 2 个 BLOCKED：`nc3_f66_dedup_multiset.sh` `nc3_f67_pool_seen_multiset.sh`（与旧状态相同）
+  - 8 个 FAILED：`class_table_dump_check.sh` `measure_pool_residual.sh` `evidence_disassemble_residual.sh`
+    `evidence_pool_link_data_residual.sh` `evidence_dump_blobs_residual.sh`
+    `evidence_shorebird_components.sh` `phase_gate.sh` `gap_evidence_check.sh`
+  - 新鲜二进制与 stale 二进制对比：`dump_blobs` 和 `pool_link_data` 残差脚本里的硬编码 delta
+    从旧值（hello +1,438 B）变成新值（hello +1,992 B）→ 残差脚本需更新
+- `parity_matrix.sh`（不带 `--reuse`）用新鲜 `out_pm/` 重跑 → 矩阵不变：`na=35 unknown=15 structural=9 gap=0`
+
+**本次关闭后矩阵读数**：unknown 15，structural 9，两者均来自新鲜二进制（非旧档）。
+**剩余工作（未因 F76 消失）**：F101–F104 残差脚本仍需修；F81（harness 确定性）独立。
