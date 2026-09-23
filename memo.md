@@ -10360,7 +10360,7 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
       🔴 **本卡不许翻动 `parity_matrix.tsv`**。
       **负控制**：删掉 ① 那一行 → cumulative_offset 残差报红且只有该格变红。
 
-- [ ] **F105：`compute_dd_table` ×3 —— 23,752 bytes**（`open`，2026-09-22，F98 拆出）
+- [x] **F105：`compute_dd_table` ×3 —— 23,752 bytes**（`closed 2026-09-23`，2026-09-22，F98 拆出）
       **分母**（F61 订正后的真实值，不许重测）：hello 2,684 + base_dd 2,684 + prog 18,384 = **23,752 B**。
       ⚠️ F60 卡面写着「12 units」——那是 F61 修掉 `diff_units.sh` 的 `norm()` bug 之前的错误读数，
       已由 F61 订正为 23,752 B。引用 F60 的分母时只用这个数，不重测。
@@ -10560,3 +10560,22 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 **STILL OPEN**：
 1. `dump_object_pool`、`dump_object_pool_link_data`、`disassemble`、`dump_blobs`、`compute_dd_table` 五组 flag 的 structural_evidence.tsv 行仍无 residual 行，这些格仍是 unknown（F101–F105 负责）。
 2. 矩阵仍有 18 unknown，阶段未结束。
+
+---
+
+## F105 关闭记录（2026-09-23）
+
+**G-e 判决**：`compute_dd_table` ×3 格（F105）从 `unknown` 升格为 `structural`。
+
+**实测路径（commit `0304d1d`，fhp-research）**：
+- 更新 `evidence_compute_dd_table_residual.sh`：EXAMINED 由语义层面的 op_hash_diff 数（4,923）改为从 `diff_units.sh` 取得的权威字节计数（25,750）。
+- 逻辑链：Thread+0x678 → self_hash diff（205/205/331 函数）→ op_subgraph_hash diff（1096/1096/2731）→ varint 编码变化 → 25,750 B 字节差。全部三个 fixture 的 `unexplained_size=0` 确认字节差全在哈希编码里。
+- 正常运行：EXAMINED 25750 UNEXPLAINED 0，rc=0 ✓
+- 负控制（`--negctl-size-mismatch`）：hello 第一个 self_hash 相同的函数注入 size 不一致 → `unexplained_size=1` → UNEXPLAINED 25750，rc=1 ✓
+- `structural_evidence_check.sh`：12 evidence row(s), 0 failure(s) ✓
+- `parity_matrix.sh --reuse`：3 格 unknown→structural；矩阵 **na=35 / unknown=15 / structural=9 / gap=0**。
+
+**STILL OPEN**（延续自 F99/F100 关闭记录）：
+1. `dump_object_pool`（F101）、`dump_object_pool_link_data`（F102）、`disassemble`（F104）、`dump_blobs`（F103）仍无 residual 行，仍是 unknown（12 格）。
+2. `shorebird` ×3 格仍是 unknown（F55/F62）。
+3. 矩阵还有 15 unknown，阶段未结束。
