@@ -280,6 +280,23 @@ def strip_meta(line):
     return TOKEN_LIST.sub("", line)
 
 
+def blank_meta(text):
+    """strip_meta, but OFFSET-PRESERVING: the run is blanked, not deleted.
+
+    green_ids() needs to know WHERE a green verdict sits in the raw text so it
+    can bind it to the nearest card id. strip_meta() shifts every offset after
+    the first removal, so a verdict's position in the stripped text is not its
+    position in the text the ids were found in. Replacing each character with a
+    space keeps both questions answerable from one set of coordinates.
+
+    Equivalent to strip_meta for the only thing either is asked -- whether
+    POS_VERDICT/RED_VERDICT still match -- because the tokens are gone either
+    way and both patterns treat the gap as `\\s*`, which is what a deletion
+    leaves behind too.
+    """
+    return TOKEN_LIST.sub(lambda m: " " * len(m.group(0)), text)
+
+
 # A structured positive verdict:
 # - Explicit VERDICT keyword: `VERDICT: SURVIVES`
 # - 判决: `证伪 pass 判决：F41 SURVIVES`
@@ -368,7 +385,102 @@ def reply_polarity(text):
     """
     if RED_VERDICT.search(text):
         return -1
-    return 1 if POS_VERDICT.search(strip_meta(text)) else 0
+    return 1 if POS_VERDICT.search(blank_meta(text)) else 0
+
+
+def id_spans(text, known=None):
+    """[(start, end, id)] for every card id occurrence, in text coordinates.
+
+    The same filter ids_on() applies -- the card table, plus the PARK_IDS
+    exemption -- so that "which ids are in this reply" and "where are they"
+    can never disagree about what counts as an id.
+    """
+    out = []
+    for m in ID.finditer(text):
+        cid = m.group(1)
+        if known is not None and cid not in known and cid not in PARK_IDS:
+            continue
+        out.append((m.start(1), m.end(1), cid))
+    return out
+
+
+# How far a card id may sit from a green verdict and still be read as the thing
+# that verdict is ABOUT. Not a limit on the search -- the nearest id wins at any
+# distance -- but a limit on the CLAIM: past this, the binding is asserted to be
+# too weak to drain on, and the entry holds. 2000 characters is about the length
+# of a whole corpus reply, i.e. deliberately generous; the rule that does the
+# work below is nearest-and-unambiguous, not this number.
+GREEN_BIND_WINDOW = 2000
+
+
+def green_ids(text, known=None):
+    """The ids a reply states a GREEN verdict ABOUT -- per id, not per reply.
+
+    F112 (iii). Until 2026-09-24 this did not exist: scan() computed ONE
+    polarity for the whole reply with reply_polarity() and then applied it to
+    every id ids_on() found anywhere in that reply, with nothing joining the
+    two. Measured on the card's own text --
+
+        "F46 ... VERDICT: SURVIVES (fix) / I did NOT test F52. F52 is still
+         broken and needs its own pass."
+
+    -- reply_polarity was +1 and ids_on was [F46, F52], so a reply that says in
+    so many words that F52 was not tested drained F52. Instrument defect 43 in
+    CLAUDE.md is this shape stated generally: a property computed over a whole
+    object, then applied to every object it contains.
+
+    The binding rule is ADJACENCY, and the two alternatives were rejected for
+    reasons already recorded in this file:
+
+      - "the id must be on the verdict LINE" -- probe P20's comment measured
+        this and rejected it: real verdict lines carry no id at all
+        ("VERDICT: FALSIFIED (model: Opus)"), so the rule drains nothing and a
+        gate that cannot drain is the wallpaper failure the docstring describes.
+      - "look for a disclaimer near the id" (did not test / still broken) --
+        that is vocabulary matching, and instrument defect 44 is exactly this:
+        an instrument that tests shape instead of semantics, which a rephrasing
+        walks straight past. "I skipped F52" carries none of those words.
+
+    So: each structured green verdict binds to the NEAREST id occurrence in the
+    reply, at any distance up to GREEN_BIND_WINDOW. Ids the verdict is not
+    nearest to are not greenlit by it -- they can still be greenlit by a second
+    verdict of their own, which is what a reply that really did test two cards
+    writes. A tie between two DIFFERENT ids greenlights neither: the reply is
+    then ambiguous about which card it settled, and the asymmetry this whole
+    file is built on (a false drain costs an unreviewed fix nobody looks at
+    again; a false hold costs one dispatch) says ambiguity holds.
+
+    A red verdict anywhere still disqualifies the entire reply, unchanged: that
+    is the conservative direction and narrowing it to a per-id question would
+    be the same mistake pointed the other way.
+    """
+    if RED_VERDICT.search(text):
+        return set()
+    spans = id_spans(text, known)
+    if not spans:
+        return set()
+    out = set()
+    for m in POS_VERDICT.finditer(blank_meta(text)):
+        vs, ve = m.start(), m.end()
+        best = {}
+        for s, e, cid in spans:
+            if e <= vs:
+                d = vs - e
+            elif s >= ve:
+                d = s - ve
+            else:
+                d = 0
+            if cid not in best or d < best[cid]:
+                best[cid] = d
+        if not best:
+            continue
+        lo = min(best.values())
+        if lo > GREEN_BIND_WINDOW:
+            continue
+        winners = [c for c, d in best.items() if d == lo]
+        if len(winners) == 1:
+            out.add(winners[0])
+    return out
 
 
 class RepliesUnavailable(Exception):
@@ -530,13 +642,18 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     # rebuild the bar this change is removing.
     named, greenlit = {}, {}
     for rid, text in replies:
-        pol = reply_polarity(text)
         here = set()
         for line in text.splitlines():
             here |= ids_on(line, known)
+        # F112 (iii). This used to be `pol = reply_polarity(text)` followed by
+        # `if pol > 0` inside the loop over `here` -- ONE verdict for the whole
+        # reply, applied to every id the reply happened to mention. green_ids()
+        # asks the question per id instead. Intersected with `here` so the two
+        # readings cannot disagree about what is an id.
+        green = green_ids(text, known) & here
         for x in here:
             named.setdefault(x, set()).add(rid)
-            if pol > 0:
+            if x in green:
                 greenlit.setdefault(x, set()).add(rid)
 
     # `agents` is deliberately no longer consulted by either bar. It is still
@@ -1826,21 +1943,65 @@ def self_test():
                 and "re-run the pass" in out and ids == ["F46"]), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
 
-    # P20. The ESCAPE THIS CHANGE LEAVES OPEN, pinned as a case rather than left
-    #      to be found. `ids_on` runs over the whole reply, so a green pass about
-    #      F46 that mentions F52 in passing lets the round's own F52 `(fix)` line
-    #      drain F52 as well. 7 of the 21 corpus green replies that name a card
-    #      name three or more. Binding the id to the verdict LINE instead was
-    #      measured and rejected: real verdict lines carry no id at all
-    #      ("VERDICT: FALSIFIED (model: Opus)"), so that rule drains nothing.
-    #      If a later change closes this, this case FAILS and must be rewritten
-    #      deliberately -- which is the point of writing it down.
-    @probe("CLI: KNOWN ESCAPE -- a card merely mentioned by a green reply can drain")
+    # P20. WAS the pinned KNOWN ESCAPE; CLOSED 2026-09-24 by F112 (iii), and
+    #      rewritten here deliberately, which the old case's own comment
+    #      demanded of whoever closed it.
+    #
+    #      The escape: `ids_on` ran over the whole reply and reply_polarity()
+    #      over the whole reply too, so a green pass about F46 that mentioned
+    #      F52 in passing let the round's own F52 `(fix)` line drain F52 as
+    #      well. 7 of the 21 corpus green replies that name a card name three or
+    #      more, so this was not hypothetical.
+    #
+    #      The assertion is INVERTED, not deleted: F46 still drains and F52 now
+    #      holds. Both halves matter -- an implementation of green_ids() that
+    #      simply returned set() would satisfy "F52 holds" and is what P17 and
+    #      the drain half of this case exist to reject.
+    @probe("CLI: a card merely MENTIONED by a green reply no longer drains")
     def _p20():
         d = tempfile.mkdtemp(prefix="fq_p20.")
         txt = ("VERDICT: SURVIVES\nATTACK RESULTS:\n1. The F46 fix holds.\n"
                "2. Note this is the same shape as F52, which I did not test.\n"
                "FLAW: none found.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "drain F52" not in out
+                and "RED F52" in out and ids == ["F52"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20a. F112 (iii)'s acceptance criterion, VERBATIM. The card names this
+    #       exact string and the exact outcome it must produce, so it is written
+    #       here as a literal rather than paraphrased into the shape P20 uses --
+    #       a paraphrase is a different input, and this input is the evidence
+    #       the falsification pass actually collected.
+    @probe("CLI: F112(iii) verbatim -- 'I did NOT test F52' holds F52, drains F46")
+    def _p20a():
+        d = tempfile.mkdtemp(prefix="fq_p20a.")
+        txt = ("F46 ... VERDICT: SURVIVES (fix) / I did NOT test F52. "
+               "F52 is still broken and needs its own pass.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "drain F52" not in out
+                and "RED F52" in out and ids == ["F52"] and rc == 1), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20b. The negative control P20/P20a need to mean anything: green_ids() is
+    #       per-ID, not per-REPLY, so a reply that really does state a verdict
+    #       for each of two cards must drain BOTH. Without this, "return set()"
+    #       passes P20 and P20a and the gate silently stops draining, which is
+    #       the wallpaper failure this file's docstring was written about.
+    @probe("CLI: a reply stating a verdict for EACH of two cards drains both")
+    def _p20b():
+        d = tempfile.mkdtemp(prefix="fq_p20b.")
+        txt = ("F46 VERDICT: SURVIVES -- re-ran every control the card names.\n"
+               "F52 VERDICT: SURVIVES -- re-ran every control the card names.\n"
+               "FLAW: none found in either.")
         rc, out, _ = run_cli(
             d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
             memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
