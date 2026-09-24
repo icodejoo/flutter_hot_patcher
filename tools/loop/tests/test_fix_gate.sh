@@ -76,8 +76,11 @@ fi
 #     real one, so the program under test is the live file.
 #   - commits touch a code file: the gate's F89 code_touch filter treats an
 #     empty commit as prose-only.
-#   - round_dispatch_stats / round_dispatch_replies stubs (agent count from $2;
-#     replies left at the gate's own "unavailable" sentinel).
+#   - round_dispatch_stats / round_dispatch_replies stubs. The agent count is
+#     $2. Replies: if the caller sets TEST_REPLY_JSON (JSONL, one
+#     {"id": ..., "text": ...} object per line, read_replies()' format), the
+#     stub writes it into the file the gate hands it; otherwise it is a no-op
+#     and the gate's own "unavailable" sentinel stands.
 #   - the round-start snapshots FIX_QUEUE_BEFORE / CARDS_BEFORE and
 #     FIX_QUEUE_BEFORE_SHA, taken here as run_round.sh's preamble does. A queue
 #     that does not exist yet is an empty queue at round start.
@@ -114,15 +117,26 @@ run_round_gate() {  # $1 memo_added text, $2 agent_calls, $3.. commit subjects
   local qsha
   qsha=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$qb")
   REPO=$REPO_SB memo_rev_before=$mh heads_before=" $tree=$h" STUB_AGENTS=$agents \
+    STUB_REPLIES=${TEST_REPLY_JSON:-} \
     CARDS_TABLE=$WORK/cards.tsv CARDS_BEFORE=$cb \
     FIX_QUEUE=$WORK/queue FIX_QUEUE_BEFORE=$qb FIX_QUEUE_BEFORE_SHA=$qsha \
     bash -c '
       set -uo pipefail
       say() { printf "%s\n" "$*"; }
       round_dispatch_stats() { printf "%s 0 - - test\n" "$STUB_AGENTS"; }
-      round_dispatch_replies() { :; }
+      round_dispatch_replies() {
+        [ -n "$STUB_REPLIES" ] || return 0
+        printf "%s\n" "$STUB_REPLIES" >"$1"
+      }
       source "$1"
       fix_queue_gate' _ "$BLOCK"
+}
+
+# A subagent reply as read_replies() takes it. The text is the shape
+# fix_queue.py's own self-test green() feeds its drain case: a VERDICT line
+# naming SURVIVES, and the card id in the body.
+reply_green() {  # $1 card id
+  python3 -c 'import json, sys; print(json.dumps({"id": "t1", "text": "VERDICT: SURVIVES\nATTACK RESULTS:\n1. Re-ran the %s fix under every shape in the card; all rc=128.\nFLAW: none found." % sys.argv[1]}))' "$1"
 }
 
 expect() {  # $1 label, $2 expected queue ids (space sep, "" for empty), $3 out
@@ -150,7 +164,7 @@ esac
 
 # 2. Negative control for 1: the same round, having reviewed its own fix.
 rm -f "$WORK/queue"
-out=$(run_round_gate '+📋 **F77 pass 1 → PARTIAL**
+out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+📋 **F77 pass 1 → PARTIAL**
 +🟢 F77 修补丁 VERDICT: SURVIVES (fix) -- 负控制 threshold 2 -> exit 1' 2 \
         'F77: fix falsification PARTIAL -- rewrite the residual script')
 expect "reviewed fix is not queued" "" "$out"
@@ -163,7 +177,7 @@ out=$(run_round_gate '+- 2026-09-09T ❤️ **心跳**' 4)
 expect "an idle round holds the queue" "F77" "$out"
 
 # 4. Draining needs the fix marker, a dispatch, and nothing else.
-out=$(run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix) -- 独立代理复现' 1)
+out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix) -- 独立代理复现' 1)
 expect "drains on an explicit fix verdict" "" "$out"
 
 # 5. Negative control for 4: a verdict about the CARD is not a verdict about
