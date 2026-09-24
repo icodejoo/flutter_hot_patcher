@@ -200,16 +200,11 @@ run_round_gate '+📋 **F77 pass 1 → PARTIAL**' 1 'F77: fix it' >/dev/null
 out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+🟢 **证伪 pass 判决：F77 SURVIVES**' 1)
 expect "card-level SURVIVES does not drain the fix" "F77" "$out"
 
-# 6. Negative control for 4: a fix verdict with no subagent behind it. This is
-#    the 15:03 failure, replayed against the new gate.
-#    Deliberately NOT given a green reply. Measured 2026-09-24 on cc1af5f: a
-#    green reply with --agents 0 DRAINS F77, because fix_queue.py scan() no
-#    longer consults `agents` (its comment at "deliberately no longer
-#    consulted"). Whether that is right is an open question for the owner, not
-#    something this test settles by flipping its expectation. As it stands, the
-#    hold here comes from "no reply", not from "0 dispatches".
+# 6. fix_queue.py's drain bars do not consult dispatch/agent count (its ~716-719
+#    comment: "`agents` is deliberately no longer consulted by either bar"), so
+#    this can only test the reply-presence gate; the dispatch-count question is F115.
 out=$(run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix)' 0)
-expect "a verdict with 0 dispatches does not drain" "F77" "$out"
+expect "a reply is required to drain; dispatch count alone does not gate" "F77" "$out"
 
 # 7. The phantom, through the wired path: the round names a card that is not in
 #    the table, in the shape the real corpus produces.
