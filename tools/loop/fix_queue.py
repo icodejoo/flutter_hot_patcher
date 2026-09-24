@@ -669,8 +669,18 @@ def green_ids(text, known=None):
 # F116 contract line: `F<id> VERDICT: ...`, the id token immediately followed
 # by VERDICT, with only list/emphasis punctuation around it. Offsets into
 # blank_meta(text), same coordinates as everything else in green_ids().
+#
+# F118 (C): '>' is deliberately NOT in the leading class. It was, and a reply
+# quoting an earlier round's verdict as a markdown blockquote
+# ("> F52 VERDICT: SURVIVES -- rebuilt and confirmed.") then read as this
+# reply's own contract line: F52 drained on a verdict nobody gave it this
+# round, and the reply's real free-text verdict was ignored (probe P20h).
+# A '>' line is by definition someone else's text. Excluding it here only
+# removes a way to BIND a green; the quoted id is still an id in the free-text
+# path, where it counts as a candidate (so an ambiguous reply holds) and a red
+# verdict inside the quote still disqualifies the reply -- both conservative.
 PER_ID_VERDICT_LINE = re.compile(
-    r"(?m)^[ \t>*_#\-]*(?:\*{1,2}|_{1,2})?([A-Z][0-9]+[a-z]?)(?:\*{1,2}|_{1,2})?"
+    r"(?m)^[ \t*_#\-]*(?:\*{1,2}|_{1,2})?([A-Z][0-9]+[a-z]?)(?:\*{1,2}|_{1,2})?"
     r"[ \t]*[:\-–—]?[ \t]*(?:\*{1,2}|_{1,2})?VERDICT\s*[:：][^\n]*")
 
 # A clause: a run with no sentence/clause terminator. '.' ends a clause only
@@ -2464,6 +2474,40 @@ def self_test():
         ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return ("drain F46" in out and "drain F52" not in out
                 and "RED F52" in out and ids == ["F52"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20h. F118 (C), the F116 item (3) suspicion, REPRODUCED 2026-09-25. A
+    #       reply that quotes an earlier round's per-id verdict as a markdown
+    #       blockquote ("> F52 VERDICT: SURVIVES ...") matched
+    #       PER_ID_VERDICT_LINE, whose leading class allowed '>'. That flipped
+    #       the whole reply into contract mode: the quoted card DRAINED on a
+    #       verdict this reply never gave it (the costly direction), and the
+    #       reply's own free-text verdict about F46 was ignored. Pre-fix,
+    #       green_ids() on the text below returned {"F52"}.
+    #       Both halves are asserted: the quoted card must not drain, AND the
+    #       very same line without the '>' -- a genuine contract line -- must
+    #       still drain it, so the fix cannot pass by disabling the contract.
+    @probe("CLI: F118(C) -- a blockquoted historical 'F<id> VERDICT:' line "
+           "is not a contract line, and the unquoted line still is")
+    def _p20h():
+        own = ("\n\nThis pass re-ran every control; the F46 fix holds.\n"
+               "VERDICT: SURVIVES")
+        quoted = ("Context from the previous round:\n"
+                  "> F52 VERDICT: SURVIVES -- rebuilt and confirmed." + own)
+        k = set(CARDS3)
+        if green_ids(quoted, k) & {"F52"}:
+            return False, "green_ids(quoted)=%r" % (green_ids(quoted, k),)
+        genuine = "F52 VERDICT: SURVIVES -- rebuilt and confirmed."
+        if green_ids(genuine, k) != {"F52"}:
+            return False, "green_ids(genuine)=%r" % (green_ids(genuine, k),)
+        d = tempfile.mkdtemp(prefix="fq_p20h.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", quoted)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F52" not in out and "RED F52" in out
+                and "F52" in ids), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
 
     # ---------------------------------------------------------------- P22-P26
