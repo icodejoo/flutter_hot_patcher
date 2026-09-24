@@ -510,34 +510,165 @@ def green_ids(text, known=None):
     A red verdict anywhere still disqualifies the entire reply, unchanged: that
     is the conservative direction and narrowing it to a per-id question would
     be the same mistake pointed the other way.
+
+    F116 (2026-09-25). The nearest-id rule above was falsified by three
+    natural rephrasings, each of which drained the UNTESTED card:
+
+        (a) "I did not test F52. VERDICT: SURVIVES for F46."
+        (b) "Scope: F46 fix ... Note F52 still broken, not tested.\nVERDICT: SURVIVES"
+        (c) "VERDICT: SURVIVES -- F52's regression was not examined; F46 fix holds"
+
+    Nearest-id is itself a shape rule (instrument defect 44), so the fix is
+    not a smarter distance but a CONTRACT plus a fallback that can only hold:
+
+      1. Per-id block lines (the contract, tools/loop/prompts/falsify.md):
+         a line of the exact shape `F<id> VERDICT: ...` binds that line's
+         verdict to that id and nothing else. If a reply contains ANY such
+         line, only those lines are read; free-text verdicts elsewhere in it
+         bind nothing. P20b is this form.
+      2. Free text naming exactly ONE distinct id: the verdict binds to it if
+         it is within GREEN_BIND_WINDOW, unless that id is disqualified (see
+         3) -- then it holds.
+      3. Free text naming TWO OR MORE distinct ids (the legacy, non-contract
+         form): an id is DISQUALIFIED if any clause it appears in carries
+         disqualifying language (not tested / not examined / still broken /
+         skipped / ...). Exactly one id must survive disqualification, and it
+         must be positively bound -- on a verdict line, or in a clause that
+         says it holds / survives / was fixed / names it after "for". Anything
+         else is ambiguous and drains NOTHING.
+
+    Why (3) is not defect 44 again: vocabulary here can only REMOVE
+    candidates, and the rule drains only when exactly one candidate remains
+    AND that candidate is positively bound. A rephrasing that the vocabulary
+    misses ("I skipped past F52" in a form it does not know) leaves two
+    candidates, which holds both -- the cheap direction. The residual risk is
+    a disqualifier matching the TESTED id while missing the untested one; the
+    positive-binding requirement narrows that, and the contract in (1) is the
+    way out of free-text reading altogether.
     """
     if RED_VERDICT.search(text):
         return set()
     spans = id_spans(text, known)
     if not spans:
         return set()
-    out = set()
-    for m in POS_VERDICT.finditer(blank_meta(text)):
-        vs, ve = m.start(), m.end()
-        best = {}
-        for s, e, cid in spans:
-            if e <= vs:
-                d = vs - e
-            elif s >= ve:
-                d = s - ve
-            else:
-                d = 0
-            if cid not in best or d < best[cid]:
-                best[cid] = d
-        if not best:
+    bt = blank_meta(text)
+
+    # (1) contract: explicit per-id block lines.
+    block = {}
+    for m in PER_ID_VERDICT_LINE.finditer(bt):
+        cid = m.group(1)
+        if known is not None and cid not in known and cid not in PARK_IDS:
             continue
-        lo = min(best.values())
-        if lo > GREEN_BIND_WINDOW:
+        line = m.group(0)
+        block.setdefault(cid, []).append(bool(POS_VERDICT.search(line)))
+    if block:
+        return {c for c, v in block.items() if v and all(v)}
+
+    verdicts = [(m.start(), m.end()) for m in POS_VERDICT.finditer(bt)]
+    if not verdicts:
+        return set()
+
+    def dist(s, e, vs, ve):
+        if e <= vs:
+            return vs - e
+        if s >= ve:
+            return s - ve
+        return 0
+
+    distinct = {cid for _, _, cid in spans}
+    clauses = [(m.start(), m.end()) for m in CLAUSE.finditer(bt)]
+
+    def clause_of(pos):
+        for cs, ce in clauses:
+            if cs <= pos < ce:
+                return bt[cs:ce]
+        return ""
+
+    def line_of(pos):
+        ls = bt.rfind("\n", 0, pos) + 1
+        le = bt.find("\n", pos)
+        return bt[ls:le if le >= 0 else len(bt)]
+
+    # The template's STILL OPEN / COST OF BEING WRONG lines are forward-looking
+    # by construction ("what could yet overturn this"), so a SURVIVES reply
+    # naming its own card there must not disqualify it -- that would stop
+    # every real green reply from draining. An id mentioned ONLY there is
+    # still a candidate, which in (3) means ambiguity, i.e. a hold.
+    disq = set()
+    for s, e, cid in spans:
+        if TEMPLATE_FORWARD_LINE.match(line_of(s)):
             continue
-        winners = [c for c, d in best.items() if d == lo]
-        if len(winners) == 1:
-            out.add(winners[0])
-    return out
+        if DISQUALIFY.search(clause_of(s)):
+            disq.add(cid)
+
+    # (2) a single distinct id: the pre-F116 rule, which is unambiguous about
+    # WHICH card -- but not if the reply disqualifies that very card
+    # ("I skipped F52. VERDICT: SURVIVES").
+    if len(distinct) == 1:
+        cid = next(iter(distinct))
+        if cid in disq:
+            return set()
+        if any(dist(s, e, vs, ve) <= GREEN_BIND_WINDOW
+               for s, e, _ in spans for vs, ve in verdicts):
+            return {cid}
+        return set()
+
+    # (3) several ids in free text: require exactly one non-disqualified,
+    # positively-bound survivor.
+    cand = distinct - disq
+    if len(cand) != 1:
+        return set()
+    c = next(iter(cand))
+    for s, e, cid in spans:
+        if cid != c:
+            continue
+        if not any(dist(s, e, vs, ve) <= GREEN_BIND_WINDOW
+                   for vs, ve in verdicts):
+            continue
+        if POS_VERDICT.search(line_of(s)):
+            return {c}
+        cl = clause_of(s)
+        if POS_BIND.search(cl) or re.search(r"\bfor\s+\**" + re.escape(c)
+                                            + r"(?![0-9A-Za-z_])", cl):
+            return {c}
+    return set()
+
+
+# F116 contract line: `F<id> VERDICT: ...`, the id token immediately followed
+# by VERDICT, with only list/emphasis punctuation around it. Offsets into
+# blank_meta(text), same coordinates as everything else in green_ids().
+PER_ID_VERDICT_LINE = re.compile(
+    r"(?m)^[ \t>*_#\-]*(?:\*{1,2}|_{1,2})?([A-Z][0-9]+[a-z]?)(?:\*{1,2}|_{1,2})?"
+    r"[ \t]*[:\-–—]?[ \t]*(?:\*{1,2}|_{1,2})?VERDICT\s*[:：][^\n]*")
+
+# A clause: a run with no sentence/clause terminator. '.' ends a clause only
+# when followed by whitespace or end of text, so "F46.x" is not split.
+# Deliberately NOT split on ',' -- "the same shape as F52, which I did not
+# test" (probe P20) keeps F52 and its disclaimer in one clause.
+CLAUSE = re.compile(r"(?:[^.;!?\n。；]|\.(?!\s|$))+")
+
+# Language that disqualifies an id in its own clause from being the one a
+# green verdict is about. It only ever REMOVES candidates (see green_ids (3)).
+DISQUALIFY = re.compile(
+    r"(?:\b(?:not|never|didn'?t|did\s+not|haven'?t|have\s+not|wasn'?t|was\s+not"
+    r"|were\s+not|weren'?t|isn'?t|is\s+not)\s+(?:been\s+|yet\s+|actually\s+)?"
+    r"(?:test|examin|check|verif|cover|run|ran|look|review|exercis|re-?run|touch|attack)"
+    r"|\bstill\s+(?:broken|failing|red|owe)"
+    r"|\b(?:untested|unverified|unexamined|unchecked|skipped|skip)\b"
+    r"|\bout\s+of\s+scope\b|\bneeds?\s+its\s+own\s+pass\b"
+    r"|\bnot\s+\**[A-Z][0-9]+[a-z]?\b"
+    r"|未测|未验证|没测|没有测|未核|仍(?:然)?(?:是)?(?:坏|红|未))",
+    re.I)
+
+# The falsify.md template lines whose content is forward-looking by design.
+TEMPLATE_FORWARD_LINE = re.compile(
+    r"[ \t>*_#\-]*(?:STILL\s+OPEN|COST\s+OF\s+BEING\s+WRONG)\s*[:\uff1a]", re.I)
+
+# Positive binding in a clause: the clause says the id holds / survives / was
+# fixed / passed.
+POS_BIND = re.compile(
+    r"\b(?:holds?|held|survives?|survived|fix(?:ed)?|pass(?:es|ed)?|verified"
+    r"|confirmed|green)\b|成立|通过", re.I)
 
 
 class RepliesUnavailable(Exception):
@@ -2190,6 +2321,39 @@ def self_test():
         ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return ("drain F46" in out and "drain F52" in out and ids == []), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20c-P20e. F116, VERBATIM. The three counter-examples the 2026-09-25
+    #       falsification pass of F112 (iii) found, each of which the
+    #       nearest-id rule read backwards (drained the untested F52). Written
+    #       as literals for the same reason P20a is. Each asserts BOTH halves:
+    #       F46 drains AND F52 holds -- "return set()" fails the first half.
+    def _f116_case(prefix, txt):
+        d = tempfile.mkdtemp(prefix=prefix)
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "drain F52" not in out
+                and "RED F52" in out and ids == ["F52"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    @probe("CLI: F116(a) verbatim -- disclaimer BEFORE 'VERDICT: SURVIVES for F46'")
+    def _p20c():
+        return _f116_case("fq_p20c.",
+                          "I did not test F52. VERDICT: SURVIVES for F46.")
+
+    @probe("CLI: F116(b) verbatim -- verdict on its own line, no id nearby")
+    def _p20d():
+        return _f116_case("fq_p20d.",
+                          "Scope: F46 fix ... Note F52 still broken, not tested.\n"
+                          "VERDICT: SURVIVES")
+
+    @probe("CLI: F116(c) verbatim -- disqualified id sits nearer the verdict")
+    def _p20e():
+        return _f116_case("fq_p20e.",
+                          "VERDICT: SURVIVES -- F52's regression was not examined; "
+                          "F46 fix holds")
 
     # ---------------------------------------------------------------- P22-P26
     # F112 (ii), 2026-09-24. Every one of these is a way for the card table to

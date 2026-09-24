@@ -190,6 +190,31 @@ STILL OPEN: <if SURVIVES: the specific test that could yet overturn this>
 COST OF BEING WRONG: <one line: what downstream work rests on this claim>
 ```
 
+🔴 **RULE (F116, 2026-09-25; the example ids below are placeholders, not cards): one reply, more than one card → one `F<id> VERDICT:` line per card.**
+If your reply states a verdict about more than one card id, you MUST write one
+explicit per-id line for each card, in exactly this shape — the card id first,
+immediately followed by `VERDICT:`, nothing else before `VERDICT` on that line:
+
+```
+F<first-id> VERDICT: <SURVIVES or FALSIFIED or PARTIAL> -- <one clause>
+F<second-id> VERDICT: <SURVIVES or FALSIFIED or PARTIAL> -- <one clause>
+```
+
+- One such line per card id; no other line may claim to be a verdict (do not
+  also write a bare `VERDICT: ...` line, and do not write the verdict and
+  the card id apart in prose).
+- A card you did **not** test gets **no** verdict line. Mention it in prose if
+  you must; it will not be drained.
+- Why: `tools/loop/fix_queue.py` `green_ids()` drains a card's fix-queue entry
+  on a green verdict. When a reply names several cards in free text, which card
+  a verdict is *about* cannot be read reliably from its wording — three natural
+  phrasings (a disclaimer about card B placed before a verdict about card A,
+  and two others) drained the untested card. When any `F<id> VERDICT:` line is present, only
+  those lines are read. Free-text multi-card replies are read conservatively
+  and are **held** whenever the binding is ambiguous — so a reply that skips
+  this format costs a re-dispatch.
+- A reply about a single card may keep the plain `VERDICT:` format above.
+
 ## After the verdict — what the dispatcher does with it
 
 A verdict is not the end of the round. The loop is: do it, review it, fix what
