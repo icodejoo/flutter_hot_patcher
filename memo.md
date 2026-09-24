@@ -11505,3 +11505,62 @@ cards.tsv`（F117 行补记实现+证伪历史与 commits 列 `6860ae4`，新增
 `fhp-research` 的 pre-drop hook 挡住没能清掉）——证伪子代理已核实其内容与提交逐字节相同，非
 数据丢失，留作后续清理。SDK 树（`~/dart-3122/sdk`）无改动。**本轮到此结束**，F113 三选一仍待
 owner 决定；F118 是新的、不依赖那个决定的可派发工作。
+
+---
+
+## 2026-09-25 心跳（交互会话，claude-sonnet-5，调度器角色）：F118 part (A) 实现 + 证伪 pass，VERDICT: SURVIVES
+
+按契约读 `docs/LOOP_CONTRACT.md` 后独立核实（不沿用记忆）：`~/dart-3122/sdk` HEAD 仍
+`63716223bde`、本仓库 HEAD 仍 `06199fa`、`fhp-research` HEAD 仍 `b84df2b`——三棵树自上条心跳以来
+均无新提交。`.loop/UNREVIEWED_FIX` 的 F37/F115 两项：无新提交，理由与前几条心跳相同，不重派。
+F49 仍传递阻塞在 F82→F113（owner 三选一未决），不重派。F118（`open`，deps=F117，不依赖 F113
+决定）的三个子问题里，(A)（`green_ids()` 的 liveness 缺陷：任意一张卡读红就让整条回复颗粒无收，
+即使别的卡有规范的逐卡 `F<id> VERDICT:` 行）判据明确、带负控制、且不依赖 (B)(C) 的产品判断，
+本轮可独立推进。
+
+**派实现子代理**（general-purpose，opus，foreground，1 个，本仓库 `v1` 树）：给出 F118(A) 的
+精确缺陷位置（`green_ids()` 顶部 `if RED_VERDICT.search(text): return set()`，在到达
+`PER_ID_VERDICT_LINE` 的 `block` 逻辑之前就短路整条回复）、要求范围严格限定为「让 per-id 契约行
+路径不再被整段红色判决压制，legacy 自由文本路径保持不变」、要求新增自测探针 + 负控制（改前必须
+先复现失败）、明确禁止碰 (B)(C)、禁止碰 memo.md/cards.tsv/研究树/SDK 树。子代理提交
+`9e21a601836ed2b995abc06ba6a945ef653b0c5c`（"F118 (A): stop whole-text RED_VERDICT from
+suppressing per-id contract lines"）：新增探针 `_p20g`，`--self-test` 65/65 → 66/66，零回归；
+自报的负控制（改前 `git show 9e21a60^` 内容复现失败、改后成功）、legacy 路径不变均在报告中给出
+原始命令与输出。遗留：实现子代理留下一个内容与提交逐字节相同的冗余 `stash@{0}`（`stash pop` 被
+本仓库的破坏性操作守卫拦下，改用 `apply`），未删除，非数据丢失。
+
+**派证伪子代理**（general-purpose，opus，foreground，1 个，与实现子代理相互独立、无共享上下文，
+不采信任何自报数字，全部独立重跑）：七项攻击全部执行并独立复核——① 手工只回滚 `RED_VERDICT` 位置
+那部分改动，确认自测恰好只有 `_p20g` 变红，其余 65 个仍绿；额外构造 3 组不同措辞的混合判决输入
+直接调 `green_ids()`，在 HEAD 上全部正确分离（drain SURVIVES / hold RED）。② 独立用
+`git show 9e21a60^:tools/loop/fix_queue.py` 重建改前文件单独跑自测，复现 65/65；HEAD 复现
+66/66——两个数字独立重新推导，与自报一致。③ 额外试了三卡混合（SURVIVES/FALSIFIED/PARTIAL，
+只 drain SURVIVES 一个）、判决行顺序反转（红在前绿在后，仍正确 drain 绿的）、同一 id 两条冲突
+判决行（正确判 hold，因为 `all(v)` 为 False）、提到一个不在 `known` 里的未知 id 不受影响——
+均按预期工作，无一失败。④ 逐个重跑 `_p20`–`_p20f` 六个既有探针（不只看聚合计数），逐条断言语义
+未变。⑤ `git merge-base --is-ancestor 9e21a60 HEAD` 确认 `9e21a60` 就是 HEAD 本身，此后无任何
+提交动过 `green_ids()`/三个正则/自测 harness。⑥ 独立重做负控制（不采信自报数字），结论一致。
+⑦ 试了 markdown 强调格式、小写后缀 id、全红 block（无 SURVIVES）等边界情形，均未发现新缺陷，
+但**找到一个未测试过的潜在缺口**：单行本身同时混有正向词与红色词的情形（例如
+`"F46 VERDICT: SURVIVES (previously FALSIFIED, now fixed)"`）从未被构造和实测，
+`PER_ID_VERDICT_LINE` 的 `[^\n]*` 尾部捕获在这种输入下是否仍正确判定 `block[cid]` 为真，
+是一个开放问题。
+
+**`F118(A) 修补丁 VERDICT: SURVIVES —— 独立重跑负控制（改前 65/65 真实复现失败、改后 66/66 真实
+复现成功）、六个既有探针逐条复核语义未变、三组新构造的混合判决场景全部正确分离，未发现缺陷；
+STILL OPEN：单行内正向词与红色词共存的输入未经测试。`**
+
+**F118 状态**：**(A) 已验证关闭**（`green_ids()` 的 liveness 缺陷已修复且过独立证伪 pass）；
+**(B)（对拍排出率回归测量/正式采纳选项(b)）与 (C)（F116 第③项复现例）仍完全未处理**——按
+契约「只有全部子问题解决才能标整卡 [x]」，`F118` 卡片本身**保持 `open`**，`cards.tsv`
+（`fhp-research` `41a46f3`）已把 (A) 的实现与证伪历史记入该卡第 6/7 列（`commits=9e21a60`），
+未改判整卡状态。`.loop/UNREVIEWED_FIX` 未新增此项——本轮走的是「实现当场配证伪 pass，
+SURVIVES 后直接记账，不入队」路径（契约五之四第 2 档：本轮派了 2 个子代理，判决行含
+`VERDICT`/`SURVIVES` 措辞），不需要 `(fix)` 词。
+
+**本轮 agents=2**（实现 1 + 证伪 1，均 general-purpose/opus/foreground）；改动文件：
+`tools/loop/fix_queue.py`（子代理提交 `9e21a60`，本仓库 `v1` 树）、
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`（`41a46f3`，F118 第
+6/7 列记录 (A) 的历史）、`memo.md`（本节）。`cards_check.sh` 复跑 0 failure（`ok: every row has
+the declared column shape` 等全绿）。SDK 树（`~/dart-3122/sdk`）无改动。**本轮到此结束**——
+F118 的 (B)(C) 与 F113 三选一都是下一轮可挑的工作，F113 仍需 owner 决定。
