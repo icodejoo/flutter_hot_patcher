@@ -546,14 +546,18 @@ def green_ids(text, known=None):
     positive-binding requirement narrows that, and the contract in (1) is the
     way out of free-text reading altogether.
     """
-    if RED_VERDICT.search(text):
-        return set()
     spans = id_spans(text, known)
     if not spans:
         return set()
     bt = blank_meta(text)
 
-    # (1) contract: explicit per-id block lines.
+    # (1) contract: explicit per-id block lines. F118 (A): this path must be
+    # reached even when the reply also contains a RED_VERDICT elsewhere (a
+    # genuine mixed-verdict reply, e.g. "F1 VERDICT: SURVIVES ... / F2
+    # VERDICT: FALSIFIED ..."). The whole-text RED_VERDICT short-circuit
+    # below is a fallback-path gate only; per-id judgment already comes from
+    # each id's own line(s) via block.setdefault(...), so a red line for one
+    # id must not suppress another id's green line.
     block = {}
     for m in PER_ID_VERDICT_LINE.finditer(bt):
         cid = m.group(1)
@@ -563,6 +567,12 @@ def green_ids(text, known=None):
         block.setdefault(cid, []).append(bool(POS_VERDICT.search(line)))
     if block:
         return {c for c, v in block.items() if v and all(v)}
+
+    # (2)/(3) free-text fallback paths: unchanged, a red verdict anywhere in
+    # the reply still disqualifies the whole reply (see reply_polarity()
+    # docstring and the _p20* probes).
+    if RED_VERDICT.search(text):
+        return set()
 
     verdicts = [(m.start(), m.end()) for m in POS_VERDICT.finditer(bt)]
     if not verdicts:
@@ -2432,6 +2442,28 @@ def self_test():
         ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return ("drain F46" not in out and "drain F52" not in out
                 and ids == ["F46", "F52"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20g. F118 (A). The top-of-function RED_VERDICT short-circuit ran
+    #       before the per-id contract-line block was even consulted, so a
+    #       reply using the F116 contract line format CORRECTLY to report a
+    #       genuine MIX -- one card SURVIVES, another card FALSIFIED --
+    #       returned set() for the whole reply, holding the clean, unambiguous
+    #       SURVIVES verdict along with the FALSIFIED one. Repro (pre-fix):
+    #       green_ids() on this exact text returned set(), not {"F46"}.
+    @probe("CLI: F118(A) -- per-id contract lines with a genuine mixed "
+           "verdict drain the SURVIVES id and hold the FALSIFIED id")
+    def _p20g():
+        d = tempfile.mkdtemp(prefix="fq_p20g.")
+        txt = ("F46 VERDICT: SURVIVES -- re-ran every control the card names.\n"
+               "F52 VERDICT: FALSIFIED -- reproduced the bug.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" in out and "drain F52" not in out
+                and "RED F52" in out and ids == ["F52"]), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
 
     # ---------------------------------------------------------------- P22-P26
