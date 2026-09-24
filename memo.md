@@ -10723,7 +10723,7 @@ Opus 子代理去做这个修法并自证，**不是**当场自己动手改（�
 **本轮 agents=1（foreground，claude-opus-5）**；无提交（改动已在临时副本上试过并证明不够，
 未落盘）。cards.tsv 已同步加入 F106 行。
 
-- [ ] **F106：重写 `test_fix_gate.sh` 的沙盒 harness**（`open`，2026-09-24，F49 拆出，deps=F49）
+- [x] **F106：重写 `test_fix_gate.sh` 的沙盒 harness**（`closed`，2026-09-24，F49 拆出，deps=F49）
       判据：①未改动 HEAD 上跑通、8 个行为用例全绿；②`fix_queue.py --self-test` 已有的扰动
       用例通过这个 harness 交叉确认仍会变红；③需要自己的一次新鲜证伪 pass 才能关闭，
       不因 F49 关闭而连带关闭。详情见上一条心跳。
@@ -11182,3 +11182,46 @@ loop 树均无新提交改动被审对象的代码，重新派发只会复现同
 `.loop/UNREVIEWED_FIX` 三项经此轮核验：F37/F106 为真实欠账（保持排队，等待 F107/F108/F109/
 F115 的产品判断落地后再各自过新的证伪 pass）；F115 为假阳性（保持排队但不代表遗留工作，
 根因已记入 F114）。**本轮到此结束。**
+
+---
+
+## 2026-09-24T2xZ 心跳：F106 修补丁补审，`cdbbc18` 的陈旧断言被证伪
+
+调度器读契约后重新核对 `.loop/UNREVIEWED_FIX`。发现上一轮（`cdbbc18`）的结论有误：它写
+「F37、F106 此后 SDK 树与 loop 树均无新提交改动被审对象的代码，重新派发只会复现同一结论」，
+但 `af64dbb`（F106 修复第二轮，改 `test_fix_gate.sh` 用例 6）**发生在证伪 pass 之后**且直接
+改动被审对象——`git log --oneline -- tools/loop/tests/test_fix_gate.sh` 与 F106 自己写的
+memo 记录（「F106 本身仍需要一次新鲜证伪 pass...未覆盖 af64dbb 这次改名」）都证实这一点。
+`cdbbc18` 没有据此关卡任何东西（两张卡仍留 `open`/排队），所以这个陈旧断言没有造成误关，
+但它确实让 `af64dbb` 一直没被审过。
+
+派一个新鲜 general-purpose 子代理（opus，未共享上下文）按 `tools/loop/prompts/falsify.md`
+补审 `df47061`+`af64dbb` 这两个修补丁。
+
+### F106 修补丁证伪 pass（2026-09-24，新鲜 general-purpose 子代理，15 次调用）—— **VERDICT: SURVIVES**
+
+七项攻击：①两次独立 mutation（`FIX_MARKERS` 恒真化、`greenlit` 过滤去掉）分别只打红用例 5
+或用例 6，证明两个用例现在各自守自己的规则，不再共用此前那个无关的「缺回复即硬 HOLD」；
+②`run_round_gate()` 与 `run_round.sh` 真实 `fix_queue_gate()` 的参数/语义逐项比对一致，
+不是脱节的简化桩；③同一份 attack-1 数据同时回答了「原因是否解释了全部差异」；④N/A；
+⑤确认 `af64dbb` 是 `test_fix_gate.sh` 最新的改动且晚于此前那次 PARTIAL pass，**`cdbbc18`
+的「无新提交」断言证伪**（见上）；⑥`fix_queue.py --self-test` 61/0、`test_fix_gate.sh` 8/8
+在 HEAD 上直接重跑确认，非采信卡片自述；⑦用例 6 现在的断言（`agents=0` 且无回复時仍 HOLD）
+与它改名后的标签（「reply-presence gate；dispatch count 是 F115」）一致，没有名实不符。
+
+**STILL OPEN（按协议原文抄入）**：若未来 `fix_queue.py` 的 `named`/`greenlit` 记账逻辑被改动
+（例如改变「什么算作点名了这个 id 的回复」），下一步要重新检查这会不会悄悄把用例 6 的判据
+放宽回旧的混淆状态。
+
+**F106 → `closed`**（cards.tsv 已同步；memo.md `- [x]` 已同步）。`.loop/UNREVIEWED_FIX` 的
+F106 一行留给下一次真实 round 跑 `fix_queue_gate()` 时按判决行自动 drain（本轮不手工编辑该
+文件，按契约执行）。
+
+`F106 修补丁 VERDICT: SURVIVES (fix) —— 两处独立 mutation 分别只打红用例 5/6，证明各自守自己命名的规则；af64dbb 是本次补审的对象，cdbbc18 此前声称的「无新提交」不成立。`
+
+**F37、F115 状态不变**：F37 修补丁上一轮已判 PARTIAL（未 SURVIVES，不许关卡，依旧排队等
+F107/F108/F109）；F115 上一轮已判为假阳性队列行（不代表真实待办，根因见 F114），本轮未重派、
+未发现需要改变该结论的新信息。
+
+**本轮 agents=1（general-purpose，opus，background）**；改动文件：`cards.tsv`（F106 行）、
+`memo.md`（本节 + `- [x]` 同步）。无 SDK/研究树改动。**本轮到此结束。**
