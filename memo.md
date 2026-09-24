@@ -10679,3 +10679,51 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
   （契约五之四）。
 - **`tools/loop/fix_queue.py` 与 `tools/loop/run_round.sh` 均未被本次 pass 修改**
   （子代理只在 `/tmp` 副本上做扰动，`git status --porcelain -- tools/loop/` 干净，本轮独立复核确认）。
+
+---
+
+## 2026-09-24T0xZ 心跳：F49 候选修法证实不够，拆出 F106（新鲜子代理，claude-opus-5，foreground）
+
+**任务**：pass 7（上一条）诊断「`test_fix_gate.sh` 的 sed 抽取锚点被 973/1714 两处同名注释
+`# ---- gate: the fix patches themselves` 撞车，抽取跑过了真正的闸门结束处」，
+并给出候选修法「把结束锚点换成唯一的 `# <<< F82 fix-queue gate >>>`」。本轮派一个新鲜的
+Opus 子代理去做这个修法并自证，**不是**当场自己动手改（调度器角色，契约第一条）。
+
+**结果：候选修法本身不成立，比诊断描述的问题更大。子代理未提交任何改动，工作树干净。**
+
+1. **基线确认**：未改动 HEAD 上 `test_fix_gate.sh` 报 **8 个行为用例失败**（只有 extraction 与
+   ordering 两个检查通过），与 pass 7 的描述一致。
+2. **单改结束锚点不够**：`sed -n '/start/,/end/p'` 遇到范围结束后，若源文件里再次出现
+   `start` 模式，会**重新开一段新范围**——第 1714 行那第二次出现的同一句注释重新起了一段，
+   一路印到 EOF（第 1778 行），块变成 216 行而不是 726 行，但仍然在文件里找不到旧的结束锚点、
+   仍然失败。
+3. **即使精确抽出 973–1135**：那一段只定义了 `fix_queue_gate()` 函数体，**从未调用它**；
+   函数体内部还调用 `round_dispatch_stats()` / `round_dispatch_replies()`，
+   测试用的沙盒 harness（`run_round_gate()`，在 test_fix_gate.sh 里）**没有定义这两个函数**。
+4. **一个独立的真缺口**：`fix_queue.py` 现在要求 `--before "$FIX_QUEUE_BEFORE"`
+   （F82 pass 5/6 加的，见 `tools/loop/fix_queue.py:734` `"fix-queue round-start snapshot
+   not supplied (--before)"`），而 `test_fix_gate.sh` 的沙盒调用从未提供这个参数
+   ⇒ 8 个行为用例**不论怎么改锚点都会红**，因为它们全部先在这一步就报
+   `round-start snapshot not supplied` → `OWED unknown`。
+5. **卡片原文提到的「五处 mutation 用例」在 `test_fix_gate.sh` 里不存在**——那五项负控制
+   实际是 `fix_queue.py --self-test`（51/0，独立确认仍然干净）自己的用例，不是这个文件的。
+   `test_fix_gate.sh` 自己的用例是另一套（8 个），命名不同、断言的东西也不同。
+
+**结论**：这不是「改一行锚点」能收口的修补丁——需要重写 `test_fix_gate.sh` 的
+`run_round_gate()` 沙盒（补上 `round_dispatch_stats`/`round_dispatch_replies` 桩、
+补上 `--before` 快照参数），这本身需要自己的判据与负控制，按契约五之四末段“修复大到需要
+自己的判据时立新卡”处理。**F49 状态不变，仍是 `built`，不许关卡**——本轮没有产出可关的修补丁，
+只有一个更精确的诊断。
+
+**立 F106**（`open`，依赖 F49）：重写 `test_fix_gate.sh` 的沙盒 harness，使它能真正端到端调用
+`fix_queue_gate()`（补桩 + 补 `--before` 快照），判据：①未改动 HEAD 上跑通、8 个行为用例全绿；
+②卡片原诊断里提到的负控制仍要能被验证会变红（用 `fix_queue.py --self-test` 已有的扰动用例
+交叉确认，不是重新发明一套）；③需要自己的新鲜证伪 pass 才能关闭，不因 F49 关闭而连带关闭。
+
+**本轮 agents=1（foreground，claude-opus-5）**；无提交（改动已在临时副本上试过并证明不够，
+未落盘）。cards.tsv 已同步加入 F106 行。
+
+- [ ] **F106：重写 `test_fix_gate.sh` 的沙盒 harness**（`open`，2026-09-24，F49 拆出，deps=F49）
+      判据：①未改动 HEAD 上跑通、8 个行为用例全绿；②`fix_queue.py --self-test` 已有的扰动
+      用例通过这个 harness 交叉确认仍会变红；③需要自己的一次新鲜证伪 pass 才能关闭，
+      不因 F49 关闭而连带关闭。详情见上一条心跳。
