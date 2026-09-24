@@ -201,6 +201,25 @@ export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
 
+# F117. The F116 per-id contract-line rule lived only in
+# tools/loop/prompts/falsify.md, AFTER the fenced ```...``` "Report in exactly
+# this format" block that "## Prompt block (copy from here)" visibly marks as
+# the literal thing to paste -- so a round driver that copies up through the
+# closing fence and stops there (the natural reading of "copy from here" with
+# no matching "copy to here") never relays it to the subagent it dispatches.
+# Measured: replaying green_ids() against this repo's real multi-id green
+# replies drains 304/329 under the pre-F116 rule but only 63/329 under the
+# new, stricter rule -- i.e. real subagent replies mostly do not use the
+# contract-line format, because they were never told to. Inlining the rule
+# here, in the text the round driver itself reads before it constructs any
+# dispatch, does not depend on that copy boundary.
+FALSIFY_CONTRACT_REMINDER='【一回复多卡的格式要求，F116/F117】若一次证伪 pass 的回复要对不止
+一张卡下判决，必须给每张卡各写一行，形状严格为 `F<id> VERDICT: <SURVIVES|FALSIFIED|PARTIAL> -- <一句>`
+（卡号紧跟 VERDICT，同一行不得再出现别的判决词）；只测了一张卡就只写这一张卡的判决行，
+提到但未测的卡不要给它判决行。不遵守这个格式的自由文本判决，
+tools/loop/fix_queue.py 的 green_ids() 现在按规则保守读——多卡自由文本判决默认不出队，
+即使其中一张确实测过，也会白跑一次派发。'
+
 # Closing a card is the one action in a round that cannot be undone by the next
 # round, because a closed card stops being looked at. Everything else -- a bad
 # commit, a wrong number, a dirty tree -- gets revisited. So the reviewer is
@@ -221,6 +240,7 @@ PROMPT="$PROMPT
 - 它报 FALSIFIED 或 PARTIAL：**不许关卡**，把它的结论写进 memo.md 并结束本轮。
 - 它报 SURVIVES：可以关卡，但必须把它那句「STILL OPEN」原文抄进 memo.md。
 不许由做这件事的那个子代理自己跑这一遍，也不许你自己代替它下结论。
+$FALSIFY_CONTRACT_REMINDER
 
 【派发纪律】每个工具结果都会留在上下文里、被之后每一次调用重发一遍，所以成本是
 N×(入场+收尾)/2，不是调用次数。实测（三个子代理）：入场 ~67k，收尾 120-204k，后半段占 6 成。
@@ -284,7 +304,8 @@ if [ "${BUILT_N:-0}" -gt 0 ]; then
 【built 卡欠证伪 pass：$BUILT_N 张】$BUILT_OWED
 「built」不是「closed」：实现完成且自测通过，但没有新鲜代理审过。判据全在宿主上，不需要真机。
 派一个新鲜子代理按 tools/loop/prompts/falsify.md 审其中一张，别自己给自己写判决（F42）。
-优先级：低于 .loop/UNREVIEWED_FIX，SDK 本体的卡排在循环机械之前（规则 0）。"
+优先级：低于 .loop/UNREVIEWED_FIX，SDK 本体的卡排在循环机械之前（规则 0）。
+$FALSIFY_CONTRACT_REMINDER"
 fi
 
 # And after repeated barren rounds, stop asking for the same thing. Pausing
@@ -398,6 +419,8 @@ CLAIM 写成「<id> 的修补丁真的修掉了它自己被报出的那处破绽
     F41 修补丁 VERDICT: SURVIVES (fix) —— <一句实测依据>
 少了 (fix) 的判决是关于卡片的，不是关于修补丁的，队列不会消。
 判决写在 memo.md，轮末由 fix_queue 依据新鲜子代理的 pass 自动出队；不要手工编辑或删除队列文件（无判决凭据删行将在轮末快照比对时报 RED 阻断）。
+若一次派发要一个回复覆盖队列里不止一项，同样按下面这条逐项写一行，否则只有单一候选且被正例词判定命中的那一项能出队，其余一律留队重派。
+$FALSIFY_CONTRACT_REMINDER
 $(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)"
 fi
 

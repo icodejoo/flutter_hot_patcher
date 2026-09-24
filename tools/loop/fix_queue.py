@@ -584,6 +584,12 @@ def green_ids(text, known=None):
                 return bt[cs:ce]
         return ""
 
+    def clause_span(pos):
+        for cs, ce in clauses:
+            if cs <= pos < ce:
+                return cs, ce
+        return pos, pos
+
     def line_of(pos):
         ls = bt.rfind("\n", 0, pos) + 1
         le = bt.find("\n", pos)
@@ -628,8 +634,24 @@ def green_ids(text, known=None):
         if POS_VERDICT.search(line_of(s)):
             return {c}
         cl = clause_of(s)
-        if POS_BIND.search(cl) or re.search(r"\bfor\s+\**" + re.escape(c)
-                                            + r"(?![0-9A-Za-z_])", cl):
+        cs, ce = clause_span(s)
+        # F117: POS_BIND used to be checked against the WHOLE clause, which
+        # made any bare "fix"/"pass" anywhere in a long sentence count as a
+        # claim that THIS id holds -- including a stray noun in an unrelated
+        # scoping caveat. Repro (drained F46, which was never confirmed):
+        #   "F46 was outside the scope of this fix; I could not confirm it.
+        #    F52's regression was not tested, still broken.\nVERDICT: SURVIVES."
+        # F52 is correctly disqualified, leaving F46 the sole candidate; the
+        # old check then found "fix" anywhere in F46's clause and drained it,
+        # though "fix" there describes something else five words away, not a
+        # claim that F46 itself holds. The word must instead sit ADJACENT to
+        # the id -- at most one filler word between them, either direction --
+        # to read as a claim ABOUT the id rather than a coincidence sharing
+        # its clause.
+        if (_bind_adjacent(bt[cs:s], after=False)
+                or _bind_adjacent(bt[e:ce], after=True)
+                or re.search(r"\bfor\s+\**" + re.escape(c)
+                             + r"(?![0-9A-Za-z_])", cl)):
             return {c}
     return set()
 
@@ -664,11 +686,43 @@ DISQUALIFY = re.compile(
 TEMPLATE_FORWARD_LINE = re.compile(
     r"[ \t>*_#\-]*(?:STILL\s+OPEN|COST\s+OF\s+BEING\s+WRONG)\s*[:\uff1a]", re.I)
 
-# Positive binding in a clause: the clause says the id holds / survives / was
-# fixed / passed.
+# Positive binding word: says an id holds / survives / was fixed / passed.
+# F117: used to be matched against a whole CLAUSE, which let a bare "fix" or
+# "pass" anywhere in a long sentence count as a claim about an id merely
+# sharing that clause. green_ids() (3) now requires this word to be one of
+# the id's immediate neighbour TOKENS (see _bind_adjacent below), not just
+# clause-mates, so a five-words-away noun in an unrelated scoping caveat
+# ("F46 was outside the scope of this fix") no longer counts as a claim that
+# F46 itself holds.
 POS_BIND = re.compile(
     r"\b(?:holds?|held|survives?|survived|fix(?:ed)?|pass(?:es|ed)?|verified"
     r"|confirmed|green)\b|成立|通过", re.I)
+
+# A single word/token, Latin or CJK, for the adjacency check in
+# _bind_adjacent(). Splits "fix" out of "fix;" or "'s" possessives without
+# needing to special-case punctuation.
+_BIND_TOKEN = re.compile(r"[A-Za-z]+|[一-鿿]+")
+
+# How many of the nearest tokens on one side of an id may be examined for a
+# POS_BIND word: the id's own neighbour, or one filler word further out
+# ("F46 still holds", "F46's fix"). Two, not "the rest of the clause" -- see
+# POS_BIND's comment for why unbounded clause-wide matching was the bug.
+_BIND_ADJACENCY_TOKENS = 2
+
+
+def _bind_adjacent(text, after):
+    """True if a POS_BIND word sits within the id's immediate neighbourhood.
+
+    `text` is the clause-bounded run directly before (after=False) or after
+    (after=True) the id span -- NOT the whole clause. Only the first/last
+    _BIND_ADJACENCY_TOKENS tokens of that run are considered, so a bind word
+    that is merely clause-mates with the id, several words away, does not
+    count; see green_ids (3)'s comment for the repro this fixes.
+    """
+    toks = _BIND_TOKEN.findall(text)
+    toks = toks[-_BIND_ADJACENCY_TOKENS:] if not after \
+        else toks[:_BIND_ADJACENCY_TOKENS]
+    return any(POS_BIND.fullmatch(t) for t in toks)
 
 
 class RepliesUnavailable(Exception):
@@ -2354,6 +2408,31 @@ def self_test():
         return _f116_case("fq_p20e.",
                           "VERDICT: SURVIVES -- F52's regression was not examined; "
                           "F46 fix holds")
+
+    # P20f. F117. POS_BIND used to match a bare "fix"/"pass" ANYWHERE in the
+    #       sole candidate's clause, not just next to the id. F52 here IS
+    #       correctly disqualified ("was not tested, still broken"), which
+    #       leaves F46 the only candidate -- but F46's own clause never
+    #       claims F46 holds, only that it "could not confirm it"; the "fix"
+    #       five words earlier describes something else ("the scope of this
+    #       fix"), not F46. Before the fix this drained F46 anyway, because
+    #       the old check searched the WHOLE clause for the word. Neither id
+    #       should drain: F46 has no positive claim, F52 is disqualified.
+    @probe("CLI: F117 -- a stray 'fix' word 5 words from an id, in an "
+           "otherwise-unconfirmed clause, does not drain it")
+    def _p20f():
+        d = tempfile.mkdtemp(prefix="fq_p20f.")
+        txt = ("F46 was outside the scope of this fix; I could not confirm it.\n"
+               "F52's regression was not tested, still broken.\n"
+               "VERDICT: SURVIVES.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F46" not in out and "drain F52" not in out
+                and ids == ["F46", "F52"]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
 
     # ---------------------------------------------------------------- P22-P26
     # F112 (ii), 2026-09-24. Every one of these is a way for the card table to
