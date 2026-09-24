@@ -27,9 +27,21 @@ note() { printf '%-4s %s\n' "$1" "$2"; [ "$1" = FAIL ] && fail=$((fail + 1)); re
 
 # ---- extract ---------------------------------------------------------------
 BLOCK=$WORK/block.sh
-sed -n '/^# ---- gate: the fix patches themselves/,/^if \[ "\$(fingerprint)" = "\$idle_before" \]; then$/p' \
-  "$SRC" | sed '$d' >"$BLOCK"
-if ! grep -q 'fix_queue.py' "$BLOCK"; then
+# F106: bracket markers, both unique in $SRC. The old start anchor ("# ---- gate:
+# the fix patches themselves") recurs further down the file, and a sed range
+# reopened on it ran ~780 lines to an unrelated end anchor. Each marker must
+# occur exactly once or the extraction is refused.
+START_MARK='# >>> F82 fix-queue gate <<<'
+END_MARK='# <<< F82 fix-queue gate >>>'
+for m in "$START_MARK" "$END_MARK"; do
+  n=$(grep -cxF -- "$m" "$SRC")
+  if [ "$n" -ne 1 ]; then
+    note FAIL "extraction: marker '$m' occurs $n time(s) in $SRC, want exactly 1"
+    exit 1
+  fi
+done
+sed -n "/^${START_MARK}\$/,/^${END_MARK}\$/p" "$SRC" >"$BLOCK"
+if ! grep -q '^fix_queue_gate() {' "$BLOCK" || ! grep -q 'fix_queue.py' "$BLOCK"; then
   note FAIL "extraction: no fix_queue.py call found in the extracted block"
   echo "  the markers in $SRC moved; fix the sed range in this file" >&2
   exit 1
@@ -55,23 +67,62 @@ fi
 # One round = one invocation. $memo_added / $agent_calls are what the round
 # produced; the trees are real git repos because the block reads them with
 # git log, and a stub would not catch a wrong revision range.
+#
+# F106: the extracted block only DEFINES fix_queue_gate(); this harness calls
+# it, and supplies what the real function reads from the rest of run_round.sh:
+#   - REPO: a sandbox git repo whose memo.md diff (memo_rev_before..HEAD) holds
+#     the round's memo lines -- the gate reads memo lines from git, not from an
+#     env var -- with tools/loop/fix_queue.py symlinked (not copied) to the
+#     real one, so the program under test is the live file.
+#   - commits touch a code file: the gate's F89 code_touch filter treats an
+#     empty commit as prose-only.
+#   - round_dispatch_stats / round_dispatch_replies stubs (agent count from $2;
+#     replies left at the gate's own "unavailable" sentinel).
+#   - the round-start snapshots FIX_QUEUE_BEFORE / CARDS_BEFORE and
+#     FIX_QUEUE_BEFORE_SHA, taken here as run_round.sh's preamble does. A queue
+#     that does not exist yet is an empty queue at round start.
+REPO_SB=$WORK/repo
+mkdir -p "$REPO_SB/tools/loop"
+ln -s "$ROOT/tools/loop/fix_queue.py" "$REPO_SB/tools/loop/fix_queue.py"
 run_round_gate() {  # $1 memo_added text, $2 agent_calls, $3.. commit subjects
   local memo=$1 agents=$2; shift 2
   local tree=$WORK/tree
+  local G="-c user.email=t@t -c user.name=t"
   rm -rf "$tree"; mkdir -p "$tree"
   git -C "$tree" init -q 2>/dev/null
-  git -C "$tree" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+  git -C "$tree" $G commit -q --allow-empty -m base
   local h; h=$(git -C "$tree" rev-parse HEAD)
-  local s
+  local s i=0
   for s in "$@"; do
-    git -C "$tree" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "$s"
+    i=$((i + 1)); printf '%s\n' "$i" >>"$tree/fix.sh"
+    git -C "$tree" add fix.sh
+    git -C "$tree" $G commit -q -m "$s"
   done
+  rm -rf "$REPO_SB/.git" "$REPO_SB/memo.md"
+  git -C "$REPO_SB" init -q 2>/dev/null
+  : >"$REPO_SB/memo.md"
+  git -C "$REPO_SB" add memo.md
+  git -C "$REPO_SB" $G commit -q -m base
+  local mh; mh=$(git -C "$REPO_SB" rev-parse HEAD)
+  printf '%s\n' "$memo" | sed 's/^+//' >"$REPO_SB/memo.md"
+  git -C "$REPO_SB" add memo.md
+  git -C "$REPO_SB" $G commit -q -m round
   printf '# test table\nF77\tbuilt\t-\t-\tc\tn\t-\n' >"$WORK/cards.tsv"
-  REPO=$ROOT heads_before=" $tree=$h" memo_added=$memo agent_calls=$agents \
-    FHP_LOOP_CARDS=$WORK/cards.tsv RESEARCH=$WORK \
-    FIX_QUEUE=$WORK/queue bash -c '
+  local qb=$WORK/queue.before cb=$WORK/cards.before
+  if [ -e "$WORK/queue" ]; then cp "$WORK/queue" "$qb"; else : >"$qb"; fi
+  cp "$WORK/cards.tsv" "$cb"
+  local qsha
+  qsha=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$qb")
+  REPO=$REPO_SB memo_rev_before=$mh heads_before=" $tree=$h" STUB_AGENTS=$agents \
+    CARDS_TABLE=$WORK/cards.tsv CARDS_BEFORE=$cb \
+    FIX_QUEUE=$WORK/queue FIX_QUEUE_BEFORE=$qb FIX_QUEUE_BEFORE_SHA=$qsha \
+    bash -c '
+      set -uo pipefail
       say() { printf "%s\n" "$*"; }
-      source "$1"' _ "$BLOCK"
+      round_dispatch_stats() { printf "%s 0 - - test\n" "$STUB_AGENTS"; }
+      round_dispatch_replies() { :; }
+      source "$1"
+      fix_queue_gate' _ "$BLOCK"
 }
 
 expect() {  # $1 label, $2 expected queue ids (space sep, "" for empty), $3 out
