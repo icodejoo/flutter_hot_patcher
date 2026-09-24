@@ -11133,3 +11133,52 @@ dispatch/agent 数，只校验回复是否存在；需要产品判断——(a) �
       「0-agent 但有回复」的 mutation 补闸门前报红、补闸门后转绿。任一收口都需要自己的新鲜证伪 pass。
 
 **本轮到此结束**（一轮一事，F106 未关，未派发新的证伪 pass——留给下一轮）。
+
+---
+
+## 2026-09-24T2xZ 心跳：`.loop/UNREVIEWED_FIX` 三项复核，F115 判 FALSE-POSITIVE
+
+调度器读契约后锁定 `.loop/UNREVIEWED_FIX`（F37、F106、F115 三项欠账）。
+
+**F37、F106：不重复派发。** 两者的"修补丁证伪 pass"均已在本会话更早处完成并记录
+（F37 见 2026-09-24 晚间"F37 修补丁证伪 pass"，VERDICT: PARTIAL，24 次调用；F106 见
+2026-09-24T2xZ"F106 实现 → 证伪 → 修复两处发现"，VERDICT: PARTIAL）。此后 SDK 树与
+loop 树均无新提交改动被审对象的代码，重新派发只会复现同一结论，不产出新信息。两项
+**正确地**保持排队（判据未到 SURVIVES，不因此算作循环缺陷）。
+
+**F115：派一个新鲜 opus 子代理（read-only 调查，无共享上下文）核实。VERDICT: FALSE-POSITIVE。**
+
+队列行：`F115 2026-09-24 21:00 fix commit(s) 2753607 97330b7 af64dbb; no pass on the fix`。
+
+子代理证据：
+1. `cards.tsv` F115 行（第 116 行）状态仍是 `open`——**从未被实现**；判据要求的是一次
+   产品判断（要不要补 `agents>=1` 闸门），尚未做出。
+2. `git log --all -- tools/loop/fix_queue.py` 最后一次改动是 `d8f1bb7`（F112(ii)，
+   09-24 16:00），**早于 F115 卡片本身诞生**（`97330b7`/`af64dbb`，20:47）；
+   `git log --all -S'agents >= 1' -- tools/loop/fix_queue.py` 只命中更早的 F82 时代提交。
+   **没有任何提交实现过 F115 的判据。**
+3. `2753607`：只改 `memo.md`，+112 行，标题是「F106 fix reviewed (PARTIAL) ... F115 split
+   out」——记录的是 F106 的证伪结果与 F115 卡片的诞生，**不修任何东西**。
+4. `97330b7`：只改 `cards.tsv`，+1 行——单纯新建卡片。
+5. `af64dbb`：只改 `tools/loop/tests/test_fix_gate.sh`，重命名 F106 用例 6 的注释/标签为
+   「reply-presence gate; dispatch count is F115」，断言未变，**`fix_queue.py` 完全未被
+   触碰**——这是 F106 的一次改名，不是 F115 的修补。
+6. `fix_queue.py` 的入队规则（docstring 17-26 行）：`neg(X)` = 本轮新增的 memo 行或提交标题
+   同时含 X 与 `FALSIFIED|PARTIAL`；`fix(X)` = 本轮提交标题含 X。`2753607` 的标题同时含
+   `PARTIAL`（关于 F106）与 `F115` ⇒ 单独满足 `neg(F115)`；`af64dbb` 的标题含 `F115`
+   且改了非文档文件 ⇒ 满足 `fix(F115)`。子代理在内存里独立重放了 `scan()` 的匹配逻辑，
+   确认这两行**仅凭字符串命中**就会把 F115 判成"被证伪又被修"，而 F115 从未收到过针对
+   它自己的任何判决——PARTIAL 那句话说的是 F106。
+
+⇒ **这是 `F114`（`open`，"fix-queue 的提交侧同款未绑定问题"）已记录缺陷类型的一次真实复现**：
+整句判定 + 整行 ID 提取，不问 ID 与判决的语义是否相关。`F115` 队列行不代表任何真实欠账，
+它对应的"F115 本身该不该被落地"仍是 `F115` 卡片自己未解决的产品判断，与这条队列记录无关。
+
+**按本轮指令不手工编辑/删除 `.loop/UNREVIEWED_FIX`**——F115 这一行会继续被重复报出
+（`hold` 状态，无法自动 drain，因为没有也不应该有针对它的伪造 `SURVIVES (fix)` 判决），
+这是已知代价，由 `F114` 的修复来解决，不在本轮范围内造假绕过。
+
+**本轮 agents=1（background, opus, read-only, general-purpose）；无提交。**
+`.loop/UNREVIEWED_FIX` 三项经此轮核验：F37/F106 为真实欠账（保持排队，等待 F107/F108/F109/
+F115 的产品判断落地后再各自过新的证伪 pass）；F115 为假阳性（保持排队但不代表遗留工作，
+根因已记入 F114）。**本轮到此结束。**
