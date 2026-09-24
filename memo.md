@@ -10637,3 +10637,45 @@ is wired (F98 already flags 21 'unknown' matrix cells as still unstarted, unrela
 - 矩阵：unknown **15 → 12**，structural **9 → 12**，na=35，gap=0
 
 **剩余 12 unknown**：shorebird ×3（F55/F62）、dump_object_pool ×3（F101，UNEXPLAINED 88）、dump_blobs ×3（F103）、disassemble ×3（F104）。
+
+---
+
+## 2026-09-24T02:2xZ 心跳 F49 pass 7 → PARTIAL（新鲜子代理，claude-sonnet-5，run_in_background）
+
+📋 **F49 pass 7 → VERDICT: PARTIAL**（本轮唯一任务，按 `tools/loop/prompts/falsify.md` 派发，
+未审自己写的东西；范围限定在 F49 自己的负控制——五处 `fix_queue.py` mutation + 「未打补丁的
+`run_round.sh` 抽块」——不重打已拆出去的 F82 那条证据收集链）。
+**卡片状态不变，仍是 `built`，不许关卡。**
+
+- **①-③⑥ SURVIVES**：`fix_queue.py --self-test` 干净副本 51/0；五处卡片指定的 mutation
+  （去掉 `(fix)`、去掉 dispatch 门槛、去掉 fix 要求、放宽 id 正则、让队列自过期）逐一施加，
+  全部在 `/tmp` 副本上变红（13/2/3/5/15 failures），且第 ④ 项初次踩了一个诱饵——
+  `agents >= 2` 那条 mutation 第一次打中的是 line 40 一个已废弃的自报计数，不是 line 547
+  真正承重的 `len(named...) >= 2`；改准之后守卫本身是好的。
+- **⑤⑦ FALSIFIED（本卡新缺陷）**：卡片自己写的负控制第二半——
+  「从**未打补丁**的 `run_round.sh` 抽出闸门代码块，这条控制也必须变红」——
+  **这个前提本身不成立**：`bash tools/loop/tests/test_fix_gate.sh` 在**完全未改动的 HEAD**
+  上直接跑就是 **8/~18 failed**（本轮独立复核确认，非转述）。
+  **成因（已用 `grep -n` 独立核实）**：`# ---- gate: fix patches` 这行注释头在
+  `run_round.sh` 里出现了两次（**973 行与 1714 行**），`sed` 抽取用这行当锚点，
+  抽到的「块」横跨 ~761 行，混进了不相关的代码，调用了在测试桩环境里根本没定义的
+  `fingerprint()` / `round_dispatch_stats()` / `round_dispatch_replies()` / `built_cards()`，
+  `$STATE` 未设置导致 `mktemp` 试图写字面路径 `/round.XXXXXX`。
+  真正的闸门在 973–1134 行，**结束处有 `# <<< F82 fix-queue gate >>>` 显式标记**，
+  抽取脚本从未用过这个结束锚点。
+  ⇒ **一个「本该在扰动时变红」的负控制，在零扰动时就已经是红的** —— 这是本项目历来记录的
+  「假绿」仪器缺陷的镜像：一个**假红**同样不能用来分辨「真的回归」和「噪声」，
+  因为它不扰动就已经报红。
+- **结论**：`fix_queue.py` 这一层（卡片核心逻辑）是好的、五个 mutation 全部命中；
+  但卡片明文要求的另一半负控制（`run_round.sh` 抽取测试）**在当前 HEAD 上已经失效**，
+  没有任何通过的测试在验证「闸门真的接线在活的 `run_round.sh` 里」。
+  **代价**：如果未来有人改坏 973–1134 行那个真闸门，`test_fix_gate.sh` 今天已经是红的，
+  不会给出任何新信号——改坏了也测不出来。
+- **未做修复**：按当前会话的显式指令（PARTIAL/FALSIFIED ⇒ 不许关卡、记录后结束本轮），
+  本轮不去改 `tools/loop/tests/test_fix_gate.sh` 的抽取锚点。**下一轮的候选修法**：
+  把抽取的开始/结束锚点换成 973 行的具体锚字符串 + 1134 行的 `# <<< F82 fix-queue gate >>>`
+  结束标记（唯一，不会撞见 1714 行那次重复），抽完后先在**未改动**HEAD 上确认变绿，
+  再重新走一遍五个 mutation 确认仍然变红，然后这个修补丁本身还欠一次新的证伪 pass
+  （契约五之四）。
+- **`tools/loop/fix_queue.py` 与 `tools/loop/run_round.sh` 均未被本次 pass 修改**
+  （子代理只在 `/tmp` 副本上做扰动，`git status --porcelain -- tools/loop/` 干净，本轮独立复核确认）。
