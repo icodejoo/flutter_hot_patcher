@@ -10727,3 +10727,76 @@ Opus 子代理去做这个修法并自证，**不是**当场自己动手改（�
       判据：①未改动 HEAD 上跑通、8 个行为用例全绿；②`fix_queue.py --self-test` 已有的扰动
       用例通过这个 harness 交叉确认仍会变红；③需要自己的一次新鲜证伪 pass 才能关闭，
       不因 F49 关闭而连带关闭。详情见上一条心跳。
+
+---
+
+## 2026-09-24T11:39 心跳：本轮开始（调度器已读 LOOP_CONTRACT，cards_check rc=0，UNREVIEWED_FIX 空）
+
+
+## 2026-09-24 本轮：F37 正式落地（A3 + A1），已派发
+
+- 契约已读（`docs/LOOP_CONTRACT.md` 全文）；`cards_check.sh` rc=0（open 27 / closed 49）；
+  `.loop/UNREVIEWED_FIX` **为空**（上一轮 F49 pass 7 判 PARTIAL，已拆出 F106，无欠账入队）；
+  `.loop/PAUSE` 不存在。
+- 锁定 memo 顺序第一项未完成任务 = **F37**（`open`，dep `F80` 已 closed）。规则 0 正面工作，
+  且解锁 `unknown` 里的 F101/F103 共 6 格。
+- **闸门 1.5（能不能装进一轮）实测，不靠估计**：`~/dart-3122/sdk` HEAD `003f2759a68`，
+  `git status --porcelain` 0 行；`ninja -n -C xcodebuild/ProductARM64 gen_snapshot` = **4 步**，
+  `ninja -n -C xcodebuild/ReleaseARM64` = **0 步** ⇒ 构建那一半已被 F80/F76 钉住，
+  本卡只需增量构建（F80 实测 569s 热）。⇒ **不拆，直接落地。**
+- 派发：一个新鲜 general-purpose 子代理（Opus，前台单写方），执行卡里已 scoping 过的
+  **A3（Thread 缓存 `CallBootstrapNative` stub 入口，只许追加在结构末尾）+ A1（`NativeCallPattern`
+  解码 shape A，并把 `set_target()` 对这些站点改为 no-op，绕开 `object.h:5773-5777` 的
+  类型标签断言）**，再重开 `il_arm64.cc:1313` 的发射。
+  判据照抄卡片：`dd_runtime_check.sh` 绿 + `measure_dd_emission.sh` 92==92 +
+  `verify_reproduction.sh` 不回归；负控制 padding 3→2 必须变红。
+  已明确要求：每步提交、禁止 `git add -A`、禁止 push、不许打印产物正文。
+
+### F37 落地交付（2026-09-24，新鲜 general-purpose 子代理，106 次调用，STATUS: DONE）—— ⚠️ 尚未过证伪 pass，卡片仍是 `- [ ]`
+
+三个提交（`~/dart-3122/sdk`，我已独立核过 `git log` 与 `git status --porcelain` 0 行）：
+`531c5356dda` A3（Thread 缓存三个 native trampoline stub 入口）·
+`edce6e25b77` A1（`NativeCallPattern` 学会 shape A）·
+`63716223bde` 重开 shape-A 发射。
+改动文件：`runtime/vm/thread.{h,cc}` · `runtime/vm/instructions_arm64.{h,cc}` ·
+`runtime/vm/compiler/backend/il_arm64.cc`。**`code_patcher_arm64.cc` 与 `native_entry.cc` 未被改动。**
+
+**它自报的判据读数**：`dd_runtime_check.sh` rc=0 `0 failure(s)`（自称非陈旧读数：
+CPU instructions 长度 286196 → 286564）· `measure_dd_emission.sh` ours 92 == theirs 92 ·
+`verify_reproduction.sh` rc=0（28 artifacts / 14 stubs，**但见下面的限定**）·
+`run_vm_tests` ProductARM64 151 选中 151 过。
+**负控制两条都实测变红**：(a) 字面 3→2 让 `gen_snapshot` 直接 abort（`assembler_arm64.cc:1258`
+static_assert），太早、够不到逐字节比对；(b) 因此补了一条仍能构建的形状扰动（asr 移位 1→2），
+`measure_dd_emission` ours 92→**0**、`dd_runtime_check` 四个用例全 `runtime exited 134 CRASH`
+⇒ 两个判据在同一次扰动上同时变红，**互相不是恒等式**。两条控制均已还原、重建、树干净。
+
+**它推翻了 scoping 文档的一条核心提议（这是本次最承重的发现）**：
+`set_target()` 改 no-op **是错的**——`LinkNativeCall` 并不总是打进 `CallBootstrapNative`，
+它经 `ResolveNativeFunction` 在 bootstrap / no-scope / auto-scope 三者中挑。no-op 会让所有
+非 bootstrap 的 native **静默走进 bootstrap wrapper**。⇒ 这正是 Shorebird 的 `Thread` 在
+`0x908/0x910/0x918` 有**三个**相邻字段而不是一个的原因：shape A 重链接的办法是改写
+「那个 Smi 立即数指的是 Thread 的哪个字段」，走 `kImmediate` 槽上的 `SetRawValueAt`
+—— 于是 `object.h:5773-5777` 的类型标签断言问题**自行消失**，不需要动 `code_patcher_arm64.cc`
+或 `native_entry.cc` 的契约。实测活体证据：临时插桩跑 `out_ddrun/no_mapping.so`
+打出 `off=3928` ×7（bootstrap）与 `off=3944` ×1（auto-scope），插桩已还原重建。
+
+**A3 的实测约束**：不能放进 `CACHED_VM_STUBS_ADDRESSES_LIST`——那些成员声明在 `Thread` 中部，
+追加会移动后面的偏移，而 `CheckOffsets()` 拿它们去对**不可重新生成**的
+`runtime_offsets_extracted.h`。字段最终落在 Shorebird 块尾部，`InitVMConstants` 里写一次；
+发射端读 `dart::Thread::` 偏移，带一条 `RELEASE_ASSERT`（`exit_through_ffi_offset()`，
+沿用 `stub_code_compiler_arm64.cc:855` 的 `is_simulating_` 先例）。
+
+🔴 **它自报的四条 STILL BROKEN（原样抄录，全部是证伪 pass 的靶子）**：
+1. `verify_reproduction.sh` **在本机是 BLOCKED（rc=2）**，缺 `~/fvm/versions/3.44.6/.../dartaotruntime`
+   （本机只有 3.47.2），**先于 F37 存在、与 F37 无关**。它是**在一份把 `STOCK=` 指向
+   ProductARM64 工具 shim 的副本上跑的**。它给的惰性论证：7 个 `out_verify/*.dill` 已存在、
+   那是脚本唯一用到 `$STOCK` 的地方、dill 的 mtime 指纹前后逐字节相同（`6237e1ee0f2f…`）。
+   ⇒ **这条「绿」是替换过判据之后的读数，必须被独立核。**
+2. `xcodebuild/ReleaseARM64` **从 0 步变成 814 步陈旧**（我独立复测 bare `ninja -n` 为 **1979**），
+   由它改的 `thread.h` / `instructions_arm64.h` 引起，**未重建**。⇒ 一切读 Release 二进制的检查
+   （`verify_all.sh` 的 `run_vm_tests`、`dd_pass_check`、`shorebird_info_check` 等）**现在都是陈旧的**，
+   这正是 CLAUDE.md 记的「继承的绿」。F76 刚把 Release 建新鲜，本卡又把它打回去了。
+3. `set_target()` 的 `call_no_scope_native_entry_point_` 那一臂**写了但从未观测到执行**
+   （插桩里没出现 offset 3936）。bootstrap 与 auto-scope 已确认，no-scope **没有**。
+4. `LinkNativeCall` 里 `#if defined(DEBUG)` 的一致性读（`native_entry.cc:293-303`）
+   **按构造满足**，但 ProductARM64 是 `NDEBUG` ⇒ **从未被编译、从未被运行**。
