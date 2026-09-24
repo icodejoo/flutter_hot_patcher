@@ -81,7 +81,12 @@ PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
 # same reading as the three real forgeries on record. Whether that is a property
 # of the model or of that one round is NOT established; one round is one sample.
 # If `round dispatch: 0 subagent(s)` shows up again now, that is the second.
-MODEL=${FHP_LOOP_MODEL:-claude-sonnet-5}
+#
+# 2026-09-24: changed to Opus 5 by operator instruction, extending the same
+# 2026-09-24 falsify.md subagent-model instruction to the driver itself. The
+# 2026-09-15 Sonnet choice and its rationale above are not retracted as
+# history, just superseded as the current setting.
+MODEL=${FHP_LOOP_MODEL:-claude-opus-5}
 
 # Effort was never set at all, so every round so far ran at the CLI default
 # (measured 2026-09-15: no --effort in the invocation, no effort key in any
