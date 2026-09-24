@@ -1189,8 +1189,24 @@ memo_rev_before=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo none)
 # card id. Recorded as tree=sha pairs -- and with `=`, not `:`, after a
 # colon-delimited argument lost its separator in transit to the finisher and
 # made it skip every tree while exiting 0.
+#
+# F112 (i): the SAME FOUR TREES fingerprint() walks, and that is the fix. This
+# list was "$SDK" "$RESEARCH" "$REPO" while fingerprint() twenty lines up read
+# those three plus $LOOP_TOOLS, so the two answers to "what did this round do"
+# disagreed about a whole repository. Everything the gate knows about commits
+# comes from here -- g_subjects and g_code_touch both iterate $heads_before --
+# so a fix committed to ~/Documents/loop satisfied `fix(X)` nowhere, nothing was
+# enqueued, and the round settled at OWED 0. Not hypothetical: that tree's
+# recent subjects are literally `Fix what the pass found: ...`, and finisher.py,
+# which this loop's own machinery lives in, is in it.
+#
+# Kept as a literal list rather than factored into a shared variable because
+# fingerprint() is a function and this is top-level, but the two are now
+# byte-identical and a change to either without the other is the defect
+# returning. tools/loop/tests/test_tree_lists.sh compares them and is the thing
+# that notices if they drift apart again.
 heads_before=""
-for t in "$SDK" "$RESEARCH" "$REPO"; do
+for t in "$SDK" "$RESEARCH" "$REPO" "$LOOP_TOOLS"; do
   heads_before="$heads_before $t=$(git -C "$t" rev-parse HEAD 2>/dev/null || echo none)"
 done
 
