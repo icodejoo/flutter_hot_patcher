@@ -32,8 +32,14 @@ that could still overturn the claim.
 
 ### Which model
 
-**Default to Opus or Sonnet. Haiku only for a single, fully specified,
-purely mechanical dispatch** — "run this command, report its exit code and the
+**2026-09-24, operator instruction: every subagent dispatch uses Opus. No
+Haiku, no Sonnet, no task-shape exception below.** The table and the
+reasoning under it are kept as the record of why Sonnet/Haiku were ever
+considered acceptable for some shapes of pass; they no longer govern the
+choice. If this is ever revisited, change this line, not the table.
+
+~~Default to Opus or Sonnet. Haiku only for a single, fully specified,
+purely mechanical dispatch~~ — "run this command, report its exit code and the
 diff" — where there is nothing left to judge.
 
 This is not a guess about capability; both have run passes here and the record
