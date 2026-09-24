@@ -79,8 +79,13 @@ fi
 #   - round_dispatch_stats / round_dispatch_replies stubs. The agent count is
 #     $2. Replies: if the caller sets TEST_REPLY_JSON (JSONL, one
 #     {"id": ..., "text": ...} object per line, read_replies()' format), the
-#     stub writes it into the file the gate hands it; otherwise it is a no-op
-#     and the gate's own "unavailable" sentinel stands.
+#     stub writes it into the file the gate hands it; otherwise it truncates
+#     that file to empty, which is what the real extractor writes when it found
+#     the transcript and it held no qualifying reply. It used to be a no-op,
+#     which left the gate's "unavailable" sentinel in place, so every case
+#     without a reply ran down fix_queue.py's "could not read this round's
+#     replies" RED path -- and a hold there says nothing about the rule a case
+#     is named for.
 #   - the round-start snapshots FIX_QUEUE_BEFORE / CARDS_BEFORE and
 #     FIX_QUEUE_BEFORE_SHA, taken here as run_round.sh's preamble does. A queue
 #     that does not exist yet is an empty queue at round start.
@@ -125,8 +130,11 @@ run_round_gate() {  # $1 memo_added text, $2 agent_calls, $3.. commit subjects
       say() { printf "%s\n" "$*"; }
       round_dispatch_stats() { printf "%s 0 - - test\n" "$STUB_AGENTS"; }
       round_dispatch_replies() {
-        [ -n "$STUB_REPLIES" ] || return 0
-        printf "%s\n" "$STUB_REPLIES" >"$1"
+        if [ -n "$STUB_REPLIES" ]; then
+          printf "%s\n" "$STUB_REPLIES" >"$1"
+        else
+          : >"$1"
+        fi
       }
       source "$1"
       fix_queue_gate' _ "$BLOCK"
@@ -183,13 +191,23 @@ expect "drains on an explicit fix verdict" "" "$out"
 # 5. Negative control for 4: a verdict about the CARD is not a verdict about
 #    the patch. Two constructions, one token -- the confusion that voided this
 #    project's largest claimed gap on 2026-09-09.
+#    The subagent reply is green, so the only thing between drain and hold is
+#    the missing fix marker on the memo line. Without the reply the entry held
+#    anyway (no evidence), and deleting the FIX_MARKERS check in fix_queue.py
+#    left this case green.
 rm -f "$WORK/queue"
 run_round_gate '+📋 **F77 pass 1 → PARTIAL**' 1 'F77: fix it' >/dev/null
-out=$(run_round_gate '+🟢 **证伪 pass 判决：F77 SURVIVES**' 1)
+out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+🟢 **证伪 pass 判决：F77 SURVIVES**' 1)
 expect "card-level SURVIVES does not drain the fix" "F77" "$out"
 
 # 6. Negative control for 4: a fix verdict with no subagent behind it. This is
 #    the 15:03 failure, replayed against the new gate.
+#    Deliberately NOT given a green reply. Measured 2026-09-24 on cc1af5f: a
+#    green reply with --agents 0 DRAINS F77, because fix_queue.py scan() no
+#    longer consults `agents` (its comment at "deliberately no longer
+#    consulted"). Whether that is right is an open question for the owner, not
+#    something this test settles by flipping its expectation. As it stands, the
+#    hold here comes from "no reply", not from "0 dispatches".
 out=$(run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix)' 0)
 expect "a verdict with 0 dispatches does not drain" "F77" "$out"
 
