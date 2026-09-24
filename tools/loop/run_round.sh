@@ -347,6 +347,20 @@ say_once() {
 # both of them print nothing.
 FIX_QUEUE=$STATE/UNREVIEWED_FIX
 FIX_QUEUE_BEFORE=$STATE/UNREVIEWED_FIX.before
+# F112 (ii). The card table the gate filters ids against, named ONCE so that the
+# round-start copy below and the --cards argument in fix_queue_gate cannot drift
+# apart -- a snapshot of a different file than the one being checked would be a
+# comparison that always agrees, which is instrument defect 10's shape.
+#
+# It lives in the fhp-research worktree, and finisher.py stashes that worktree
+# at the bottom of this file (:1584) BEFORE the gate runs (:1742). Verified on
+# the live tree: `git -C ~/Documents/fhp-research stash show --name-only
+# stash@{0}` was exactly spikes/shorebird_linkinfo_oracle/cards.tsv. So the gate
+# can be handed the PRE-round revision of the table, in which a card the round
+# added is simply absent -- and an absent id used to mean "not a card", so the
+# fix for it was never enqueued and the round settled at OWED 0.
+CARDS_TABLE=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
+CARDS_BEFORE=$STATE/CARDS.before
 # Only the PATHS are set here. The snapshot itself is taken further down, after
 # the lock -- see "round-start snapshot" below.
 #
@@ -728,6 +742,18 @@ if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
 fi
 FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
+# F112 (ii): the card table as it stood when this round started. Taken here,
+# beside the queue snapshot and for the same reason -- the gate needs a second
+# source for "which ids are cards", because the one it reads at round end can
+# have been stashed out from under it by the finisher.
+#
+# The fallback writes the same sentinel the queue snapshot uses rather than
+# leaving an empty file: an empty table reads as "no ids were cards at round
+# start", which makes the comparison vacuous in exactly the permissive
+# direction. fix_queue.py reddens on the sentinel.
+if ! cp "$CARDS_TABLE" "$CARDS_BEFORE" 2>/dev/null; then
+  printf '#SNAPSHOT-FAILED\n' >"$CARDS_BEFORE" 2>/dev/null || true
+fi
 FQ_GATE_RAN=0
 # Counted here so that "a card was closed this round" is a fact rather than a
 # claim in the round's own report. The gate rule is in the prompt, but a rule in
@@ -1043,7 +1069,11 @@ fix_queue_gate() {
   # produced "V2" from PATCHED_V2 (332 occurrences) and "B8" from state(B8).
   # If the table is named and unreadable, fix_queue.py refuses to enqueue and
   # prints a WARNING rather than filling the queue with phantoms.
-  g_cards=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
+  #
+  # F112 (ii): both halves come from CARDS_TABLE/CARDS_BEFORE, set together at
+  # the top of this file, so the table being checked and the table it is
+  # compared against can never be two different paths.
+  g_cards=$CARDS_TABLE
 
   fq_memo=$(mktemp 2>/dev/null) || fq_memo=
   fq_commits=$(mktemp 2>/dev/null) || fq_commits=
@@ -1079,12 +1109,13 @@ fix_queue_gate() {
       ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
       --replies "$fq_replies" --code-touch "$fq_code_touch" \
-      --cards "$g_cards" 2>&1)
+      --cards "$g_cards" --cards-before "$CARDS_BEFORE" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
-  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" "$FIX_QUEUE_BEFORE"
+  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" \
+        "$FIX_QUEUE_BEFORE" "$CARDS_BEFORE"
   FQ_GATE_RAN=1
 
   # ---- how much is owed, from two sources that can disagree ----------------

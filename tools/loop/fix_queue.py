@@ -239,17 +239,74 @@ def ids_on(line, known=None):
     return (found & known) | (found & PARK_IDS)
 
 
+class CardsUnavailable(Exception):
+    """The card table could not be ESTABLISHED.
+
+    F112 (ii). Until 2026-09-24 known_ids() returned None for this and for
+    "no table was named", and the caller turned both into one WARNING and then
+    settled the round at a number anyway. Three states were collapsed into one
+    permissive answer:
+
+        table named but missing     -> None -> WARNING, then OWED 0
+        table named but empty       -> None -> WARNING, then OWED 0  (`out or None`)
+        table named but unreadable  -> PermissionError, no OWED line at all
+
+    and the consequence in every case is the same: ids_on() filters against a
+    table that is not there, so an id the round really did fix reads as "not a
+    card", the enqueue is skipped, and the round settles at OWED 0 with the id
+    never named. Same family as QueueUnreadable and RepliesUnavailable, and
+    raised rather than returned for the same reason -- so that no caller can
+    treat it as "the table says this id is not a card" by omission.
+    """
+
+
 def known_ids(path):
-    """Card ids from cards.tsv, or None if it cannot be read."""
-    if not path or not os.path.exists(path):
+    """Card ids from cards.tsv. None means NO TABLE WAS NAMED.
+
+    Raises CardsUnavailable when a table WAS named and could not be
+    established. Those two answers used to be the same value.
+    """
+    if not path:
         return None
+    if not os.path.exists(path):
+        raise CardsUnavailable("%s does not exist" % path)
+    if not os.path.isfile(path):
+        raise CardsUnavailable("%s is not a regular file" % path)
+    try:
+        raw = io.open(path, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        # Was an unhandled PermissionError: the process died with a traceback,
+        # printed no OWED line, and exited 1 -- which is the code this program
+        # uses for "settled, and something went red".
+        raise CardsUnavailable(str(e))
+    # Checked on the RAW text, not on the parsed ids: the sentinel is a comment
+    # line and the parser skips comments, so a sentinel-only file would
+    # otherwise arrive here as an ordinary empty table and be reported with the
+    # wrong cause.
+    #
+    # A WHOLE LINE, not a substring, and this was measured rather than reasoned
+    # about. `SNAPSHOT_FAILED in raw` was the first version, and running it
+    # against the real table -- not a fixture -- returned CardsUnavailable
+    # immediately: cards.tsv contains the sentinel inside a card's own prose
+    # ("...an unreadable snapshot and a #SNAPSHOT-FAILED sentinel are both
+    # RED..."), because the cards describe this machinery. That version would
+    # have pinned the live loop at OWED unknown on every round, forever, which
+    # is the wallpaper failure and not a gate. run_round.sh writes the sentinel
+    # with `printf '#SNAPSHOT-FAILED\\n'` as the whole file, so a line test is
+    # what the producer actually produces.
+    if any(l.strip() == SNAPSHOT_FAILED for l in raw.splitlines()):
+        raise CardsUnavailable(
+            "%s carries the %s sentinel -- it was never taken"
+            % (path, SNAPSHOT_FAILED))
     out = set()
-    with io.open(path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            if line.startswith("#") or not line.strip():
-                continue
-            out.add(line.split("\t", 1)[0].strip())
-    return out or None
+    for line in raw.splitlines():
+        if line.startswith("#") or not line.strip():
+            continue
+        out.add(line.split("\t", 1)[0].strip())
+    out.discard("")
+    if not out:
+        raise CardsUnavailable("%s holds no card ids" % path)
+    return out
 
 
 # A slash-joined run of verdict tokens is usually documentation about verdicts
@@ -764,9 +821,54 @@ def parked(rows, now, reason):
     return out
 
 
+def cards_gap_reason(cards_path, known, before_path):
+    """Why this round's card table cannot be trusted, or None.
+
+    F112 (ii), the half known_ids() cannot answer on its own. The production
+    instance the card recorded is a table that is present, readable and full of
+    real ids -- and still wrong, because it is the PRE-round revision:
+    cards.tsv lives in the fhp-research worktree, finisher.py stashes that
+    worktree at run_round.sh:1584, and the gate runs at :1742. Verified on the
+    live tree: `git -C ~/Documents/fhp-research stash show --name-only
+    stash@{0}` is exactly spikes/shorebird_linkinfo_oracle/cards.tsv.
+
+    A stash can only take the round's additions back out, so the signature is
+    that the table SHRANK during the round. That it never shrinks for any other
+    reason is measured, not assumed: over the 185 revisions of cards.tsv in
+    fhp-research the id set grew 43 times and shrank 0 times
+    (`git log --format=%H --reverse -- spikes/shorebird_linkinfo_oracle/cards.tsv`,
+    comparing the id-shaped first column of consecutive revisions; the one
+    apparent shrink is three quoted `"#` header lines, not cards).
+
+    The snapshot is MANDATORY when a table is named, for the reason --before is:
+    an input the caller simply did not pass must not read as "the condition was
+    not met, quietly". That sentence is in update()'s own docstring about
+    `else: before_rows = rows`, and this is the same shape one file over.
+    """
+    if not cards_path:
+        return None
+    try:
+        before_known = known_ids(before_path)
+    except CardsUnavailable as e:
+        return "the round-start card table could not be established (%s)" % e
+    if before_known is None:
+        return ("no round-start card table snapshot was supplied "
+                "(--cards-before), so a table that lost rows during the round "
+                "-- which is what the finisher stashing cards.tsv looks like -- "
+                "cannot be told from a table that never listed them")
+    lost = sorted(before_known - (known or set()))
+    if lost:
+        return ("the card table lost %d id(s) during this round (%s) -- it is "
+                "not the table this round started with, so an id missing from "
+                "it is not evidence that the id is not a card"
+                % (len(lost), " ".join(lost[:8])
+                   + (" ..." if len(lost) > 8 else "")))
+    return None
+
+
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
-           replies_path=None, code_touch=None):
+           replies_path=None, code_touch=None, cards_gap=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -810,6 +912,20 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "-- nothing on disk now records what this round owed" % e)
             return actions, None, False
         return actions, new_rows, False
+
+    # F112 (ii). FIRST, because every id-shaped decision below runs through
+    # ids_on(..., known) and a table that cannot be trusted makes all of them
+    # meaningless in the silent direction: the id is dropped, the enqueue never
+    # happens, and the round settles at OWED 0 without ever naming it. The old
+    # handling disabled enqueue and settled anyway, which is the same answer
+    # with a WARNING in front of it.
+    if cards_gap:
+        return refuse(
+            "card table unusable (%s); which ids are cards is unknown" % cards_gap,
+            "fix-queue cannot establish this round's card table -- %s. Every "
+            "id-shaped decision filters against that table, so an id missing "
+            "from it cannot be read as 'not a card'; the round is NOT settled"
+            % cards_gap)
 
     # The queue file itself. Unreadable is not empty: that is the entire subject
     # of this card, and it was still true one layer out at run_round.sh:1351 on
@@ -911,6 +1027,36 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         memo_lines, subjects, agents, known, replies, code_touch)
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
+
+    # F112 (ii), the half the shrink check cannot reach. If the table was
+    # ALREADY the stashed revision when the round started -- the finisher
+    # stashed it at the end of round N and nobody popped it, so round N+1 both
+    # starts and ends without those rows -- then nothing shrank and the
+    # comparison above is silent. The gate genuinely cannot tell, at that
+    # point, whether the id is not a card or the table is behind.
+    #
+    # What it CAN do is stop being silent, which is the word the card uses:
+    # "reads as OWED 0 SILENTLY rather than a STATED unknown". So the ids the
+    # round's own evidence would have enqueued, and that only the table filter
+    # removed, are named.
+    #
+    # Named and NOT refused, deliberately. Unfiltered, this set really does
+    # contain prose: attack 4's replay over 120 commits yielded V2 out of
+    # PATCHED_V2 and B8 out of state(B8), and a refusal on those would pin owed
+    # at unknown for rounds at a time -- the wallpaper failure this file's
+    # docstring is about. A named line costs a reader one glance and cannot be
+    # mistaken for "nothing was owed".
+    if known is not None:
+        wide_neg, wide_fix, _, _, _ = scan(
+            memo_lines, subjects, agents, None, replies, code_touch)
+        dropped = sorted((wide_neg & wide_fix) - (neg & fix))
+        if dropped:
+            actions.append(
+                "note-unlisted %s -- look like a fix after a red verdict but "
+                "are not in the card table, so nothing was enqueued for them. "
+                "Either they are prose and the filter is working, or the table "
+                "is behind this round: if the finisher stashed cards.tsv, pop "
+                "it and re-run the gate." % " ".join(dropped))
 
     if replies_gap:
         actions.append(
@@ -1352,7 +1498,13 @@ def self_test():
         ["state(B8): PATCHED_V2 verified on device after the PARTIAL verdict"],
         ["024d48e fhp state(B8): PATCHED_V2 second round complete"],
         1,
-        [],
+        # F112 (ii): the drop is now NAMED. Still no enqueue -- the queue stays
+        # empty, which is the thing this case is named for -- but the filter no
+        # longer removes a token without saying which. This is the honest cost
+        # of that: a `note-unlisted B8` on a round where the filter was right.
+        # It is a line in the log, not an entry in the queue, and the
+        # alternative is the silence F112 (ii) was filed about.
+        ["note-unlisted B8"],
         [],
         {"F38", "F49"},
     )
@@ -1387,7 +1539,12 @@ def self_test():
         ["F99 pass 1 → PARTIAL"],
         ["deadbee fhp F99: fix the thing"],
         1,
-        [],
+        # F112 (ii). This case is the defect's own shape: an id-shaped token
+        # the table does not list. "Not a card" and "the table is behind this
+        # round" produce identical inputs here, so the only honest outcome is
+        # to enqueue nothing AND say which token was dropped. The queue is
+        # still empty -- that half is unchanged and is what the case asserts.
+        ["note-unlisted F99"],
         [],
         {"F38", "F39", "F41", "F49"},
     )
@@ -1426,12 +1583,19 @@ def self_test():
 
     cli_cases = [
         (
-            "CLI: an unreadable card table refuses to enqueue, out loud",
+            # Rewritten 2026-09-24 for F112 (ii), deliberately. It used to
+            # assert `WARNING ... enqueue disabled this round` and an EMPTY
+            # queue -- i.e. the round settled at OWED 0 while saying out loud
+            # that it could not tell which ids were cards. "Out loud" was true
+            # and load-bearingly insufficient: the next round reads the file,
+            # not the log, and the file said nothing was owed. It is now a
+            # refusal, and the debt is parked so owed stays non-zero.
+            "CLI: an unestablishable card table is a refusal, not a warning",
             [], ["F38 pass 1 → PARTIAL"], ["1f2daaa fhp F38: fix it"], 1,
             # `[]` and not `None`: the snapshot is mandatory as of 2026-09-17,
             # so a case that omitted it would now be asserting on the refusal
             # path instead of on the card-table path it is named for.
-            "/nonexistent/cards.tsv", [], "WARNING", [],
+            "/nonexistent/cards.tsv", [PARK_ID], "NOT settled", [],
         ),
         (
             "CLI: entry disappeared with no verdict goes RED and names the entry",
@@ -1544,7 +1708,8 @@ def self_test():
 
     def run_cli(d, queue_rows, memo=(), subjects=(), agents=0, before=True,
                 cards=None, extra=(), replies=(), replies_raw=None,
-                replies_flag=True, replies_chmod=None):
+                replies_flag=True, replies_chmod=None,
+                cards_before=True, cards_chmod=None):
         """Runs the real CLI in a fresh directory. Returns (rc, stdout, stderr).
 
         `replies` is [(id, text)] written as JSON Lines; `replies_raw` writes the
@@ -1567,6 +1732,22 @@ def self_test():
             io.open(cf, "w", encoding="utf-8").write(
                 "".join("%s\topen\n" % c for c in cards))
             cmd.extend(["--cards", cf])
+            # F112 (ii): production always supplies the round-start copy, so
+            # every probe must too -- a harness that omits an input production
+            # always passes is testing a path production never takes, which is
+            # the lesson this suite already recorded for --before and
+            # --before-sha. `cards_before=True` mirrors the table (a round that
+            # did not disturb it); a list writes a DIFFERENT round-start table,
+            # which is how the staleness probes reach the comparison; False
+            # omits the flag, which is the omission probe.
+            if cards_before is not False:
+                cbf = os.path.join(d, "cards.before")
+                io.open(cbf, "w", encoding="utf-8").write(
+                    "".join("%s\topen\n" % c for c in
+                            (cards if cards_before is True else cards_before)))
+                cmd.extend(["--cards-before", cbf])
+            if cards_chmod is not None:
+                os.chmod(cf, cards_chmod)
         if before:
             bp = os.path.join(d, "before")
             write_queue(bp, list(queue_rows or []))
@@ -2010,6 +2191,186 @@ def self_test():
         return ("drain F46" in out and "drain F52" in out and ids == []), \
                "rc=%s ids=%s out=%r" % (rc, ids, out)
 
+    # ---------------------------------------------------------------- P22-P26
+    # F112 (ii), 2026-09-24. Every one of these is a way for the card table to
+    # be UNAVAILABLE that used to read as "that id is simply not a card", and
+    # therefore as OWED 0. P26 is the one that matters most and is the one the
+    # card verified in production; P22 is the negative control that keeps the
+    # other four from passing because the gate refuses everything.
+    NEG99 = "\U0001f4cb **F99 pass 1 → PARTIAL（haiku-4-5）**"
+    SUBJ99 = ["a1b2c3d fhp-research F99: fix the falsification PARTIAL"]
+    CARDS99 = ["F41", "F46", "F52", "F99"]
+
+    # P22. THE NEGATIVE CONTROL for P23-P26. A table that IS established must
+    #      still settle the round and still enqueue. Without this, "raise
+    #      CardsUnavailable unconditionally" passes all four probes below and
+    #      the gate stops working entirely -- owed pinned non-zero forever,
+    #      which is the wallpaper failure, not a fix.
+    @probe("CLI: an established card table still settles and still enqueues")
+    def _p22():
+        d = tempfile.mkdtemp(prefix="fq_p22.")
+        rc, out, _ = run_cli(d, [], memo=[NEG99], subjects=SUBJ99, agents=1,
+                             cards=CARDS99)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("enqueue F99" in out and "OWED 1" in out and ids == ["F99"]
+                and "OWED unknown" not in out), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P23. The table was named and is not there.
+    @probe("CLI: a missing card table is OWED unknown, not OWED 0")
+    def _p23():
+        d = tempfile.mkdtemp(prefix="fq_p23.")
+        rc, out, _ = run_cli(d, [], memo=[NEG99], subjects=SUBJ99, agents=1)
+        # run_cli only writes a table when `cards` is given, so name one that
+        # does not exist by hand -- the shape run_round.sh reaches when the
+        # research worktree is not checked out.
+        rc, out, _ = run_cli(d, [], memo=[NEG99], subjects=SUBJ99, agents=1,
+                             extra=["--cards", os.path.join(d, "nope.tsv")])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return (rc == 2 and "OWED unknown" in out and "OWED 0" not in out
+                and "does not exist" in out and ids == [PARK_ID]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P24. The table is there and cannot be opened. This was an unhandled
+    #      PermissionError: a traceback, NO OWED line at all, and rc=1 -- the
+    #      code this program uses for "settled, and something went red".
+    @probe("CLI: an unreadable card table is OWED unknown, not a traceback")
+    def _p24():
+        if os.geteuid() == 0:
+            return False, "cannot be exercised as root -- mode bits do not apply"
+        d = tempfile.mkdtemp(prefix="fq_p24.")
+        try:
+            rc, out, err = run_cli(d, [], memo=[NEG99], subjects=SUBJ99,
+                                   agents=1, cards=CARDS99, cards_chmod=0)
+        finally:
+            try:
+                os.chmod(os.path.join(d, "cards.tsv"), 0o600)
+            except OSError:
+                pass
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return (rc == 2 and "OWED unknown" in out and "OWED 0" not in out
+                and "Traceback" not in err and ids == [PARK_ID]), \
+               "rc=%s ids=%s out=%r err=%r" % (rc, ids, out, err[-200:])
+
+    # P25. The round-start copy was not supplied. An input the caller simply
+    #      did not pass must not read as "the condition was not met, quietly" --
+    #      the same sentence update() carries about `else: before_rows = rows`.
+    @probe("CLI: --cards-before omitted is a refusal, not a settlement")
+    def _p25():
+        d = tempfile.mkdtemp(prefix="fq_p25.")
+        rc, out, _ = run_cli(d, [], memo=[NEG99], subjects=SUBJ99, agents=1,
+                             cards=CARDS99, cards_before=False)
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return (rc == 2 and "OWED unknown" in out and "OWED 0" not in out
+                and "--cards-before" in out and ids == [PARK_ID]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P26. THE PRODUCTION INSTANCE. The table is present, readable and full of
+    #      real ids -- and it is the PRE-round revision, because finisher.py
+    #      stashed the research worktree at run_round.sh:1584 and this gate runs
+    #      at :1742. Verified live: stash@{0} was exactly cards.tsv. F99 was a
+    #      card when the round started and is not one now, so the round's F99
+    #      fix silently failed to enqueue and the round settled at OWED 0.
+    #
+    #      A stash can only take the round's own additions back out, so the
+    #      signature is that the table SHRANK. Measured, not assumed: over 185
+    #      revisions of cards.tsv the id set grew 43 times and shrank 0 times.
+    @probe("CLI: a card table that lost rows mid-round (stashed) is OWED unknown")
+    def _p26():
+        d = tempfile.mkdtemp(prefix="fq_p26.")
+        rc, out, _ = run_cli(
+            d, [], memo=[NEG99], subjects=SUBJ99, agents=1,
+            cards=["F41", "F46", "F52"],          # the stashed, pre-round table
+            cards_before=CARDS99)                 # F99 was a card at round start
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return (rc == 2 and "OWED unknown" in out and "OWED 0" not in out
+                and "lost 1 id(s) during this round (F99)" in out
+                and ids == [PARK_ID]), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P26a. The other half of P26, and the reason it is not just "any change to
+    #       the table refuses": a round that ADDS a card is the normal, frequent
+    #       case (43 of the 185 revisions) and must settle normally.
+    @probe("CLI: a card table that GAINED rows mid-round settles normally")
+    def _p26a():
+        d = tempfile.mkdtemp(prefix="fq_p26a.")
+        rc, out, _ = run_cli(
+            d, [], memo=[NEG99], subjects=SUBJ99, agents=1,
+            cards=CARDS99,                        # F99 added during the round
+            cards_before=["F41", "F46", "F52"])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("enqueue F99" in out and "OWED 1" in out and ids == ["F99"]
+                and "OWED unknown" not in out), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P26b. The near-miss, kept as a case. The sentinel test was first written
+    #       as `SNAPSHOT_FAILED in raw`, and run against the REAL cards.tsv --
+    #       not a fixture -- it refused on the spot: the table describes this
+    #       very machinery, so one card's prose contains the sentinel string.
+    #       Shipped, it would have pinned the live loop at OWED unknown every
+    #       round. The probe feeds a table whose prose mentions the sentinel and
+    #       requires the round to settle anyway.
+    @probe("CLI: a card table whose PROSE mentions the snapshot sentinel still settles")
+    def _p26b():
+        d = tempfile.mkdtemp(prefix="fq_p26b.")
+        prose = ("F98\topen\ta card about the gate: an unreadable snapshot and "
+                 "a %s sentinel are both RED\n" % SNAPSHOT_FAILED)
+        for n in ("cards.tsv", "cards.before"):
+            io.open(os.path.join(d, n), "w", encoding="utf-8").write(
+                "".join("%s\topen\n" % c for c in CARDS3) + prose)
+        qp = os.path.join(d, "queue")
+        write_queue(qp, [F46])
+        bp = os.path.join(d, "before")
+        write_queue(bp, [F46])
+        with io.open(bp, "rb") as fh:
+            bsha = hashlib.sha256(fh.read()).hexdigest()
+        for n in ("memo", "commits", "replies.jsonl"):
+            io.open(os.path.join(d, n), "w", encoding="utf-8").write("")
+        r = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--queue", qp,
+             "--before", bp, "--before-sha", bsha,
+             "--memo-added", os.path.join(d, "memo"),
+             "--commits", os.path.join(d, "commits"),
+             "--replies", os.path.join(d, "replies.jsonl"),
+             "--cards", os.path.join(d, "cards.tsv"),
+             "--cards-before", os.path.join(d, "cards.before"),
+             "--agents", "0", "--now", "2026-09-24 12:00"],
+            capture_output=True, text=True)
+        ids = [x[0] for x in read_queue(qp)]
+        return ("OWED 1" in r.stdout and "OWED unknown" not in r.stdout
+                and ids == ["F46"]), \
+               "rc=%s ids=%s out=%r" % (r.returncode, ids, r.stdout)
+
+    # P26c. Negative control for P26b: a file that really IS the sentinel -- the
+    #       whole-line form run_round.sh writes when the cp fails -- must still
+    #       refuse, so P26b did not pass by deleting the check.
+    @probe("CLI: a cards snapshot that IS the sentinel still refuses")
+    def _p26c():
+        d = tempfile.mkdtemp(prefix="fq_p26c.")
+        rc, out, _ = run_cli(d, [F46], cards=CARDS3)
+        io.open(os.path.join(d, "cards.before"), "w",
+                encoding="utf-8").write(SNAPSHOT_FAILED + "\n")
+        rc, out, _ = run_cli(d, [F46], cards=CARDS3, extra=[])
+        # run_cli rewrites cards.before, so drive the sentinel case directly.
+        cbf = os.path.join(d, "cards.before")
+        io.open(cbf, "w", encoding="utf-8").write(SNAPSHOT_FAILED + "\n")
+        qp, bp = os.path.join(d, "queue"), os.path.join(d, "before")
+        with io.open(bp, "rb") as fh:
+            bsha = hashlib.sha256(fh.read()).hexdigest()
+        r = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--queue", qp,
+             "--before", bp, "--before-sha", bsha,
+             "--memo-added", os.path.join(d, "memo"),
+             "--commits", os.path.join(d, "commits"),
+             "--replies", os.path.join(d, "replies.jsonl"),
+             "--cards", os.path.join(d, "cards.tsv"), "--cards-before", cbf,
+             "--agents", "0", "--now", "2026-09-24 12:00"],
+            capture_output=True, text=True)
+        ids = [x[0] for x in read_queue(qp)]
+        return (r.returncode == 2 and "OWED unknown" in r.stdout
+                and "sentinel" in r.stdout and PARK_ID in ids), \
+               "rc=%s ids=%s out=%r" % (r.returncode, ids, r.stdout)
+
     # P21. F89b: the CLI flag, not just the update()/scan() parameter the
     #      tabular cases 1a/1b already cover. run_round.sh never calls update()
     #      directly -- it shells out to this file -- so a regression that only
@@ -2073,6 +2434,12 @@ def main():
                          "drains and the refusal is printed.")
     ap.add_argument("--cards", default="",
                     help="cards.tsv; ids absent from it are not treated as cards")
+    ap.add_argument("--cards-before", default="",
+                    help="F112(ii): copy of --cards taken at round start. "
+                         "REQUIRED whenever --cards is given: the finisher "
+                         "stashes the worktree cards.tsv before this gate "
+                         "runs, and a table that lost rows mid-round is not "
+                         "evidence that the rows were never cards.")
     ap.add_argument("--code-touch", default="",
                     help="F89b: file of '<sha> <0|1>' lines from run_round.sh's "
                          "own git diff-tree check, 1=touched non-prose files. "
@@ -2140,23 +2507,29 @@ def main():
             return [l.rstrip("\n") for l in fh if l.strip()]
 
     now = args.now or __import__("time").strftime("%Y-%m-%d %H:%M")
-    known = known_ids(args.cards)
-    allow_enqueue = True
-    if args.cards and known is None:
-        # Loud, and closed rather than loose. Unfiltered, the id pattern reads
-        # prose as cards: the real corpus yields V2 from PATCHED_V2 and B8 from
-        # state(B8). A queue of phantoms is worse than an empty one, because a
-        # demand nobody believes is a demand nobody reads.
-        print("WARNING: cards table unreadable (%s) -- enqueue disabled this round"
-              % args.cards)
-        allow_enqueue = False
+    # F112 (ii). `known = known_ids(args.cards)` returned None for a missing
+    # table, an empty table AND a table that was named but never read, and the
+    # branch below printed one WARNING, disabled enqueue, and then settled the
+    # round at a number anyway. Unfiltered, the id pattern does read prose as
+    # cards -- V2 out of PATCHED_V2, B8 out of state(B8) -- so loosening is not
+    # the answer either. The answer is that the round is not settleable: a
+    # refusal, parked, owed non-zero, exactly like a missing --before.
+    known, cards_gap = None, None
+    try:
+        known = known_ids(args.cards)
+    except CardsUnavailable as e:
+        cards_gap = str(e)
+    if cards_gap is None:
+        cards_gap = cards_gap_reason(
+            args.cards, known, args.cards_before or None)
     actions, rows, settled = update(
         args.queue, lines(args.memo_added), lines(args.commits),
-        args.agents, now, known, allow_enqueue,
+        args.agents, now, known, True,
         before_path=args.before or None,
         before_sha=args.before_sha or None,
         replies_path=args.replies or None,
-        code_touch=read_code_touch(args.code_touch or None))
+        code_touch=read_code_touch(args.code_touch or None),
+        cards_gap=cards_gap)
     for a in actions:
         print(a)
 
