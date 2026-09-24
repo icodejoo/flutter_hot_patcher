@@ -722,16 +722,37 @@ if [ -e "$FIX_QUEUE_BEFORE" ]; then
   # EXIT trap with it, its queue line vanishes, and the next round printed a
   # warning naming no entry and then destroyed the only record -- owed back to
   # 0, which is the one answer this card exists to forbid.
-  fq_orphan=$FIX_QUEUE_BEFORE.orphan.$(date +%Y%m%dT%H%M%S)
+  # F112 (iv). The stamp is second-resolution and `mv -f` overwrites, so two
+  # orphanings in the same second destroyed the first one's snapshot -- measured
+  # on the previous version: two runs, one file left. The pid plus a counter
+  # makes the name unique, and the loop never overwrites something that is
+  # already there. (The pid alone is not enough: this block can be reached twice
+  # from the quota-block path and the normal path within one process.)
+  fq_orphan=$FIX_QUEUE_BEFORE.orphan.$(date +%Y%m%dT%H%M%S).$$
+  fq_n=0
+  while [ -e "$fq_orphan" ]; do
+    fq_n=$((fq_n + 1))
+    fq_orphan=$FIX_QUEUE_BEFORE.orphan.$(date +%Y%m%dT%H%M%S).$$.$fq_n
+  done
   if mv -f "$FIX_QUEUE_BEFORE" "$fq_orphan" 2>/dev/null; then
     say "WARNING: a fix-queue round-start snapshot from an earlier round was still on disk -- that round ended without ever comparing it, so any queue line it deleted is unrecorded. Preserved as $fq_orphan; it holds $(grep -ac . "$fq_orphan" 2>/dev/null || echo '?') entr(ies) that were owed when that round started."
-    python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
-      --park "a previous round ended without running the fix-queue gate; its round-start snapshot is $fq_orphan and the queue is not known to be complete" \
-      2>&1 | while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
+    fq_park_why="a previous round ended without running the fix-queue gate; its round-start snapshot is $fq_orphan and the queue is not known to be complete"
   else
     say "WARNING: a fix-queue round-start snapshot from an earlier round is on disk ($FIX_QUEUE_BEFORE) and could NOT be preserved -- that round's queue edits are unrecorded and this round is about to overwrite the evidence"
+    fq_park_why="a previous round ended without running the fix-queue gate AND its round-start snapshot ($FIX_QUEUE_BEFORE) could not even be preserved, so which entries it held is unrecoverable; the queue is not known to be complete"
   fi
-  unset fq_orphan
+  # F112 (iv): OUTSIDE the if/else, and that is the fix. The park used to sit in
+  # the success branch only, so the failure branch warned and recorded nothing:
+  # the next line overwrites $FIX_QUEUE_BEFORE with the current queue, the dead
+  # round's deleted entry is gone from both, and owed goes back to a number --
+  # which is precisely the outcome the park was added to prevent, left open on
+  # the one path where the evidence is MORE lost, not less. Measured on the
+  # previous version with the snapshot made un-renameable: `warning only,
+  # NOTHING parked`, queue back to one entry.
+  python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" \
+    --park "$fq_park_why" \
+    2>&1 | while IFS= read -r l; do [ -n "$l" ] && say "fix-queue: $l"; done
+  unset fq_orphan fq_n fq_park_why
 fi
 # The fallback must not fabricate an EMPTY snapshot. An empty before-file reads
 # as "nothing was owed at round start", which hides a disappearance just as well
