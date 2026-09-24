@@ -11021,3 +11021,115 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
 对哈希），不是照抄子代理的话；F91 的"1 个函数 vs 179 个函数"表面矛盾就是靠独立复核发现并解开的
 （两个测的是不同重建状态的二进制，不是谁错了）。并发派发前先按文件重叠分组，
 真正重叠的（F65a/b/d 之前、F84/F65b 这次）错开或确认互不干扰再派。
+
+---
+
+## 2026-09-24 晚间（/loop 自动轮次，读契约后锁定 `.loop/UNREVIEWED_FIX`）
+
+`.loop/UNREVIEWED_FIX` 欠账：F37 的落地修补丁（`531c5356dda`/`edce6e25b77`/`63716223bde`）
+在 F37 证伪 pass 1（PARTIAL，见上）之后从未被单独审过"这个修补丁本身"。按契约五之四，
+派一个新鲜 opus 子代理（未共享上下文），CLAIM 明确写成"这三个提交真的修掉了导致 F37 被撤销的
+那个 SEGV 崩溃"，模板用 `tools/loop/prompts/falsify.md` 全七项攻击。
+
+### F37 修补丁证伪 pass（2026-09-24，新鲜 general-purpose 子代理，opus，24 次调用）—— **VERDICT: PARTIAL**
+
+七项攻击结果：
+1. **FALSIFIED（实测，不是预测）**：子代理亲手把 `il_arm64.cc:1364` 的
+   `call_bootstrap_native_entry_point_offset()` 换成 `call_auto_scope_native_entry_point_offset()`，
+   重建 ProductARM64（415/415 步，rc=0，`gen_snapshot` md5 `ee68d403`→`8c9f268a`），
+   `dd_runtime_check.sh` 仍 rc=0「0 failure(s)」，`measure_dd_emission.sh` 仍 rc=0；
+   `cmp -l` 显示 `out_ddrun/no_mapping.so` 96 字节不同，**全部在 `.text` 之外，`.text` 内 0 字节**。
+   ⇒ **两个判据都测不出"名的是错的 Thread 字段"**——F37 pass 1 的 attack 7 当时只是预测，这次是实测。
+2. **新发现，比 pass 1 更重**：`measure_dd_emission.sh` 读的是 `out_pm/as.hello.{ours,theirs}.so`
+   （F81 那次发现被 `ProductARM64` 误产快照污染过的同一份文件），**不是**这组提交跑出来的东西；
+   今天它读到的是 `ours native_patched=0`（`dd_emission.expected` 钉的就是 `ours=0`，提交 `a50f66b`）。
+   ⇒ **"92==92" 这句话当前在这棵树上没有任何读数支持**——检查这个提交组时用错了输入文件。
+3. 没有分母：`dd_runtime_check.sh` 只 diff 一次 `hello.dart` 的 stdout，覆盖 92 个发射点里
+   pass 1 观测到的约 8 个链接事件、3 条 trampoline 臂里的 2 条；没有 `EXAMINED`/`UNEXPLAINED` 行。
+4. 未重跑（沿用 pass 1 的扫描结论：92/92 shape-A 尾部，放宽掩码仍是 92，无第二构造命中）。
+5. 三个提交确认是 `HEAD~2..HEAD` 的祖先关系（`git merge-base --is-ancestor` 对四个 sha 全部
+   `rc=0`），`git status --porcelain` 0 行；但 **`ninja -n` 实测 ProductARM64 415 步 / ReleaseARM64
+   429 步陈旧**（mtime 被这三个提交改的 `thread.h`/`instructions_arm64.h` 顶新到 17:51，
+   晚于 13:50 的旧二进制）——子代理已重建 ProductARM64 使其归零（同 md5），F108（ReleaseARM64
+   那一半，1979 步）仍未做。
+6. 负控制真实：offset-swap 确实编译、确实改变了产物（96 字节），只是两个判据都测不到；
+   `native_entry.cc:305-306` 的 DEBUG ASSERT 理论上会抓到，但**这次没有跑 DebugARM64 去验证**，
+   是读代码路径推出来的，不是实测。
+7. 问题被换成了更容易的："对的 Thread 字段有没有被命名、relink 对不对" 被换成了
+   "指令形状一样吗 + hello 打印一样吗"；`exit_through_ffi_offset()` 那条 RELEASE_ASSERT
+   本来就不挨着这三个新字段（pass 1 已发现），对它们恒真。
+
+**FLAW（PARTIAL 的依据）**：两个判据对池槽的值全盲，这是实测而非预测；**F107 当前写的判据
+（读发射立即数的值 / 跑 DEBUG assert 路径）不完整**——子代理指出即使加上它，也可能测不到
+"relink 之后 `set_target()` 把 native 送进了错的 wrapper"这类错误（送错 wrapper 但 stdout 照样
+一样），但**这一条本身没有实测，是子代理自己标注的未验证怀疑**，不因此重写 F107，只记账。
+另外，`measure_dd_emission.sh` 现在读的文件与这组提交无关，这是一个 F107 没有覆盖的新维度。
+
+**STILL OPEN / 未验证的**：DebugARM64 上跑这组提交对应的 AOT 程序，确认
+`native_entry.cc:305-306` 的 ASSERT 真的会在 offset-swap 下触发（子代理没跑，只读了代码）；
+`measure_dd_emission.sh` 需要指向由这组提交产出的快照而不是 `out_pm` 里那份陈旧/曾被污染的文件。
+
+`F37 修补丁 VERDICT: PARTIAL —— 在新鲜 ProductARM64 上补丁确实能跑（dd_runtime_check 0 failure），但实测换错 Thread 字段后两个判据仍然全绿（改动的 96 字节全在池槽、.text 0 字节），且 measure_dd_emission.sh 今天读到的是 out_pm 里 ours=0，不是这组提交。`
+
+**树状态**：子代理是本轮唯一写方；`~/dart-3122/sdk` 实验性 offset-swap 已用 `git checkout --`
+还原，`git status --porcelain` 0 行；`xcodebuild/ProductARM64` 重建两次后 `gen_snapshot`/
+`dartaotruntime` md5 与实验前逐字节相同（陈旧步数 415→0）；研究树 `out_ddrun/no_mapping.so`
+重新生成后与原文件逐字节相同。**无提交**（诊断性质，未落地任何修复）。
+
+⇒ **按契约「PARTIAL/FALSIFIED：不许关卡」**：F37 修补丁本身仍不算「SURVIVES (fix)」，
+`.loop/UNREVIEWED_FIX` 里这一项**不清**（这是正确行为，不是仪器缺陷——真实缺口还在）。
+`F107` 保持 `open`，其判据需要在实现时纳入上面两条 STILL OPEN（DEBUG 实测 + 指向正确的快照文件），
+但本轮不重写卡片正文，只记账，留给下一次派发 F107 时一并处理。**本轮到此结束**（F37 落地本身
+仍是 `open`，规则 1.5：本轮唯一产出是这条证伪结论，不是新实现）。
+
+---
+
+## 2026-09-24T2xZ 心跳：F106 实现 → 证伪 → 修复两处发现 → F106 仍 open，拆出 F115
+
+**任务**：F106（重写 `test_fix_gate.sh` 沙盒 harness）实现完成后，新鲜 Opus 子代理跑证伪 pass。
+
+**实现**（`ef879c2` + `cc1af5f`）：sed 抽取锚点换成唯一的 `# >>> F82 fix-queue gate <<<` /
+`# <<< F82 fix-queue gate >>>`；补 `round_dispatch_stats()` / `round_dispatch_replies()` 桩；
+补 `--before` 快照；`TEST_REPLY_JSON` 机制喂用例 2/4 真实子代理回复。跑通 8/8，
+`fix_queue.py --self-test` 61/0 不受影响。
+
+**证伪 pass VERDICT: PARTIAL**（新鲜 Opus，未参与实现）。七项攻击：抽取（3）、新鲜度（5）、
+新旧行为对比（6）核实无误；**攻击 1 抓到真缺陷**：用例 5「card-level SURVIVES 不清队」与
+用例 6「0 dispatch 不清队」两条**都是虚假绿**——两者都没喂 `TEST_REPLY_JSON`，回复文件里留着
+「extractor 未跑」哨兵值，`fix_queue.py` 对读不到回复的情况本来就是硬 RED，两条用例守住的其实
+是这个无关前提，不是卡名声称的规则。实测证明：把 `fix_queue.py` 的 `FIX_MARKERS` 判断整段删掉
+（`if any(...) :` → `if True:`）**仍然 8/8 全绿**，而 `fix_queue.py` 自己的 `--self-test`
+对同一处 mutation 正确报红。
+
+**修复第一轮**（`df47061`，新鲜子代理执行，非实现者本人）：给用例 5/6 补真实绿色回复
+（复用用例 2/4 的 `TEST_REPLY_JSON` 机制）；桩改为「无 `TEST_REPLY_JSON` 时写空文件」而非留哨兵
+（对齐 `run_round.sh` 里真实 extractor 「找到 transcript 但没有合格回复」时的行为）。
+**用例 5 的 mutation 证明补全**（HEAD 通过、mutant 报红，逐一复现）。
+**用例 6 发现一个更大的真问题，不是测试写错**：`fix_queue.py:716-719` 目前**故意不再看
+dispatch/agent 数**，两道清队闸门只认「有没有回复」。给一个 0-dispatch 场景喂绿色回复
+**照样清队**——生产环境里回复只可能来自真实 Agent tool_use id、理论上不该出现「有回复但 0
+dispatch」，但代码里没有任何东西强制这条假设成立。这不是 harness 能修的，是 `fix_queue.py`
+本身要不要补一道 `agents>=1` 闸门的产品判断。
+
+**修复第二轮**（`af64dbb`）：用例 6 改名为「a reply is required to drain; dispatch count
+alone does not gate」，断言不变（无回复时仍应清不了队，这部分本来就测对了，只是名字起错），
+注释指向 F115。
+
+**立 F115**（`open`，依赖 F106，cards.tsv `97330b7`）：`fix_queue.py` 的清队逻辑不校验
+dispatch/agent 数，只校验回复是否存在；需要产品判断——(a) 确认这是有意为之（回复在生产里不可
+伪造，不需要额外校验）就此关卡，或 (b) 补回一道显式的 `agents>=1`（或等价）闸门并配一条
+`fix_queue.py --self-test` 用例证明「0-agent 但有回复」的 mutation 在补闸门前报红、补闸门后转绿。
+两种收口都需要自己的新鲜证伪 pass。
+
+**F106 状态**：仍 `open`——用例 5 已证明修复（本轮内当场修完），但用例 6 牵出的
+`fix_queue.py` 设计问题超出本卡范围，已拆成 F115（契约五之四「修复大到需要自己判据时立新卡」）。
+`test_fix_gate.sh` 当前 8/8 绿、`fix_queue.py --self-test` 61/0 绿，**但 F106 本身仍需要一次
+新鲜证伪 pass 才能关闭**（本轮的证伪 pass 覆盖的是修复前状态，未覆盖 `af64dbb` 这次改名，
+按契约「修复不继承它所修的那次审查」）。
+
+- [ ] **F115：`fix_queue.py` 清队逻辑不校验 dispatch/agent 数**（`open`，2026-09-24，F106 拆出，deps=F106）
+      判据：产品判断二选一——(a) 确认「回复只可能来自真实 dispatch」在生产里恒成立，就此关卡；
+      或 (b) 补一道显式 `agents>=1` 闸门，配 `fix_queue.py --self-test` 新用例证明
+      「0-agent 但有回复」的 mutation 补闸门前报红、补闸门后转绿。任一收口都需要自己的新鲜证伪 pass。
+
+**本轮到此结束**（一轮一事，F106 未关，未派发新的证伪 pass——留给下一轮）。
