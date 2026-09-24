@@ -10800,3 +10800,88 @@ static_assert），太早、够不到逐字节比对；(b) 因此补了一条仍
    （插桩里没出现 offset 3936）。bootstrap 与 auto-scope 已确认，no-scope **没有**。
 4. `LinkNativeCall` 里 `#if defined(DEBUG)` 的一致性读（`native_entry.cc:293-303`）
    **按构造满足**，但 ProductARM64 是 `NDEBUG` ⇒ **从未被编译、从未被运行**。
+
+### F37 证伪 pass 1 —— **VERDICT: PARTIAL**（2026-09-24，新鲜 general-purpose 子代理，40 次调用）
+🔴 **按关卡规则，F37 不许关卡，仍是 `- [ ]`。** 七项攻击里 **两项打红**。
+
+**打红的两项**：
+- **攻击 7（负控制质量）FALSIFIED —— 这是本次最重要的一条。**
+  两个被引用的判据**都读不到对象池槽的「值」**：`measure_dd_emission.sh`（46-66 行）只读指令字、
+  从不碰池；`dd_runtime_check.sh` 只 diff 一个 `hello.dart` 的 stdout。
+  把 `il_arm64.cc` 里发射的立即数从 `call_bootstrap_native_entry_point_offset()` 换成
+  `call_auto_scope_native_entry_point_offset()`，**指令字节逐位不变**（还是同一条 `ldr x16,[PP,#imm]`）
+  ⇒ `native_patched` 仍是 92；程序照样跑（`CallAutoScopeNative` 也经 R5 通到 `LinkNativeCall`）
+  ⇒ stdout 仍然相等。**两个判据在一个语义已错的发射上同时给绿**，而它违反
+  `native_entry.cc:259-260`（「永远经 `BootstrapNativeCallWrapper` 调用」）与 `:306` 的不变式。
+  ⇒ **负控制 (b)（asr 移位 1→2）只证明了「指令字节有关系」，从未证明「命名的是对的那个 Thread 字段」。**
+  次要一处：提交里那条 `RELEASE_ASSERT(... exit_through_ffi_offset() ...)` 被描述为「检查相邻字段」，
+  **它不相邻**——`exit_through_ffi_` 在 `thread.h:1708`，被守卫的三个字段在 `1880-1882`，
+  中间隔着整个追加的 Shorebird 块 ⇒ 它的偏移**不受该块影响**，这道守卫对它声称要守的那段是**恒真的**。
+- **攻击 2（`verify_reproduction.sh` 的 shim）—— 惰性论证 SURVIVES，但该判据本身 FALSIFIED。**
+  `stat out_verify/*.dill` 全部是 **2026-08-24/25** 的，而脚本第 112 行只在 `! -f` 时才建 dill
+  ⇒ 被 shim 的 `STOCK` 工具**一次都没被调用**，替换只满足了第 36 行 `[ -e "$DARTAOT" ]` 的前置
+  ⇒ **那个绿不是替换制造出来的**。**但它对 F37 不承重**：`ARTIFACTS`（46-51 行）是 ct/dt/ddid/ft
+  四个 `--print_*_link_info_to` / identity dump，**不含任何指令字节**，任何代码发射改动都动不了它。
+  ⇒ 拿「28 artifacts, 0 failures」当 F37 的判据，正是本项目点过名的那种失败形态：
+  **一个便宜的检查，而它便宜恰恰是因为它不承重。**
+
+**未打红的五项（含两条比实现方原报告更强的证据）**：
+- 攻击 1 SURVIVES：`set_target`/`target()` 与 `LinkNativeCall`（`native_entry.cc:312-318`）挑的三种情形
+  1:1 对应，`thread.cc:239-244` 逐个从对应 stub 缓存、无复制粘贴串位；3928/3936/3944 由
+  `thread.h:1880-1882` 的声明顺序推出，间隔 16 字节，与观测到的 3928/3944 一致。
+- 攻击 3 SURVIVES：`dd_runtime_check.sh` 的 `EXPECTED` 是**字面 heredoc**（33-38 行），
+  不由本次运行捕获、不被这几个提交重新生成 ⇒ **不是缺陷 #10 那个形态**。
+  但口径要记：它只比一个 `hello.dart` 的 stdout，`count_sites`（80 行）数的是 `blr x16`（DD 站点）、
+  **从不数 native 站点**；它覆盖的是 92 个发射站点里被观测到的 8 次链接事件、三臂里的两臂。
+- 攻击 5 SURVIVES（强）：对 `out_ddrun/no_mapping.so` 做指令扫描，
+  `尾部匹配 92 / 其中前置两个 NOP 92 / 前一个字全是 0xf9400000 / 池加载 (Rt,Rn) 全是 (16,27)`
+  ⇒ 逐字就是 shape A，92/92。**没有 F35 式的一模双配**：按掩码放宽（任意 Rm/Rn）计数**仍是 92**
+  ⇒ 本快照里没有别的构造（包括 `EmitIndirectStaticCall`）发出这个尾部。
+  ⚠️ 但记一笔：`measure_dd_emission.sh`（55-58 行）区分 `native_patched` 与 `dd_dispatch`
+  的**唯一判别子是一个 NOP**。
+- 攻击 6 SURVIVES —— **而且这是本卡最强的证据，它不是实现方做的**：证伪方自己建了
+  `xcodebuild/DebugARM64`（`is_debug=true dart_debug=true`，430 步），用 Debug 的 `gen_snapshot`
+  AOT 编译 `fixtures/hello.dart` 再用 Debug 的 `dartaotruntime` 跑，输出正确、**rc=0**，
+  该快照含 **179** 个 shape-A 站点 ⇒ **在断言全活的构建里**（`NativeCallPattern` 构造函数的
+  `ASSERT(reg==R16)`/`ASSERT(reg==R5)`、`target()` 的 FATAL、`native_entry.cc:303-307` 两条 ASSERT），
+  这个形状解码并重链接正确。⇒ 实现方报「`#if defined(DEBUG)` 那段从未编译过」的空白，**已被填上**。
+- 攻击 4 PARTIAL：见 F108。ProductARM64 那一半**是可靠的**——`gen_snapshot`/`dartaotruntime`/
+  `run_vm_tests` 三个目标 `ninja -n` **各为 0**，二进制 13:50:57 新于每一个被改的源文件；
+  那 980 个全局待办是 `_product`/`_jit` 变体，不是被测的那几个二进制。
+
+**STILL OPEN（原文抄录，必须做的那个实验）**：
+「Rebuild ProductARM64 gen_snapshot with one token changed in `il_arm64.cc` —
+`dart::Thread::call_bootstrap_native_entry_point_offset()` → `...call_auto_scope_native_entry_point_offset()`
+— then rerun `measure_dd_emission.sh` and `dd_runtime_check.sh`. My prediction is **both stay green**
+(92 == 92, 0 failures), which would prove the two reported criteria are blind to the pool slot's value
+and that control (b) demonstrated only "the instruction bytes matter", never "the right Thread field is
+named". The criterion that *would* catch it is the DEBUG run I established in attack 6
+(`native_entry.cc:306`), which is not in `verify_all.sh` at all — it should be added before this card
+closes. Secondarily untested: the `call_no_scope_native_entry_point_` (3936) arm has still never
+executed anywhere; reaching it needs an embedder resolver returning `auto_setup_scope=false`, e.g. a
+`run_vm_tests` AOT case, and nothing in the card covers it.」
+
+**树状态**（证伪方自报并由我复核口径）：`~/dart-3122/sdk` `git status --porcelain` 0 行，
+`ninja -n` 前后一致（Release 1979→1979，Product 980→980），未提交、未 stash、未 `gn clean`；
+它建的 `DebugARM64` 是新增产物，没动任何源文件。**未安装任何工具**，扫描器按规则 4 先复现了
+已知读数（92 == `measure_dd_emission.sh`）再被信任，并被证明能判别（Debug 快照报 179；
+对 DD 站点要求 NOP 谓词时报 0）。
+
+⇒ **由本次 PARTIAL 逼出三张新卡**（按契约五之四「修它本身大到需要自己的判据与负控制，就立新卡」）：
+
+- [ ] **F107：F37 的两个判据都读不到对象池槽的「值」**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
+      判据：`verify_all.sh` 里要有一个能读到发射立即数命名的是哪个 Thread 字段的检查
+      （或等价地跑那条 DEBUG 断言路径）。负控制：上面那个 offset-swap 实验必须让新检查变红，
+      而 `measure_dd_emission.sh` 与 `dd_runtime_check.sh` 两个都仍然绿——三个一起动=新检查冗余，
+      三个都不动=新检查恒真。
+- [ ] **F108：F37 把 `ReleaseARM64` 从 0 步打回 1979 步陈旧，撤销了 F76**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
+      11 个读 `$RELEASE` 的 `run_script` 行 + `:923`/`:944` 的 `run_vm_tests` 选择器现在全是继承的绿。
+      判据：重建四个 Release 目标后，**不带** `SKIP_STALENESS_GUARD=1` 跑 `verify_all.sh` 得 rc=0
+      且 ran == `EXPECTED_CHECKS`。负控制：先证明那个陈旧探针能报红（touch 一个 Release 依赖的源文件，
+      确认 `ninja -n` 非零且 `verify_all.sh:77` 给 rc=2），再还原——注意 `git checkout --` 会顶新 mtime、
+      **不还原构建状态**（第 38 种仪器缺陷）。
+- [ ] **F109：`call_no_scope_native_entry_point_`（3936）那一臂从未在任何地方执行过**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
+      pass 1 已确立它是**不可达**而非写错：`bootstrap_natives.cc:56` 把 `auto_setup_scope` 置 false，
+      但 `native_entry.cc:312-318` 先测 `is_bootstrap_native`；`io_natives.cc:234` 硬编码
+      `*auto_setup_scope = true` ⇒ 只有 embedder 自带的 `Dart_SetNativeResolver` 能走到它。
+      它按 `OFFSET_OF` 构造正确，但**未经执行验证**。判据与负控制见 `cards.tsv`。
