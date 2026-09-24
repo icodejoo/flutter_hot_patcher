@@ -82,11 +82,17 @@ PERMISSION_MODE=${FHP_LOOP_PERMISSION_MODE:-bypassPermissions}
 # of the model or of that one round is NOT established; one round is one sample.
 # If `round dispatch: 0 subagent(s)` shows up again now, that is the second.
 #
-# 2026-09-24: changed to Opus 5 by operator instruction, extending the same
-# 2026-09-24 falsify.md subagent-model instruction to the driver itself. The
-# 2026-09-15 Sonnet choice and its rationale above are not retracted as
-# history, just superseded as the current setting.
-MODEL=${FHP_LOOP_MODEL:-claude-opus-5}
+# 2026-09-24: tried Opus 5 on the driver (operator instruction, extending the
+# same-day falsify.md subagent-model change to the driver itself) and reverted
+# it the same day: the one round that ran on it (11:37-12:44) produced zero
+# tool calls and zero output before being killed by the 3600s ROUND_TIMEOUT
+# watchdog -- rc=143, "0 subagent(s)", nothing salvageable. One sample, not
+# proven to be an Opus property rather than that one round's, but the cost of
+# finding out the hard way is a dead hour per attempt, so back to Sonnet for
+# the driver. The subagent-side Opus instruction in falsify.md is UNCHANGED --
+# a Sonnet-driver round dispatching an Opus subagent (10:55-11:06) completed
+# normally the same day.
+MODEL=${FHP_LOOP_MODEL:-claude-sonnet-5}
 
 # Effort was never set at all, so every round so far ran at the CLI default
 # (measured 2026-09-15: no --effort in the invocation, no effort key in any
