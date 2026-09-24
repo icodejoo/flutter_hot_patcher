@@ -170,14 +170,19 @@ locus「存在即可」而不问它解释了多少、以及 2026-09-09 的第六
 
 🔴 **待办以 `memo.md` 为准，不是本文件。**
 
-**当前账面（2026-09-23 实测，判据 = `cards_check.sh` rc=0）：`open 26（含 built 1）· closed 49（含 closed-unreviewed 1）`，共 75 张。**
-矩阵 `na 35 / unknown 12 / structural 12 / gap 0`（2026-09-23 直接数 `parity_matrix.tsv`）。
-🔴 **循环已手动停机（2026-09-22 17:21）**：Claude CLI 登录态过期，恢复需先 `/login` 再重启 ralph.sh。
-🟢 **2026-09-23 进展**：F76（重建 ReleaseARM64）· F99/F100/F105（field_table + compute_dd_table structural）已在上次会话关闭；
-本次会话：F102（dump_object_pool_link_data ×3 → structural，unexplained_funcs=0）关闭。
-`unknown` 从 24 降至 12（本次 -3），`structural` 从 0 升至 12。
-**剩余 12 unknown**：shorebird ×3（F55/F62）· dump_object_pool ×3（F101，UNEXPLAINED 88 bytes）·
-dump_blobs ×3（F103，content diff 含 PC-relative 级联效应）· disassemble ×3（F104，EXAMINED/UNITS 不匹配）。
+**当前账面（2026-09-24 实测，判据 = `cards_check.sh` rc=0）：`open 30（含 built 1）· closed 49（含 closed-unreviewed 1）`，共 79 张。**
+矩阵 `na 35 / unknown 12 / structural 12 / gap 0`（2026-09-24 直接数 `parity_matrix.tsv`，与 09-23 相同 —— 今天的进展在卡片层，还没反映到矩阵）。
+⏸️ **循环已按指令暂停（2026-09-24）**：`.loop/PAUSE` 已放，`ralph.sh`/`wip_snapshot.sh --daemon` 均已干净停机（SIGTERM，trap 里 `exit 143`，无 round 在飞）。
+🔴 **订正 09-23 那条"登录态过期"**：09-24 实测登录一直有效（`claude auth status` → `loggedIn: true`），循环卡住的真因是**磁盘死循环**：本地 Time Machine 快照（`tmutil listlocalsnapshots`）锁住了 39G，`disk_slim`（`brew cleanup`）清不动，`refuse → slim → "recovered"（19→19GB，没变）→ PAUSE lifted → 2分钟后再撞` 循环了至少 2 小时。`tmutil thinlocalsnapshots / 999999999999 4` 不需要 sudo，一次性 19Gi→58Gi 解开。**"手动停机"这条历史断言已作废**，循环本可以更早恢复，是磁盘问题误导了诊断。
+🟢 **2026-09-24 进展（F37 首次真正落地，走的是 A1+A3 组合）**：
+- F101/F103 卡面数字先核实为过期（F79 撤销 F37 后 gap 弹回），刷新为实测值，见卡片本体
+- F37 可行性侦察：选项 (b)（绕过 `NativeCallPattern`）已证伪；选项 (a) 排出 A1/A2/A3 难度序
+- F104 的 `evidence_disassemble_residual.sh` 对齐算法缺陷修复（zip 对位→按名字/值对位），`EXAMINED` 从"跟 `UNITS` 对不上"变成精确相等；真实残差从旧模型的 5,946 units 暴涨为 209,532 units，47% 目前无法归因（对象身份模型缺口，非测量错误）
+- F103 的 R4 区偏移 93.3% 归因到 F37 同一批函数（两条独立证据交叉印证）；R2 仍是未证实的数值线索
+- **F37 实际重新落地**：`~/dart-3122/sdk` 三个新提交——`531c5356dda`(A3，给三个 stub 在 Thread 里缓存真实入口地址)、`edce6e25b77`(A1，教 `NativeCallPattern` 认 shape A)、`63716223bde`(重新发出 shape-A 调度)。独立证伪 pass 判 **PARTIAL**（不是 SURVIVES），拆出 **F107**（验证本身对池槽值是盲的，只查指令形状）、**F108**（这几个提交又把 `ReleaseARM64` 构建搞旧了 1979 步）、**F109**（`call_no_scope_native_entry_point_` 分支从未被实测覆盖）。F37 卡片保持 `open`。
+- 顺带一提：round driver 曾短暂试过全部子代理+driver 都用 opus（含 driver），driver 那次跑了 67 分钟 0 产出被硬超时杀掉；随后证实同一配置下第二次跑了 54 分钟正常完成并产出了上面的 F37 落地——**driver 已改回 sonnet，子代理保留 opus**（`falsify.md` 里的强制 opus 指令未动）。
+**剩余 12 unknown（矩阵口径，未变）**：shorebird ×3（F55/F62，需要规则0 owner 决定是否永久 unknown）· dump_object_pool ×3（F101，根因 F37，现已部分落地待 F107/F108/F109 收尾）·
+dump_blobs ×3（F103，R4 已 93.3% 归因同一根因，R2 未归因）· disassemble ×3（F104，工具已修好，47% 是真实的对象身份缺口，需要新的堆图模型）。
 ```
 SDK 正面工作  9   F37 F55 F62 F67 F68 F69 F72 F80 F88
 仪器/闸门/循环 12  F46 F49 F53 F54 F65 F71 F81 F82 F83 F84 F86 F87

@@ -10885,3 +10885,63 @@ executed anywhere; reaching it needs an embedder resolver returning `auto_setup_
       但 `native_entry.cc:312-318` 先测 `is_bootstrap_native`；`io_natives.cc:234` 硬编码
       `*auto_setup_scope = true` ⇒ 只有 embedder 自带的 `Dart_SetNativeResolver` 能走到它。
       它按 `OFFSET_OF` 构造正确，但**未经执行验证**。判据与负控制见 `cards.tsv`。
+
+---
+
+## 2026-09-24 交互会话（人工驾驶，非 /loop 自动轮次）
+
+**触发点**：人问「unknown 可以跑了吗」，逐张复核 4 张 open 卡（F55/F62、F101、F103、F104）背后的实测状态，
+发现两张卡（F101、F103）的卡面数字已经过期——过期原因本身就是新发现。
+
+**F101/F103 过期核实**（fhp-research `274debb`）：`measure_pool_residual.sh` 实测 `UNEXPLAINED 88`
+（卡面写的是 3）、`evidence_dump_blobs_residual.sh` 实测 `UNITS 2,255,538`（卡面写的是 2,471,135）。
+根因追到 `121cc101d43`（F79 撤销 F37 的 native-call 调度形状，因为它会段错误）——F37 关闭时消掉的
+88 个函数差异，随撤销原样弹回来了。
+
+**F37 选项 (b) 证伪**（fhp-research `f7786cb`，`F37_LINKNATIVECALL_ROUTING.md`）：重跑
+`f35_native_vs_dd_probe.py`（不信旧的 92 这个数），证实 92/178 个 shape-A 站点在 Shorebird 真机二进制上
+R5 确实装的是 `LinkNativeCall` 池槽符号——排除了「这些站点根本不走 `NativeCallPattern`」这条更省事的路。
+独立复核过：`native_entry.cc:264-339` 内部没有 precompiled-mode 守卫，`code_patcher_arm64.cc:158-177`
+的 `PatchNativeCallAt`/`GetNativeCallAt` 也没有——约束 2 是真的、躲不掉。
+
+**F37 选项 (a) 可行性侦察**（fhp-research `81d364d`，`F37_OPTION_A_SCOPING.md`）：排出 A1/A2/A3 难度序，
+新发现——就算解码器修好，`ObjectPool::SetObjectAt` 的类型断言（`object.h:5773-5777`，独立核对过一字不差）
+仍会拒绝往 shape A 的 `kImmediate` 槽写 `Code` 对象，因为这类槽压根没有 target 概念。这份侦察后来被
+/loop 自动轮次（11:37-12:44 或 13:15-14:09，opus driver）直接拿去实现了 A1+A3，是本次会话与自动轮次
+之间唯一一条direct hand-off。
+
+**F104 工具缺陷修复**（fhp-research `bb3cac9`）：`evidence_disassemble_residual.sh` 原来按列表位置
+（`zip()`）配对两侧对象，但 `--disassemble` 的对象编号是堆遍历顺序，两侧不保证一致（同一个
+`CallBootstrapNative` stub 我方 id 145、对方 id 9785）。改成按 name/value 身份配对后 `EXAMINED` 与
+`diff_units.sh` 的 `UNITS` 精确相等（原来 243,820 ≠ 209,532）。真实残差从旧模型以为的 5,946 units
+暴涨为 209,532，其中 47%（98,462）目前无法归因——不是吸收掉了（`matched_literal_mismatch=0` 三个
+fixture 全验证过），是 ~40% 的对象（`Array`/`Type`/`Instance`/`Library`/占位对象）在这份转储格式里
+根本没有跨构建身份信号。
+
+**F104 堆图身份模型可行性侦察**（fhp-research `bba9650`，`F104_UNALIGNED_IDENTITY_SCOPING.md`）：那 40%
+不是铁板一块——`Library.url` 字段已经在 dump 里但没被用（~8%，白捡）、`ObjectPool` 每侧正好 1 个可直接
+配对（也在这 8% 里）；`Type`（11%）有 12.4% 能直接从已对齐对象反推，其余靠 `type_arguments` 位置未验证；
+剩下 ~81%（主要是 `Array`，逐类型查过引用字段零锚点）目前没找到便宜路。
+
+**F103 R2/R4 归因**（fhp-research `f80ece8`，`F103_R2_R4_ATTRIBUTION.md`）：`b1111a30e62` 排除（链进了
+`gen_snapshot` 但整个文件是一个从不被 `gen_snapshot` 自己代码引用的命名空间，死代码，独立用
+`ninja -t commands gen_snapshot` 核实过链接关系）。R4 的 93.3% 归因到 F101 同一批 92/178 个函数（两条
+独立证据交叉印证：F91 的真实 revert+rebuild 负控制、以及本次 F37(b) 调查用完全不同方法独立复现的
+同一批函数身份）。R2（+731B）只有数值相关性（~2B/函数，两个 fixture 精确整除），没有机制证据，诚实
+报成线索非结论。
+
+**/loop 恢复与运维排障**：
+- 09-23 CLAUDE.md 记的「登录态过期」是误诊——09-24 实测 `claude auth status` 一直 `loggedIn: true`；
+  真因是本地 Time Machine 快照锁住 39G 磁盘，`disk_slim` 的 `brew cleanup` 清不动，陷入
+  `refuse → 假装 recovered → PAUSE lifted → 2分钟后再撞` 的死循环，持续了至少 2 小时。
+  `tmutil thinlocalsnapshots / 999999999999 4`（不需要 sudo）一次性解开，19Gi→58Gi。
+- `COOLDOWN` 3600→1800（`82bc671`），按 57% 周额度剩余做的比例下调，非严格速率重算（没有第二个
+  带时间戳的读数可以重复 09-16 那次的线性拟合方法论）。
+- 试了「driver 也用 opus」（`7e78f7a`）：第一次跑 67 分钟 0 产出被硬超时看门狗杀掉（`rc=143`）；
+  同配置下紧接着那次跑了 54 分钟正常完成，就是产出 F37 A1+A3 落地的那一轮——**说明不是卡死，是慢**，
+  但代价太不可预测，改回 sonnet（`b1c21c9`），子代理侧的强制 opus（`cfbc87f`，改 `falsify.md`）保留。
+- 会话结束前按指令暂停：`.loop/PAUSE` 已放，`ralph.sh`/`wip_snapshot.sh --daemon` 均已用 SIGTERM
+  干净停机（等到它们各自当前的 `sleep $INTERVAL` 走完才退出，这是脚本自己的已知延迟，不是卡住）。
+
+**矩阵未变**：`na 35 / unknown 12 / structural 12 / gap 0`——今天的进展全在卡片与根因层，
+F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109），矩阵还没有格子因此改判。
