@@ -12480,4 +12480,36 @@ F140 VERDICT: PARTIAL -- both negative controls really go red, but run_round.sh 
 
 ---
 
+心跳：2026-09-26（本轮，交互式会话）任务锁定为 F140 修补丁 pass 4（commit `9e2c0da`）的证伪 pass，派新鲜 Opus 子代理跑 `tools/loop/prompts/falsify.md`。
+
+---
+
+## F140 修补丁证伪 pass 5（2026-09-26，Opus，commit `9e2c0da`/`4a8a521`）
+
+```
+VERDICT: PARTIAL   (model: Claude Opus 5.5, claude-opus-5-5[1m])
+ATTACK RESULTS:
+1. 读闸门本身。bootstrap 只判「文件缺失」一支。把攻击从删除改成清空/改写文件（trunc_attack.py delete|truncate|rewrite）：delete 报 `#SNAPSHOT-FAILED` 哨兵、RED、F46 留队；truncate 给 `snapC=b''` 且 `operator-drained F46 (ledger 16:45)`，队列清空；rewrite（写入无关内容）同样把它排掉。⇒ 闸门能报红，但只对「删除」这一种破坏方式。
+2. 自测用的是从活 `run_round.sh` 原样切出的 `# BEGIN/END quarantine-snapshot` 块，在 scratch git 仓里真跑，不是重写的副本；rev_i_marker/rev_i_history_only 只改 run_round.sh 就能让这条用例变红，证明切片是承重的。
+3. marker 只堵住一种丢 floor 的方式：(a) 跨轮清空/改写活文件仍能重置 floor（同攻击 1）；(b) git 历史那一半 fail-open——`core.repositoryformatversion 99` 令 `git log` 报错、被 `2>/dev/null` 吞掉，marker 与隔离区文件都删掉后照样静默重新 bootstrap（floor 归空，stderr 为空）；(c) `git branch -r --contains 9e2c0da` 为空，marker 提交只在本地，改写历史即可抹掉它。(ii) 的引号/代码段排除只按单行判断，多行 fenced block 看不见——引用 falsify.md 模板里的 "F52 VERDICT: SURVIVES (fix) -- template; F53 is FALSIFIED" 只绑定 F53，F52 的红丢失；反向例子里"请看"后面的绿会被过度判红。
+4. 逐行比对 c0be0a6（94）与 HEAD（101）的 `--self-test` 输出，只多出 7 条新 ok，旧 94 条结果不变；抽查显示新读法只会多判红、不会少判红，未做穷举。
+5. `git log -5`：`4a8a521` 在 `9e2c0da` 之上，`merge-base --is-ancestor` rc=0；`.loop/QUARANTINE_BOOTSTRAPPED` 已 `git ls-files` 确认在库；两个文件 `git status --porcelain` 均干净、`cmp` 与工作树一致；HEAD `--self-test` 101/0，`c0be0a6` 94/0。`9e2c0da` 不在任何远程分支上。
+6. 亲手重建全部 7 个负控制：rev_i_marker/rev_i_history_only/rev_ii_backtick/rev_ii_instr/rev_ii_unattr/rev_iii 各自 101/1，且失败即各自那条用例；但 `rev_ii_all`（只还原 POS 门控本身）只给 2 个失败（backtick、instr），不是账本写的 4——另两条被 `unattributed_red` 单独救回，账本未把它算进 `rev_ii_all` 的定义里。
+7. 部分算换了更容易的问题：测试确实跨了真实边界（新 bash 进程 + scratch 仓与文件系统持久状态），但只模拟了"轮次删除文件"这一种；一个被杀掉或延迟改写文件（而非 rm）的轮次仍能把 F46 洗白进下一轮。
+
+FLAW:（i）未被真正关闭——修补把"活文件缺失"当成丢 floor 的唯一方式；marker 一旦存在，下一轮开始时活文件里写的什么就被当成可信 floor。清空或改写 `<ledger>.quarantine` 再让本轮死掉，floor 照样被重置：`python3 /tmp/f140p5/trunc_attack.py truncate`（及 `rewrite`）以 `operator-drained F46 (ledger 2026-09-09 16:45)` 收场、队列清空。floor 需要一个跨轮的内容锚点（比如上一轮快照或其 sha 存在活文件之外），而不只是一个"bootstrap 过没有"的旗标。另外 marker 的 git 历史检查 fail-open：任何 git 报错被 `2>/dev/null` 吞掉、按"从未 bootstrap"处理（复现：`core.repositoryformatversion 99` 令 git 报错，删掉 marker 与隔离区文件后跑该块，floor 静默重新 bootstrap 为空，stderr 全空）。次要：(ii) 的代码段排除只按单行判断、看不见多行 fence；`rev_ii_all` 按账本定义数不出 4。
+STILL OPEN: n/a（判 PARTIAL）
+COST OF BEING WRONG: F113/F140 的"仅操作者出队"仍然靠这道 floor 撑着——一个被杀死或孤儿化、清空/改写了隔离区文件的轮次，能让伪造的账本行在无人介入下把一处未审的修补丁排出队列。
+
+F140 修补丁 VERDICT: PARTIAL (fix) -- 全部 7 条既有负控制真的变红，删除隔离区文件已被拦住，但跨轮清空/改写活文件仍会把 floor 重置为空并洗白伪造行（trunc_attack.py truncate|rewrite），且 git 历史 marker 检查在 git 报错时 fail-open。
+```
+
+**不许关卡**：F140 保持 `open`，第四次修补丁仍未过证伪 pass。下一轮的当场修至少要覆盖：
+① floor 的跨轮内容锚点不能只是"bootstrap 过没有"的旗标——需要保存上一轮 floor 快照本身（或其 sha）在活隔离区文件之外的位置，清空/改写活文件不能让它失忆；
+② marker 的 git 历史检查不许 fail-open——`git log --all -1 -- <marker>` 报错时必须按"未确认 bootstrap"处理，不能当"从未 bootstrap"处理（两者后果相反：前者应保守拒绝出队，后者会重新清空 floor）；
+③（次要）`real_pos_verdicts` 需要能看见多行 fenced code block，不能只按单行判断。
+本轮到此结束。
+
+---
+
 心跳：2026-09-26 05:41 本轮收到子代理回报（`9e2c0da`，`101 case(s), 0 failure(s)`，实测已核对 F140 在 `cards.tsv`/`.loop/UNREVIEWED_FIX` 均未被动过）。写回完毕，结束本轮。
