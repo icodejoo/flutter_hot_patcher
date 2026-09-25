@@ -10869,7 +10869,7 @@ executed anywhere; reaching it needs an embedder resolver returning `auto_setup_
 
 ⇒ **由本次 PARTIAL 逼出三张新卡**（按契约五之四「修它本身大到需要自己的判据与负控制，就立新卡」）：
 
-- [ ] **F107：F37 的两个判据都读不到对象池槽的「值」**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
+- [x] **F107：F37 的两个判据都读不到对象池槽的「值」**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
       判据：`verify_all.sh` 里要有一个能读到发射立即数命名的是哪个 Thread 字段的检查
       （或等价地跑那条 DEBUG 断言路径）。负控制：上面那个 offset-swap 实验必须让新检查变红，
       而 `measure_dd_emission.sh` 与 `dd_runtime_check.sh` 两个都仍然绿——三个一起动=新检查冗余，
@@ -10880,7 +10880,7 @@ executed anywhere; reaching it needs an embedder resolver returning `auto_setup_
       且 ran == `EXPECTED_CHECKS`。负控制：先证明那个陈旧探针能报红（touch 一个 Release 依赖的源文件，
       确认 `ninja -n` 非零且 `verify_all.sh:77` 给 rc=2），再还原——注意 `git checkout --` 会顶新 mtime、
       **不还原构建状态**（第 38 种仪器缺陷）。
-- [ ] **F109：`call_no_scope_native_entry_point_`（3936）那一臂从未在任何地方执行过**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
+- [x] **F109：`call_no_scope_native_entry_point_`（3936）那一臂从未在任何地方执行过**（`open`，2026-09-24，F37 证伪 pass 1 拆出，deps=F37）
       pass 1 已确立它是**不可达**而非写错：`bootstrap_natives.cc:56` 把 `auto_setup_scope` 置 false，
       但 `native_entry.cc:312-318` 先测 `is_bootstrap_native`；`io_natives.cc:234` 硬编码
       `*auto_setup_scope = true` ⇒ 只有 embedder 自带的 `Dart_SetNativeResolver` 能走到它。
@@ -11914,3 +11914,9 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F136：写方与读方的 Thread 布局没有真守卫（F37 修补丁证伪拆出）**（`open`，2026-09-25）
 
 **F37 修补丁证伪 PARTIAL（opus）**：池槽类型、每站独立槽（92/92/178 两侧都无共享）、弱池序列化都站得住；但 pass 1 点名的那条 `RELEASE_ASSERT` 仍是恒真式——`exit_through_ffi_` 在所有配置里都是 1792，而那三个字段在 3928 与 3968 之间移动（父方复读 DWARF 表）。gen_snapshot 用自己进程的 Thread 布局写偏移，运行时第一次调用就按这个偏移跳，没有任何东西核对两边一致；今天各配置恰好一致，所以是**缺守卫、不是已发生的错误发射** → F136。另：DebugARM64 早于 F121，DEBUG 断言从没覆盖过 Smi 槽。
+
+**agy 第四批（证伪用 gemini-3.8-flash-high，⚠️ 非 Opus，操作者指定）**：
+- **F107 SURVIVES → 关卡**；**F109 SURVIVES → 关卡**。STILL OPEN 原文已抄进卡里。
+- **F129 PARTIAL**：读数与卡面逐项吻合，但落盘证据里没有回退时的源码 diff，严格单变量无法从产物审计；补法是带 diff 重做一次（要重建）。
+- **CF 修补丁 SURVIVES (fix)**，STILL OPEN（旧新函数数目不一致时只打警告不报错）抄进 F101。
+- 🔴 **G122（F122 实现）被父方拒收，未提交**：在当前产物上它把 offset 桶全判成未解释（`cumulative_code_offset 0 / unexplained_offset_diff 2268`）。原因是它按对象枚举顺序、对全部对象累计尺寸差，而 offset 跟的是指令区布局顺序——模型写错，把能解释的差异变成了假缺口。脚本已恢复为已提交版本，被拒的 diff 存在 `reports_20260925/G122_rejected.diff`，卡片写了下一次的正确做法。
