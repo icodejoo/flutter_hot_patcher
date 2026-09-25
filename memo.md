@@ -11037,6 +11037,18 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
       要求的对拍未完成，且独立发现更深的既有缺陷（见 F118）。详见 memo.md 本节对应心跳与
       `cards.tsv` F117 行。
 
+- [ ] **F119：`green_ids()` 路径 (3) 正向绑定要求 id 与判决语同处一个 clause/行**（`open`，
+      2026-09-25，deps=F118，由 F118(C) 的 FLAW2 逐条分类发现）
+      复现：`green_ids("F63: use a call-graph that avoids the old predicate.\nVERDICT: SURVIVES
+      (fresh Sonnet agent, 9 tool calls).\nAll seven attacks passed. F55 was not tested and
+      remains unanswered.", known={"F63","F55"})` 返回 `set()`，而 F55 已被正确消歧
+      （`disq={F55}`）、`cand={F63}` 只剩唯一候选——不是歧义（候选数为 1），也不是
+      blockquote，而是"正向绑定"检查只在候选自己的 clause 里找绑定词，标题行与判决行分处
+      两行时找不到。真实语料影响：177 条重放里 idx 59/61/147 三条被此缺陷误判为持有。
+      判据与负控制：见 `cards.tsv` F119 行本体（修后三条须翻转为排出，且不得让已分类
+      CORRECT-FIX/REGRESSION 之外的条目产生新的假排；新增自测探针复现改前 hold→改后
+      `{F63}`）。
+
 - [ ] **F118：混合判决多卡回复颗粒无收 + F117②的对拍缺失 + F116③从未记录复现例**（`open`，
       2026-09-25，deps=F117，由 F117 自己的证伪 pass 找到）
       (A) 活性缺陷，非本次提交引入、`green_ids()` 一直如此：回复里只要**任意一张卡**判成
@@ -11654,3 +11666,49 @@ commits 列 `9e21a60,55a234d`，状态未改，仍 `open`）；`cards_check.sh` 
 子代理只读未写；`cards.tsv` 由本节手动记账更新（F118 行追加 PARTIAL 判决摘要）；`memo.md`
 （本节）。SDK 树（`~/dart-3122/sdk`）无改动。**本轮到此结束**——F118 (B)(C) 仍需下一轮继续修；
 F113 三选一与 F49 仍待 owner 决定。
+
+---
+
+## 2026-09-25 心跳（交互会话，claude-sonnet-5，调度器角色）：F118 FLAW1（blockquote 单卡假排）修复 + FLAW2 逐条分类，拆出 F119
+
+按契约读 `docs/LOOP_CONTRACT.md` 后独立核实：`.loop/UNREVIEWED_FIX` 的 F37/F115/F116/F117/F118
+五项均已在本会话此前各轮拿到过针对当前提交的新鲜证伪 pass，且自上条心跳以来三棵树 HEAD 均无变化
+（`flutter_hot_patcher` 仍 `27bd7e9`、`~/dart-3122/sdk` 仍 `63716223bde`、`fhp-research` 仍
+`4f1bbc8`），按契约不重复派发。F49/F113 仍等待 owner 三选一决定，不重派。F118 上一条心跳留下的
+两条具体缺陷（FLAW1 blockquote 单卡假排、FLAW2 22 条翻转的逐条分类）判据明确、不依赖 F113 决定，
+是本轮可独立推进的工作。
+
+**派实现子代理**（general-purpose，opus，foreground，1 个）：给出 FLAW1 的精确复现串
+（`green_ids("Context...\n> F52 VERDICT: SURVIVES...", {"F46","F52","F53"})` 返回 `{'F52'}`）、
+根因定位（`green_ids()` 的自由文本兜底路径对 `verdicts` 列表用的是含引用行的 `bt`，未像
+contract 路径那样排除 `>` 行）、修法方向（对 `verdicts` 计算单独用一份屏蔽了引用行的偏移保持字符串，
+`id_spans`/歧义机制仍用原文本不变）；同时要求对 FLAW2 做**逐条**而非估算的分类（用
+`replay_drain_rate.py --rev ade1624 --rev HEAD --list --why` 找出全部翻转条目，每条人工判
+REGRESSION/CORRECT-FIX/UNCLEAR）。
+
+子代理提交 `b005d95`（"F118 (C): mask blockquoted verdicts in the free-text fallback path"）：
+
+- **FLAW1 已修**：新增一份屏蔽引用行的偏移保持字符串，仅用于 `verdicts` 列表；`--self-test`
+  67/67 → 68/68 零回归；负控制：改前复现串返回 `{'F52'}`，改后返回 `set()`；多卡歧义用例
+  （`"F46 VERDICT: SURVIVES...\n> F52 VERDICT: SURVIVES..."`）改前改后均正确返回 `{'F46'}`
+  （引用卡仍作为候选制造歧义这条设计未被破坏）；语料重放 `27bd7e9`/HEAD 均 2/177（这处缺陷是直接
+  构造发现的，语料里未必有代表样本，数字不变符合预期，不是回归）。
+- **FLAW2 逐条分类**（22 条翻转，非估算）：**REGRESSION 3 · CORRECT-FIX 18 · UNCLEAR 1**。
+  3 条 REGRESSION（idx 59/61/147）经排查**不是** blockquote 缺陷也不是设计接受的歧义权衡，
+  而是一个**新发现的、此前未知的独立缺陷**：`green_ids()` 路径 (3) 的"正向绑定"检查要求验证短语
+  与唯一候选 id 同处一个 clause/行，当 id 出现在标题行（如 `"F63: <标题>"`）、判决语出现在后续行时，
+  即使歧义已被消解到只剩一个候选（`cand` 大小为 1、无其他候选竞争），仍返回 `set()`（判为持有，
+  实际本该排出）。18 条 CORRECT-FIX 确认属于已记录的接受权衡（真实联合判决、依赖/新卡提及、
+  历史引用、真正模糊的多卡记录），1 条 UNCLEAR（idx 129，F53/F83）未强行下判。
+
+**新缺陷已拆卡，不在本轮修**（契约五之四：装不下的问题拆新卡，不含糊写"待改进"）：
+`cards.tsv` 新增 `F119`（`open`，deps=F118），判据与负控制见卡片本体（复现串、要求修后 idx 59/61/147
+三条翻转为排出、且不得让已分类 CORRECT-FIX/REGRESSION 之外的条目产生新的假排）。
+
+`F118(C) 修补丁 VERDICT: 待独立证伪 pass`（本节记录实现方自报数字，尚未经审查——契约要求
+"修完的东西同样是未经审的"，下方派发新鲜证伪子代理）。
+
+**本轮 agents=1（实现）+ 1（证伪，独立、无共享上下文，正在跑，结果见下一节）**；改动文件：
+`tools/loop/fix_queue.py`（子代理提交 `b005d95`）、`~/Documents/fhp-research/spikes/
+shorebird_linkinfo_oracle/cards.tsv`（新增 F119 行）、`memo.md`（本节 + 下方 F119 卡片
+`- [ ]` 条目）。SDK 树无改动。
