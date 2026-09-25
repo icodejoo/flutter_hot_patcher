@@ -1395,6 +1395,38 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                            % ("missing" if not ledger_before_sha else "mismatch"))
     drained_before = (operator_drained(ledger_before, actions=actions)
                       if ledger_ok else {})
+    # F113 fix pass 3: a line written into the live ledger during the round is
+    # never the operator's (the operator drains between rounds), even when no
+    # queue row vanishes this round -- otherwise it is snapshotted next round
+    # with an honest checksum and cashed in then. Every such line is reported
+    # and removed, restoring the ledger to its round-start snapshot.
+    if ledger_before and ledger_ok:
+        live_path = operator_ledger(queue_path)
+        try:
+            with io.open(ledger_before, encoding="utf-8") as fh:
+                snap_lines = fh.read().splitlines()
+        except (IOError, OSError):
+            snap_lines = []
+        try:
+            with io.open(live_path, encoding="utf-8") as fh:
+                live_lines = fh.read().splitlines()
+        except (IOError, OSError):
+            live_lines = None
+        if live_lines is not None:
+            snap_set = set(snap_lines)
+            added = [x for x in live_lines if x and x not in snap_set]
+            if added:
+                actions.append(
+                    "RED %d ledger line(s) added during the round -- removed, "
+                    "ledger restored to its round-start snapshot (%s)"
+                    % (len(added), "; ".join(x.split("\t")[1] if "\t" in x
+                                             else x[:20] for x in added)))
+                try:
+                    with io.open(live_path, "w", encoding="utf-8") as fh:
+                        fh.write("".join(x + "\n" for x in snap_lines
+                                         if x and not x.startswith("#")))
+                except (IOError, OSError) as e:
+                    actions.append("RED could not restore the ledger (%s)" % e)
     drained_now = operator_drained(operator_ledger(queue_path))
 
     def settle(cid, seen, reason, vanished):
@@ -3001,7 +3033,7 @@ def self_test():
     heads, q, _, acts = settle_once(False, [row], [],
                               ledger_now="2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n")
     f113.append(("F113 control: ledger line added during the round restores queue line",
-                 any("ledger line added during the round" in a for a in acts) and q == ["F46"], (acts, q)))
+                 any("added during the round" in a for a in acts) and q == ["F46"], (acts, q)))
     # FA's repro: the round appends the same forged line to the ledger AND to
     # its round-start snapshot. The snapshot's checksum was taken before that,
     # so it no longer matches and nothing is excused.
@@ -3011,6 +3043,13 @@ def self_test():
     f113.append(("F113: forging both the ledger and its snapshot is RED and restored",
                  any("ledger snapshot checksum mismatch" in a for a in acts)
                  and q == ["F46"], (acts, q)))
+    # The two-round shape: round N only appends to the live ledger and deletes
+    # nothing. It must be caught in round N, before round N+1 snapshots it.
+    heads, q, qp2, acts = settle_once(False, [row], [row], ledger_now=forged)
+    live_after = io.open(operator_ledger(qp2), encoding="utf-8").read()
+    f113.append(("F113: a ledger line added mid-round with no row removed is RED and removed",
+                 any("ledger line(s) added during the round" in a for a in acts)
+                 and q == ["F46"] and "forged" not in live_after, (acts, q)))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")

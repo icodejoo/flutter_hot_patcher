@@ -11855,7 +11855,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F122：disassemble 残差的 offset/size 桶仍无条件吸收**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F123：disassemble 1,086 单位 = 他们 ObjectPool 多出的引用元素，F121 后归因**（`open`，2026-09-25，deps=F121）判据与负控制见 `cards.tsv`。
 - [ ] **F124：ArrayWriteBarrierStub 我们 1060B / 他们 1096B（三张卡的共同残差）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
-- [ ] **F125：ThreadLocal 首字差异与 5 个 shape-A 函数的 self_hash 残差**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [x] **F125：ThreadLocal 首字差异与 5 个 shape-A 函数的 self_hash 残差**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F126：shorebird_components 检查极性反了（需拍板判据）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F127：compute_dd_table ×3 的 structural 证据不能变红（需拍板撤回）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F128：phase_gate 钉子漏移 12 格（需拍板 field_table 判据）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
@@ -11879,7 +11879,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 **F49 证伪 PARTIAL → 保持 `built`**：五个变异今天仍能让守卫变红，但 F113 带进来一处新逃逸 E7（拆 F130），同轮自审仍能免入队 E6（拆 F131，需拍板）；E1–E5 旧逃逸仍开着，其中 E2/E3/E5 09-16 就已登记。
 
 - [ ] **F132：gen_snapshot 用 `target_os="ios"` 构建（我们一直在对 mac 目标，他们是 iOS）**（`open`，2026-09-25，deps=F124，需操作者定时机）
-- [ ] **F133：偏移替换规则解释不了的 17 个条目**（`open`，2026-09-25，deps=F125）
+- [x] **F133：偏移替换规则解释不了的 17 个条目**（`open`，2026-09-25，deps=F125）
 
 **同日 F124/F125 调查（opus，只读）——今天最大的发现**：
 - 🔴 **我们的 gen_snapshot 一直是 mac 目标（`ProductSimARM64/args.gn` `target_os = "mac"`），他们是 iOS**：快照特性串我们 `arm64 macos`、他们 `arm64 ios`，三个 fixture 皆然。`cpu_arm64.h:48` 只在「mac 且非 iOS」时开 LSE 原子指令 ⇒ 我们的写屏障用 `ldclr/stset`，他们用 LL/SC 重试循环 ⇒ `ArrayWriteBarrierStub` 正好差 9 字 36B，而它又是 shorebird 格 offset 桶 1146 单位的唯一来源、F101 三项之一、F103 唯一剩下的尺寸差。同一个宏还决定 FFI ABI（`abi.cc:57`）和 `shorebird/wrapper.cc:207/275`。残差模型 `TOTAL UNEXPLAINED 0`。父方核过 `cpu_arm64.h:48`、`args.gn`、特性串与残差。**修法是换构建目标，不是改代码 → F132，需要你定时机。**
@@ -11905,3 +11905,8 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - **FB（dump_blobs 重钉）SURVIVES**，STILL OPEN 原文已抄进 F103。
 - **FD（disassemble 语义判据）PARTIAL**：判据本身真实且对注入敏感；但实现方的负控制用的是无标识 Array 互换、会误报缺口，报告也引了旧产物数字。
 - **CF DONE**：新复跑脚本 `EQ_TO_NE_TOTAL 0`；`--break-decomposition` 改为在产物副本上扰动、走真实解码路径（父方复跑）。
+
+**F125 + F133 证伪 SURVIVES → 两张都关卡**：没有循环论证（替换只读我们的字和两份 DWARF 名字表）；391 个非 THR 注入与 388 个错名注入全部不再匹配；字节层打完补丁后非 `bl` 差异为 0、948 条 `bl` 都落在同名同偏移的被调函数上。STILL OPEN 已原文抄进卡里（spill 规则推广前要加 CFG 或单写守卫）。
+⇒ **「尺寸相同、self_hash 不同」的 391 个条目归因到 Thread 偏移，这条已经过独立证伪。**
+
+**F113 修补丁第二次证伪 PARTIAL → 父方再修（第三处）**：单轮伪造已堵住，但把同一招拆成两轮能过（第 N 轮只往账本追加、第 N+1 轮兑现）。现在每轮结束时在线账本必须等于开局快照，轮次期间新增的行一律 RED 并删除；用审查方自己的 `attack.sh` 复放：两轮伪造在第 N 轮就被拦下（旧代码会放行），合法出队照常。自测 78/0，变异掉检查后新用例变红。**仍开着的是结构性问题**：轮次能改写正在执行的 `run_round.sh` 本身——证据来源和行动者仍是同一方。
