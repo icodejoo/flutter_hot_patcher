@@ -11897,3 +11897,5 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）
 
 **F68 第二次证伪 FALSIFIED → 不关**：改写后的结论两处被实测推翻。① 补齐只修了 `LoadDFromOffset`；造一个用 float 常量的 fixture，**在今天的二进制上** `fl` 的 self_pp 他们 `[772,773]`、我们 `[772]`，同一机制仍在（父方读过原始输出）→ F134。② 跳窗并非完全一致：两边真实工具的动态差分显示池/字段加载一样被吞，但窗口里的 `bl` 他们照样分类、我们吞掉 → F135。这次差分顺带动态回答了 F72 在池加载那一半的问题。
+
+**F109 → `built`（同日）**：no-scope 分支**第一次真正执行**了。SDK 树外写了一个 AOT embedder（`spikes/f109_aot_embedder/`），链的是 ProductSimARM64 当前的 aotruntime 目标文件——共享的 engine 库是 09-23 的、早于 F37，链它就是空测，子代理主动避开了。运行时 NoScopeNative 的槽读到 `Smi 3936`、走 `CallNoScopeNative`、不压 API scope；AutoScopeNative 读到 3944；负控制下 9 条断言失败。父方复跑 `./run.sh` rc=0。
