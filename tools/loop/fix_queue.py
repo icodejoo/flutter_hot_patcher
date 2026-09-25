@@ -158,11 +158,22 @@ def operator_drained(ledger_path, actions=None):
         return out
     if os.path.exists(ledger_path) and os.path.isfile(ledger_path):
         try:
-            with io.open(ledger_path, encoding="utf-8") as fh:
+            with io.open(ledger_path, encoding="utf-8-sig") as fh:
                 for line in fh:
                     # Comment lines (a header, or the #SNAPSHOT-FAILED sentinel)
                     # are not drains and must not be parsed as malformed ones.
-                    if line.startswith("#"):
+                    #
+                    # F140: `line.startswith("#")` missed a comment that carries
+                    # leading whitespace (' #header'), a UTF-8 BOM ahead of the
+                    # '#' (only the FIRST line of a file can have one, but that
+                    # is exactly where a header comment lives), or the '//'
+                    # spelling -- each of those fell through to the data-line
+                    # parser and printed a false "RED malformed ledger line".
+                    # `utf-8-sig` above strips a leading BOM from the file
+                    # (io mode, not per-line); stripping leading whitespace here
+                    # handles the rest without touching how a real data line
+                    # (never whitespace-prefixed) is read.
+                    if line.lstrip().startswith(("#", "//")):
                         continue
                     parts = line.rstrip("\n").split("\t")
                     if len(parts) >= 5 and parts[1]:
@@ -907,6 +918,50 @@ def read_code_touch(path):
     return out
 
 
+def neg_ids_on_line(line, known=None):
+    """The ids ONE memo/subject line records a RED verdict about.
+
+    F140 (2026-09-26): scan() used to do `if NEG_RE.search(line): neg |=
+    here`, binding a red verdict found anywhere on the line to EVERY id the
+    line mentions -- the same "property computed over the whole object,
+    applied to every object it contains" shape green_ids() was fixed for
+    (F112 (iii), F116). Repro: "F77 VERDICT: FALSIFIED; F78 VERDICT:
+    SURVIVES" requeued F78 too, though its own verdict on the very same line
+    is green.
+
+    The card's own contract format (tools/loop/prompts/falsify.md) puts one
+    verdict per PHYSICAL line, so PER_ID_VERDICT_LINE's `^`-anchored match
+    cannot see a second header that starts mid-line -- and that is exactly
+    the shape the repro line uses ("F77 VERDICT: FALSIFIED; F78 VERDICT:
+    SURVIVES", both on one line). So the unit this function narrows to is
+    the CLAUSE (already used by green_ids() for the same reason: a comma or
+    a mid-word period must not split "F52, which I did not test" apart, but
+    a semicolon or a sentence boundary does separate two genuinely distinct
+    verdicts). A NEG token is bound only to the ids named in ITS OWN clause;
+    ids the line mentions in a DIFFERENT clause are unaffected by a NEG token
+    that never appears in theirs.
+    Within one clause the reading stays exactly as liberal as before (every
+    id the clause names is flagged), since a verdict is not always written
+    in a form more specific than that, and narrowing further -- "the id must
+    be on the verdict's own sub-clause" -- was already rejected once for
+    green verdicts, for a proven reason (green_ids()'s docstring).
+
+    Runs on the RAW line, not blank_meta(line): "did a red verdict happen"
+    is answered on raw text on purpose (see the comment above TOKEN_LIST) --
+    a verdict written `VERDICT: FALSIFIED/PARTIAL` is a slash-joined pair
+    that blank_meta blanks out whole, which would erase the FALSIFIED token
+    this function exists to see. That regression was caught by an existing
+    self-test case ("a verdict written FALSIFIED/PARTIAL is still a red
+    verdict") when this function first went through blank_meta.
+    """
+    out = set()
+    for m in CLAUSE.finditer(line):
+        seg = m.group(0)
+        if NEG_RE.search(seg):
+            out |= ids_on(seg, known)
+    return out
+
+
 def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
 
@@ -956,8 +1011,7 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
         # polarity, so a rejected SURVIVES does not read as an approval. A line
         # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
         # it owes nothing only if the round also dispatched twice.
-        if NEG_RE.search(line):
-            neg |= here
+        neg |= neg_ids_on_line(line, known)
         if polarity(strip_meta(line)) > 0 and PASS_VOCAB.search(line):
             # The legacy-id alias applies here and nowhere else: a verdict
             # written against "F--" drains the row that was migrated out of it.
@@ -1386,10 +1440,12 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # caller took at round start; otherwise nothing is excused (fail closed).
     ledger_ok = True
     if ledger_before:
+        raw = None
         got = None
         try:
             with io.open(ledger_before, "rb") as fh:
-                got = hashlib.sha256(fh.read()).hexdigest()
+                raw = fh.read()
+            got = hashlib.sha256(raw).hexdigest()
         except (IOError, OSError):
             pass
         if not ledger_before_sha or got != ledger_before_sha:
@@ -1397,6 +1453,26 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             actions.append("RED ledger snapshot checksum %s -- no operator "
                            "drain is excused this round"
                            % ("missing" if not ledger_before_sha else "mismatch"))
+        elif raw is not None and SNAPSHOT_FAILED.encode("utf-8") in raw:
+            # F140: a checksum match only proves the sentinel FILE was not
+            # tampered with after being written -- it says nothing about
+            # whether a real snapshot was ever taken. The queue path (this
+            # module's read_before_settle, ~:1289) and the cards path
+            # (known_ids(), ~:353) both already refuse on this sentinel; the
+            # ledger path did not, so `ledger_ok` stayed True, and the F113
+            # fix-pass-3 restore block below (which trusts ledger_ok) then
+            # overwrote the LIVE ledger with the sentinel-minus-comment
+            # snapshot -- i.e. nothing -- erasing every real operator drain
+            # recorded since. Treating a checksummed sentinel the same as a
+            # checksum mismatch keeps both the read below and the restore
+            # below from trusting a snapshot that was never taken, and the
+            # live ledger is left untouched (see the restore block's own
+            # `if ledger_before and ledger_ok` guard).
+            ledger_ok = False
+            actions.append("RED ledger snapshot was not taken at round start "
+                           "(#SNAPSHOT-FAILED sentinel) -- no operator drain "
+                           "is excused this round, and the live ledger is "
+                           "left untouched")
     drained_before = (operator_drained(ledger_before, actions=actions)
                       if ledger_ok else {})
     # F113 fix pass 3: a line written into the live ledger during the round is
@@ -1519,9 +1595,29 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             old_reason = kept[row_i][2]
             # G130f: a sha the row already records is not a new fix -- a round
             # that merely mentions the old commit again must not requeue.
+            #
+            # F140: the first version compared shas as exact strings, so a sha
+            # written back in uppercase (git prints `ABC1234` nowhere on its
+            # own, but a memo line copying one by hand can) or abbreviated to a
+            # different length than the one already recorded (`abc12345` vs the
+            # recorded `abc1234`) read as a NEW commit and requeued a card that
+            # had not actually been touched again. Comparison is now
+            # case-insensitive, and a candidate sha is "already recorded" when
+            # it is a prefix of a recorded one or a recorded one is a prefix of
+            # it -- either direction, since an old_reason can itself hold the
+            # short form and a new mention can be longer, or the reverse.
+            old_shas = {s.lower() for s in
+                        re.findall(r"[0-9a-f]{7,40}", old_reason, re.IGNORECASE)}
+
+            def _new_sha(sha, old=old_shas):
+                sha = sha.lower()
+                return not any(sha.startswith(o) or o.startswith(sha)
+                               for o in old)
+
             shas = " ".join(sorted(
-                {s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)}
-                - set(re.findall(r"[0-9a-f]{7,40}", old_reason))))
+                s for s in {s.split(" ", 1)[0] for s in subjects
+                            if cid in ids_on(s, known)}
+                if _new_sha(s)))
             if shas:
                 # The verdict word comes from lines that name THIS card, not
                 # from any red line in the round.
@@ -3009,6 +3105,64 @@ def self_test():
               and [r[1] for r in q if r[0] == "F77"] == ["2026-09-17 10:00"])
         return ok, "rc=%s out=%r q=%r" % (rc, out, q)
 
+    @probe("F140: a differently-cased mention of the recorded sha does not requeue")
+    def _f140_sha_case():
+        d = tempfile.mkdtemp(prefix="fq_f140case.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["ABC1234 tree F77: same commit, uppercase in this subject"],
+            agents=0, cards={"F77"})
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("requeue F77" not in out
+              and [r[1] for r in q if r[0] == "F77"] == ["2026-09-17 10:00"])
+        return ok, "rc=%s out=%r q=%r" % (rc, out, q)
+
+    @probe("F140: a longer abbreviation of the recorded sha does not requeue")
+    def _f140_sha_abbrev():
+        d = tempfile.mkdtemp(prefix="fq_f140abbrev.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["abc12345678 tree F77: same commit, longer abbreviation"],
+            agents=0, cards={"F77"})
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("requeue F77" not in out
+              and [r[1] for r in q if r[0] == "F77"] == ["2026-09-17 10:00"])
+        return ok, "rc=%s out=%r q=%r" % (rc, out, q)
+
+    @probe("F140 control: a genuinely new sha still requeues")
+    def _f140_sha_new():
+        d = tempfile.mkdtemp(prefix="fq_f140new.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["fff9999 tree F77: an actually new fix"],
+            agents=0, cards={"F77"})
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("requeue F77 -- new fix fff9999" in out
+              and any(r[0] == "F77" and "fff9999" in r[2] for r in q))
+        return ok, "rc=%s out=%r q=%r" % (rc, out, q)
+
+    @probe("F140: a memo line with two per-id verdicts marks a RED verdict "
+           "only for the id whose OWN block says so")
+    def _f140_negline():
+        memo = ["F77 VERDICT: FALSIFIED -- reproduced the bug; "
+                "F78 VERDICT: SURVIVES -- re-ran every control the card names."]
+        subjects = ["abc1234 tree F77: fix", "def5678 tree F78: fix"]
+        known = {"F77", "F78"}
+        neg, fix, _, _, _ = scan(memo, subjects, 1, known)
+        ok = (neg == {"F77"} and {"F77", "F78"} <= fix)
+        return ok, "neg=%r fix=%r" % (neg, fix)
+
+    @probe("F140 control: a line with no per-id block still binds a NEG "
+           "token to every id it names (liberal fallback unchanged)")
+    def _f140_negline_fallback():
+        memo = ["F77 and F78 both regressed: FALSIFIED again."]
+        known = {"F77", "F78"}
+        neg = neg_ids_on_line(memo[0], known)
+        return neg == {"F77", "F78"}, "neg=%r" % (neg,)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3120,6 +3274,34 @@ def self_test():
     f113.append(("F113: a ledger line added mid-round with no row removed is RED and removed",
                  any("ledger line(s) added during the round" in a for a in acts)
                  and q == ["F46"] and "forged" not in live_after, (acts, q)))
+
+    # F140: run_round.sh writes exactly this one line when its `cp` of the
+    # ledger snapshot fails. Its checksum matches what the caller passed in
+    # (the sentinel content was never tampered with after being written), so
+    # the checksum check alone cannot catch it -- it has to be read as its own
+    # case. The live ledger here holds a REAL operator drain that predates the
+    # failed snapshot attempt; the pre-fix code read the sentinel as a harmless
+    # comment, decided ledger_ok=True, then found the real drain line "added
+    # during the round" and overwrote the live ledger with nothing.
+    real_drain = "2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n"
+    heads, q, qp4, acts = settle_once(False, [row], [row],
+                                      ledger_b=SNAPSHOT_FAILED + "\n",
+                                      ledger_now=real_drain)
+    live_after_sentinel = io.open(operator_ledger(qp4), encoding="utf-8").read()
+    f113.append(("F140: a #SNAPSHOT-FAILED ledger snapshot refuses instead of "
+                 "erasing a real drain recorded before the failed snapshot",
+                 any("SNAPSHOT-FAILED" in a for a in acts)
+                 and q == ["F46"] and live_after_sentinel == real_drain,
+                 (acts, q, live_after_sentinel)))
+
+    # F140: a comment header with leading whitespace, a leading BOM, or the
+    # '//' spelling must not be read as a malformed drain line.
+    weird_hdr = "﻿# header\n // also a comment\n  #indented too\n"
+    heads_w, q_w, _, acts_w = settle_once(False, [row], [row], ledger_b=weird_hdr)
+    f113.append(("F140: BOM/leading-space/'//' comment lines in the ledger "
+                 "raise no RED",
+                 not any("malformed" in a for a in acts_w) and q_w == ["F46"],
+                 acts_w))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
