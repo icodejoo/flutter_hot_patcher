@@ -1061,18 +1061,82 @@ def neg_ids_on_line(line, known=None):
     ALSO has a structured green verdict does the CLAUSE restriction apply,
     to keep that verdict's id out of reach of a red token in a different
     clause.
+
+    F140, FOURTH round (2026-09-26, pass 3's flaw (ii)): the POS_VERDICT
+    gate above was asked of the raw line, so a green verdict that is only
+    being QUOTED turned the restriction on and dropped real group reds:
+    "派 F52、F53 证伪（要求末行 `VERDICT: SURVIVES` 格式）。回来两张都
+    FALSIFIED" describes a dispatch prompt, it is not a verdict, and gave []
+    where pre-CLAUSE binding gives F52 and F53; so did same-card history
+    ("F52 旧补丁证伪 pass 1: SURVIVES…两张都 PARTIAL"). See
+    real_pos_verdicts() and unattributed_red() for the two narrowings.
+    Both only ever send a line BACK to the liberal (pre-CLAUSE) reading,
+    i.e. they can only add red bindings, never remove one -- the cheap
+    direction. The F77/F78 shape (every red names its id, the green is
+    issued, not quoted) still restricts.
     """
     ids = ids_on(line, known)
     if len(ids) <= 1:
         return ids if NEG_RE.search(line) else set()
-    if not POS_VERDICT.search(line):
+    if not real_pos_verdicts(line):
         return ids if NEG_RE.search(line) else set()
+    if unattributed_red(line, known):
+        return ids
     out = set()
     for m in CLAUSE.finditer(line):
         seg = m.group(0)
         if NEG_RE.search(seg):
             out |= ids_on(seg, known)
     return out
+
+
+# A green verdict being QUOTED rather than issued (F140 round 4): inside a
+# `code span`, or right after a dispatch-instruction verb in the same clause.
+CODE_SPAN = re.compile(r"`[^`\n]*`")
+INSTRUCTION_BEFORE = re.compile(
+    r"(?:要求|需要|让[^。；;]{0,20}?(?:回答|回复|回|答|写)|请|"
+    r"\b(?:ask(?:s|ed)?|requir(?:e|es|ed|ing)|request(?:s|ed)?|"
+    r"expect(?:s|ed)?|want(?:s|ed)?|reply\s+with|answer\s+with)\b)"
+    r"[^。；;.!?\n]{0,20}$", re.IGNORECASE)
+
+
+def real_pos_verdicts(line):
+    """POS_VERDICT matches on `line` that are ISSUED, not quoted.
+
+    Excluded: a match lying inside a backtick code span (a template or a
+    literal being described), and a match whose own clause, in the 30
+    characters before it, carries a dispatch-instruction verb (要求 / 需要 /
+    让…回答 / ask / require ...) -- "asked for a SURVIVES-shaped answer" is
+    not "answered SURVIVES".
+    """
+    spans = [(m.start(), m.end()) for m in CODE_SPAN.finditer(line)]
+    out = []
+    for m in POS_VERDICT.finditer(line):
+        if any(s <= m.start() and m.end() <= e for s, e in spans):
+            continue
+        head = line[max(0, m.start() - 30):m.start()]
+        head = re.split(r"[.;!?\n。；]", head)[-1]
+        if INSTRUCTION_BEFORE.search(head):
+            continue
+        out.append(m)
+    return out
+
+
+def unattributed_red(line, known=None):
+    """True iff some clause carries a red token but names no card id.
+
+    That red is about ids named elsewhere -- a pronoun group ("两张都
+    PARTIAL", "另两张 PARTIAL") or a later verdict superseding a green
+    recounted earlier on the line. CLAUSE restriction cannot see who it is
+    about, so the caller must fall back to binding every id on the line
+    (F140 round 4: "F52 旧补丁证伪 pass 1: SURVIVES，F53 同；新补丁再证伪。
+    两张都 PARTIAL" gave [] with the restriction on).
+    """
+    for m in CLAUSE.finditer(line):
+        seg = m.group(0)
+        if NEG_RE.search(seg) and not ids_on(seg, known):
+            return True
+    return False
 
 
 def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
@@ -3437,6 +3501,54 @@ def self_test():
         neg = neg_ids_on_line(memo[0], known)
         return neg == {"F52", "F53", "F54"}, "neg=%r" % (neg,)
 
+    # F140 round 4 (pass 3's flaw (ii)): a QUOTED green must not switch the
+    # CLAUSE restriction on. One case per narrowing, each built so that only
+    # that narrowing sends the line back to liberal binding (the others do
+    # not fire on it), so reverting any one of them turns its own case red.
+    @probe("F140 r4: a SURVIVES inside a `code span` is quoted, not issued "
+           "-- the id named only beside it still gets the line's red")
+    def _f140_pos_backtick():
+        line = "F53 的回执模板是 `VERDICT: SURVIVES`；F52 与另一张都 FALSIFIED"
+        k = {"F52", "F53"}
+        iso = (not unattributed_red(line, k)
+               and not INSTRUCTION_BEFORE.search(line.split("`")[0]))
+        neg = neg_ids_on_line(line, k)
+        return iso and neg == {"F52", "F53"}, "iso=%r neg=%r" % (iso, neg)
+
+    @probe("F140 r4: a SURVIVES right after a dispatch-instruction verb "
+           "(要求…) is a request, not a verdict")
+    def _f140_pos_instruction():
+        line = "派 F53 证伪，要求回 VERDICT: SURVIVES 格式；F52 与另一张都 FALSIFIED"
+        k = {"F52", "F53"}
+        iso = "`" not in line and not unattributed_red(line, k)
+        neg = neg_ids_on_line(line, k)
+        return iso and neg == {"F52", "F53"}, "iso=%r neg=%r" % (iso, neg)
+
+    @probe("F140 r4: a red naming no id (pronoun group / later verdict "
+           "superseding recounted history) binds every id on the line")
+    def _f140_pos_history():
+        line = "F52 旧补丁证伪 pass 1: SURVIVES，F53 同；新补丁再证伪。两张都 PARTIAL"
+        k = {"F52", "F53"}
+        iso = "`" not in line and bool(real_pos_verdicts(line))
+        neg = neg_ids_on_line(line, k)
+        return iso and neg == {"F52", "F53"}, "iso=%r neg=%r" % (iso, neg)
+
+    @probe("F140 r4: pass 3's verbatim dispatch-template line binds F52 "
+           "and F53 red (was [])")
+    def _f140_pos_template_verbatim():
+        line = ("派 F52、F53 证伪（要求末行 `VERDICT: SURVIVES` 格式）。"
+                "回来两张都 FALSIFIED")
+        neg = neg_ids_on_line(line, {"F52", "F53"})
+        return neg == {"F52", "F53"}, "neg=%r" % (neg,)
+
+    @probe("F140 r4 control: an ISSUED green before an attributed red still "
+           "restricts -- F77 SURVIVES / F78 FALSIFIED binds only F78")
+    def _f140_pos_issued_first():
+        line = ("F77 VERDICT: SURVIVES -- re-ran every control; "
+                "F78 VERDICT: FALSIFIED -- reproduced the bug.")
+        neg = neg_ids_on_line(line, {"F77", "F78"})
+        return neg == {"F78"}, "neg=%r" % (neg,)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3734,6 +3846,106 @@ def self_test():
     f113.append(("F140: a directory swapped in for the live quarantine "
                  "file is caught, not read as an empty quarantine",
                  okD, actsD))
+
+    # F140 round 4 (pass 3's flaw (iii)): the missing_from_live branch's own
+    # `ledger_ok = False` had no negative control -- in the deletion case
+    # above the forged line stays excluded via the floor anyway, so F46 goes
+    # RED whether or not the round is refused. Here the honest, checksummed
+    # ledger snapshot holds a DIFFERENT, well-formed drain line that is not
+    # quarantined; the only thing standing between it and
+    # "operator-drained F46" is that a round which deleted quarantine rows
+    # is not trusted to excuse anything.
+    d3 = tempfile.mkdtemp(prefix="fq_f140qmiss.")
+    qp_m = os.path.join(d3, "q")
+    write_queue(qp_m, [])
+    forged_q = "2026-09-09 16:45\tF46\tforged earlier\tcruz\t2026-09-09 16:40"
+    other = "2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n"
+    qbM = os.path.join(d3, "qb")
+    io.open(qbM, "w", encoding="utf-8").write(forged_q + "\n")
+    qbshaM = hashlib.sha256(io.open(qbM, "rb").read()).hexdigest()
+    io.open(quarantine_path(qp_m), "w", encoding="utf-8").write("")
+    io.open(operator_ledger(qp_m), "w", encoding="utf-8").write(other)
+    bpM = os.path.join(d3, "b")
+    write_queue(bpM, [row])
+    lbM = bpM + ".operator_drains"
+    io.open(lbM, "w", encoding="utf-8").write(other)
+    shaM = hashlib.sha256(io.open(bpM, "rb").read()).hexdigest()
+    lshaM = hashlib.sha256(io.open(lbM, "rb").read()).hexdigest()
+    rpM = os.path.join(d3, "r")
+    io.open(rpM, "w", encoding="utf-8").write("")
+    actsM, _, _ = update(qp_m, [], [], 0, "2026-09-09 17:30", {"F46"},
+                         before_path=bpM, before_sha=shaM, replies_path=rpM,
+                         ledger_before=lbM, ledger_before_sha=lshaM,
+                         quarantine_before=qbM, quarantine_before_sha=qbshaM)
+    restored = forged_q in load_quarantine(quarantine_path(qp_m))
+    okM = (restored
+           and not any(a.startswith("operator-drained F46") for a in actsM)
+           and any(a.startswith("RED F46") for a in actsM)
+           and [r[0] for r in read_queue(qp_m)] == ["F46"])
+    f113.append(("F140 r4: rows deleted from the live quarantine file are "
+                 "restored AND the round excuses no drain (missing_from_live)",
+                 okM, (restored, actsM)))
+
+    # F140 round 4 (pass 3's flaw (i)): run_round.sh's quarantine snapshot
+    # block, extracted between its BEGIN/END markers and run for real in a
+    # scratch git repo across three rounds. Round A bootstraps and writes the
+    # marker; the marker is committed; round B's gate is skipped after it
+    # deletes BOTH the live quarantine file and the marker's working copy;
+    # round C must snapshot the #SNAPSHOT-FAILED sentinel (marker is in git
+    # history), NOT re-bootstrap an empty floor -- and update() fed that
+    # snapshot must not drain the forged line.
+    rr = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run_round.sh")
+    blk = io.open(rr, encoding="utf-8").read()
+    b0 = blk.index("# BEGIN quarantine-snapshot")
+    b1 = blk.index("# END quarantine-snapshot")
+    snippet = blk[b0:b1]
+    d4 = tempfile.mkdtemp(prefix="fq_f140boot.")
+    st = os.path.join(d4, ".loop")
+    os.mkdir(st)
+    fq = os.path.join(st, "UNREVIEWED_FIX")
+    fqb = fq + ".before"
+    env = dict(os.environ, REPO=d4, STATE=st, FIX_QUEUE=fq, FIX_QUEUE_BEFORE=fqb)
+    script = snippet + '\nprintf "%s" "$QUARANTINE_BEFORE_SHA"\n'
+    git = lambda *a: subprocess.run(["git", "-C", d4] + list(a),
+                                    capture_output=True, text=True)
+    git("init", "-q")
+    rA = subprocess.run(["bash", "-c", script], env=env,
+                        capture_output=True, text=True)
+    marker = os.path.join(st, "QUARANTINE_BOOTSTRAPPED")
+    bootA = (os.path.isfile(quarantine_path(fq)) and os.path.isfile(marker))
+    git("add", "-f", marker)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "marker")
+    # round A's gate quarantines a forged line (as update() would)
+    io.open(quarantine_path(fq), "w", encoding="utf-8").write(forged_q + "\n")
+    # round B: deletes the evidence and the marker, gate never runs
+    os.remove(quarantine_path(fq))
+    os.remove(marker)
+    rC = subprocess.run(["bash", "-c", script], env=env,
+                        capture_output=True, text=True)
+    snapC = io.open(fqb + ".operator_drains.quarantine", "rb").read() \
+        if os.path.exists(fqb + ".operator_drains.quarantine") else b""
+    sentinelC = snapC.strip() == SNAPSHOT_FAILED.encode("utf-8")
+    write_queue(fq, [])
+    io.open(operator_ledger(fq), "w", encoding="utf-8").write(forged_q + "\n")
+    write_queue(fqb, [row])
+    io.open(fqb + ".operator_drains", "w", encoding="utf-8").write(forged_q + "\n")
+    rpC = os.path.join(d4, "r")
+    io.open(rpC, "w", encoding="utf-8").write("")
+    actsC, _, _ = update(
+        fq, [], [], 0, "2026-09-09 17:30", {"F46"},
+        before_path=fqb,
+        before_sha=hashlib.sha256(io.open(fqb, "rb").read()).hexdigest(),
+        replies_path=rpC, ledger_before=fqb + ".operator_drains",
+        ledger_before_sha=hashlib.sha256(
+            io.open(fqb + ".operator_drains", "rb").read()).hexdigest(),
+        quarantine_before=fqb + ".operator_drains.quarantine",
+        quarantine_before_sha=rC.stdout or None)
+    okB = (rA.returncode == 0 and bootA and sentinelC
+           and not any(a.startswith("operator-drained F46") for a in actsC))
+    f113.append(("F140 r4: a quarantine file deleted across a round boundary "
+                 "is NOT re-bootstrapped empty once the marker is in git "
+                 "history (run_round.sh snippet, 3 rounds)",
+                 okB, (rA.returncode, bootA, snapC, rC.stderr, actsC)))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")

@@ -809,14 +809,40 @@ LEDGER_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sh
 # the snapshot. After that bootstrap, "missing" at any FUTURE round's
 # snapshot time can only mean the file was deleted, and gets the same
 # #SNAPSHOT-FAILED sentinel treatment as the ledger, not a fresh empty file.
+#
+# F140 round 4 (pass 3's flaw (i)): the paragraph above was a claim no code
+# kept -- "missing" re-bootstrapped to empty on EVERY round, so a round that
+# deleted the file and then got its gate killed (or deleted it later from a
+# background job) reset the floor to nothing for the next round. "Has this
+# ever been bootstrapped" is now its own persistent fact: the marker file
+# $STATE/QUARANTINE_BOOTSTRAPPED, force-added to git once (.loop/ is
+# ignored), and read from the working tree OR from git history -- so
+# deleting the working copy alongside the quarantine file does not bring
+# the bootstrap back. No round-time code re-creates the marker once it is
+# in history. With the marker known, a missing live file is not
+# re-created: `cp` fails and the snapshot is the #SNAPSHOT-FAILED sentinel,
+# which fix_queue.py reddens on (no drain excused, every live ledger line
+# re-quarantined). An operator who has reviewed it restores the file by hand.
+# fix_queue.py --self-test runs the block between the BEGIN/END lines
+# verbatim; keep it self-contained (REPO STATE FIX_QUEUE FIX_QUEUE_BEFORE).
+# BEGIN quarantine-snapshot
 QUARANTINE_LIVE="$FIX_QUEUE.operator_drains.quarantine"
-if [ ! -e "$QUARANTINE_LIVE" ]; then
-  : >"$QUARANTINE_LIVE" 2>/dev/null || true
+QUARANTINE_MARKER="$STATE/QUARANTINE_BOOTSTRAPPED"
+if [ -e "$QUARANTINE_MARKER" ] || [ -n "$(git -C "$REPO" log --all -1 --format=%H -- "${QUARANTINE_MARKER#"$REPO"/}" 2>/dev/null)" ]; then
+  if [ ! -e "$QUARANTINE_LIVE" ]; then
+    echo "run_round: quarantine file $QUARANTINE_LIVE is missing after bootstrap -- snapshot is the #SNAPSHOT-FAILED sentinel, not an empty floor" >&2
+  fi
+else
+  if [ ! -e "$QUARANTINE_LIVE" ]; then
+    : >"$QUARANTINE_LIVE" 2>/dev/null || true
+  fi
+  : >"$QUARANTINE_MARKER" 2>/dev/null || true
 fi
 if ! cp "$QUARANTINE_LIVE" "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || true
 fi
 QUARANTINE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || echo "")
+# END quarantine-snapshot
 # F112 (ii): the card table as it stood when this round started. Taken here,
 # beside the queue snapshot and for the same reason -- the gate needs a second
 # source for "which ids are cards", because the one it reads at round end can

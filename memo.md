@@ -12435,3 +12435,43 @@ F140 VERDICT: PARTIAL -- both negative controls really go red, but run_round.sh 
 需要排除处于引号/代码块内或明显是"转述过去判决"的文本；
 ③ 补一条 `missing_from_live` 分支自己的负控制（当前 rev_restore 还原后 `--self-test` 仍 94/0，是空判据）。
 本轮到此结束。
+
+---
+
+心跳：2026-09-26 05:25 本轮（PID 25356，ralph.sh 子进程）任务锁定为 F140 修补丁 pass 3 列出的三处待修（floor 持久标记 / POS_VERDICT 排除引用文本 / missing_from_live 负控制），派子代理实现。
+
+---
+
+## F140 修补丁 pass 4 的当场修（当前 commit）
+
+针对 pass 3（`c0be0a6`）列出的三处，`fix_queue.py --self-test` **94 → 101 case(s), 0 failure(s)**（新增 7 条）。
+负控制脚本 `/tmp/f140p4/mk.py`（每个变体只还原一处，连同 `run_round.sh` 一起拷到独立目录跑 `--self-test`）。
+
+(i) **floor 跨轮重置**：`run_round.sh` 的隔离区快照块改为 `# BEGIN/END quarantine-snapshot` 包起来的自足块。
+新增持久标记 `.loop/QUARANTINE_BOOTSTRAPPED`（空文件，`.loop/` 被 ignore，故 `git add -f` 入库，本 commit 已加）。
+判"已 bootstrap 过"= 工作树里有标记 **或** `git log --all -1 -- .loop/QUARANTINE_BOOTSTRAPPED` 非空 ⇒ 轮次连标记工作副本一起删也回不到"首次"。
+已 bootstrap 且活隔离区缺失 ⇒ 不再 `: >` 重建，`cp` 失败写 `#SNAPSHOT-FAILED` 哨兵（fix_queue.py 对它判 RED、不免检、把活账本全部数据行重新隔离）；只有标记在工作树与历史里都不存在时才 bootstrap，且同一步写标记。
+自测用例把该块从 `run_round.sh` 原样截出、在临时 git 仓里用 bash 跑三轮（A bootstrap+提交标记 → B 删隔离区与标记、闸门不跑 → C 快照），再用 C 的快照喂 `update()`。
+负控制：`rev_i_marker`（判定换成 `if false`，即旧的每轮 bootstrap）→ `101 case(s), 1 failure(s)`，失败即此用例，细节 `snapC=b''`、`operator-drained F46`（= pass 3 的 floor_attack 结果原样复现）；
+`rev_i_history_only`（只去掉 git 历史那一半）→ 同样 1 failure、同一用例 ⇒ 历史查询承重，不是装饰。
+实仓 `git log --all -1 -- <marker>` 耗时 0.62s。
+
+(ii) **POS_VERDICT 读引用文本**：`neg_ids_on_line()` 的门控从 `POS_VERDICT.search(line)` 改为 `real_pos_verdicts(line)`，排除
+① 落在 `` `…` `` 代码段内的匹配、② 同分句内前 30 字符有派单指令词（`要求`/`需要`/`让…回答`/`请`/ask/require/expect…）的匹配；
+另加 ③ `unattributed_red()`：某分句有红判词却不点任何 id（代词分组"两张都 PARTIAL"、覆盖前面历史绿的后续判决）⇒ 退回整行绑定。
+三者都只会把一行送回 pre-CLAUSE 的宽松读法 ⇒ 只可能多判红（便宜方向），不可能少判红。
+新增 5 条：三条各自只被一个子规则救（用例里带 `iso` 断言确认另两条子规则不命中）、pass 3 原句 `派 F52、F53 证伪（要求末行 \`VERDICT: SURVIVES\` 格式）。回来两张都 FALSIFIED` → `{F52,F53}`（此前 `[]`）、
+正控制 `F77 VERDICT: SURVIVES…; F78 VERDICT: FALSIFIED…` → 只 `{F78}`（既有 F77/F78 用例仍 `{F77}`）。
+负控制：`rev_ii_all` → 4 failures（四条新红用例）；`rev_ii_backtick` / `rev_ii_instr` / `rev_ii_unattr` 各 1 failure，且各自就是自己那条 ⇒ 三个子规则都有独立负控制。
+全语料：HEAD vs 本版在真实 memo.md（12441 行、研究树 `spikes/shorebird_linkinfo_oracle/cards.tsv` 110 个 id）上逐行比 `neg_ids_on_line`：**差异 0 行，丢 0 得 0**（`/tmp/f140p4/measure.py`）；
+仍走 CLAUSE 分支的行从 12 降到 5（口径：多 id 且有 POS 匹配）。
+
+(iii) **missing_from_live 无负控制**：新增用例——floor 快照里隔离了一行伪造 `16:45` 行，活隔离区被清空，而**诚实校验和的**账本快照里另有一条格式正确、未被隔离的 `16:50 F46` 行；
+断言 (a) 伪造行被写回活隔离区、(b) F46 不被 `operator-drained`、判 `RED F46`、行回到队列。
+负控制：`rev_iii`（只删 `missing_from_live` 分支的 `ledger_ok = False`）→ `101 case(s), 1 failure(s)`，失败即此用例，细节 `restored=True` 但 `operator-drained F46 (ledger 2026-09-09 16:50)` ⇒ 恰好证明这一行承重。
+（pass 3 的 rev_restore 为何 94/0：既有删除用例里伪造行仍经 floor 被排除，F46 不论是否免检都 RED。）
+
+`baseline` 变体 `101 case(s), 0 failure(s)` rc=0；实仓 `python3 tools/loop/fix_queue.py --self-test` 同。
+`run_round.sh` 是用"写临时文件 + rename"替换的（轮次在跑，bash 按偏移读脚本，原地改写会打乱在飞的那一轮）。
+
+**尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。
