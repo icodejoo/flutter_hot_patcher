@@ -12096,3 +12096,15 @@ f. **真实产物（未改动）上的实测 UNEXPLAINED：1190（396/396/398）
 重新核验上面六条，尤其是 (b)(c) 两条负控的具体数字与「187 个对象单一断链」这句话，
 不许由做实现的那个子代理自己下判决，我自己也不下判决。
 **F122 保持 `open`/`built`，欠证伪 pass。**
+
+## 2026-09-25 心跳：F122「anchored」规则第三次证伪 PARTIAL——出口侧断链不计入 UNEXPLAINED
+
+**F122 VERDICT: PARTIAL -- every number the card cites reproduces exactly, but a break that lands on an offset_diff==0 object is never counted, so a displaced run whose entry is explained by a size change is fully absorbed even though nothing explains its jump back to zero**
+
+新鲜 Opus 子代理（22 次调用，独立于实现该修补丁的那个会话）逐条核验了 `1489446` 自报的六条数字与四个负控制，**全部原样复现**（`EXAMINED 1808/1808/1808`、`UNEXPLAINED 1190`、负控 A/B/C/D 分别 +2/+4/+1336/+2130，`out_pm` sha1 扰动前后一致，仅在 `$TMPDIR` 私有副本上操作）。同时它自己造了一个第五种扰动（原负控脚本没有的）：把私有副本里 pos299 的尺寸 +8、pos300..699 的偏移 +8，**再把 pos299 在两侧都改名成白名单里的 `_iso_stub_ArrayWriteBarrierStub`**——结果 800 个对象仍被吸收进 `cumulative_code_offset`，`UNEXPLAINED` 增量为 **0**。
+
+**根因**：anchored 规则只检查一条链能不能一路连到一个 `offset_diff==0` 的对象，但**没有检查"连到它的那条链本身是不是完好的"**——一个从非零跳到 `offset_diff==0` 的断链，落点恰好是零，就被判成 `zero`，从不产生任何一行记录，于是**这个断链没有代价**。同一形状的断链发生在链的**入口**（K-1 是非零、K 是本对象、往前追）会被计入 2 行 UNEXPLAINED；发生在链的**出口**（本对象是非零、K+1 恰好是 offset_diff==0）**代价是 0**——不对称，且出口这一侧就是攻击 7 造出的那个真实可复现的漏洞。
+
+⚠️ **子代理指出的下游影响**：`disassemble ×3` 残差（F104）与任何后续依据它重分类的结论，都建立在"`cumulative_code_offset` 是真解释"这句话上；**当前真实产物上该桶是 0/0/0，所以现在的数字未受影响**，但下一次出现出口侧位移时，规则会像这次一样悄悄吸收它。
+
+**F122 保持 `open`/`built`，不关卡。** 本轮到此结束，不当场再派第四轮修补——按契约"何时不当场修"：这处修法需要新的判据（对称化入口/出口断链的代价）+ 自己的负控制（子代理提供了可复现构造：pos299 尺寸+8、pos300-699 偏移+8、pos299 双侧改名为 `_iso_stub_ArrayWriteBarrierStub`），交给下一轮/下一会话，写清规格再动手，避免重复"改一处、逃逸挪一层"（与 F82 同型，CLAUDE.md 已记录该模式）。
