@@ -12400,3 +12400,38 @@ F140 VERDICT: PARTIAL -- all three negative controls really go red, but the quar
 
 **尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。下一轮：对最新提交派一个新鲜 Opus 子代理再跑一次 `tools/loop/prompts/falsify.md`。
 本轮到此结束。
+
+---
+
+## F140 修补丁证伪 pass 3（2026-09-26，Opus，commit `c0be0a6`）
+
+```
+Model: Claude Opus 5.5 (claude-opus-5-5[1m])
+
+VERDICT: PARTIAL
+
+ATTACK RESULTS:
+1. I rebuilt each sub-fix reverted in /tmp/f140p3 (`mk.py`: rev_floor, rev_readok, rev_posgate, rev_restore) and ran `--self-test` on each. rev_floor, rev_readok and rev_posgate each give "94 case(s), 1 failure(s)", and the failing case is that sub-fix's own. rev_restore (drop the `ledger_ok=False` in the missing_from_live branch) gives 94/0, so that line has no negative control. The two claimed controls are real.
+2. `git diff 9a3b225 c0be0a6 -- tools/loop/run_round.sh`: the wiring is real. The snapshot is at run_round.sh:~811-819 (bootstrap `[ ! -e ] && : >`, then `cp`, then the sentinel on failure, then the sha). The flags are passed in `fix_queue_gate` (~:1189). But the bootstrap runs on every round whose live file is missing, not only the first. The comment says "After that bootstrap, missing ... gets the same #SNAPSHOT-FAILED sentinel treatment", and no code does that. There is no marker recording that a bootstrap already happened.
+3. `measure.py` checks the real memo.md against 110 ids from the research `cards.tsv`, with the pre-CLAUSE baseline `de72312~1`. Lost red bindings: de72312 59 lost across 39 lines, 9a3b225 48 lost across 28 lines, c0be0a6 0 lost and 0 gained. c0be0a6 recovers 59 compared with de72312. "0 lost" reproduces; the counts are 59/48 instead of 58/47 only because memo has grown. Only 1 real line (memo.md:6634) ever reaches the CLAUSE branch, so the 0 is almost entirely the fallback to pre-CLAUSE behaviour.
+4. `phr2.py`: the POS_VERDICT gate runs on the raw line. A quoted template such as "派 F52、F53 证伪（要求末行 `VERDICT: SURVIVES` 格式）。回来两张都 FALSIFIED" turns on CLAUSE restriction and gives [] (pre-CLAUSE gives F52 and F53). Same-card history ("F52 旧补丁证伪 pass 1: SURVIVES…两张都 PARTIAL") also gives []. In the other direction, "F77 VERDICT: FALSIFIED; F78 SURVIVES" binds F78 red. That is the cheap direction, so it is acceptable.
+5. `git log -1` shows c0be0a6 as HEAD. `merge-base --is-ancestor` gives rc=0. `git status --porcelain` on fix_queue.py and run_round.sh is empty, and `cmp` of HEAD against the worktree is identical. Nothing is stale. HEAD `--self-test` gives 94 case(s), 0 failure(s).
+6. The two pass-2 scenarios are blocked inside a single round: in-round deletion is restored with a RED, and the directory swap reddens and then keeps failing closed through the sentinel. The floor still breaks across rounds. `floor_attack.py` copies run_round.sh's snapshot and bootstrap logic faithfully. Round 1 forges the line and it is quarantined. Round 2 deletes `<ledger>.quarantine` and its gate never runs (killed). Round 3's bootstrap creates an empty floor with an honest sha, and the gate prints "operator-drained F46 (ledger 2026-09-09 16:50)" with the queue left empty. `floor_attack_bg.py` has round 2's gate run and restore the file, then a delayed background `rm` removes it. Round 3 gives the same "operator-drained F46".
+7. Yes, the question was swapped for an easier one. "0 lost on memo.md" is measured almost entirely on lines with no POS token. Any future line that quotes `VERDICT: SURVIVES` (dispatch templates do; see the N1 history) or keeps same-card green history next to a pronoun-grouped red loses every binding (attack 4). And "floor forever" was only tested inside one `update()` pair, never across the round boundary where run_round.sh bootstraps.
+
+FLAW: (i) The quarantine floor lasts only as long as the live file lasts at round boundaries. run_round.sh re-bootstraps a missing quarantine file to empty on every round, despite its own comment. So a round that deletes the file and then keeps the gate from running (kill -9 of run_round.sh, which is the same SIGKILL orphan path run_round.sh already handles), or that deletes it after the gate with a delayed background `rm`, resets the floor to empty. The next round then drains the forged line. Reproduce with `python3 /tmp/f140p3/floor_attack.py` and `python3 /tmp/f140p3/floor_attack_bg.py`; both end with `R3 actions: ['operator-drained F46 ...']`. (ii) The POS_VERDICT gate tests the raw line, so a quoted template or same-card history green turns on CLAUSE restriction and real group reds are dropped. Reproduce with `python3 /tmp/f140p3/phr2.py`, which gives [] for all three cases while pre-CLAUSE binds F52 and F53. Minor: the missing_from_live `ledger_ok=False` line has no negative control (rev_restore stays 94/0).
+
+COST OF BEING WRONG: F113/F140 operator-only draining depends on this. A forged ledger line can still take an unreviewed fix off the queue with no human involved.
+
+F140 VERDICT: PARTIAL -- both negative controls really go red, but run_round.sh re-bootstraps a deleted quarantine file to an empty floor every round (floor_attack.py / floor_attack_bg.py launder F46), and POS_VERDICT on the raw line lets a quoted `VERDICT: SURVIVES` drop real group reds.
+```
+
+**STILL OPEN（此判决唯一的判据）**：n/a（判 PARTIAL）。
+
+**不许关卡**：F140 保持 `open`，第三次修补丁仍未过证伪 pass。破绽记录如上，下一轮的当场修至少要覆盖：
+① 给 `<ledger>.quarantine` 的"是否已 bootstrap 过"加一个持久标记（而不是"文件不存在就重新 bootstrap"），
+使跨轮删除/替换该文件不能把 floor 重置为空；
+② `POS_VERDICT` 判定不能只看原始行文本——被引用/转述的判词（模板字符串、历史复述）会误触发 CLAUSE 限制，
+需要排除处于引号/代码块内或明显是"转述过去判决"的文本；
+③ 补一条 `missing_from_live` 分支自己的负控制（当前 rev_restore 还原后 `--self-test` 仍 94/0，是空判据）。
+本轮到此结束。
