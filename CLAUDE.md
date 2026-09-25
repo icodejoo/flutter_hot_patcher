@@ -39,6 +39,10 @@
 ⇒ **在 F76 做完之前，「harness 全绿」在任何报告里都是有条件的断言，引用时必须带这个条件。**
 - 判据 1 ✅ · 判据 3 ✅ · 判据 2 🔴 **未满足：24 格 unknown** ⇒ **这一阶段没有结束。**
 
+⚠️ **2026-09-25 订正（R5，研究树 `reports_20260925/R5_*`）：下面这段的 23,320 是在已带 F37 v1 的陈旧二进制上量的，不是可比基线。**
+新鲜产物上 `diff_units.sh shorebird` = **20,274**（`op_subgraph_hash 9152 · subgraph_hash 9152 · offset 1146 · self_hash 788 · size 6 · header 30`），
+逐函数 `0/0/4576/1400` 原样复现；offset 残差只剩「`ArrayWriteBarrierStub` 之后的每个函数」一个形状。引用 23,320 之前先读这条。
+
 🟢 **2026-09-17：`unknown` 里最大的那一格第一次有了分解，而不是一个不透明的数（F88）。**
 `shorebird` 三格的差异不是「23,320 个无法表达的单位」：按 JSON 键分桶得
 `op_subgraph_hash 9152 · subgraph_hash 9152 · offset 4104 · self_hash 824 · 其余 91`，

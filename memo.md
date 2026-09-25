@@ -11166,11 +11166,41 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
   `evidence_pool_link_data_residual`（hello delta 分解对不上）·
   `evidence_dump_blobs_residual`（hello 尺寸差 1440 ≠ 钉住的 1992）·
   `evidence_shorebird_components` ·
-  `phase_gate`：**12 个 `structural` 格的证据在新产物上不再复现**
-  （`compute_dd_table`、`dump_object_pool_link_data`、`print_field_table_link_info_to`、
-  `print_field_table_link_debug_info_to` 各 ×3），闸门量得它们是 `unknown`。**`phase_gate.expected` 未动。**
+  `phase_gate`：~~12 个 `structural` 格的证据在新产物上不再复现，闸门量得它们是 `unknown`~~
+  🔴 **本句方向写反了（同日 R2/R4 订正）**：`phase_gate.expected` 把这 12 格钉成 `unknown`，**实测是 `structural`**；
+  09-23 的 `4d6378f`（F99+F100）→ `0304d1d`（F105）→ `263d02b`（F102）三次改判都没移动钉子，
+  闸门从 09-23 10:45 起就是红的，与本次重建和 F37 无关。12 格的 verify_cmd 在新产物上全部通过。**`phase_gate.expected` 未动。**
 - ⇒ **下一轮的优先级（规则 0）**：逐个判定这五个红是「F37 落地引入的回归」还是「证据钉在陈旧产物上」，
   **各自带证据**；禁止改常量求绿。然后是 F37 修补丁 pass、F107、F109。F115–F120 不要挑。
+
+### 同一会话：五个红逐个判定（7 个并发 opus 只读调查 R1–R7，父方逐个复核核心数字；报告与脚本在研究树 `reports_20260925/`）
+
+| # | 对象 | 判定 | 依据（均有落盘脚本） |
+|---|---|---|---|
+| R1 | `op_dump_check` | 🔴 **真回归（F37 重落地引入）** | `63716223bde` 用 `AddImmediate` 发 shape-A 池槽（kImmediate），他们是 kTaggedObject Smi：theirs `2312 (obj)` / ours `0x1f00 (unknown)`，恰为那 92 个槽。首次落地用的是 `AddObject(Smi)`，被 `121cc101d43` 删掉（父方 `git show` 核过）。F101 的 88→**3** 为真：私有副本模拟 F37 前形态精确复现 88 |
+| R2 | `pool_link_data` | 钉子过期（是进展） | 逐函数 `eq->ne 0`，`ne->eq` hello 87 / prog 173；新 delta +40/−82 按字节精确分解 |
+| R3 | `dump_blobs` | 钉子过期（收敛） | 1992→1440 = 92×4B（R4）+ 92×2B（R2）；尺寸不同函数 93→1（只剩 `ArrayWriteBarrierStub` 36B）；R4 集合与 F37 函数集合逐个重合；原脚本指向 F37 前产物 rc=0 |
+| R4 | 9 格 structural 证据 | field_table ×6：钉子漏移；**compute_dd_table ×3：证据从来不够** | DD 表换成等长随机字节仍 `UNEXPLAINED 0`（C4），`ArrayWriteBarrierStub` size 改 9999 仍绿（C3）——残差不读 DD 表内容 |
+| R5 | `shorebird_components` | **检查极性反了** | 六个列表字段已有序全等（REAL GAP 4 已闭合），`real_gap==0` 守卫却要求必须是 gap ⇒ 往我们侧删一个槽反而变绿。F88 逐函数拆分 `0/0/4576/1400` 原样复现；🔴 **23,320 这个基线是在带 F37 v1 的陈旧二进制上量的**，今天 20,274 的下降几乎与 F37 无关 |
+| R6 | F104 209,532→4,068 | **PARTIAL** | 下降为真（F37 纠正对象枚举顺序，两侧 id 按位置全等）；但 `UNEXPLAINED 0` 是假的：1,086 单位是他们 ObjectPool 多出的引用元素，被 `reference_id_renumbering` 吞掉；注入 60 个任意引用仍报 0 |
+| R7 | F113 | **PARTIAL** | 轮次能写账本行再删队列行伪造出队（0 次派发）；argparse 前缀缩写 `--op` 绕过钩子；`test_fix_gate.sh` 第 5、6 例成恒真式；三处「队列优先」文字未改 |
+
+**随后由 agy 实现（gemini-3.1-pro-high），父方逐项复跑后提交**：
+- v1 `2ffe5e6`：F113 修补丁（账本快照、`allow_abbrev=False`、时间戳严格解析、第 5/6 例断言、三处文字）。父方复现：伪造出队在旧代码上出队、新代码 RED 且行恢复。
+- 研究树 `00b1e95`：B 重钉 `evidence_dump_blobs_residual.sh`（`EXAMINED 4321 of 2184729`，`--drop-regions` 现打到 regional sum）；
+  C 重钉 `evidence_pool_link_data_residual.sh`（`EXAMINED 162 of 961550`）+ F37 前 ours 产物归档（仅 MANIFEST 入库）；
+  D 给 `evidence_disassemble_residual.sh` 加引用语义判据 ⇒ 当前产物 **`EXAMINED 4068 / UNEXPLAINED 1086`，rc=1**（真实残差，预期）。
+  ⚠️ D 自报的 `209,532 / 27,046` 是在旧产物上的读数，非当前。
+
+**证伪（agy）**：Opus 与 Gemini 3.8 Flash 额度相继用尽，FA/FB/FD 只写了占位行（无效）。
+**FC 判 PARTIAL**（gemini-3.8-flash-high，⚠️ 非 Opus，操作者指定）：钉值与归档经独立解码器核实，`eq->ne 0` 成立；
+但脚本头注释的复跑命令一跑就崩（`R2_old_vs_new.py` 不接受 `--old-dir` 且要求 theirs），`--break-decomposition` 只在内存里 `sh_diff += 1`（自证）。父方两处都复现。
+修补丁派单 `dispatch_20260925/CF_pool_link_data_fix.md` 已写，与 FA/FB/FD 一起待 agy 额度恢复后重派。
+
+**待操作者拍板**：① field_table ×6 接不接受「只差组内顺序」为 structural（接受则移 `phase_gate` 钉子）；
+② compute_dd_table ×3 退回 `unknown`、撤证据行 46/47（建议退回）；③ `evidence_shorebird_components.sh` 的新判据（涉及 F62 棘轮）。
+
+**进行中**：一个 opus 子代理在修 R1 的池槽类型（改回 per-site kTaggedObject Smi），重建三棵构建树，只在私有目录重生成产物，不碰共享 `out_pm`。
 
 ---
 
