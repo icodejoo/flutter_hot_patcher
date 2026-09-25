@@ -11936,6 +11936,22 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 - [ ] **F137：切到 iOS 后重钉/重设计四个检查**（`open`，2026-09-25，deps=F132）
 - [ ] **F138：iOS 产物上仍有 12 个 VM stub 尺寸不同**（`open`，2026-09-25，deps=F132）
+- [ ] **F139：F132 证伪 pass 抓出的三处共享 harness 缺口**（`open`，2026-09-26，F132 证伪 PARTIAL 拆出，deps=F132）
+  (a) `comparability_check.sh` 只有一条检查（simulator-enabled），从不看 `target_os`——把
+  `PRODUCT` 指回旧的 mac 目标 `ProductSimARM64`，照样打印 `0 comparability failure(s)`，
+  输出与正确的 ios 跑法逐字节相同 ⇒ 静默切回被混淆的 mac 目标不会被发现。
+  (b) `verify_all.sh` 新的 ios 陈旧守卫（`ninja -n` 管到 `grep -c`）**失败即开**：
+  `IOS_TREE=/nonexistent` 跑出来 `pending=0`，缺失/未构建的 ios 树被读成"新鲜"而不是拦截。
+  (c) `evidence_disassemble_residual.sh` 现在在 ios 产物上报 `UNEXPLAINED 1190`，不是 F132
+  引用的 `68`——那个 68 用的是 F122 后来判定过于宽松的"local"规则（两轮 PARTIAL），
+  当前树里生效的是 anchored 规则，给出 `102+1020+68=1190`。
+  判据：(a) 要求 `comparability_check.sh` 断言构建里嵌的 `target_os`（读 `args.gn` 或探测
+  features 字符串）与 ios 钉住的期望一致，指向 mac 目标时 rc 必须非零；(b) ios 陈旧守卫在
+  树/`ninja` 文件缺失或不可读时必须**失败关闭**（rc=2 BLOCKED），`IOS_TREE=/nonexistent`
+  必须给出非零阻塞退出，不是 `pending=0`；(c) F132 卡片文本与下游文档（F137/F138 范围、
+  memo.md）引用 disassemble 残差时必须现读 `evidence_disassemble_residual.sh` 的实时输出，
+  不许硬编码 `68`。三处负控制见 `cards.tsv` F139 行；三处改动共用同一批 shared harness
+  文件，按 F65 规则一轮只留一个写方。
 
 **F132 切换已落地（操作者决定）**：共享 harness 改用 `ProductSimIosARM64/clang_arm64`，`out_pm` 已由 iOS gen_snapshot 重生成。矩阵分类不变；`verify_all` 41 过 / 6 红 / 4 阻塞，6 个红逐一核对：4 个是 F132 预告的（pool_link_data 恰为预测的 +101/−164、dump_blobs 钉值来自 mac、subgraph_hash 对照失去检测力、disassemble 真实残差 68），2 个切换前就红（F126、F128）→ 重钉拆 F137。
 - **F122 → `built`**：offset 桶在 iOS 产物上全部由累计尺寸解释；原先被无条件吸收的 68 个 size 单位改判为未解释（12 个 VM stub → F138）。
@@ -12178,3 +12194,52 @@ UNEXPLAINED == 3` 改成 `== 2`；删除"三个构建目录 0 待办"这条断�
 `measure_pool_residual.sh` 在这一点上的空判据地位。**F121 保持 `built`，不关卡**——
 留着的是 STILL OPEN 那条 Debug 断言复核，属于"可以晚做但没做过"的验证缺口，不是
 本次改动引入的新问题。
+
+## 2026-09-26 心跳：F132 证伪 pass（新会话，claude-sonnet-5，调度器角色）
+
+同一会话继续：F121 已过 pass（PARTIAL，保持 built），下一张欠证伪 pass 的 built 卡是
+**F132**（唯一从未被独立复核过的一张——`built` 队列里 F49/F113/F129/F130 都已有过
+至少一次 FALSIFICATION PASS 记录）。
+
+**F132 VERDICT: PARTIAL -- the switch is real and F124's predictions reproduce (1096B,
+LSE 0, offset 1146→0, arm64 ios, mac control intact). But the disassemble attribution
+(UNEXPLAINED 68) has been superseded (now 1190), comparability_check cannot catch a
+revert to mac target, and the new ios staleness guard fails open.**
+
+新鲜 Opus 子代理（44 次调用）逐条核验七项攻击：
+1. 翻一字节 `out_pm/as.hello.ours.so` 让 `pool_slot_field_check.sh` 正确报红（已还原、
+   sha256 核对一致）；但 `comparability_check.sh` 只有一条 simulator-enabled 检查、从不
+   看 target_os——把 `PRODUCT` 指回旧的 `ProductSimARM64`（mac 目标）照样打印
+   `0 comparability failure(s)`，输出与 ios 跑法逐字节相同；`verify_all.sh` 新的 ios
+   陈旧守卫 `IOS_TREE=/nonexistent` 给出 `pending=0`，失败即开。
+2. 两个构建目录 `ninja -n` 均 "no work to do"；`strings` 独立确认双侧快照都是
+   `arm64 ios`；provenance 与当前二进制 sha 一致；ios `analyze_snapshot` 拒绝 mac 快照
+   （rc=255）。
+3. 独立重算逐字段 diff：mac `offset 573/size 3`，ios `offset 0/size 0`（换算 units 桶
+   1146→0、6→0，精确解释 20274→19122 的全部差额）；LSE 字：mac 3+5，ios 0，理论侧 0；
+   `ArrayWriteBarrierStub` 两侧 1096B。但 `pool_link_data` 反而变差（size delta
+   40→101、-82→-164，+10,881 units），**这项增长被记录、未被解释**。
+4. 全部宿主工具编译都带 `-DDART_TARGET_OS_MACOS_IOS`（除 3 个纯数据 ninja 文件）；
+   `abi.cc:57`/`cpu_arm64.h:49`/`wrapper.cc:207/275` 都走非 mac 分支，未发现残留 mac 代码路径。
+5. `out_pm` 已在 relink 之后（18:22–18:23）重生成，"lag" 问题已解决；但
+   `phase_gate.expected` 仍钉着旧的 `unknown=24/structural=0`，24 个格子的身份对不上；
+   `parity_matrix.tsv` 的 disassemble 备注仍写着"macos vs ios"这个已经不存在的分量。
+6. 独立重跑 mac 负控制（0bec6f28）：`arm64 macos`、`ArrayWriteBarrierStub 1060B`、
+   offset 桶 1146、`shorebird 20274`/`disassemble 2982`/`dump_blobs 2470989`——负控制真实。
+7. 新鲜跑一次 `verify_all.sh`（无 skip，8 分钟）：**41 ran / 7 failed / 4 blocked**，不是
+   F132 记的 6 红——第 7 红是 `cards_check "F122(commits-not-sha)"`（F132 之后才出现，
+   F122 的 commits 列写的是叙述文字不是 sha，与本次证伪无关，属于既有欠账）。
+   `evidence_disassemble_residual.sh` 现读 **UNEXPLAINED 1190**，不是 F132 引用的 68——
+   68 是 F122 后来判定过于宽松的"local"规则给出的数，当前 anchored 规则给出
+   `102+1020+68=1190`。
+
+**COST OF BEING WRONG**：09-25 之后所有读 `out_pm` 的结论都靠这次切换站着，包括
+F137 重钉、F138、以及 F122/F101/F103/F104 的残差工作，还有"harness 现在比较同一个
+target"这句话本身。
+
+**当场拆卡（不当场改共享 harness 脚本——三处缺口全在 F65 点名的同一批 shared harness
+文件上，一轮一个写方；且 F65 本身还开着）**：立 **F139**，收纳三处缺口
+（`comparability_check.sh` 不查 target_os、ios 陈旧守卫失败即开、F132 卡片引用的
+disassemble 残差数字已被 F122 的后续判决超越）。**F132 保持 `built`，不关卡**——
+F124 的核心预测与 mac 负控制都站得住，缺的是守卫本身的对称性与一处过期引用。
+本轮到此结束。
