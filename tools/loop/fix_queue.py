@@ -151,17 +151,31 @@ def operator_ledger(queue_path):
     return queue_path + ".operator_drains"
 
 
-def operator_drained(queue_path):
-    """{id: latest drain timestamp} from the operator ledger; {} if absent."""
+def operator_drained(ledger_path, actions=None):
+    import datetime
     out = {}
-    try:
-        with io.open(operator_ledger(queue_path), encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) >= 2 and parts[1]:
-                    out[parts[1]] = max(out.get(parts[1], ""), parts[0])
-    except (IOError, OSError):
-        pass
+    if not ledger_path:
+        return out
+    if os.path.exists(ledger_path) and os.path.isfile(ledger_path):
+        try:
+            with io.open(ledger_path, encoding="utf-8") as fh:
+                for line in fh:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 5 and parts[1]:
+                        try:
+                            ts = datetime.datetime.strptime(parts[0], "%Y-%m-%d %H:%M")
+                            existing = out.get(parts[1])
+                            if not existing or existing[0] < ts:
+                                out[parts[1]] = (ts, parts[4], parts[0])
+                        except ValueError:
+                            if actions is not None:
+                                actions.append("RED malformed ledger line")
+        except (IOError, OSError):
+            if actions is not None:
+                actions.append("RED ledger snapshot unreadable")
+    else:
+        if actions is not None:
+            actions.append("RED ledger snapshot missing or invalid")
     return out
 
 # Parked in the queue when the snapshot cannot be trusted, so that fq_owed stays
@@ -1139,7 +1153,8 @@ def cards_gap_reason(cards_path, known, before_path):
 
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
-           replies_path=None, code_touch=None, cards_gap=None):
+           replies_path=None, code_touch=None, cards_gap=None,
+           ledger_before=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -1362,20 +1377,32 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
     kept = []
     seen_ids = set()
-    drained_by_operator = operator_drained(queue_path)
+    drained_before = operator_drained(ledger_before, actions=actions)
+    drained_now = operator_drained(operator_ledger(queue_path))
 
     def settle(cid, seen, reason, vanished):
         if cid in pos and AUTO_DRAIN:
             actions.append("drain %s (fix pass recorded by a subagent reply, "
                            "%d dispatch(es))" % (cid, agents))
             return
+        
+        import datetime
+        try:
+            seen_dt = datetime.datetime.strptime(seen, "%Y-%m-%d %H:%M")
+        except ValueError:
+            seen_dt = None
+            if vanished:
+                actions.append("RED malformed ledger line")
+        
         # F113: an operator drain is recorded in the ledger, not inferred. Only
         # a ledger line at or after the row's own timestamp excuses it, so an
         # old drain of the same id cannot cover a later re-enqueue.
-        if vanished and drained_by_operator.get(cid, "") >= seen:
-            actions.append("operator-drained %s (ledger %s)"
-                           % (cid, drained_by_operator[cid]))
-            return
+        if vanished and cid in drained_before and seen_dt:
+            drain_ts, orig_seen, drain_ts_raw = drained_before[cid]
+            if drain_ts >= seen_dt and orig_seen == seen:
+                actions.append("operator-drained %s (ledger %s)"
+                               % (cid, drain_ts_raw))
+                return
         if cid in pos:
             kept.append((cid, seen, reason))
             # Remembered so --render can tell the next round the pass exists and
@@ -1387,10 +1414,13 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             except (IOError, OSError):
                 pass
             if vanished:
-                # Deleting the line by hand is exactly the drain F113 took away
-                # from the round; the row is restored above, and said so.
-                actions.append("RED %s (removed from the queue with no operator "
-                               "ledger line -- restored)" % cid)
+                if cid in drained_now and cid not in drained_before:
+                    actions.append("RED %s (ledger line added during the round -- restored)" % cid)
+                else:
+                    # Deleting the line by hand is exactly the drain F113 took away
+                    # from the round; the row is restored above, and said so.
+                    actions.append("RED %s (removed from the queue with no operator "
+                                   "ledger line -- restored)" % cid)
             actions.append(
                 "candidate %s (a subagent reply this round reads green; it stays "
                 "queued until the operator runs fix_queue.py --queue <queue> "
@@ -2895,46 +2925,66 @@ def self_test():
     n1_memo = ["\U0001f7e2 F46 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"]
     n1_reply = [("t1", "VERDICT: SURVIVES for F46 (fix)")]
 
-    def settle_once(auto, rows_before, rows_now, ledger=None):
+    def settle_once(auto, rows_before, rows_now, ledger_b=None, ledger_now=None):
         global AUTO_DRAIN
         AUTO_DRAIN = auto
         d = tempfile.mkdtemp(prefix="fix_queue_f113.")
         qp, bp, rp = (os.path.join(d, n) for n in ("q", "b", "r"))
+        lb = bp + ".operator_drains"
         write_queue(qp, rows_now)
         write_queue(bp, rows_before)
-        if ledger:
-            io.open(operator_ledger(qp), "w", encoding="utf-8").write(ledger)
+        io.open(lb, "w", encoding="utf-8").write(ledger_b or "")
+        io.open(operator_ledger(qp), "w", encoding="utf-8").write(ledger_now or ledger_b or "")
         io.open(rp, "w", encoding="utf-8").write("".join(
             json.dumps({"id": i, "text": t}) + "\n" for i, t in n1_reply))
         with io.open(bp, "rb") as fh:
             sha = hashlib.sha256(fh.read()).hexdigest()
         acts, _, _ = update(qp, n1_memo, [], 1, "2026-09-09 17:00", {"F46"},
-                            before_path=bp, before_sha=sha, replies_path=rp)
+                            before_path=bp, before_sha=sha, replies_path=rp,
+                            ledger_before=lb)
         AUTO_DRAIN = False
         heads = sorted(a.split(" (")[0] for a in acts)
-        return heads, [r[0] for r in read_queue(qp)], qp
+        return heads, [r[0] for r in read_queue(qp)], qp, acts
 
-    heads, q, qp = settle_once(False, [row], [row])
+    heads, q, qp, _ = settle_once(False, [row], [row])
     f113.append(("F113: N1 shape makes a candidate and stays queued",
                  heads == ["candidate F46"] and q == ["F46"]
                  and candidates(qp).get("F46") == "2026-09-09 17:00"
                  and "不要再派" in render(read_queue(qp), candidates(qp)),
                  (heads, q)))
-    heads, q, _ = settle_once(True, [row], [row])
+    heads, q, _, _ = settle_once(True, [row], [row])
     f113.append(("F113 control: the same input drains with the switch on",
                  heads == ["drain F46"] and q == [], (heads, q)))
-    heads, q, _ = settle_once(False, [row], [],
-                              "2026-09-09 16:50\tF46\tread the pass\tcruz\n")
+    heads, q, _, _ = settle_once(False, [row], [],
+                              ledger_b="2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n")
     f113.append(("F113: a ledgered operator drain is not a vanished entry",
                  heads == ["operator-drained F46"] and q == [], (heads, q)))
-    heads, q, _ = settle_once(False, [row], [],
-                              "2026-09-01 10:00\tF46\tolder drain\tcruz\n")
+    heads, q, _, _ = settle_once(False, [row], [],
+                              ledger_b="2026-09-01 10:00\tF46\tolder drain\tcruz\t2026-09-09 16:40\n")
     f113.append(("F113 control: a ledger line older than the row does not excuse it",
                  any(h.startswith("RED F46") for h in heads), (heads, q)))
+    
+    heads, q, _, _ = settle_once(False, [row], [],
+                              ledger_b="2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:30\n")
+    f113.append(("F113 control: a ledger line with mismatched seen does not excuse it",
+                 any(h.startswith("RED F46") for h in heads), (heads, q)))
+    
+    heads, q, _, _ = settle_once(False, [row], [],
+                              ledger_b="2026-09-09Z 16:50\tF46\tmalformed\tcruz\t2026-09-09 16:40\n")
+    f113.append(("F113 control: malformed ledger date does not excuse it",
+                 any(h.startswith("RED malformed ledger line") for h in heads), (heads, q)))
+                 
+    heads, q, _, acts = settle_once(False, [row], [],
+                              ledger_now="2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n")
+    f113.append(("F113 control: ledger line added during the round restores queue line",
+                 any("ledger line added during the round" in a for a in acts) and q == ["F46"], (acts, q)))
+
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
     qp = os.path.join(d, "q")
     write_queue(qp, [row])
+    r0 = subprocess.run([sys.executable, os.path.abspath(__file__), "--queue", qp,
+                         "--op", "F46"], capture_output=True, text=True)
     r1 = subprocess.run([sys.executable, os.path.abspath(__file__), "--queue", qp,
                          "--operator-drain", "F46"], capture_output=True, text=True)
     r2 = subprocess.run([sys.executable, os.path.abspath(__file__), "--queue", qp,
@@ -2943,10 +2993,10 @@ def self_test():
                         capture_output=True, text=True)
     led = io.open(operator_ledger(qp), encoding="utf-8").read() \
         if os.path.exists(operator_ledger(qp)) else ""
-    f113.append(("F113: --operator-drain refuses without --why, then drains and ledgers",
-                 r1.returncode != 0 and r2.returncode == 0
-                 and read_queue(qp) == [] and "\tF46\tread it\t" in led,
-                 (r1.returncode, r2.returncode, led)))
+    f113.append(("F113: --operator-drain refuses abbreviation and without --why, then drains and ledgers",
+                 r0.returncode != 0 and r1.returncode != 0 and r2.returncode == 0
+                 and read_queue(qp) == [] and "\tF46\tread it\t" in led and "\t2026-09-09 16:40\n" in led,
+                 (r0.returncode, r1.returncode, r2.returncode, led)))
     for name, ok, detail in f113:
         print("%-4s %s" % ("ok" if ok else "FAIL", name))
         if not ok:
@@ -2959,7 +3009,7 @@ def self_test():
 
 
 def main():
-    ap = argparse.ArgumentParser(add_help=True)
+    ap = argparse.ArgumentParser(add_help=True, allow_abbrev=False)
     ap.add_argument("--queue")
     ap.add_argument("--before", default="",
                     help="queue snapshot taken at round start")
@@ -2968,6 +3018,8 @@ def main():
     ap.add_argument("--memo-added")
     ap.add_argument("--commits")
     ap.add_argument("--agents", type=int, default=0)
+    ap.add_argument("--ledger-before", default="",
+                    help="ledger snapshot taken at round start")
     ap.add_argument("--replies", default="",
                     help="JSON Lines of this round's subagent replies; a "
                          "{\"unavailable\": reason} line means they could not "
@@ -3024,10 +3076,11 @@ def main():
         if args.operator_drain not in [r[0] for r in rows]:
             print("not queued: %s" % args.operator_drain)
             return 1
+        seen = next(r[1] for r in rows if r[0] == args.operator_drain)
         with io.open(operator_ledger(args.queue), "a", encoding="utf-8") as fh:
-            fh.write("%s\t%s\t%s\t%s\n" % (
+            fh.write("%s\t%s\t%s\t%s\t%s\n" % (
                 now_d, args.operator_drain, args.why.replace("\t", " "),
-                os.environ.get("USER", "?")))
+                os.environ.get("USER", "?"), seen))
         write_queue(args.queue, [r for r in rows if r[0] != args.operator_drain])
         print("operator-drained %s" % args.operator_drain)
         print("OWED %d" % (len(rows) - 1))
@@ -3095,7 +3148,8 @@ def main():
         before_sha=args.before_sha or None,
         replies_path=args.replies or None,
         code_touch=read_code_touch(args.code_touch or None),
-        cards_gap=cards_gap)
+        cards_gap=cards_gap,
+        ledger_before=args.ledger_before or None)
     for a in actions:
         print(a)
 

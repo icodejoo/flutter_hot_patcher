@@ -304,7 +304,7 @@ if [ "${BUILT_N:-0}" -gt 0 ]; then
 【built 卡欠证伪 pass：$BUILT_N 张】$BUILT_OWED
 「built」不是「closed」：实现完成且自测通过，但没有新鲜代理审过。判据全在宿主上，不需要真机。
 派一个新鲜子代理按 tools/loop/prompts/falsify.md 审其中一张，别自己给自己写判决（F42）。
-优先级：低于 .loop/UNREVIEWED_FIX，SDK 本体的卡排在循环机械之前（规则 0）。
+优先级：SDK 本体的卡排在循环机械之前（规则 0）。
 $FALSIFY_CONTRACT_REMINDER"
 fi
 
@@ -789,6 +789,9 @@ if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
 fi
 FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
+if ! cp "$FIX_QUEUE.operator_drains" "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null; then
+  printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || true
+fi
 # F112 (ii): the card table as it stood when this round started. Taken here,
 # beside the queue snapshot and for the same reason -- the gate needs a second
 # source for "which ids are cards", because the one it reads at round end can
@@ -1156,13 +1159,14 @@ fix_queue_gate() {
       ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
       --replies "$fq_replies" --code-touch "$fq_code_touch" \
+      --ledger-before "$FIX_QUEUE_BEFORE.operator_drains" \
       --cards "$g_cards" --cards-before "$CARDS_BEFORE" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
   rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" \
-        "$FIX_QUEUE_BEFORE" "$CARDS_BEFORE"
+        "$FIX_QUEUE_BEFORE" "$FIX_QUEUE_BEFORE.operator_drains" "$CARDS_BEFORE"
   FQ_GATE_RAN=1
 
   # ---- how much is owed, from two sources that can disagree ----------------
@@ -1217,7 +1221,7 @@ fix_queue_gate() {
   if [ "$fq_owed" = UNKNOWN ]; then
     say "WARNING: the fix-queue gate could not establish what is owed -- $fq_why. Treating it as owed: a human must reconcile $FIX_QUEUE. This is NOT the same as 0."
   elif [ "$fq_owed" -gt 0 ] 2>/dev/null; then
-    say "WARNING: $fq_owed fix patch(es) owe a falsification pass of their own -- next round runs them before anything else ($FIX_QUEUE)"
+    say "WARNING: $fq_owed fix patch(es) owe a falsification pass of their own ($FIX_QUEUE)"
   fi
   return 0
 }

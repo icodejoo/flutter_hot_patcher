@@ -118,6 +118,7 @@ run_round_gate() {  # $1 memo_added text, $2 agent_calls, $3.. commit subjects
   printf '# test table\nF77\tbuilt\t-\t-\tc\tn\t-\n' >"$WORK/cards.tsv"
   local qb=$WORK/queue.before cb=$WORK/cards.before
   if [ -e "$WORK/queue" ]; then cp "$WORK/queue" "$qb"; else : >"$qb"; fi
+  if [ -e "$WORK/queue.operator_drains" ]; then cp "$WORK/queue.operator_drains" "$qb.operator_drains"; else : >"$qb.operator_drains"; fi
   cp "$WORK/cards.tsv" "$cb"
   local qsha
   qsha=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$qb")
@@ -207,12 +208,18 @@ rm -f "$WORK/queue"
 run_round_gate '+📋 **F77 pass 1 → PARTIAL**' 1 'F77: fix it' >/dev/null
 out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+🟢 **证伪 pass 判决：F77 SURVIVES**' 1)
 expect "card-level SURVIVES does not drain the fix" "F77" "$out"
+case $out in
+  *"candidate F77"*) note FAIL "card-level SURVIVES falsely made F77 a candidate"; printf '%s\n' "$out" | sed 's/^/       /' ;;
+esac
 
 # 6. fix_queue.py's drain bars do not consult dispatch/agent count (its ~716-719
 #    comment: "`agents` is deliberately no longer consulted by either bar"), so
 #    this can only test the reply-presence gate; the dispatch-count question is F115.
 out=$(run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix)' 0)
 expect "a reply is required to drain; dispatch count alone does not gate" "F77" "$out"
+case $out in
+  *"candidate F77"*) note FAIL "reply absence falsely made F77 a candidate"; printf '%s\n' "$out" | sed 's/^/       /' ;;
+esac
 
 # 7. The phantom, through the wired path: the round names a card that is not in
 #    the table, in the shape the real corpus produces.
