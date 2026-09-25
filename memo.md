@@ -11037,6 +11037,17 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
       要求的对拍未完成，且独立发现更深的既有缺陷（见 F118）。详见 memo.md 本节对应心跳与
       `cards.tsv` F117 行。
 
+- [ ] **F120：blockquote 修复只堵了字面 `>` 这一种形状，同类假排换个措辞就复现**（`open`，
+      2026-09-25，deps=F118，由 F118(C) 的独立证伪 pass 发现）
+      证伪子代理在 `b005d95` 上直接构造（无 markdown 引用符号）：
+      `green_ids("Last round said F52 VERDICT: SURVIVES. I did not test it this round.",
+      {"F46","F52","F53"})` 返回 `{'F52'}`——与修复前的原始 bug 完全一样。根因：`DISQUALIFY`
+      按 clause（句子）定界，"I did not test it"与"F52 VERDICT: SURVIVES"分处两个句子，
+      从不在同一 clause 里触发。同样复现的还有行中 `>`（不在行首）与代码块引用。
+      与 F116(a)(b)(c)→F117→F118(A)(B)(C) 是同一种反复的形状：每轮堵一种措辞，下一种立刻现形。
+      判据与负控制见 `cards.tsv` F120 行本体（要求先判断是结构性改动还是记为已接受的限制，
+      两种收口都需要新探针与文档落地，不许再是一次性打补丁）。
+
 - [ ] **F119：`green_ids()` 路径 (3) 正向绑定要求 id 与判决语同处一个 clause/行**（`open`，
       2026-09-25，deps=F118，由 F118(C) 的 FLAW2 逐条分类发现）
       复现：`green_ids("F63: use a call-graph that avoids the old predicate.\nVERDICT: SURVIVES
@@ -11712,3 +11723,45 @@ REGRESSION/CORRECT-FIX/UNCLEAR）。
 `tools/loop/fix_queue.py`（子代理提交 `b005d95`）、`~/Documents/fhp-research/spikes/
 shorebird_linkinfo_oracle/cards.tsv`（新增 F119 行）、`memo.md`（本节 + 下方 F119 卡片
 `- [ ]` 条目）。SDK 树无改动。
+
+---
+
+### F118(C) 修补丁证伪 pass（2026-09-25，新鲜 general-purpose 子代理，opus，21 次调用）—— **VERDICT: PARTIAL**
+
+七项攻击：①②③④⑦ 实测确认作者自报数字准确（复现串在两个版本上结果与声明一致；68/68 自测；
+语料重放两版本均 2/177，且语料里只有 2 条含 `>` 开头行、两条排出状态都未变——这处修复对真实语料
+测量效果为零，只对合成探针有效，**不是缺陷但削弱了证据分量**）；顺带指出 `_p20h` 探针验证的其实是
+更早 `55a234d`（F118(C) 之前）就落地的另一处修复（把 `>` 从 `PER_ID_VERDICT_LINE` 的行首字符类里
+去掉），不是 `b005d95` 新代码本身，`b005d95` 提交信息把这一点写得容易被误读成"两种场景已都被覆盖"。
+
+**FLAW（判 PARTIAL 的依据，攻击 ⑥）**：`b005d95` 声称修的 bug 类是"回复引用/转述了一个本轮没测过
+的旧判决，导致该卡被误排出"，但它的实现只堵住了字面 `^[ \t]*>` 这一种句法形状。证伪子代理在**修复后
+的 HEAD** 上直接构造（不含任何 markdown 引用符号）：
+
+    green_ids("Last round said F52 VERDICT: SURVIVES. I did not test it this round.",
+               {"F46","F52","F53"})
+
+返回 `{'F52'}`——与修复前的原始 bug **一模一样**。根因：`DISQUALIFY` 按 clause（句子）定界，
+"I did not test it"与"F52 VERDICT: SURVIVES"分处两个不同的句子，从未落进同一个 clause，
+消歧检查根本没被触发。同样复现的还有：行中 `>`（不在行首，如 `"Context: > F52 VERDICT:
+SURVIVES..."`）、代码块引用的判决行。**这正是本项目反复出现的形状**（F116(a)(b)(c) →
+F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
+
+**COST OF BEING WRONG**（子代理原话）：若把这次修复当成"引用/转述旧判决"这整类 bug 已经关闭，
+一个只是**转述**而非**引用**旧判决的回复仍会悄悄把没测过的卡排出队列——这正是这份文件存在
+要防止的"未审查修补丁流出队列"那个代价，会在每次出现这种措辞时各付一次未被复审的补丁。
+
+`F118 VERDICT: PARTIAL —— blockquote 屏蔽本身实测正确、无回归，但同一类 bug（转述/引用旧判决
+误排未测卡）换成不含 markdown 引用符号的措辞（转述句、行中 `>`、代码块）在修复后的 HEAD 上原样
+复现，根因是 DISQUALIFY 按句子定界、跨句消歧从不触发。`
+
+**按契约（PARTIAL 不许关卡）**：`F118` **保持 `open`**。这个新发现比 F119（正向绑定跨行失效）
+更根本、且是同一条"逐个措辞打补丁"死循环的第 N 次实例，本轮不再尝试第五次窄补丁——已拆成新卡
+`F120`（`open`，deps=F118，`cards.tsv` 已加）：要求先做产品判断（结构性改动 DISQUALIFY 的跨句
+范围，还是正式记为"自由文本兜底路径的已知限制、依赖契约行格式作为可靠替代"），两种收口都需要
+新探针与文档落地，不许再是一次性打补丁。
+
+**本轮 agents=2**（实现 1 + 证伪 1，均 general-purpose/opus/foreground）；改动文件：
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`（新增 F120 行）、
+`memo.md`（本节 + F120 卡片 `- [ ]` 条目）。`cards_check.sh` 待本节提交后复核。SDK 树无改动。
+**本轮到此结束**——F118 仍 `open`，欠 F119/F120 两项具体修复；F49/F113 三选一仍待 owner 决定。
