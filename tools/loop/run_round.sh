@@ -823,22 +823,124 @@ LEDGER_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sh
 # re-created: `cp` fails and the snapshot is the #SNAPSHOT-FAILED sentinel,
 # which fix_queue.py reddens on (no drain excused, every live ledger line
 # re-quarantined). An operator who has reviewed it restores the file by hand.
+#
+# F140 round 5 (pass 5's flaws (1) and (2)): the marker only said "was this
+# ever bootstrapped", never WHAT the floor held -- truncating or rewriting the
+# live file (instead of deleting it) was copied into the snapshot faithfully
+# and drained the forged line. The snapshot is now the union of a content
+# anchor, $FIX_QUEUE.quarantine_floor (append-only; fix_queue.py appends every
+# line it quarantines), every committed version of that anchor in git
+# history, and the live file; the union is written back to the anchor first.
+# A line in the anchor but not in the live file reaches fix_queue.py as
+# "missing from the live quarantine file": restored, no drain excused. And
+# every git call fails CLOSED: a `git log` that errors is "bootstrap state
+# unconfirmed" (sentinel snapshot, nothing re-created), never "no marker in
+# history" (which used to re-bootstrap an empty floor with no stderr at all).
 # fix_queue.py --self-test runs the block between the BEGIN/END lines
 # verbatim; keep it self-contained (REPO STATE FIX_QUEUE FIX_QUEUE_BEFORE).
 # BEGIN quarantine-snapshot
 QUARANTINE_LIVE="$FIX_QUEUE.operator_drains.quarantine"
 QUARANTINE_MARKER="$STATE/QUARANTINE_BOOTSTRAPPED"
-if [ -e "$QUARANTINE_MARKER" ] || [ -n "$(git -C "$REPO" log --all -1 --format=%H -- "${QUARANTINE_MARKER#"$REPO"/}" 2>/dev/null)" ]; then
-  if [ ! -e "$QUARANTINE_LIVE" ]; then
-    echo "run_round: quarantine file $QUARANTINE_LIVE is missing after bootstrap -- snapshot is the #SNAPSHOT-FAILED sentinel, not an empty floor" >&2
-  fi
-else
-  if [ ! -e "$QUARANTINE_LIVE" ]; then
-    : >"$QUARANTINE_LIVE" 2>/dev/null || true
-  fi
-  : >"$QUARANTINE_MARKER" 2>/dev/null || true
-fi
-if ! cp "$QUARANTINE_LIVE" "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null; then
+QUARANTINE_FLOOR="$FIX_QUEUE.quarantine_floor"
+if ! python3 - "$REPO" "$QUARANTINE_LIVE" "$QUARANTINE_MARKER" "$QUARANTINE_FLOOR" \
+    "$FIX_QUEUE_BEFORE.operator_drains.quarantine" <<'QUARANTINE_PY'
+import io, os, subprocess, sys
+repo, live, marker, floor, snap = sys.argv[1:6]
+
+
+def die(why):
+    sys.stderr.write("run_round: quarantine floor: %s -- snapshot is the "
+                     "#SNAPSHOT-FAILED sentinel; the floor is NOT reset\n" % why)
+    sys.exit(1)
+
+
+def git(*a):
+    try:
+        r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True)
+    except OSError as e:
+        die("git could not be run (%s), bootstrap state unconfirmed" % e)
+    if r.returncode != 0:
+        die("`git %s` failed (rc=%d: %s), bootstrap state unconfirmed"
+            % (" ".join(a), r.returncode,
+               r.stderr.decode("utf-8", "replace").strip()))
+    return r.stdout
+
+
+def rel(p):
+    p, r = os.path.abspath(p), os.path.abspath(repo)
+    if not p.startswith(r + os.sep):
+        die("%s is not inside %s" % (p, repo))
+    return p[len(r) + 1:]
+
+
+def lines_of(raw):
+    # Same reading as fix_queue.py load_quarantine(): utf-8-sig, universal
+    # newlines, blank and comment lines skipped.
+    fh = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig")
+    for line in fh:
+        line = line.rstrip("\n")
+        if line and not line.lstrip().startswith(("#", "//")):
+            yield line
+
+
+def read_plain(p):
+    if not os.path.exists(p):
+        return None
+    if not os.path.isfile(p):
+        die("%s is not a plain file" % p)
+    try:
+        with io.open(p, "rb") as fh:
+            return fh.read()
+    except (IOError, OSError) as e:
+        die("%s unreadable (%s)" % (p, e))
+
+
+# Fail closed: "git could not answer" is NOT "never bootstrapped".
+booted = (os.path.exists(marker)
+          or bool(git("log", "--all", "-1", "--format=%H", "--",
+                      rel(marker)).strip()))
+frel = rel(floor)
+revs = git("log", "--all", "--diff-filter=d", "--format=%H", "--",
+           frel).decode().split()
+history = [git("show", "%s:%s" % (rv, frel)) for rv in revs]
+live_raw = read_plain(live)
+floor_raw = read_plain(floor)
+if booted:
+    if live_raw is None:
+        die("live quarantine file %s is missing after bootstrap" % live)
+    if floor_raw is None and revs:
+        die("floor anchor %s was deleted but is in git history" % floor)
+else:
+    if live_raw is None:
+        io.open(live, "w").close()
+        live_raw = b""
+    io.open(marker, "w").close()
+out, seen = [], set()
+try:
+    for raw in [floor_raw or b""] + history + [live_raw]:
+        for line in lines_of(raw):
+            if line not in seen:
+                seen.add(line)
+                out.append(line)
+except UnicodeDecodeError as e:
+    die("quarantine data is not valid UTF-8 (%s)" % e)
+data = "".join(l + "\n" for l in out).encode("utf-8")
+try:
+    tmp = floor + ".tmp.%d" % os.getpid()
+    with io.open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, floor)
+    with io.open(snap, "wb") as fh:
+        fh.write(data)
+except (IOError, OSError) as e:
+    die("could not write the floor or snapshot (%s)" % e)
+if live_raw is not None and set(lines_of(live_raw)) != seen:
+    sys.stderr.write("run_round: quarantine floor holds %d line(s) the live "
+                     "file %s does not -- the gate will restore them and "
+                     "excuse no drain\n" % (len(seen - set(lines_of(live_raw))),
+                                           live))
+QUARANTINE_PY
+then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || true
 fi
 QUARANTINE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || echo "")

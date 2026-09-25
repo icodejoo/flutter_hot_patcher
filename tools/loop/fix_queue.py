@@ -155,6 +155,31 @@ def quarantine_path(queue_path):
     return operator_ledger(queue_path) + ".quarantine"
 
 
+def quarantine_floor_path(queue_path):
+    """Append-only anchor of every line ever quarantined (F140 round 5).
+
+    Pass 5 of F140's falsification showed the floor had no content of its
+    own: run_round.sh's snapshot was a `cp` of the LIVE quarantine file, and
+    the persistent marker only answered "was it ever bootstrapped" -- so a
+    round (or a killed round's orphan) that TRUNCATED or REWROTE the live file
+    instead of deleting it made the next round's snapshot faithfully copy the
+    empty/rewritten file, checksum it honestly, and drain the forged line.
+    This file is the content anchor: update() appends every line it
+    quarantines here as well as to the live file, reads it back as trusted
+    floor on every call, and run_round.sh's quarantine-snapshot block unions
+    it (plus every committed version of it in git history) with the live
+    file before snapshotting. A line that is here and not in the live file
+    is treated exactly like one the round-start snapshot proves was
+    quarantined: restored, and the round excuses no drain. Deliberately NOT a
+    sibling of the live file's name, so one glob does not hit both.
+
+    Releasing a line is an operator act: delete it from the live file AND
+    this file (and, if this file was ever committed, from history too --
+    run_round.sh unions every committed version). Nothing else shrinks it.
+    """
+    return queue_path + ".quarantine_floor"
+
+
 def load_quarantine(path):
     """Raw ledger data-lines (no trailing newline) marked unverifiable.
 
@@ -977,7 +1002,7 @@ def read_code_touch(path):
     return out
 
 
-def neg_ids_on_line(line, known=None):
+def neg_ids_on_line(line, known=None, in_fence=False):
     """The ids ONE memo/subject line records a RED verdict about.
 
     F140 (2026-09-26): scan() used to do `if NEG_RE.search(line): neg |=
@@ -1078,7 +1103,7 @@ def neg_ids_on_line(line, known=None):
     ids = ids_on(line, known)
     if len(ids) <= 1:
         return ids if NEG_RE.search(line) else set()
-    if not real_pos_verdicts(line):
+    if not real_pos_verdicts(line, in_fence):
         return ids if NEG_RE.search(line) else set()
     if unattributed_red(line, known):
         return ids
@@ -1100,8 +1125,43 @@ INSTRUCTION_BEFORE = re.compile(
     r"[^。；;.!?\n]{0,20}$", re.IGNORECASE)
 
 
-def real_pos_verdicts(line):
+def fence_flags(lines):
+    """For each line, True iff it lies inside (or delimits) a fenced block.
+
+    F140 round 5 (pass 5's flaw (3)): real_pos_verdicts() only ever saw one
+    line, so a verdict template quoted inside a multi-line ``` / ~~~ fence
+    (a pasted dispatch prompt, falsify.md's answer format) read as issued.
+    A fence opens on a line whose stripped text starts with three or more
+    backticks or tildes and closes on the next line starting with the same
+    character run at least as long (CommonMark). An unclosed fence runs to
+    the end -- which only ever sends lines back to the liberal (pre-CLAUSE)
+    red reading, the cheap failure direction.
+    """
+    out, fence = [], None
+    for line in lines:
+        m = FENCE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                out.append(True)
+            else:
+                out.append(False)
+        else:
+            out.append(True)
+            if (m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
+                    and not line[m.end():].strip()):
+                fence = None
+    return out
+
+
+FENCE = re.compile(r"^[ \t>+]*(`{3,}|~{3,})")
+
+
+def real_pos_verdicts(line, in_fence=False):
     """POS_VERDICT matches on `line` that are ISSUED, not quoted.
+
+    `in_fence` (see fence_flags()): the line sits inside a multi-line fenced
+    block, so nothing on it is issued -- every match is excluded.
 
     Excluded: a match lying inside a backtick code span (a template or a
     literal being described), and a match whose own clause, in the 30
@@ -1109,6 +1169,8 @@ def real_pos_verdicts(line):
     让…回答 / ask / require ...) -- "asked for a SURVIVES-shaped answer" is
     not "answered SURVIVES".
     """
+    if in_fence:
+        return []
     spans = [(m.start(), m.end()) for m in CODE_SPAN.finditer(line)]
     out = []
     for m in POS_VERDICT.finditer(line):
@@ -1171,7 +1233,9 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     the verdict half by writing the memo line. See the module docstring.
     """
     neg, fix, surv, surv_fix = set(), set(), set(), set()
-    for line in list(memo_lines) + list(subjects):
+    memo_lines, subjects = list(memo_lines), list(subjects)
+    fenced = fence_flags(memo_lines) + [False] * len(subjects)
+    for line, in_fence in zip(memo_lines + subjects, fenced):
         here = ids_on(line, known)
         # The legacy-id alias has to be computed BEFORE the early exit, not
         # after it: ID.findall("F--") is [] -- that IS the defect -- so a line
@@ -1188,7 +1252,7 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
         # polarity, so a rejected SURVIVES does not read as an approval. A line
         # saying "FALSIFIED then SURVIVES" is therefore both, which is correct:
         # it owes nothing only if the round also dispatched twice.
-        neg |= neg_ids_on_line(line, known)
+        neg |= neg_ids_on_line(line, known, in_fence)
         if polarity(strip_meta(line)) > 0 and PASS_VOCAB.search(line):
             # The legacy-id alias applies here and nowhere else: a verdict
             # written against "F--" drains the row that was migrated out of it.
@@ -1668,6 +1732,20 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "excused this round")
         else:
             trusted_quarantine = load_quarantine(quarantine_before)
+    # F140 round 5 (pass 5's flaw (1)): the content anchor -- see
+    # quarantine_floor_path(). Read on every call, whether or not a
+    # round-start snapshot was passed, so a truncated/rewritten live file is
+    # caught by the gate itself and not only by the next round's snapshot.
+    fpath = quarantine_floor_path(queue_path)
+    if not quarantine_read_ok(fpath):
+        ledger_ok = False
+        actions.append(
+            "RED quarantine floor %s is not a plain file -- the floor cannot "
+            "be read, so no operator drain is excused this round" % fpath)
+        floor_quarantine = set()
+    else:
+        floor_quarantine = load_quarantine(fpath)
+    trusted_quarantine = trusted_quarantine | floor_quarantine
     missing_from_live = trusted_quarantine - live_quarantine
     quarantine = live_quarantine | trusted_quarantine
     if missing_from_live:
@@ -1767,6 +1845,22 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "RED %d ledger line(s) quarantined (no trusted snapshot to "
                 "tell old from forged) -- none of them can drain a queue "
                 "row until an operator reviews %s by hand" % (len(newly), qpath))
+    # F140 round 5: everything quarantined by now -- live, round-start
+    # snapshot, floor, and anything added just above -- is made part of the
+    # floor before the gate returns, so a line quarantined THIS round is
+    # anchored even if the live file is truncated before the next round's
+    # snapshot (the orphaned-background-job shape pass 5 named).
+    floor_add = sorted(quarantine - floor_quarantine)
+    if floor_add and quarantine_read_ok(fpath):
+        try:
+            with io.open(fpath, "a", encoding="utf-8") as fh:
+                for l in floor_add:
+                    fh.write(l + "\n")
+        except (IOError, OSError):
+            ledger_ok = False
+            actions.append(
+                "RED quarantine floor %s could not be appended to -- no "
+                "operator drain is excused this round" % fpath)
     drained_before = (operator_drained(ledger_before, actions=actions,
                                         quarantine=quarantine)
                       if ledger_ok else {})
@@ -3549,6 +3643,38 @@ def self_test():
         neg = neg_ids_on_line(line, {"F77", "F78"})
         return neg == {"F78"}, "neg=%r" % (neg,)
 
+    # F140 r5 (pass 5's flaw (3)): the same quoted-not-issued rule across a
+    # multi-line fenced block. The fenced line on its own restricts (F52
+    # only, the F77/F78 shape); inside a ``` block it is a pasted template,
+    # so the red binds both ids. The unfenced control proves the fence, not
+    # the line, is what changes the answer.
+    F140_FENCED = ["F53 的回执模板如下，F52 同：", "```text",
+                   "F53 VERDICT: SURVIVES；F52 与另一张都 FALSIFIED",
+                   "```", "以上是模板。"]
+
+    @probe("F140 r5: fence_flags marks a ``` / ~~~ block (delimiters "
+           "included), a shorter or different run does not close it")
+    def _f140_fence_flags():
+        got = fence_flags(["a", "````x", "```", "~~~", "b", "````", "c",
+                           "~~~", "d", "~~~"])
+        want = [False, True, True, True, True, True, False, True, True, True]
+        return got == want, "got=%r" % (got,)
+
+    @probe("F140 r5: a SURVIVES inside a multi-line ``` block is quoted, not "
+           "issued -- the red binds every id on the line")
+    def _f140_pos_fenced_block():
+        k = {"F52", "F53"}
+        neg = scan(F140_FENCED, [], 0, k)[0]
+        return neg == {"F52", "F53"}, "neg=%r" % (neg,)
+
+    @probe("F140 r5 control: the same line with the fences removed still "
+           "restricts (F52 only)")
+    def _f140_pos_unfenced_control():
+        k = {"F52", "F53"}
+        neg = scan([l for l in F140_FENCED if not l.startswith("```")],
+                   [], 0, k)[0]
+        return neg == {"F52"}, "neg=%r" % (neg,)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3946,6 +4072,147 @@ def self_test():
                  "is NOT re-bootstrapped empty once the marker is in git "
                  "history (run_round.sh snippet, 3 rounds)",
                  okB, (rA.returncode, bootA, snapC, rC.stderr, actsC)))
+
+    # F140 round 5 (pass 5's flaws (1) and (2)): the same real snippet, run
+    # across rounds in a scratch git repo. Round A bootstraps (marker
+    # committed); round A's gate quarantines a line forged into the live
+    # ledger (a sentinel ledger snapshot, as in the launder case above);
+    # round B damages the live quarantine file WITHOUT deleting it and its
+    # gate never runs; round C's snapshot + gate must still hold F46.
+    def _f140r5_rounds(attack):
+        d5 = tempfile.mkdtemp(prefix="fq_f140r5_%s." % attack)
+        st5 = os.path.join(d5, ".loop")
+        os.mkdir(st5)
+        fq5 = os.path.join(st5, "UNREVIEWED_FIX")
+        fqb5 = fq5 + ".before"
+        env5 = dict(os.environ, REPO=d5, STATE=st5, FIX_QUEUE=fq5,
+                    FIX_QUEUE_BEFORE=fqb5)
+        g5 = lambda *a: subprocess.run(
+            ["git", "-C", d5, "-c", "user.name=t", "-c", "user.email=t@t"]
+            + list(a), capture_output=True, text=True)
+        g5("init", "-q")
+        run5 = lambda: subprocess.run(["bash", "-c", script], env=env5,
+                                      capture_output=True, text=True)
+        rA5 = run5()
+        g5("add", "-f", os.path.join(st5, "QUARANTINE_BOOTSTRAPPED"))
+        g5("commit", "-qm", "marker")
+        # round A's gate: sentinel ledger snapshot -> live line quarantined
+        forged_l = forged_q + "\n"
+        io.open(operator_ledger(fq5), "w", encoding="utf-8").write(forged_l)
+        write_queue(fq5, [row])
+        write_queue(fqb5, [row])
+        io.open(fqb5 + ".operator_drains", "w", encoding="utf-8").write(
+            SNAPSHOT_FAILED + "\n")
+        rpA5 = os.path.join(d5, "rA")
+        io.open(rpA5, "w", encoding="utf-8").write("")
+        update(fq5, [], [], 0, "2026-09-09 17:00", {"F46"}, before_path=fqb5,
+               before_sha=hashlib.sha256(io.open(fqb5, "rb").read()).hexdigest(),
+               replies_path=rpA5, ledger_before=fqb5 + ".operator_drains",
+               ledger_before_sha=hashlib.sha256(
+                   io.open(fqb5 + ".operator_drains", "rb").read()).hexdigest(),
+               quarantine_before=fqb5 + ".operator_drains.quarantine",
+               quarantine_before_sha=rA5.stdout or None)
+        quarA = forged_q in load_quarantine(quarantine_path(fq5))
+        floor5 = quarantine_floor_path(fq5)
+        if attack == "history":
+            g5("add", "-f", floor5)
+            g5("commit", "-qm", "floor")
+        # round B: damages the evidence, gate never runs
+        if attack == "truncate":
+            io.open(quarantine_path(fq5), "w", encoding="utf-8").write("")
+        elif attack == "rewrite":
+            io.open(quarantine_path(fq5), "w", encoding="utf-8").write(
+                "2026-01-01 00:00\tF99\tunrelated\tx\t2026-01-01 00:00\n")
+        elif attack == "history":
+            io.open(quarantine_path(fq5), "w", encoding="utf-8").write("")
+            io.open(floor5, "w", encoding="utf-8").write("")
+        elif attack == "gitfail":
+            os.remove(quarantine_path(fq5))
+            os.remove(os.path.join(st5, "QUARANTINE_BOOTSTRAPPED"))
+            if os.path.exists(floor5):
+                os.remove(floor5)
+            g5("config", "core.repositoryformatversion", "99")
+        rC5 = run5()
+        snap5 = fqb5 + ".operator_drains.quarantine"
+        snapC5 = io.open(snap5, "rb").read() if os.path.exists(snap5) else b""
+        # (before round C's gate, which legitimately re-creates the live file)
+        live_after_snip = os.path.exists(quarantine_path(fq5))
+        marker_after_snip = os.path.exists(
+            os.path.join(st5, "QUARANTINE_BOOTSTRAPPED"))
+        # round C: the forged line is still sitting in the live ledger and
+        # the (honest, checksummed) ledger snapshot; queue row vanishes.
+        write_queue(fq5, [])
+        write_queue(fqb5, [row])
+        io.open(fqb5 + ".operator_drains", "w", encoding="utf-8").write(forged_l)
+        rpC5 = os.path.join(d5, "rC")
+        io.open(rpC5, "w", encoding="utf-8").write("")
+        actsC5, _, _ = update(
+            fq5, [], [], 0, "2026-09-09 17:30", {"F46"}, before_path=fqb5,
+            before_sha=hashlib.sha256(io.open(fqb5, "rb").read()).hexdigest(),
+            replies_path=rpC5, ledger_before=fqb5 + ".operator_drains",
+            ledger_before_sha=hashlib.sha256(
+                io.open(fqb5 + ".operator_drains", "rb").read()).hexdigest(),
+            quarantine_before=snap5, quarantine_before_sha=rC5.stdout or None)
+        held = (not any(a.startswith("operator-drained F46") for a in actsC5)
+                and any(a.startswith("RED F46") for a in actsC5))
+        return dict(rA=rA5.returncode, quarA=quarA, snapC=snapC5,
+                    errC=rC5.stderr, acts=actsC5, held=held, st=st5,
+                    live_exists=live_after_snip,
+                    marker_exists=marker_after_snip)
+
+    for attack, label in (("truncate", "TRUNCATED"), ("rewrite", "REWRITTEN")):
+        r5 = _f140r5_rounds(attack)
+        ok5 = (r5["rA"] == 0 and r5["quarA"] and r5["held"]
+               and forged_q.encode("utf-8") in r5["snapC"]
+               and any("missing from the live quarantine file" in a
+                       for a in r5["acts"]))
+        f113.append(("F140 r5: a live quarantine file %s (not deleted) across "
+                     "a round boundary does not reset the floor -- the "
+                     "content anchor keeps the forged line quarantined "
+                     "(run_round.sh snippet, 3 rounds)" % label, ok5, r5))
+    r5 = _f140r5_rounds("history")
+    ok5 = (r5["rA"] == 0 and r5["quarA"] and r5["held"]
+           and forged_q.encode("utf-8") in r5["snapC"])
+    f113.append(("F140 r5: truncating BOTH the live file and the floor "
+                 "anchor's working copy is undone by the anchor's committed "
+                 "history (run_round.sh snippet, 3 rounds)", ok5, r5))
+    r5 = _f140r5_rounds("gitfail")
+    ok5 = (r5["rA"] == 0 and r5["quarA"] and r5["held"]
+           and r5["snapC"].strip() == SNAPSHOT_FAILED.encode("utf-8")
+           and not r5["live_exists"] and not r5["marker_exists"]
+           and "failed" in r5["errC"])
+    f113.append(("F140 r5: `git log` erroring on the marker check fails "
+                 "CLOSED -- sentinel snapshot, no empty re-bootstrap, reason "
+                 "on stderr (run_round.sh snippet, corrupted repo)", ok5, r5))
+
+    # F140 r5: the gate reads the floor anchor itself, not only through the
+    # round-start snapshot -- no --quarantine-before at all, live quarantine
+    # file truncated, floor still holds the forged line.
+    d6 = tempfile.mkdtemp(prefix="fq_f140r5gate.")
+    qp6 = os.path.join(d6, "q")
+    write_queue(qp6, [])
+    io.open(quarantine_path(qp6), "w", encoding="utf-8").write("")
+    io.open(quarantine_floor_path(qp6), "w", encoding="utf-8").write(
+        forged_q + "\n")
+    io.open(operator_ledger(qp6), "w", encoding="utf-8").write(forged_q + "\n")
+    bp6 = os.path.join(d6, "b")
+    write_queue(bp6, [row])
+    io.open(bp6 + ".operator_drains", "w", encoding="utf-8").write(
+        forged_q + "\n")
+    rp6 = os.path.join(d6, "r")
+    io.open(rp6, "w", encoding="utf-8").write("")
+    acts6, _, _ = update(
+        qp6, [], [], 0, "2026-09-09 17:30", {"F46"}, before_path=bp6,
+        before_sha=hashlib.sha256(io.open(bp6, "rb").read()).hexdigest(),
+        replies_path=rp6, ledger_before=bp6 + ".operator_drains",
+        ledger_before_sha=hashlib.sha256(
+            io.open(bp6 + ".operator_drains", "rb").read()).hexdigest())
+    ok6 = (not any(a.startswith("operator-drained F46") for a in acts6)
+           and any(a.startswith("RED F46") for a in acts6)
+           and forged_q in load_quarantine(quarantine_path(qp6)))
+    f113.append(("F140 r5: the gate enforces the floor anchor directly "
+                 "(truncated live file, no round-start snapshot passed)",
+                 ok6, acts6))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
