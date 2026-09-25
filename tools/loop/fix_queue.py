@@ -1515,18 +1515,23 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     if allow_enqueue:
         requeue_cids = sorted((neg & fix) & {r[0] for r in kept} - reviewed)
         for cid in requeue_cids:
-            shas = " ".join(
-                sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
-            )
+            row_i = next(i for i in range(len(kept)) if kept[i][0] == cid)
+            old_reason = kept[row_i][2]
+            # G130f: a sha the row already records is not a new fix -- a round
+            # that merely mentions the old commit again must not requeue.
+            shas = " ".join(sorted(
+                {s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)}
+                - set(re.findall(r"[0-9a-f]{7,40}", old_reason))))
             if shas:
-                verdict_str = "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED"
-                for i in range(len(kept)):
-                    if kept[i][0] == cid:
-                        old_reason = kept[i][2]
-                        new_reason = old_reason + "; new fix " + shas
-                        kept[i] = (cid, now, new_reason)
-                        actions.append("requeue %s -- new fix %s after %s verdict" % (cid, shas, verdict_str))
-                        break
+                # The verdict word comes from lines that name THIS card, not
+                # from any red line in the round.
+                own = [l for l in list(memo_lines) + list(subjects)
+                       if cid in ids_on(l, known)]
+                verdict_str = "/".join(t for t in NEG
+                                       if any(t in l for l in own)) or "FALSIFIED"
+                kept[row_i] = (cid, now, old_reason + "; new fix " + shas)
+                actions.append("requeue %s -- new fix %s after %s verdict"
+                               % (cid, shas, verdict_str))
 
     enqueue_cids = sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []
     for cid in enqueue_cids:
@@ -2990,6 +2995,19 @@ def self_test():
         
         render_out = render(q, candidates(os.path.join(d, "queue")))
         return (is_requeued and has_new_seen and "已有绿色 pass" not in render_out), "rc=%s out=%r q=%r render_out=%r" % (rc, out, q, render_out)
+
+    @probe("CLI: G130f an already-recorded sha mentioned again does not requeue")
+    def _g130f():
+        d = tempfile.mkdtemp(prefix="fq_g130f.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["abc1234 tree F77: first fix mentioned again"],
+            agents=0, cards={"F77"})
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("requeue F77" not in out
+              and [r[1] for r in q if r[0] == "F77"] == ["2026-09-17 10:00"])
+        return ok, "rc=%s out=%r q=%r" % (rc, out, q)
 
     for name, fn in probes:
         try:
