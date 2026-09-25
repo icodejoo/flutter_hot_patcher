@@ -11146,6 +11146,32 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
 **队列现状**：F37 / F115 / F116 / F117 / F118 五条。F115–F118 的修补丁 pass 已无意义（它们修的是被停用的出队路径），
 **请操作者在自己终端里出队这四条**；F37 的修补丁 pass 是真债（A1+A3 落地），保留。
 
+### 同一会话：两棵构建树重建 + `out_pm` 重生成 —— 陈旧藏住的五个红现在露出来了
+
+- SDK `63716223bde`，树干净。**`ProductSimARM64`** `gen_snapshot`/`dartaotruntime`/`analyze_snapshot` 重建
+  （595 步，333s），三个目标 `ninja -n … | grep -vc '^ninja: '` 全为 **0**；sha256 前→后
+  `a35a6dc66212→2d0c57047fee` / `0fa908e2d3cd→9ae36d71ecef` / `c21e38a68965→c615cd04f8ec`。
+- **`ReleaseARM64`** 四个目标重建（410s），全为 0（原 253/176/637/176）。
+- `parity_matrix.sh` 重跑（rc=0，`59 cells, 0 unrun, 3 blocked`）：6 个 ours `.so` 全部重生成，
+  `.provenance.tsv` 的生产者列都是 `2d0c57047fee`。**分类列一格未变**（`na 35 / structural 12 / unknown 12 / gap 0`），
+  15 格的备注数字变了。
+- **新鲜读数（均未经证伪，不可当结论引用）**：
+  F101 `measure_pool_residual.sh` **UNEXPLAINED 3**（陈旧二进制上是 88）· `self_hash` 差 hello 205→118、prog 331→158 ·
+  F104 `disassemble` **UNITS 4,068**（原 209,532），`EXAMINED 4068 / UNEXPLAINED 0` ——
+  ⚠️ 降幅这么大，先问「转储格式或配对变了没有」，再问「缺口是不是关了」·
+  F103 `dump_blobs` UNITS 2,184,729（原 2,255,538）· `shorebird` UNITS 20,274。
+- 🔴 **`verify_all.sh` 不带 `SKIP_STALENESS_GUARD`：守卫放行，`40 ran / 5 failed / 4 blocked`，rc=1。**
+  五个红此前被陈旧二进制盖住：
+  `op_dump_check`（deserializer-reset 1323/1421，差的 98 = 92+6 个 per-process 项）·
+  `evidence_pool_link_data_residual`（hello delta 分解对不上）·
+  `evidence_dump_blobs_residual`（hello 尺寸差 1440 ≠ 钉住的 1992）·
+  `evidence_shorebird_components` ·
+  `phase_gate`：**12 个 `structural` 格的证据在新产物上不再复现**
+  （`compute_dd_table`、`dump_object_pool_link_data`、`print_field_table_link_info_to`、
+  `print_field_table_link_debug_info_to` 各 ×3），闸门量得它们是 `unknown`。**`phase_gate.expected` 未动。**
+- ⇒ **下一轮的优先级（规则 0）**：逐个判定这五个红是「F37 落地引入的回归」还是「证据钉在陈旧产物上」，
+  **各自带证据**；禁止改常量求绿。然后是 F37 修补丁 pass、F107、F109。F115–F120 不要挑。
+
 ---
 
 ## 2026-09-24 晚间（/loop 自动轮次，读契约后锁定 `.loop/UNREVIEWED_FIX`）
