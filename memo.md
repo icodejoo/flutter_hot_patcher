@@ -12353,3 +12353,50 @@ F140 VERDICT: FALSIFIED -- the sentinel branch disables the anti-forgery restore
 
 **尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。下一轮：对最新提交派一个新鲜 Opus 子代理再跑一次 `tools/loop/prompts/falsify.md`。
 本轮到此结束。
+
+---
+
+## F140 修补丁证伪 pass 2（2026-09-26，Opus，commit `9a3b225`）
+
+```
+VERDICT: PARTIAL
+
+ATTACK RESULTS:
+1. I read `update()`, `operator_drained()` and `load_quarantine()`. Then I ran `--self-test` on /tmp copies with each fix reverted. The criterion can fail: the baseline gives 91/0, and every revert gives 1 failure.
+2. The laundering self-test uses one `queue_path` for both `update()` calls, so the quarantine file persists between them the way it would in real use. Round 2's baseline is an honest byte copy of the live ledger. The two sides are comparable.
+3. I measured pre-CLAUSE (`de72312^`), `de72312` and `9a3b225` bindings over the real memo.md, with known ids taken from the research-tree `cards.tsv` (110 ids). `de72312` lost 58 red bindings: 11 on single-id lines and 47 on multi-id lines. `9a3b225` recovers only the 11. The docstring says "every loss was one id", which is false. The 47 that remain include real verdicts, for example memo.md:275 "F54 **FALSIFIED**、另两张 PARTIAL", where F52 and F53 still lose their PARTIAL. Other losses really are unrelated-clause ids (memo.md:1035, F36).
+4. Quarantine can be skipped without touching the checksummed snapshot. In `/tmp/f140fz/attack.py`, a round-2 agent that deletes or truncates `<ledger>.quarantine` gives `operator-drained F46` and an empty queue. A round-1 agent that pre-creates the quarantine path as a directory makes the append fail silently. Round 1 still prints "RED 1 ledger line(s) quarantined", and round 2 drains F46. A CRLF-forged line is still blocked.
+5. I checked the prior pass's text in memo.md against the new docstring. That pass itself said "Some losses are correct (an id sitting in an unrelated clause)", so the new "every loss was one id" is a misreading of the earlier finding. The prior pass also flagged that the sentinel check is a substring test (`SNAPSHOT_FAILED in raw`). That is outside this commit's three fixes and is still a substring test.
+6. I reverted each fix mechanically in /tmp: rev1 (the `if not ledger_ok` block disabled), rev1b (the quarantine filter removed), rev2 (the `len(ids)<=1` early return removed), rev3bom (`utf-8` instead of `utf-8-sig`), rev3ls (`lstrip` removed), rev3sl (the `//` check removed), and rev3all. Each goes red on exactly its own case. All three negative controls are real.
+7. Yes, the question was swapped for an easier one. Quarantine moves the trust problem from the ledger to `<ledger>.quarantine`. That file is neither snapshotted nor checksummed (`run_round.sh` does not mention it), and it can be written by the same round the ledger machinery assumes is adversarial. So the laundering is not closed, only delayed until a round deletes one file.
+
+FLAW: Fix (i) is only as strong as a file the round can write. `run_round.sh` never snapshots or checksums `<ledger>.quarantine`, so a round-2 `rm` of it, or a round-1 `mkdir` at its path, launders the forged line into `operator-drained F46`. The mkdir variant also leaves a false "quarantined" RED in round 1's log. To reproduce, run `cd /tmp/f140fz && python3 attack.py` (scenarios "round2 deletes quarantine file" and "round1 pre-creates quarantine as dir"). Fix (ii) restores 11 of the 58 lost bindings. Its stated justification ("every loss was one id") is contradicted by the measurement, and real multi-id red verdicts are still dropped (memo.md:275, F52 and F53).
+
+COST OF BEING WRONG: F113/F140 operator-only draining rests on this. Right now every round is a sentinel round (the live ledger does not exist), so a forged drain can still take an unreviewed fix off the queue with no human involved.
+
+F140 VERDICT: PARTIAL -- all three negative controls really go red, but the quarantine file is itself unprotected state the round can delete, and the neg-binding fix recovers only the single-id losses (11 of 58).
+```
+
+**STILL OPEN**：n/a（判 PARTIAL）。
+
+**当场修（同一轮内，commit 待提交，`--self-test` 94/0）**：
+
+**(i) 隔离区文件自身未受保护**：`<ledger>.quarantine` 和活账本一样是轮次可自由改写的普通文件——`run_round.sh` 从未快照/校验和它。给它套上和账本完全相同的机制：
+新增 `--quarantine-before` / `--quarantine-before-sha`（`run_round.sh` 在轮次开跑前 `cp` 一份、算好 sha256，轮次本身摸不到那次计算），
+`update()` 里把这份"轮外快照"里已隔离的行当作**地板**——不论活文件此刻写着什么，只要地板证明某行曾被隔离，它就继续被排除在放行之外；
+地板里有而活文件里没有的行（被删/被截断）会被重新写回活文件，且本轮**不予免检**（`ledger_ok=False`）。
+另外新增 `quarantine_read_ok()` 健康检查：活隔离区路径若存在但不是普通文件（例如被换成目录），读写都会静默失败——现在这种情况本身就报红并本轮不予免检，不再被 `load_quarantine()` 的 `except OSError: pass` 悄悄读成"什么都没隔离"。
+`run_round.sh` 侧：首次运行时把活隔离区文件“引导”成一个空文件（此后"不存在"只可能意味着被删，不再意味着"从未隔离过"），随后走和账本完全相同的 `cp`→失败写哨兵→算 sha 的流程。
+负控制：新增两个自测用例（"round2 删除隔离区文件"、"round1 把隔离区路径建成目录"），机械还原 (i) 的修复后两者都变红（`rm -f /tmp/fq_verify2.py` 前已实测：`93 case(s), 2 failure(s)`，且失败的正是这两条）。
+
+**(ii) 文档声称"每处丢失都是单 id"是假的**：重新用真实 memo.md + 研究树 `cards.tsv` 的 110 个已知 id 测了一遍：`de72312` 丢了 58 处（11 单 id + 47 多 id），`9a3b225` 只救回单 id 那 11 处。
+问题的核心不是"CLAUSE 切分需要更聪明"——`memo.md:275` "F54 **FALSIFIED**、另两张 PARTIAL" 里 F52/F53 是用代词"另两张"指代，字面 `F52`/`F53` 出现在同一物理行的**另一分句**，任何基于分句的规则都读不出这层指代关系，这是语义问题不是分句问题。
+真正能用的判别信号是：这一行**除了红判词还有没有一个结构化的绿判词**（`POS_VERDICT`，和 `reply_polarity()`/`green_ids()` 用的同一个模式）。
+如果整行没有任何绿判词，红判词就没有什么"可能误伤的对象"，直接沿用 CLAUSE 限制之前（本卡最初的）行为——绑定到整行提到的每个 id（含 `memo.md:275` 这种代词分组的情形）；
+只有当整行**同时**存在结构化绿判词时（F77/F78 那种"一行两个不同判决"的真实歧义），才启用 CLAUSE 限制以保护绿卡不被误伤。
+这个选择也对齐本项目自己反复申明的代价不对称：错误地把一个 id 判红成本是一次多余的复核（便宜）；漏掉一个真实的红判词成本是一个未经复核的修复再也没人看（昂贵）——所以在没有歧义信号时应当偏向"多判红"而不是"漏判红"。
+新增自测用例：直接摘录 `memo.md:275` 原句（含真实的 `。` 分句边界，避免像第一版那样因为手写测试串没有分句边界而变成空判据），机械还原 (ii) 的 `POS_VERDICT` 判定分支后该用例变红（`94 case(s), 1 failure(s)`），确认是真负控制。
+逐行核对：`de72312` vs `9a3b225` 在真实 memo.md 上的绑定差异现在是 **0 处丢失、47 处找回**（此前是 66 丢 / 0 得，本次修复前是 58 丢 / 11 得）；F77/F78 的原始 repro（含绿判词那一行）仍然只判 `{'F77'}`，没有误伤 F78。
+
+**尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。下一轮：对最新提交派一个新鲜 Opus 子代理再跑一次 `tools/loop/prompts/falsify.md`。
+本轮到此结束。

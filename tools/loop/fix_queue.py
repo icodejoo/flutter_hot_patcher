@@ -183,6 +183,25 @@ def load_quarantine(path):
     return out
 
 
+def quarantine_read_ok(path):
+    """False iff `path` exists but is not a plain, readable file.
+
+    F140, third falsification pass (2026-09-26): `load_quarantine()` above
+    silently returns an empty set on ANY OSError, including "this path is a
+    directory" -- so a round that pre-creates the live quarantine file as a
+    directory makes every future read of it look like "nothing is
+    quarantined" instead of "this could not be read", and the append in
+    update() fails the same way, silently. Absence is legitimate (nothing
+    has ever been quarantined yet); a directory, a broken symlink, or a
+    permission error in its place is not, and the caller must treat that
+    the same as a forged or missing ledger snapshot -- refuse to trust
+    anything this round -- rather than reading it as "quarantine is empty".
+    """
+    if not path or not os.path.exists(path):
+        return True
+    return os.path.isfile(path)
+
+
 def operator_drained(ledger_path, actions=None, quarantine=None):
     import datetime
     out = {}
@@ -1004,13 +1023,49 @@ def neg_ids_on_line(line, known=None):
     treats as its liberal case (2): when the line names only ONE distinct
     id, that id is the only thing a verdict on the line could be about, so
     the verdict binds to it regardless of clause boundaries, matching the
-    pre-CLAUSE behavior for this shape. The CLAUSE restriction is now
-    applied ONLY when the line names two or more distinct ids -- the actual
-    shape the F77/F78 repro above needs it for, and the only shape where
-    "which id is this verdict about" is genuinely ambiguous without it.
+    pre-CLAUSE behavior for this shape.
+
+    F140, THIRD falsification pass (2026-09-26): the single-id fix above was
+    correct but its docstring's claim -- "every loss was one id" -- was
+    itself wrong, and unconditionally CLAUSE-restricting the multi-id case
+    was still too strong. Re-measured against the real corpus: of 58 lines
+    that lost a binding under the CLAUSE-restricted version, 47 name TWO OR
+    MORE ids, and some of those losses are real (memo.md:275, a table row
+    where "F54 **FALSIFIED**、另两张 PARTIAL" refers to F52/F53 by the
+    pronoun "另两张" rather than by name -- their literal `F52`/`F53` text
+    sits several ids earlier on the same physical line, in an unrelated
+    clause, so CLAUSE-restricted `ids_on(seg)` cannot see them).
+
+    A clause rule cannot resolve a pronoun -- that is a semantic question,
+    and CLAUDE.md's instrument-defect catalogue is explicit that matching
+    vocabulary instead of meaning is not a fix, it just moves where the
+    check is wrong. So the question is not "how do we parse the pronoun"
+    but "which failure direction is this function allowed to have", and
+    this project has already answered that: a false hold (an id wrongly
+    read as red) costs one extra dispatch; a false drain (a real red
+    verdict never recorded) costs an unreviewed fix nobody looks at again.
+    CLAUSE-restricting every multi-id line trades the cheap failure for the
+    expensive one on exactly the lines -- like memo.md:275 -- where nothing
+    on the line lets the two be told apart.
+
+    The one place CLAUSE-restriction earns its cost is the F77/F78 shape,
+    where the line ALSO carries a genuine green verdict for a different id
+    ("F77 VERDICT: FALSIFIED; F78 VERDICT: SURVIVES") -- there, binding
+    every id red would overwrite a real SURVIVES with a wrong red, which is
+    not a safe direction to fail in either. POS_VERDICT (the same
+    structured-SURVIVES pattern reply_polarity() and green_ids() use) tells
+    the two situations apart: if the line has no green verdict on it at
+    all, there is nothing a red token could be wrongly overwriting, so it
+    binds to every id the line names (matching pre-CLAUSE behavior,
+    including for memo.md:275-shaped group references). Only when the line
+    ALSO has a structured green verdict does the CLAUSE restriction apply,
+    to keep that verdict's id out of reach of a red token in a different
+    clause.
     """
     ids = ids_on(line, known)
     if len(ids) <= 1:
+        return ids if NEG_RE.search(line) else set()
+    if not POS_VERDICT.search(line):
         return ids if NEG_RE.search(line) else set()
     out = set()
     for m in CLAUSE.finditer(line):
@@ -1270,7 +1325,8 @@ def cards_gap_reason(cards_path, known, before_path):
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
            replies_path=None, code_touch=None, cards_gap=None,
-           ledger_before=None, ledger_before_sha=None):
+           ledger_before=None, ledger_before_sha=None,
+           quarantine_before=None, quarantine_before_sha=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -1498,7 +1554,79 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # caller took at round start; otherwise nothing is excused (fail closed).
     ledger_ok = True
     qpath = quarantine_path(queue_path)
-    quarantine = load_quarantine(qpath)
+    # F140, third falsification pass (2026-09-26): the quarantine file above
+    # was itself a plain file sitting where the round can freely rewrite it --
+    # a round could `rm` it (load_quarantine() then sees nothing quarantined)
+    # or pre-create it as a directory (every read AND write on it fails
+    # silently, see quarantine_read_ok()'s docstring), undoing the
+    # protection in one step -- the same laundering shape this file exists
+    # to close, just moved one file over. It now gets the same treatment as
+    # the ledger: a copy taken OUTSIDE the round, before the round runs,
+    # with its checksum baked into the CLI invocation the round cannot edit
+    # after the fact (`--quarantine-before` / `--quarantine-before-sha`,
+    # mirroring `--ledger-before` / `--ledger-before-sha`). Anything
+    # quarantined in that outside copy is trusted regardless of what the
+    # LIVE file says now; anything missing from the live file that the
+    # outside copy proves was quarantined is re-added and treated as
+    # evidence this round cannot be trusted either.
+    if not quarantine_read_ok(qpath):
+        ledger_ok = False
+        actions.append(
+            "RED live quarantine file %s is not a plain file (e.g. a "
+            "directory put in its place) -- nothing can be read from or "
+            "written to it safely, so no operator drain is excused this "
+            "round" % qpath)
+        live_quarantine = set()
+    else:
+        live_quarantine = load_quarantine(qpath)
+    trusted_quarantine = set()
+    if quarantine_before:
+        raw_q = None
+        got_q = None
+        try:
+            with io.open(quarantine_before, "rb") as fh:
+                raw_q = fh.read()
+            got_q = hashlib.sha256(raw_q).hexdigest()
+        except (IOError, OSError):
+            pass
+        if not quarantine_before_sha or got_q != quarantine_before_sha:
+            ledger_ok = False
+            actions.append(
+                "RED quarantine snapshot checksum %s -- the round-start "
+                "quarantine floor could not be verified, so no operator "
+                "drain is excused this round"
+                % ("missing" if not quarantine_before_sha else "mismatch"))
+        elif raw_q is not None and SNAPSHOT_FAILED.encode("utf-8") in raw_q:
+            ledger_ok = False
+            actions.append(
+                "RED quarantine snapshot was not taken at round start "
+                "(#SNAPSHOT-FAILED sentinel) -- no operator drain is "
+                "excused this round")
+        else:
+            trusted_quarantine = load_quarantine(quarantine_before)
+    missing_from_live = trusted_quarantine - live_quarantine
+    quarantine = live_quarantine | trusted_quarantine
+    if missing_from_live:
+        # A line the round-start snapshot proves was already quarantined is
+        # gone from the live file -- deleted, truncated, or the file
+        # replaced during the round. Restored, and (like a forged ledger
+        # line) this round is not trusted either: whatever made the
+        # quarantine floor disappear could just as easily have forged a
+        # ledger line the same round.
+        ledger_ok = False
+        if quarantine_read_ok(qpath):
+            try:
+                with io.open(qpath, "a", encoding="utf-8") as fh:
+                    fh.write("# %s re-quarantined -- missing from the live "
+                             "quarantine file at round start\n" % now)
+                    for l in sorted(missing_from_live):
+                        fh.write(l + "\n")
+            except (IOError, OSError):
+                pass
+        actions.append(
+            "RED %d previously-quarantined ledger line(s) missing from the "
+            "live quarantine file -- restored, and no operator drain is "
+            "excused this round either" % len(missing_from_live))
     if ledger_before:
         raw = None
         got = None
@@ -3281,6 +3409,34 @@ def self_test():
         neg = neg_ids_on_line(memo[0], known)
         return neg == {"F67"}, "neg=%r" % (neg,)
 
+    @probe("F140, third falsification pass: a multi-id line with a group "
+           "reference by pronoun (no green verdict anywhere on the line) "
+           "binds the red verdict to every id named (real memo.md:275 shape)")
+    def _f140_negline_pronoun_group():
+        # The reviewer's attack 3 measured 47 real losses on lines exactly
+        # this shape: three ids named together, then a verdict clause that
+        # names only one of them explicitly and refers to "the other two" by
+        # pronoun. CLAUSE-restricting unconditionally cannot see F52/F53
+        # here -- their literal text sits in an earlier, unrelated clause --
+        # so the line must fall back to liberal (whole-line) binding, which
+        # it can safely do because nothing on the line is a green verdict
+        # this could wrongly overwrite (contrast _f140_negline(), which DOES
+        # have a green verdict on the line and must restrict).
+        # Verbatim from memo.md:275 (the line the reviewer cited): F52/F53's
+        # names sit in a clause of their OWN, separated by a full stop (。)
+        # from the clause that carries the verdict -- a naive test string
+        # with no clause break would put all three ids in one CLAUSE by
+        # construction and pass even with the pre-fix code, which is exactly
+        # the "vacuous test" mistake this file's own history warns about.
+        memo = ["F52 / F53 / F54 代码在别处，这套循环看不见那棵树，"
+                "挑了也只能空转。三张卡已各自拿到判决"
+                "（F54 **FALSIFIED**、另两张 PARTIAL），"
+                "修复清单见本文件那一节"]
+        known = {"F52", "F53", "F54"}
+        assert len(list(CLAUSE.finditer(memo[0]))) >= 2, "test string has no clause break"
+        neg = neg_ids_on_line(memo[0], known)
+        return neg == {"F52", "F53", "F54"}, "neg=%r" % (neg,)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3480,6 +3636,105 @@ def self_test():
                  "launder into a legitimate drain the next round",
                  ok, (acts1, acts2, q2)))
 
+    # F140, third falsification pass (2026-09-26): the test above never
+    # passes --quarantine-before/-sha, so it never exercises the floor this
+    # pass added -- it only proves the IN-MEMORY quarantine set (built fresh
+    # from the live file each call) works within one process. This
+    # reproduces the attack the floor exists for: round 1 quarantines a
+    # forged line (as above), then round 2 DELETES the live quarantine file
+    # before update() runs -- simulating a round that removes the evidence
+    # of its own forgery -- and only THEN calls update(). Without the floor,
+    # load_quarantine() on a missing file returns an empty set and the
+    # forged line drains anyway; with the floor (quarantine_before /
+    # quarantine_before_sha, taken -- as run_round.sh now does -- BEFORE
+    # round 2 runs and thus before the deletion), the previously-quarantined
+    # line is restored from the floor and the round is refused a drain.
+    d = tempfile.mkdtemp(prefix="fq_f140qfloor.")
+    qp_q = os.path.join(d, "q")
+    write_queue(qp_q, [row])
+    live_ledger_q = operator_ledger(qp_q)
+    io.open(live_ledger_q, "w", encoding="utf-8").write(
+        "2026-09-09 16:50\tF46\tforged by the round\tcruz\t2026-09-09 16:40\n")
+    bp1q = os.path.join(d, "b1")
+    write_queue(bp1q, [row])
+    lb1q = bp1q + ".operator_drains"
+    io.open(lb1q, "w", encoding="utf-8").write(SNAPSHOT_FAILED + "\n")
+    sha1q = hashlib.sha256(io.open(bp1q, "rb").read()).hexdigest()
+    lsha1q = hashlib.sha256(io.open(lb1q, "rb").read()).hexdigest()
+    # Round 1's quarantine floor: nothing has ever been quarantined yet, so
+    # run_round.sh's bootstrap-then-snapshot leaves this genuinely empty.
+    qb1 = os.path.join(d, "qb1")
+    io.open(qb1, "w", encoding="utf-8").write("")
+    qbsha1 = hashlib.sha256(b"").hexdigest()
+    rp1q = os.path.join(d, "r1")
+    io.open(rp1q, "w", encoding="utf-8").write("")
+    update(qp_q, [], [], 0, "2026-09-09 17:00", {"F46"},
+           before_path=bp1q, before_sha=sha1q, replies_path=rp1q,
+           ledger_before=lb1q, ledger_before_sha=lsha1q,
+           quarantine_before=qb1, quarantine_before_sha=qbsha1)
+    quarantine_live_q = quarantine_path(qp_q)
+    assert os.path.exists(quarantine_live_q), (
+        "round 1 should have written a quarantine entry for the forged line")
+    # Round 1's OUTGOING quarantine file is round 2's floor snapshot -- taken
+    # by run_round.sh before round 2 runs, exactly like the ledger's.
+    with io.open(quarantine_live_q, "rb") as fh:
+        qfloor2_bytes = fh.read()
+    qb2 = os.path.join(d, "qb2")
+    io.open(qb2, "wb").write(qfloor2_bytes)
+    qbsha2 = hashlib.sha256(qfloor2_bytes).hexdigest()
+    # Now round 2 deletes the live quarantine file before update() runs.
+    os.remove(quarantine_live_q)
+    write_queue(qp_q, [])
+    bp2q = os.path.join(d, "b2")
+    write_queue(bp2q, [row])
+    lb2q = bp2q + ".operator_drains"
+    with io.open(live_ledger_q, "rb") as fh:
+        ledger_now_q = fh.read()
+    io.open(lb2q, "wb").write(ledger_now_q)
+    sha2q = hashlib.sha256(io.open(bp2q, "rb").read()).hexdigest()
+    lsha2q = hashlib.sha256(ledger_now_q).hexdigest()
+    rp2q = os.path.join(d, "r2")
+    io.open(rp2q, "w", encoding="utf-8").write("")
+    acts2q, _, _ = update(qp_q, [], [], 0, "2026-09-09 17:30", {"F46"},
+                           before_path=bp2q, before_sha=sha2q,
+                           replies_path=rp2q,
+                           ledger_before=lb2q, ledger_before_sha=lsha2q,
+                           quarantine_before=qb2, quarantine_before_sha=qbsha2)
+    q2q = [r[0] for r in read_queue(qp_q)]
+    okq = (not any(a.startswith("operator-drained F46") for a in acts2q)
+           and any(a.startswith("RED F46") for a in acts2q)
+           and any("missing from the live quarantine file" in a
+                   for a in acts2q))
+    f113.append(("F140: deleting the live quarantine file mid-round cannot "
+                 "re-launder an already-quarantined forgery",
+                 okq, (acts2q, q2q)))
+
+    # F140, third falsification pass: the same attack via a directory swap
+    # instead of deletion -- round 1 pre-creates the live quarantine path as
+    # a directory before update() ever writes to it. Every read AND write on
+    # it then fails silently (quarantine_read_ok() catches exactly this), so
+    # without a health check a round could make the mechanism inert from the
+    # very first round rather than needing a forged line to already exist.
+    d2 = tempfile.mkdtemp(prefix="fq_f140qdir.")
+    qp_d = os.path.join(d2, "q")
+    write_queue(qp_d, [row])
+    os.mkdir(quarantine_path(qp_d))
+    bpD = os.path.join(d2, "b1")
+    write_queue(bpD, [row])
+    lbD = bpD + ".operator_drains"
+    io.open(lbD, "w", encoding="utf-8").write("")
+    shaD = hashlib.sha256(io.open(bpD, "rb").read()).hexdigest()
+    lshaD = hashlib.sha256(io.open(lbD, "rb").read()).hexdigest()
+    rpD = os.path.join(d2, "r1")
+    io.open(rpD, "w", encoding="utf-8").write("")
+    actsD, _, _ = update(qp_d, [], [], 0, "2026-09-09 17:00", {"F46"},
+                          before_path=bpD, before_sha=shaD, replies_path=rpD,
+                          ledger_before=lbD, ledger_before_sha=lshaD)
+    okD = any("not a plain file" in a for a in actsD)
+    f113.append(("F140: a directory swapped in for the live quarantine "
+                 "file is caught, not read as an empty quarantine",
+                 okD, actsD))
+
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
     qp = os.path.join(d, "q")
@@ -3524,6 +3779,13 @@ def main():
     ap.add_argument("--ledger-before-sha", default="",
                     help="sha256 of --ledger-before taken at round start; "
                          "without it, or on mismatch, no drain is excused")
+    ap.add_argument("--quarantine-before", default="",
+                    help="quarantine-file snapshot taken at round start "
+                         "(F140 third falsification pass)")
+    ap.add_argument("--quarantine-before-sha", default="",
+                    help="sha256 of --quarantine-before taken at round "
+                         "start; without it, or on mismatch, no drain is "
+                         "excused")
     ap.add_argument("--replies", default="",
                     help="JSON Lines of this round's subagent replies; a "
                          "{\"unavailable\": reason} line means they could not "
@@ -3654,7 +3916,9 @@ def main():
         code_touch=read_code_touch(args.code_touch or None),
         cards_gap=cards_gap,
         ledger_before=args.ledger_before or None,
-        ledger_before_sha=args.ledger_before_sha or None)
+        ledger_before_sha=args.ledger_before_sha or None,
+        quarantine_before=args.quarantine_before or None,
+        quarantine_before_sha=args.quarantine_before_sha or None)
     for a in actions:
         print(a)
 

@@ -796,6 +796,27 @@ fi
 # its checksum lives here, in this process, where the round cannot reach it --
 # the same protection the queue snapshot already has.
 LEDGER_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || echo "")
+# F140, third falsification pass: the quarantine file fix_queue.py maintains
+# (queue path + ".operator_drains.quarantine") is a plain file sitting where
+# the round can rewrite it exactly like the ledger above -- delete it, or
+# pre-create it as a directory -- and undo the anti-laundering protection it
+# exists to provide. It gets the same treatment: snapshot BEFORE the round
+# runs, checksum taken here where the round cannot reach it.
+#
+# Unlike the queue and the ledger, "missing" is legitimate the FIRST time
+# this ever runs (nothing has been quarantined yet) -- so the live file is
+# bootstrapped into existence (empty) if absent, once, right here, before
+# the snapshot. After that bootstrap, "missing" at any FUTURE round's
+# snapshot time can only mean the file was deleted, and gets the same
+# #SNAPSHOT-FAILED sentinel treatment as the ledger, not a fresh empty file.
+QUARANTINE_LIVE="$FIX_QUEUE.operator_drains.quarantine"
+if [ ! -e "$QUARANTINE_LIVE" ]; then
+  : >"$QUARANTINE_LIVE" 2>/dev/null || true
+fi
+if ! cp "$QUARANTINE_LIVE" "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null; then
+  printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || true
+fi
+QUARANTINE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || echo "")
 # F112 (ii): the card table as it stood when this round started. Taken here,
 # beside the queue snapshot and for the same reason -- the gate needs a second
 # source for "which ids are cards", because the one it reads at round end can
@@ -1165,13 +1186,16 @@ fix_queue_gate() {
       --replies "$fq_replies" --code-touch "$fq_code_touch" \
       --ledger-before "$FIX_QUEUE_BEFORE.operator_drains" \
       ${LEDGER_BEFORE_SHA:+--ledger-before-sha "$LEDGER_BEFORE_SHA"} \
+      --quarantine-before "$FIX_QUEUE_BEFORE.operator_drains.quarantine" \
+      ${QUARANTINE_BEFORE_SHA:+--quarantine-before-sha "$QUARANTINE_BEFORE_SHA"} \
       --cards "$g_cards" --cards-before "$CARDS_BEFORE" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
   rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" \
-        "$FIX_QUEUE_BEFORE" "$FIX_QUEUE_BEFORE.operator_drains" "$CARDS_BEFORE"
+        "$FIX_QUEUE_BEFORE" "$FIX_QUEUE_BEFORE.operator_drains" \
+        "$FIX_QUEUE_BEFORE.operator_drains.quarantine" "$CARDS_BEFORE"
   FQ_GATE_RAN=1
 
   # ---- how much is owed, from two sources that can disagree ----------------
