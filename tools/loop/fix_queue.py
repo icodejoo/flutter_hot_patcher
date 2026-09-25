@@ -160,6 +160,10 @@ def operator_drained(ledger_path, actions=None):
         try:
             with io.open(ledger_path, encoding="utf-8") as fh:
                 for line in fh:
+                    # Comment lines (a header, or the #SNAPSHOT-FAILED sentinel)
+                    # are not drains and must not be parsed as malformed ones.
+                    if line.startswith("#"):
+                        continue
                     parts = line.rstrip("\n").split("\t")
                     if len(parts) >= 5 and parts[1]:
                         try:
@@ -1424,7 +1428,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 try:
                     with io.open(live_path, "w", encoding="utf-8") as fh:
                         fh.write("".join(x + "\n" for x in snap_lines
-                                         if x and not x.startswith("#")))
+                                         if x and x != SNAPSHOT_FAILED))
                 except (IOError, OSError) as e:
                     actions.append("RED could not restore the ledger (%s)" % e)
     drained_now = operator_drained(operator_ledger(queue_path))
@@ -1508,7 +1512,24 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             seen_ids.add(cid)
             settle(cid, seen, reason, False)
 
-    for cid in sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []:
+    if allow_enqueue:
+        requeue_cids = sorted((neg & fix) & {r[0] for r in kept} - reviewed)
+        for cid in requeue_cids:
+            shas = " ".join(
+                sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
+            )
+            if shas:
+                verdict_str = "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED"
+                for i in range(len(kept)):
+                    if kept[i][0] == cid:
+                        old_reason = kept[i][2]
+                        new_reason = old_reason + "; new fix " + shas
+                        kept[i] = (cid, now, new_reason)
+                        actions.append("requeue %s -- new fix %s after %s verdict" % (cid, shas, verdict_str))
+                        break
+
+    enqueue_cids = sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []
+    for cid in enqueue_cids:
         shas = " ".join(
             sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
         )
@@ -2951,6 +2972,25 @@ def self_test():
         return (ids2 == ["F46"]), \
                "code-touching stage: rc=%s ids=%s out=%r" % (rc2, ids2, out2)
 
+    @probe("CLI: G130 F77 re-enqueue with updated seen time and no stale green mark")
+    def _g130():
+        d = tempfile.mkdtemp(prefix="fq_g130.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        # we simulate it having a candidate mark
+        io.open(os.path.join(d, "queue.candidates"), "w", encoding="utf-8").write("2026-09-17 11:00\tF77\n")
+        
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["fff0001 tree F77: second fix"],
+            agents=0, cards={"F77"})
+        
+        q = read_queue(os.path.join(d, "queue"))
+        is_requeued = any("requeue F77 -- new fix fff0001 after FALSIFIED verdict" in x for x in out.splitlines())
+        has_new_seen = any(r[0] == "F77" and r[1] == "2026-09-17 12:00" and "fff0001" in r[2] for r in q)
+        
+        render_out = render(q, candidates(os.path.join(d, "queue")))
+        return (is_requeued and has_new_seen and "已有绿色 pass" not in render_out), "rc=%s out=%r q=%r render_out=%r" % (rc, out, q, render_out)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3047,6 +3087,18 @@ def self_test():
     # nothing. It must be caught in round N, before round N+1 snapshots it.
     heads, q, qp2, acts = settle_once(False, [row], [row], ledger_now=forged)
     live_after = io.open(operator_ledger(qp2), encoding="utf-8").read()
+    # G113f: a tab-separated header comment is not a malformed drain, and a
+    # restore keeps the snapshot's own comment lines.
+    hdr = "#date\tcard_id\treason\twho\tseen\n"
+    heads_h, q_h, _, acts_h = settle_once(False, [row], [row], ledger_b=hdr)
+    f113.append(("F113: a tab-separated comment line in the ledger raises no RED",
+                 not any("malformed" in a for a in acts_h) and q_h == ["F46"],
+                 acts_h))
+    _, _, qp3, _ = settle_once(False, [row], [row], ledger_b=hdr,
+                               ledger_now=hdr + forged)
+    kept_ledger = io.open(operator_ledger(qp3), encoding="utf-8").read()
+    f113.append(("F113: restoring the ledger keeps its comment lines",
+                 kept_ledger == hdr, kept_ledger))
     f113.append(("F113: a ledger line added mid-round with no row removed is RED and removed",
                  any("ledger line(s) added during the round" in a for a in acts)
                  and q == ["F46"] and "forged" not in live_after, (acts, q)))
