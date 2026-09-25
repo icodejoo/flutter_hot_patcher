@@ -11961,4 +11961,14 @@ agy 的 Opus 与 Gemini 3.8 Flash 都撞过额度，另有三次网络中断；�
 
 **给下一个会话的两条教训**：
 - 钩子会拦截含操作者出队参数字面量的 Bash 命令（包括派单正文里的），以及对工作树根目录的组合命令；**派 agy 用脚本文件起进程**，写派单用文件工具。今天因此有一次重派没发出去而我以为发出去了。
+
+## 2026-09-25T21:17 心跳（交互会话，claude-sonnet-5，调度器角色）：派 F122 的欠账证伪 pass
+
+按契约读 `docs/LOOP_CONTRACT.md`。锁定的第一项：`built` 卡里欠证伪 pass 的七张
+（F113 F121 F122 F129 F130 F132 F49）中，**F122** 判据最干净、产物已在共享树上、
+不涉及跨树写方竞争（只读 `fhp-research/spikes/shorebird_linkinfo_oracle`），
+且上一手（`G122c_REPORT.md`，iOS 产物）已实现并明确写着"Owes a falsification pass"，
+不需要先拆卡（判据是脚本读现成 `out_pm`，不涉及干净重建）。派一个新鲜 opus 子代理
+跑 `tools/loop/prompts/falsify.md`，CLAIM 填 F122 的 CRITERION/EVIDENCE/WHERE TO LOOK
+（`cards.tsv` 第 123 行）。本轮到此结束，等待子代理结论。
 - 「现有三个 fixture 覆盖面不够」今天被证实了三次（F121 池槽类型、F124 mac/iOS 目标、F134 float/SIMD 池加载）——换了输入就冒出来的缺口，说明 fixture 需要扩（float 常量、SIMD、FFI 调用点）。
