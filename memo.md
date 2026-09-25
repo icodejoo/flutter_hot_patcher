@@ -11920,3 +11920,11 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - **F129 PARTIAL**：读数与卡面逐项吻合，但落盘证据里没有回退时的源码 diff，严格单变量无法从产物审计；补法是带 diff 重做一次（要重建）。
 - **CF 修补丁 SURVIVES (fix)**，STILL OPEN（旧新函数数目不一致时只打警告不报错）抄进 F101。
 - 🔴 **G122（F122 实现）被父方拒收，未提交**：在当前产物上它把 offset 桶全判成未解释（`cumulative_code_offset 0 / unexplained_offset_diff 2268`）。原因是它按对象枚举顺序、对全部对象累计尺寸差，而 offset 跟的是指令区布局顺序——模型写错，把能解释的差异变成了假缺口。脚本已恢复为已提交版本，被拒的 diff 存在 `reports_20260925/G122_rejected.diff`，卡片写了下一次的正确做法。
+
+**F132 → `built`（同日）：iOS 目标的 gen_snapshot 建好了，F124 的预测全部命中，而且没有引入任何新差异。**
+- `ArrayWriteBarrierStub` 两侧都是 1096B；特性串两侧都是 `arm64 ios`；函数区 LSE 归零；shorebird 格 offset 桶 1146→0；±36B 的跳转位移字 11384→0。
+- 字段级扫描：新增差异 **0**、新增吻合 1163；mac→iOS 之间只有 `ArrayWriteBarrierStub` 一个函数变了。
+- **矩阵分类一格未变**（仍是 na 35 / structural 12 / unknown 12 / gap 0），但单位数大幅下降：dump_blobs 247 万→186 万、disassemble 2982→1808、shorebird 20274→19122。
+- 负控制：mac 构建树照样复现 1060B 和 `arm64 macos`。父方复核了 args 差异、0 待办、F132_15 的读数。
+- ⚠️ 第一次尝试改过 `verify_sdk_hash`（未记录），续做方核过它不影响任何编译单元。
+- **切换共享 harness 是你的决定**：改法写在 `reports_20260925/F132_28_proposed_shared_diff.txt`，要跑宿主可执行检查的仍用 mac 树。切过去以后有三个检查要重钉或退役。
