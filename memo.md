@@ -11848,3 +11848,17 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`（新增 F120 行）、
 `memo.md`（本节 + F120 卡片 `- [ ]` 条目）。`cards_check.sh` 待本节提交后复核。SDK 树无改动。
 **本轮到此结束**——F118 仍 `open`，欠 F119/F120 两项具体修复；F49/F113 三选一仍待 owner 决定。
+
+### 2026-09-25 拆卡（操作者指令「太大的卡片拆分」）
+
+- [ ] **F121：shape-A 池槽改回 per-site kTaggedObject Smi（R1 真回归）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F122：disassemble 残差的 offset/size 桶仍无条件吸收**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F123：disassemble 1,086 单位 = 他们 ObjectPool 多出的引用元素，F121 后归因**（`open`，2026-09-25，deps=F121）判据与负控制见 `cards.tsv`。
+- [ ] **F124：ArrayWriteBarrierStub 我们 1060B / 他们 1096B（三张卡的共同残差）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F125：ThreadLocal 首字差异与 5 个 shape-A 函数的 self_hash 残差**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F126：shorebird_components 检查极性反了（需拍板判据）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F127：compute_dd_table ×3 的 structural 证据不能变红（需拍板撤回）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F128：phase_gate 钉子漏移 12 格（需拍板 field_table 判据）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+
+伞卡（不直接挑，子卡全关才关）：**F37**（→F107/F108/F109/F121）· F55（→F91–F95/F124/F126）· F65（→F65a–e）· F69（→F110/F111）· F82（→F112/F113）。
+判据已满足、只欠一次证伪就能关的：**F68**（数值目标经别的机制达成）· **F91**（证伪 pass 建议退休，实质已并入 F37 系列）。
