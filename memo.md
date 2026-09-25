@@ -11971,4 +11971,33 @@ agy 的 Opus 与 Gemini 3.8 Flash 都撞过额度，另有三次网络中断；�
 不需要先拆卡（判据是脚本读现成 `out_pm`，不涉及干净重建）。派一个新鲜 opus 子代理
 跑 `tools/loop/prompts/falsify.md`，CLAIM 填 F122 的 CRITERION/EVIDENCE/WHERE TO LOOK
 （`cards.tsv` 第 123 行）。本轮到此结束，等待子代理结论。
+
+## 2026-09-25T21:30 心跳：F122 证伪 pass 结论 PARTIAL，父方派修补丁
+
+**F122 VERDICT: PARTIAL (opus, 18 次调用) —— 不关卡。**
+size 规则、denominator（`EXAMINED == diff_units.sh UNITS`）与 offset+8 单点注入检测
+均站得住，但 **offset 规则实际是"本侧内部是否连续"，不是"按布局序对齐前驱后累加尺寸差"**：
+`cumulative_code_offset`（`evidence_disassemble_residual.sh:482-499,606`）算的是
+`offset − 本侧累计尺寸和`，这个值在无缺口布局上对整批 Code 对象只取 3 个常量
+⇒ **任意一个不改变任何尺寸的纯重排都会被通过**。
+子代理独立构造并实测：交换两个相邻对象（尺寸 304/8，无尺寸变化）——仍判定为 explained；
+把一个 304 字节对象搬到布局末尾、连带偏移 567 个对象——`+1136` 行仍全部计入
+`cumulative_code_offset`，`unexplained_offset_diff 0`。
+在真实 iOS 产物上用 instrumented 版本实测：**106/604 条（约 17.5%）offset 行**
+是通过"不同位置"分支被接受的，对应 **53 个被重排的 VM stub**——这些差异来自重排、
+不是尺寸级联，但被当前脚本算作 explained ⇒ **"offset 桶已被 ArrayWriteBarrierStub 完全解释"
+这句话在 53 个 VM stub 上是假阴性**。
+顺带发现：脚本注释里的 `base_diff=1408`、`ArrayWriteBarrierStub ours 1060 / theirs 1096`
+已过期（iOS 产物上两侧都是 1096，白名单实际空转）；「12 个 VM stub」这个数也不准，
+实际是 11 个 VM stub + 1 个 Dart 函数 `Map._fromKeyValues`（440 vs 436，仅 prog）。
+
+**修法（子代理给出，未落地）**：按他们那侧的布局序遍历，要求同名相邻对象满足
+`offset_diff[K] == offset_diff[K-1] + size_diff[K-1]`，前驱不同名的对象一律判 UNEXPLAINED；
+修完后上面构造的两个负控制（交换、搬移）必须变红，106/604 条重排 offset 行也要变红。
+
+**下游代价**：F104/F122 的"offset 桶已全部解释"这句话、任何把 disassemble ×3
+往 structural 推的动作、以及 F138 的范围（53 个 VM stub 重排目前不在它账上）都靠这个结论站着。
+
+派一个新鲜 opus 子代理按这条修法实现并重跑（不重建，只读现有 `out_pm`）；
+修补丁本身不继承这次证伪的审查结论，仍待下一轮欠一次新的证伪 pass。本轮到此结束。
 - 「现有三个 fixture 覆盖面不够」今天被证实了三次（F121 池槽类型、F124 mac/iOS 目标、F134 float/SIMD 池加载）——换了输入就冒出来的缺口，说明 fixture 需要扩（float 常量、SIMD、FFI 调用点）。
