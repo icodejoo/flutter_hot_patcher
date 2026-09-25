@@ -792,6 +792,10 @@ FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib
 if ! cp "$FIX_QUEUE.operator_drains" "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || true
 fi
+# F113 fix pass 2: the ledger snapshot is a plain file the round can rewrite, so
+# its checksum lives here, in this process, where the round cannot reach it --
+# the same protection the queue snapshot already has.
+LEDGER_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || echo "")
 # F112 (ii): the card table as it stood when this round started. Taken here,
 # beside the queue snapshot and for the same reason -- the gate needs a second
 # source for "which ids are cards", because the one it reads at round end can
@@ -1160,6 +1164,7 @@ fix_queue_gate() {
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
       --replies "$fq_replies" --code-touch "$fq_code_touch" \
       --ledger-before "$FIX_QUEUE_BEFORE.operator_drains" \
+      ${LEDGER_BEFORE_SHA:+--ledger-before-sha "$LEDGER_BEFORE_SHA"} \
       --cards "$g_cards" --cards-before "$CARDS_BEFORE" 2>&1)
   fq_rc=$?
   printf '%s\n' "$fq_out" | while IFS= read -r l; do

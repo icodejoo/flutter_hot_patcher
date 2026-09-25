@@ -1154,7 +1154,7 @@ def cards_gap_reason(cards_path, known, before_path):
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
            replies_path=None, code_touch=None, cards_gap=None,
-           ledger_before=None):
+           ledger_before=None, ledger_before_sha=None):
     """Returns (actions, rows_on_disk, settled).
 
     `settled` is the third element, added 2026-09-17 after the card was
@@ -1377,7 +1377,24 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
     kept = []
     seen_ids = set()
-    drained_before = operator_drained(ledger_before, actions=actions)
+    # F113 fix pass 2: the round could rewrite the ledger snapshot as easily as
+    # the ledger itself. Only trust it when its checksum matches the one the
+    # caller took at round start; otherwise nothing is excused (fail closed).
+    ledger_ok = True
+    if ledger_before:
+        got = None
+        try:
+            with io.open(ledger_before, "rb") as fh:
+                got = hashlib.sha256(fh.read()).hexdigest()
+        except (IOError, OSError):
+            pass
+        if not ledger_before_sha or got != ledger_before_sha:
+            ledger_ok = False
+            actions.append("RED ledger snapshot checksum %s -- no operator "
+                           "drain is excused this round"
+                           % ("missing" if not ledger_before_sha else "mismatch"))
+    drained_before = (operator_drained(ledger_before, actions=actions)
+                      if ledger_ok else {})
     drained_now = operator_drained(operator_ledger(queue_path))
 
     def settle(cid, seen, reason, vanished):
@@ -2925,7 +2942,8 @@ def self_test():
     n1_memo = ["\U0001f7e2 F46 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"]
     n1_reply = [("t1", "VERDICT: SURVIVES for F46 (fix)")]
 
-    def settle_once(auto, rows_before, rows_now, ledger_b=None, ledger_now=None):
+    def settle_once(auto, rows_before, rows_now, ledger_b=None, ledger_now=None,
+                    forge_after_sha=None):
         global AUTO_DRAIN
         AUTO_DRAIN = auto
         d = tempfile.mkdtemp(prefix="fix_queue_f113.")
@@ -2939,9 +2957,15 @@ def self_test():
             json.dumps({"id": i, "text": t}) + "\n" for i, t in n1_reply))
         with io.open(bp, "rb") as fh:
             sha = hashlib.sha256(fh.read()).hexdigest()
+        lsha = None
+        if lb and os.path.exists(lb):
+            with io.open(lb, "rb") as fh:
+                lsha = hashlib.sha256(fh.read()).hexdigest()
+        if forge_after_sha and lb:
+            io.open(lb, "a", encoding="utf-8").write(forge_after_sha)
         acts, _, _ = update(qp, n1_memo, [], 1, "2026-09-09 17:00", {"F46"},
                             before_path=bp, before_sha=sha, replies_path=rp,
-                            ledger_before=lb)
+                            ledger_before=lb, ledger_before_sha=lsha)
         AUTO_DRAIN = False
         heads = sorted(a.split(" (")[0] for a in acts)
         return heads, [r[0] for r in read_queue(qp)], qp, acts
@@ -2978,6 +3002,15 @@ def self_test():
                               ledger_now="2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n")
     f113.append(("F113 control: ledger line added during the round restores queue line",
                  any("ledger line added during the round" in a for a in acts) and q == ["F46"], (acts, q)))
+    # FA's repro: the round appends the same forged line to the ledger AND to
+    # its round-start snapshot. The snapshot's checksum was taken before that,
+    # so it no longer matches and nothing is excused.
+    forged = "2026-09-09 16:50\tF46\tforged\tcruz\t2026-09-09 16:40\n"
+    heads, q, _, acts = settle_once(False, [row], [], ledger_now=forged,
+                                    forge_after_sha=forged)
+    f113.append(("F113: forging both the ledger and its snapshot is RED and restored",
+                 any("ledger snapshot checksum mismatch" in a for a in acts)
+                 and q == ["F46"], (acts, q)))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
@@ -3020,6 +3053,9 @@ def main():
     ap.add_argument("--agents", type=int, default=0)
     ap.add_argument("--ledger-before", default="",
                     help="ledger snapshot taken at round start")
+    ap.add_argument("--ledger-before-sha", default="",
+                    help="sha256 of --ledger-before taken at round start; "
+                         "without it, or on mismatch, no drain is excused")
     ap.add_argument("--replies", default="",
                     help="JSON Lines of this round's subagent replies; a "
                          "{\"unavailable\": reason} line means they could not "
@@ -3149,7 +3185,8 @@ def main():
         replies_path=args.replies or None,
         code_touch=read_code_touch(args.code_touch or None),
         cards_gap=cards_gap,
-        ledger_before=args.ledger_before or None)
+        ledger_before=args.ledger_before or None,
+        ledger_before_sha=args.ledger_before_sha or None)
     for a in actions:
         print(a)
 
