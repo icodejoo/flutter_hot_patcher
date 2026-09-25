@@ -11877,3 +11877,10 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F131：同一轮自派子代理的绿回复能让新修补丁免于入队（F49 证伪 E6，需拍板）**（`open`，2026-09-25，deps=F113）
 
 **F49 证伪 PARTIAL → 保持 `built`**：五个变异今天仍能让守卫变红，但 F113 带进来一处新逃逸 E7（拆 F130），同轮自审仍能免入队 E6（拆 F131，需拍板）；E1–E5 旧逃逸仍开着，其中 E2/E3/E5 09-16 就已登记。
+
+- [ ] **F132：gen_snapshot 用 `target_os="ios"` 构建（我们一直在对 mac 目标，他们是 iOS）**（`open`，2026-09-25，deps=F124，需操作者定时机）
+- [ ] **F133：偏移替换规则解释不了的 17 个条目**（`open`，2026-09-25，deps=F125）
+
+**同日 F124/F125 调查（opus，只读）——今天最大的发现**：
+- 🔴 **我们的 gen_snapshot 一直是 mac 目标（`ProductSimARM64/args.gn` `target_os = "mac"`），他们是 iOS**：快照特性串我们 `arm64 macos`、他们 `arm64 ios`，三个 fixture 皆然。`cpu_arm64.h:48` 只在「mac 且非 iOS」时开 LSE 原子指令 ⇒ 我们的写屏障用 `ldclr/stset`，他们用 LL/SC 重试循环 ⇒ `ArrayWriteBarrierStub` 正好差 9 字 36B，而它又是 shorebird 格 offset 桶 1146 单位的唯一来源、F101 三项之一、F103 唯一剩下的尺寸差。同一个宏还决定 FFI ABI（`abi.cc:57`）和 `shorebird/wrapper.cc:207/275`。残差模型 `TOTAL UNEXPLAINED 0`。父方核过 `cpu_arm64.h:48`、`args.gn`、特性串与残差。**修法是换构建目标，不是改代码 → F132，需要你定时机。**
+- **F125 → `built`**：5 个名字（6 个条目）的 self_hash 差异全部是同名 Thread 字段的偏移差（`isolate_group_` 0x680/0x690、`predefined_symbols_address_` 0x2a8/0x2b8、`thread_locals_` 0x8f0/0x970，最后这个 +0x80 不在 F88 的台阶上）；按两侧 DWARF 字段名替换偏移后 **SELF_HASH MATCH 18/18**，三个负控制全红。同一规则套到全部同尺寸异哈希条目上 374/391，剩 17 个拆 F133。
