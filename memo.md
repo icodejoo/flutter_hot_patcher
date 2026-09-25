@@ -11121,6 +11121,33 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
 
 ---
 
+## 2026-09-25 操作者决定：F113 选 (b) —— 修补丁队列只由人出队（交互会话，循环已暂停）
+
+**为什么现在决定**：循环 09-24 18:26 重开后跑了约 20 轮，SDK 树 **0 提交**、矩阵没动，
+卡片净增 6 张（F115–F120），全是 `green_ids()` 的「修一处 → 证伪 PARTIAL → 拆一张」，
+`UNREVIEWED_FIX` 从 1 条涨到 5 条且每轮抢先。这正是 F113 卡面说的形状：局部修补无尽头。
+
+**落地内容（v1 树，未经证伪 ⇒ F113 为 `built`）**：
+- `tools/loop/fix_queue.py`：绿色回复 → `candidate`（记入 `<queue>.candidates`），**不再出队**；
+  出队只经 `fix_queue.py --operator-drain <ID> --why <理由>`，写 `<queue>.operator_drains` 账本。
+  轮内删行且账本无对应（时间 ≥ 该行时间）⇒ `RED` 并恢复该行。
+- `run_round.sh` 提示词：标【已有绿色 pass】的项不再派、**不再阻挡新任务**，SDK 本体优先。
+- `deny-destructive.sh` 拒绝字面 `--operator-drain`（`verify-deny.sh` 加向量，全绿）。
+- 判据实测：`--self-test` 68 → **73 cases, 0 failure(s)**；N1 原样输入得 `candidate F46`、队列保留 F46；
+  **负控制**：把 `if cid in pos and AUTO_DRAIN` 改回 `if cid in pos` ⇒ 新增检查 **3 条变红**。
+  `test_fix_gate.sh` 与 `test_f112_iii_per_id_verdict.py` 的出队断言按新策略改写（改前在原代码上两者 rc=0、
+  在新代码上各 1 处 FAIL，差异恰为「drain → candidate」），改后 rc=0。
+- 🔴 **残余风险（不隐藏）**：轮次是 `bypassPermissions`，能用 python 子进程绕过字符串拦截，
+  与该钩子其他每一条同科。换来的是：出队不再是轮次正常路径的副作用，而是一个被点名、被记账的动作。
+
+**F115–F120 已标 PARKED**（`cards.tsv` 各自的判据栏末尾）：`green_ids()` 现在只决定「显示为候选」，
+误绑的代价从「一个无人复核的修补丁」降为「给人的一个标签错了」。**轮次不要挑这六张。**
+
+**队列现状**：F37 / F115 / F116 / F117 / F118 五条。F115–F118 的修补丁 pass 已无意义（它们修的是被停用的出队路径），
+**请操作者在自己终端里出队这四条**；F37 的修补丁 pass 是真债（A1+A3 落地），保留。
+
+---
+
 ## 2026-09-24 晚间（/loop 自动轮次，读契约后锁定 `.loop/UNREVIEWED_FIX`）
 
 `.loop/UNREVIEWED_FIX` 欠账：F37 的落地修补丁（`531c5356dda`/`edce6e25b77`/`63716223bde`）

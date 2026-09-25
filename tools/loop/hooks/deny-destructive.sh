@@ -74,6 +74,14 @@ case $CMD in
     deny "blocked: pops/drops/clears a stash entry. reference-transaction cannot see this operation (it bypasses git's ref-transaction hook via reflog surgery, verified 2026-09-16) -- this string match is the only layer here, and it is defeatable by a python-subprocess call the same way every other pattern in this file is. Run it yourself in your own terminal if you mean it." ;;
 esac
 
+# F113 (2026-09-25): draining the fix-patch queue is the operator's act, not a
+# round's. Same string-match layer, same bypasses; what it buys is that a round
+# doing it has to go around a stated refusal rather than stumble into it.
+case $CMD in
+  *"--operator-drain"*)
+    deny "blocked: fix_queue.py --operator-drain is the operator's (F113). A round marks candidates; the human drains them from their own terminal." ;;
+esac
+
 # Machine-level and global-config changes. The contract forbids these in prose;
 # this makes it mechanical.
 case $CMD in

@@ -58,9 +58,12 @@ left = [l.split("\t")[0] for l in
 print("--- stdout ---")
 print(r.stdout.rstrip())
 print("--- rc=%d  queue left on disk=%s ---" % (r.returncode, left))
-f46 = "drain F46" in r.stdout
-f52 = "drain F52" in r.stdout
-print("F46 drained: %s   F52 drained: %s" % (f46, f52))
-want = f46 and not f52 and left == ["F52"]
-print("EXPECTED (F46 drains, F52 held): %s" % ("PASS" if want else "FAIL"))
+# F113 (2026-09-25): a green reading makes a candidate instead of a drain, so
+# the binding under test is now "which id becomes the candidate"; both stay
+# queued until the operator drains them.
+f46 = "candidate F46" in r.stdout
+f52 = "candidate F52" in r.stdout
+print("F46 candidate: %s   F52 candidate: %s" % (f46, f52))
+want = f46 and not f52 and left == ["F46", "F52"]
+print("EXPECTED (F46 candidate, F52 held): %s" % ("PASS" if want else "FAIL"))
 sys.exit(0 if want else 1)

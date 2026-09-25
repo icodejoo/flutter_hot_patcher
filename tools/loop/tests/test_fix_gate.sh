@@ -184,9 +184,17 @@ run_round_gate '+📋 **F77 pass 1 → PARTIAL**' 1 'F77: fix it' >/dev/null
 out=$(run_round_gate '+- 2026-09-09T ❤️ **心跳**' 4)
 expect "an idle round holds the queue" "F77" "$out"
 
-# 4. Draining needs the fix marker, a dispatch, and nothing else.
+# 4. F113 (2026-09-25): a green fix verdict no longer drains -- it makes the
+#    entry a candidate, and only the operator's --operator-drain removes it.
 out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+🟢 F77 修补丁 VERDICT: SURVIVES (fix) -- 独立代理复现' 1)
-expect "drains on an explicit fix verdict" "" "$out"
+expect "a green fix verdict makes a candidate, not a drain" "F77" "$out"
+case $out in
+  *"candidate F77"*) note ok "the gate names F77 as a candidate" ;;
+  *) note FAIL "no 'candidate F77' line"; printf '%s\n' "$out" | sed 's/^/       /' ;;
+esac
+out=$(python3 "$ROOT/tools/loop/fix_queue.py" --queue "$WORK/queue" \
+  --operator-drain F77 --why "test: operator read the pass" 2>&1)
+expect "the operator drain removes it" "" "$out"
 
 # 5. Negative control for 4: a verdict about the CARD is not a verdict about
 #    the patch. Two constructions, one token -- the confusion that voided this

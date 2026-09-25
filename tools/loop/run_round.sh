@@ -413,12 +413,15 @@ if [ -s "$FIX_QUEUE" ]; then
 
 【修补丁尚未经证伪】下面每一项都是：证伪 pass 报了 FALSIFIED/PARTIAL → 有人修了它 →
 但那个修补丁自己没有再过一遍 pass。修补丁不继承被修对象的审查结论（契约五之四末段）。
-在开始新任务之前，对每一项派一个**新鲜的**子代理跑 tools/loop/prompts/falsify.md，
+对**没有**标【已有绿色 pass】的项，派一个**新鲜的**子代理跑 tools/loop/prompts/falsify.md，
 CLAIM 写成「<id> 的修补丁真的修掉了它自己被报出的那处破绽」。
 判决必须是含 id、SURVIVES 与 (fix) 的一行，例如
     F41 修补丁 VERDICT: SURVIVES (fix) —— <一句实测依据>
-少了 (fix) 的判决是关于卡片的，不是关于修补丁的，队列不会消。
-判决写在 memo.md，轮末由 fix_queue 依据新鲜子代理的 pass 自动出队；不要手工编辑或删除队列文件（无判决凭据删行将在轮末快照比对时报 RED 阻断）。
+少了 (fix) 的判决是关于卡片的，不是关于修补丁的。
+🔴 F113（2026-09-25 操作者决定）：**轮次不再能让队列出队。** 绿色 pass 只把该项标成候选，
+出队只由操作者在轮次之外执行 fix_queue.py --operator-drain。你不要执行它，不要编辑或删除队列文件
+（删行会被轮末比对报 RED 并恢复）。标了【已有绿色 pass】的项**不要再派**，
+也**不再阻挡新任务** —— 派完没标的那几项之后，照常做 memo 里的下一项，SDK 本体优先（规则 0）。
 若一次派发要一个回复覆盖队列里不止一项，同样按下面这条逐项写一行，否则只有单一候选且被正例词判定命中的那一项能出队，其余一律留队重派。
 $FALSIFY_CONTRACT_REMINDER
 $(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)"

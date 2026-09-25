@@ -34,6 +34,7 @@ check() { # expected, command
 }
 
 echo "must be refused:"
+check DENY  "python3 tools/loop/fix_queue.py --queue .loop/UNREVIEWED_FIX --operator-drain F37 --why x"
 check DENY  "rm -rf /Users/Cruz/dart-3122/sdk/xcodebuild"
 check DENY  "rm -fr build"
 check DENY  "find . -name '*.o' -delete"
