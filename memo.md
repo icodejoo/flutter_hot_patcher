@@ -12060,3 +12060,39 @@ offset_diff=0 的起点才算 explained），真实产物上每个 fixture 的 s
 下一步是按"anchored"规则重写（有明确规格：双向锚定、断链落自己的桶、
 锚点验证需要另一条从头验证的证伪 pass），交给下一个会话/轮次带着这条心跳继续。
 - 「现有三个 fixture 覆盖面不够」今天被证实了三次（F121 池槽类型、F124 mac/iOS 目标、F134 float/SIMD 池加载）——换了输入就冒出来的缺口，说明 fixture 需要扩（float 常量、SIMD、FFI 调用点）。
+
+## 2026-09-25T22:5x 心跳：F122「anchored」规则已实现并落地（`fhp-research` `1489446`），欠证伪 pass
+
+按上一条心跳留的规格派了一个新鲜子代理实现「anchored」规则：`cumulative_code_offset`
+只有当一条同名相邻对象链能**一路无断链**回溯到一个**已验证 `offset_diff==0`** 的锚点时才算解释；
+锚点不硬编码成 `UnknownDartCode`，改成在布局序里**自动发现**任何 `offset_diff==0` 的点
+（`UnknownDartCode` 实测确实是其中一个，但规则不依赖这个名字，比硬编码锚点更通用）；
+断链对象改落进新桶 `offset_displaced_by_unattributed_break`，计入 UNEXPLAINED。
+`evidence_disassemble_residual.sh` 已提交 `1489446`，新负控制脚本落盘在
+`reports_20260925/F122_anchor_negctl.py`（可复跑）。
+
+**六条验收，子代理自报的实测数字**（尚未经独立复核）：
+a. `EXAMINED` 三个 fixture 均 1808/1808/1808（604/604/600 拆分），与 `diff_units.sh UNITS` 相等，未变；
+b. 整块位移负控（hello 侧私有副本，1065 个对象、size_diff 全 0）：UNEXPLAINED **+2130/2130 = 100%**
+（旧的 local 规则只报 4/2132）；
+c. 相邻同尺寸互换负控：UNEXPLAINED +4（新增）；搬到末尾负控（40 个对象搬动、级联位移 628 个）：
+UNEXPLAINED +1336（新增）——两者均未回退到 0；
+d. `offset+8` 单点注入负控：UNEXPLAINED +2，未回归；
+e. `stub_and_code_size`/`unexplained_size_diff` 在真实产物上不变，仍是 68（22/22/24）——
+子代理称size 分类器走的是显式具名白名单、不是链式推导，未发现同类缺陷，按规格未改动它；
+f. **真实产物（未改动）上的实测 UNEXPLAINED：1190（396/396/398）**。
+`cumulative_code_offset` 从 340/340/340 **降到 0/0/0**；新桶 `offset_displaced_by_unattributed_break`
+接住这 340/340/340。offset-only 部分（34+340=374/fixture）与上一轮证伪 pass 给出的
+「未测试、仅作预测」的 374 这个数**精确吻合**。
+
+🔴 **子代理顺带报出一处未经我核实的具体结构性发现**：那 187 个非零 offset 的对象
+实为**一整块连续的 stub 区**，与零 diff 区之间**只有一处断链**（`GetCStackPointer → UnknownDartCode`
+这一条相邻关系），于是在 anchored 规则下**整块都追不到锚点** —— 这是
+`cumulative_code_offset` 归零的直接原因，不是规则写错，但这句话本身也未经证伪 pass 核实，
+不能拿来当结论用。
+
+⚠️ **本轮到此结束，不当场审**：按契约「修补丁不继承被修对象的审查结论」，
+`1489446` 是一次新的实现，必须由**新鲜、独立**的子代理按 `tools/loop/prompts/falsify.md`
+重新核验上面六条，尤其是 (b)(c) 两条负控的具体数字与「187 个对象单一断链」这句话，
+不许由做实现的那个子代理自己下判决，我自己也不下判决。
+**F122 保持 `open`/`built`，欠证伪 pass。**
