@@ -12285,3 +12285,71 @@ SURVIVES` 会把 F78 也一起重新入队，尽管 F78 自己的判决是绿的
 本轮到此结束。
 
 - [ ] **F140：F113/F130 修补丁证伪 pass 抓出的账本哨兵处理与 sha 去重两处缺口**（`open`，2026-09-26，F113 修补丁+F130 修补丁证伪 PARTIAL 拆出，deps=-）
+
+---
+
+## F140 实现（2026-09-26，commit `de72312`）
+
+三处修复，`fix_queue.py --self-test` 89/0（新增 7 条用例，含每处修复各自的负控制）：
+
+1. **账本哨兵未被识别**：`update()` 的账本校验块新增对 `#SNAPSHOT-FAILED`（校验和有效但内容是哨兵）
+   的判定，命中即 `ledger_ok = False`，同时不信任 before-baseline、也不跑 restore，
+   打一条新 RED（本轮 operator-drain 不被豁免，且不动活账本）。
+   `operator_drained()` 的注释行判定从只认 `#` 开头改为容忍 BOM（`utf-8-sig` 打开）、
+   前导空白、以及 `//` 注释。
+2. **sha 去重精确字符串匹配**：`requeue_cids` 循环里改成大小写不敏感 + 双向前缀匹配，
+   同时保留"真正新 sha 仍要入队"的正控制不被误伤。
+3. **整行判定应用到行内每个 id**（`scan()` 的红判词读法与 green_ids() 的 F112(iii) 同族缺陷）：
+   新函数 `neg_ids_on_line()` 把红判词绑定到它所在的 CLAUSE（用 green_ids() 已用过的
+   `CLAUSE` 分句单元），而非整行。踩过一次坑：第一版用 `blank_meta(line)` 而非原始行，
+   把 `VERDICT: FALSIFIED/PARTIAL`（斜杠连写）整体抹空，反而让已有用例
+   "a verdict written FALSIFIED/PARTIAL is still a red verdict" 变红——
+   红判词检测必须读原始行（本文件 TOKEN_LIST 注释里"两问不同问法"那条规则的第三处应用）。
+
+**尚未做的**：本实现只经过自测（`--self-test` 绿），尚未经过新鲜子代理的证伪 pass，
+按契约不得关卡。`F140` 保持 `open`（cards.tsv 未改），等证伪 pass 判 SURVIVES 才能转 `closed`。
+本轮到此结束，下一轮：对 commit `de72312` 派一个新鲜子代理跑 `tools/loop/prompts/falsify.md`。
+
+---
+
+## F140 修补丁证伪 pass（2026-09-26，Opus，commit `de72312`）
+
+```
+VERDICT: FALSIFIED
+ATTACK RESULTS:
+1. I made 9 throwaway copies in /tmp/f140, each with one sub-fix reverted, and ran --self-test on each (mk.py). Reverting the sentinel branch, the case-folding, the prefix match or neg_ids_on_line each turns exactly one F140 case red, so those four checks can fail. Reverting (b) in full (utf-8-sig plus lstrip plus "//") still gives "89 case(s), 0 failure(s)", and so does reverting each part alone. The (b) check cannot go red.
+2. The (b) test case passes whether or not the fix is there. operator_drained() only emits "RED malformed ledger line" when a line has 5 or more tab-separated fields and the timestamp fails to parse. The test's comment lines ("﻿# header", " // also a comment", "  #indented too") have no tabs, so the pre-fix code never flagged them either. The bug (b) describes ("fell through ... printed a false RED malformed") does not happen for this input, and the case is not a real negative control.
+3. I ran pre-fix and post-fix red-verdict binding over the whole real memo.md plus the last 400 commit subjects (memo_diff.py). Of 328 red lines, 42 bind differently: 66 ids lost, 0 gained. Some losses are correct (an id sitting in an unrelated clause). Others are real red verdicts now missed because the id and the verdict sit in different sentences of one line. memo.md:9653 "**VERDICT: FALSIFIED**。**F67 不关闭…**" scans as pre {'F67'}, post set(). memo.md:7914 (F89a …。第 3 问判 FALSIFIED) and the F55 "Pass 4 → PARTIAL（…；…F55…）" line are lost the same way. Synthetic lines "F77 fix re-attacked. VERDICT: FALSIFIED." and "F77: seven attacks run; VERDICT: PARTIAL" are also pre {'F77'}, post set().
+4. The clause split adds no new false positives on the corpus (0 gained). It does add false negatives, which is the unsafe direction: a missed red verdict means no fix-pass is owed. For the sentinel: the real production snapshot .loop/UNREVIEWED_FIX.before.operator_drains is 17 bytes (the sentinel), and the live UNREVIEWED_FIX.operator_drains does not exist. So run_round.sh:792-793 (cp fails, sentinel written) is the normal case right now, not an edge case.
+5. `git merge-base --is-ancestor de72312 HEAD` gives rc=0, and HEAD is de72312. A fresh --self-test gives rc=0 and "89 case(s), 0 failure(s)". The output is 90 lines with 7 F140 cases, all ok.
+6. Fix (a) reopens a forgery hole (launder.py, running update() in two rounds against the pre-fix and post-fix files). Round 1: the snapshot is the sentinel and the round writes a forged drain line into the live ledger. Pre-fix code removes it (live ledger after round 1 is ''). Post-fix code leaves it in place ("live ledger is left untouched"). Round 2: cp now succeeds, the forged line becomes the checksummed baseline, and the round deletes the queue row. Post-fix output: 'operator-drained F46 (ledger 2026-09-09 16:50)', queue []. Pre-fix output: 'RED F46 (disappeared with no recorded verdict)', row restored. This is the F113 fix-pass-3 attack, reopened in the case the loop is actually running in. The (a) test case only checks the opposite scenario (a real drain that predates the failed snapshot).
+7. The harness counts correctly. Exceptions inside a probe count as FAIL, total is the sum of cases, cli_cases, probes and f113, and failed drives rc. My single-hunk reverts show up as "1 failure(s)" with rc=1. No case is skipped or swallowed.
+FLAW: (i) The sentinel branch sets ledger_ok=False, which also turns off the restore that strips ledger lines added during the round. Right now every round writes the sentinel, because the live ledger does not exist. A line forged during a sentinel round survives, becomes next round's checksummed baseline and drains the queue row: `python3 /tmp/f140/launder.py` shows post-fix 'operator-drained F46', pre-fix a RED and the row restored. The sentinel test is also a substring check (`SNAPSHOT_FAILED in raw`), not the equality the claim describes. (ii) neg_ids_on_line misses red verdicts whose id is in a different sentence or clause of the same line (memo.md:9653 F67, :7914 F89a; `python3 /tmp/f140/memo_diff.py` shows 66 ids lost, 0 gained). (iii) The (b) test case is vacuous (mk.py B_comment gives 0 failures), and the bug it claims to fix does not happen for comment lines without tabs.
+STILL OPEN: n/a
+COST OF BEING WRONG: The F113/F130 operator-drain guarantee (a round cannot drain its own fix-queue entry) and the enqueueing of owed fix-passes after FALSIFIED/PARTIAL both rest on this. As committed, a round can launder a forged drain, and some red verdicts go silently un-owed.
+
+F140 VERDICT: FALSIFIED -- the sentinel branch disables the anti-forgery restore in the current production case (no live ledger), the clause binding drops real same-line red verdicts, and the (b) test cannot go red.
+```
+
+**STILL OPEN（此判决唯一的判据）**：n/a（判 FALSIFIED，不适用）。
+
+**当场修（同一轮内，不新开卡，三处均已自测绿）**：
+
+(i) **账本伪造洗白**：sentinel 分支关掉的不只是"信任 before 基线"，还关掉了"清除本轮新增行"这个 restore 步骤，而生产环境现在恒为 sentinel（`.loop/UNREVIEWED_FIX.before.operator_drains` 实测 17 字节即哨兵，
+`UNREVIEWED_FIX.operator_drains` 不存在）。新增**隔离区**机制：`ledger_ok` 变 False 的那一刻（sentinel 或校验和不符），把当前活账本里全部数据行（去注释）追加进
+`<ledger>.quarantine`（去重、只增不删），并让 `operator_drained()` 对隔离区里的行永远不发放信任——不论哪一侧调用、不论后续哪一轮的快照多"干净"，除非人工打开该文件手删那一行。
+负控制：写了一个两轮 `update()` 直接调用的用例（第一轮 sentinel+活账本里写入一行伪造，第二轮 cp 成功、诚实校验和覆盖同一行），修复后第二轮判 `RED F46（disappeared with no recorded verdict）`；
+把隔离区逻辑整体还原回未修状态重跑同一用例，判 `operator-drained F46`——两侧都实测过，不是靠推理。
+
+(ii) **同行跨句丢判决**：`neg_ids_on_line` 的 CLAUSE 限制原样应用到"一行只提一个 id"的情形，而真实 memo.md 里红判词与它所指的唯一 id 经常分处同一行的不同句子
+（`memo.md:9653` "**VERDICT: FALSIFIED**。**F67 不关闭…**"）。改法参照 `green_ids()` 已有的先例：一行只命中一个 distinct id 时，判词绑定不再按 CLAUSE 限制（整行范围，等价于修 F140 之前的行为）；
+只有一行命中两个及以上 distinct id 时才按 CLAUSE 分句（这才是 F77/F78 那种真正需要分清"哪句判给哪张卡"的情形）。新增自测用例复现 `memo.md:9653` 的确切形状。
+
+(iii) **(b) 用例是空判据**：原用例的注释行不含制表符，`len(parts) >= 5` 这道闸本来就会先于注释判断把它们跳过，不论有没有 BOM/`//` 处理都是 0 failure。
+换成三行都带 5 个制表符分隔字段（且首字段刻意不可解析为时间戳）的注释行——不做 BOM/前导空白/`//` 识别时，这三行会落进数据行解析分支、各触发一次
+`RED malformed ledger line`；已实测：还原 `operator_drained()` 里的注释判定逻辑，此用例确实变红。
+
+自测：`python3 tools/loop/fix_queue.py --self-test` **91 case(s), 0 failure(s)**（新增 3 条，含上述三处各自的负控制，其中 (i) 的负控制是两轮 `update()` 直接调用，已实测在修复前后两个方向都对得上）。
+
+**尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。下一轮：对最新提交派一个新鲜 Opus 子代理再跑一次 `tools/loop/prompts/falsify.md`。
+本轮到此结束。

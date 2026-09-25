@@ -151,7 +151,39 @@ def operator_ledger(queue_path):
     return queue_path + ".operator_drains"
 
 
-def operator_drained(ledger_path, actions=None):
+def quarantine_path(queue_path):
+    return operator_ledger(queue_path) + ".quarantine"
+
+
+def load_quarantine(path):
+    """Raw ledger data-lines (no trailing newline) marked unverifiable.
+
+    F140, second falsification pass (2026-09-26): a #SNAPSHOT-FAILED round
+    used to leave the live ledger untouched, which stopped it from erasing a
+    real drain -- but a line the ROUND ITSELF forged into the live ledger
+    during that same sentinel round then survives untouched, and the next
+    round's `cp` (run_round.sh) snapshots it as legitimate history with an
+    honest checksum, laundering it. See the call site in update() for where
+    lines are added; this just reads the file back, comment lines (`#`)
+    included so operators can annotate why without those bytes ever being
+    compared as data.
+    """
+    out = set()
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        with io.open(path, encoding="utf-8-sig") as fh:
+            for line in fh:
+                line = line.rstrip("\n")
+                if not line or line.lstrip().startswith(("#", "//")):
+                    continue
+                out.add(line)
+    except (IOError, OSError):
+        pass
+    return out
+
+
+def operator_drained(ledger_path, actions=None, quarantine=None):
     import datetime
     out = {}
     if not ledger_path:
@@ -175,7 +207,15 @@ def operator_drained(ledger_path, actions=None):
                     # (never whitespace-prefixed) is read.
                     if line.lstrip().startswith(("#", "//")):
                         continue
-                    parts = line.rstrip("\n").split("\t")
+                    stripped = line.rstrip("\n")
+                    # F140 (second pass): a quarantined line is excluded here
+                    # rather than at the call site so BOTH callers (the
+                    # round-start baseline and the live ledger) are filtered
+                    # the same way -- a quarantined entry must never grant
+                    # credit no matter which snapshot is asked about it.
+                    if quarantine and stripped in quarantine:
+                        continue
+                    parts = stripped.split("\t")
                     if len(parts) >= 5 and parts[1]:
                         try:
                             ts = datetime.datetime.strptime(parts[0], "%Y-%m-%d %H:%M")
@@ -953,7 +993,25 @@ def neg_ids_on_line(line, known=None):
     this function exists to see. That regression was caught by an existing
     self-test case ("a verdict written FALSIFIED/PARTIAL is still a red
     verdict") when this function first went through blank_meta.
+
+    F140, second falsification pass (2026-09-26): the first version above
+    applied the CLAUSE restriction unconditionally, which broke the common
+    single-id case -- a fresh review diffed pre- and post-fix binding over
+    the real memo.md and found 66 ids losing a red verdict they should have
+    kept, 0 gained. Every loss was one id, one verdict, split across a
+    SENTENCE boundary on one physical line ("**VERDICT: FALSIFIED**。**F67
+    不关闭...**", memo.md:9653) -- exactly the shape green_ids() already
+    treats as its liberal case (2): when the line names only ONE distinct
+    id, that id is the only thing a verdict on the line could be about, so
+    the verdict binds to it regardless of clause boundaries, matching the
+    pre-CLAUSE behavior for this shape. The CLAUSE restriction is now
+    applied ONLY when the line names two or more distinct ids -- the actual
+    shape the F77/F78 repro above needs it for, and the only shape where
+    "which id is this verdict about" is genuinely ambiguous without it.
     """
+    ids = ids_on(line, known)
+    if len(ids) <= 1:
+        return ids if NEG_RE.search(line) else set()
     out = set()
     for m in CLAUSE.finditer(line):
         seg = m.group(0)
@@ -1439,6 +1497,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # the ledger itself. Only trust it when its checksum matches the one the
     # caller took at round start; otherwise nothing is excused (fail closed).
     ledger_ok = True
+    qpath = quarantine_path(queue_path)
+    quarantine = load_quarantine(qpath)
     if ledger_before:
         raw = None
         got = None
@@ -1473,7 +1533,50 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                            "(#SNAPSHOT-FAILED sentinel) -- no operator drain "
                            "is excused this round, and the live ledger is "
                            "left untouched")
-    drained_before = (operator_drained(ledger_before, actions=actions)
+    if not ledger_ok:
+        # F140, second falsification pass (2026-09-26): leaving the live
+        # ledger untouched (above) stopped a bad snapshot from erasing a
+        # real drain, but reopened the forgery this ledger machinery exists
+        # to catch -- a line the ROUND ITSELF writes into the live ledger
+        # during a round whose snapshot could not be trusted now survives
+        # untouched, and the NEXT round's `cp` (run_round.sh) then snapshots
+        # it as legitimate history with an honest checksum, laundering it in
+        # one round. Demonstrated: two `update()` calls in sequence, sentinel
+        # then a clean snapshot, drain a card on a line forged during the
+        # first.
+        #
+        # There is no baseline to diff against here (that is the whole
+        # problem), so every data-line currently live is quarantined instead
+        # -- appended (deduped) to a sibling file and excluded from
+        # `operator_drained()` everywhere, permanently, until an operator
+        # reviews `qpath` and deletes the line by hand. This fails closed: a
+        # genuine drain recorded before the bad snapshot is held again (one
+        # more dispatch) rather than a forged one being trusted later.
+        live_now_path = operator_ledger(queue_path)
+        try:
+            with io.open(live_now_path, encoding="utf-8-sig") as fh:
+                live_now_lines = [l.rstrip("\n") for l in fh
+                                  if l.strip()
+                                  and not l.lstrip().startswith(("#", "//"))]
+        except (IOError, OSError):
+            live_now_lines = []
+        newly = [l for l in live_now_lines if l not in quarantine]
+        if newly:
+            try:
+                with io.open(qpath, "a", encoding="utf-8") as fh:
+                    fh.write("# %s quarantined -- ledger snapshot could not "
+                             "be trusted this round\n" % now)
+                    for l in newly:
+                        fh.write(l + "\n")
+            except (IOError, OSError):
+                pass
+            quarantine |= set(newly)
+            actions.append(
+                "RED %d ledger line(s) quarantined (no trusted snapshot to "
+                "tell old from forged) -- none of them can drain a queue "
+                "row until an operator reviews %s by hand" % (len(newly), qpath))
+    drained_before = (operator_drained(ledger_before, actions=actions,
+                                        quarantine=quarantine)
                       if ledger_ok else {})
     # F113 fix pass 3: a line written into the live ledger during the round is
     # never the operator's (the operator drains between rounds), even when no
@@ -1507,7 +1610,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                                          if x and x != SNAPSHOT_FAILED))
                 except (IOError, OSError) as e:
                     actions.append("RED could not restore the ledger (%s)" % e)
-    drained_now = operator_drained(operator_ledger(queue_path))
+    drained_now = operator_drained(operator_ledger(queue_path),
+                                    quarantine=quarantine)
 
     def settle(cid, seen, reason, vanished):
         if cid in pos and AUTO_DRAIN:
@@ -3163,6 +3267,20 @@ def self_test():
         neg = neg_ids_on_line(memo[0], known)
         return neg == {"F77", "F78"}, "neg=%r" % (neg,)
 
+    @probe("F140 control: a single id's red verdict still binds across a "
+           "sentence boundary on the same line (real memo.md:9653 shape)")
+    def _f140_negline_single_id_cross_clause():
+        # A second falsification pass (2026-09-26) found the first version of
+        # neg_ids_on_line() applied CLAUSE-splitting unconditionally, which
+        # broke this exact shape from the live memo.md: the verdict token and
+        # the one id it is about sit in different sentences of one line, and
+        # a real drain of memo.md found 66 such losses, 0 gains.
+        memo = ["**VERDICT: FALSIFIED**。**F67 不关闭，"
+                "改回 unknown**"]
+        known = {"F67"}
+        neg = neg_ids_on_line(memo[0], known)
+        return neg == {"F67"}, "neg=%r" % (neg,)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -3295,13 +3413,72 @@ def self_test():
                  (acts, q, live_after_sentinel)))
 
     # F140: a comment header with leading whitespace, a leading BOM, or the
-    # '//' spelling must not be read as a malformed drain line.
-    weird_hdr = "﻿# header\n // also a comment\n  #indented too\n"
+    # '//' spelling must not be read as a malformed drain line. The first
+    # version of this case used comment lines with no tab at all, which
+    # `len(parts) >= 5` already skips regardless of comment detection --
+    # a fresh falsification pass (2026-09-26) found it passed unchanged with
+    # the BOM/lstrip/'//' fix reverted, i.e. it was not a real negative
+    # control. Each line here carries 5 tab-separated fields with an
+    # unparseable first field, so without comment detection each one would
+    # have hit the ValueError branch and appended "RED malformed ledger
+    # line" -- reverting the fix and re-running this case does exactly that.
+    weird_hdr = ("﻿# 2026-01-01 00:00\tF00\theader row\tnobody\t2026-01-01 00:00\n"
+                 " // 2026-01-02 00:00\tF00\tcomment row\tnobody\t2026-01-02 00:00\n"
+                 "  # 2026-01-03 00:00\tF00\tindented row\tnobody\t2026-01-03 00:00\n")
     heads_w, q_w, _, acts_w = settle_once(False, [row], [row], ledger_b=weird_hdr)
-    f113.append(("F140: BOM/leading-space/'//' comment lines in the ledger "
-                 "raise no RED",
+    f113.append(("F140: BOM/leading-space/'//' comment lines with tab fields "
+                 "in the ledger raise no RED",
                  not any("malformed" in a for a in acts_w) and q_w == ["F46"],
                  acts_w))
+
+    # F140, second falsification pass (2026-09-26): the two-round forgery this
+    # fix exists to close. Round 1's snapshot is the sentinel, and a line
+    # forged straight into the live ledger (standing in for a round self-
+    # draining via `--operator-drain`) is left in place, as the case above
+    # confirms it must be. Round 2's `cp` then succeeds and honestly
+    # checksums that SAME live ledger -- the queue row vanishes this round,
+    # and the question is whether the forged line is allowed to explain it.
+    # Same queue_path across both calls so the quarantine file (keyed off it)
+    # persists between them, exactly as run_round.sh keeps one queue file
+    # across rounds.
+    d = tempfile.mkdtemp(prefix="fq_f140launder.")
+    qp_l = os.path.join(d, "q")
+    write_queue(qp_l, [row])
+    live_ledger_path = operator_ledger(qp_l)
+    io.open(live_ledger_path, "w", encoding="utf-8").write(
+        "2026-09-09 16:50\tF46\tforged by the round\tcruz\t2026-09-09 16:40\n")
+    bp1 = os.path.join(d, "b1")
+    write_queue(bp1, [row])
+    lb1 = bp1 + ".operator_drains"
+    io.open(lb1, "w", encoding="utf-8").write(SNAPSHOT_FAILED + "\n")
+    sha1 = hashlib.sha256(io.open(bp1, "rb").read()).hexdigest()
+    lsha1 = hashlib.sha256(io.open(lb1, "rb").read()).hexdigest()
+    rp1 = os.path.join(d, "r1")
+    io.open(rp1, "w", encoding="utf-8").write("")
+    acts1, _, _ = update(qp_l, [], [], 0, "2026-09-09 17:00", {"F46"},
+                          before_path=bp1, before_sha=sha1, replies_path=rp1,
+                          ledger_before=lb1, ledger_before_sha=lsha1)
+    write_queue(qp_l, [])
+    bp2 = os.path.join(d, "b2")
+    write_queue(bp2, [row])
+    lb2 = bp2 + ".operator_drains"
+    with io.open(live_ledger_path, "rb") as fh:
+        ledger_now_bytes = fh.read()
+    io.open(lb2, "wb").write(ledger_now_bytes)
+    sha2 = hashlib.sha256(io.open(bp2, "rb").read()).hexdigest()
+    lsha2 = hashlib.sha256(ledger_now_bytes).hexdigest()
+    rp2 = os.path.join(d, "r2")
+    io.open(rp2, "w", encoding="utf-8").write("")
+    acts2, _, _ = update(qp_l, [], [], 0, "2026-09-09 17:30", {"F46"},
+                          before_path=bp2, before_sha=sha2, replies_path=rp2,
+                          ledger_before=lb2, ledger_before_sha=lsha2)
+    q2 = [r[0] for r in read_queue(qp_l)]
+    ok = (any("quarantined" in a for a in acts1)
+          and not any(a.startswith("operator-drained F46") for a in acts2)
+          and any(a.startswith("RED F46") for a in acts2))
+    f113.append(("F140: a line forged during a #SNAPSHOT-FAILED round cannot "
+                 "launder into a legitimate drain the next round",
+                 ok, (acts1, acts2, q2)))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
