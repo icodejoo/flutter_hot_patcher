@@ -574,7 +574,26 @@ def green_ids(text, known=None):
     if RED_VERDICT.search(text):
         return set()
 
-    verdicts = [(m.start(), m.end()) for m in POS_VERDICT.finditer(bt)]
+    # F118 (C): a verdict quoted inside a markdown blockquote is someone
+    # else's verdict from an earlier round, not this reply's own -- the same
+    # reasoning PER_ID_VERDICT_LINE's comment already gives for excluding '>'
+    # from the contract path. The contract path (1) above only ever BINDS a
+    # green from a line it reads, so excluding '>' there was enough to stop a
+    # quoted contract line from draining. But when block is empty, control
+    # falls through to here, and this free-text fallback's `verdicts` list
+    # used to be built straight from `bt`, so a quoted "VERDICT: SURVIVES"
+    # still counted as a real verdict for proximity-binding purposes --
+    # draining an id whose ONLY verdict this round is inside a quote (probe
+    # P20i). Only the verdict SIGNAL is suppressed here: `qt` blanks out
+    # blockquoted lines, offset-preserving, and is used ONLY to build
+    # `verdicts`. Everything else below -- id_spans() (on raw `text`),
+    # CLAUSE.finditer(bt), disq, line_of/clause_of -- still reads `bt`
+    # unchanged, so a quoted id is still a candidate id (an ambiguous reply
+    # still holds, per the design note above PER_ID_VERDICT_LINE) and a red
+    # verdict inside a quote was already handled above via RED_VERDICT on the
+    # raw `text`.
+    qt = QUOTE_LINE.sub(lambda m: " " * len(m.group(0)), bt)
+    verdicts = [(m.start(), m.end()) for m in POS_VERDICT.finditer(qt)]
     if not verdicts:
         return set()
 
@@ -665,6 +684,15 @@ def green_ids(text, known=None):
             return {c}
     return set()
 
+
+# A markdown blockquote line: leading whitespace then '>'. Used ONLY to blank
+# out the verdicts a free-text-fallback reply must not bind to (F118 (C)) --
+# a quoted line is by definition someone else's text, same reasoning as the
+# comment on PER_ID_VERDICT_LINE's exclusion of '>' from its leading class.
+# `(?m)` so `^` matches per line; `[^\n]*\n?` consumes the whole quoted line
+# including its trailing newline (or nothing, at end of text) so the blanked
+# run is offset-preserving and does not leak into the next line.
+QUOTE_LINE = re.compile(r"(?m)^[ \t]*>[^\n]*\n?")
 
 # F116 contract line: `F<id> VERDICT: ...`, the id token immediately followed
 # by VERDICT, with only list/emphasis punctuation around it. Offsets into
@@ -2505,6 +2533,36 @@ def self_test():
             d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
             memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
             agents=1, cards=CARDS3, replies=[("t1", quoted)])
+        ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return ("drain F52" not in out and "RED F52" in out
+                and "F52" in ids), \
+               "rc=%s ids=%s out=%r" % (rc, ids, out)
+
+    # P20i. F118 (C), the second half of the same finding: P20h's quoted text
+    #       always carried a SECOND, real id (F46) elsewhere in the reply, so
+    #       the escape it caught lived in path (3) (several distinct ids).
+    #       This probe is the SINGLE-id shape: the reply names no card of its
+    #       own at all, its only mention of any id is a quoted historical
+    #       verdict, and free text elsewhere says outright that nothing was
+    #       tested this round. Pre-fix, green_ids() on this text returned
+    #       {"F52"} -- path (2)'s single-distinct-id rule read the quoted
+    #       "VERDICT: SURVIVES" as a real verdict and bound it to the only id
+    #       in the reply, draining a card no one reviewed this round.
+    @probe("CLI: a lone blockquoted 'F<id> VERDICT:' with no id of its own "
+           "in the reply's own text does not drain")
+    def _p20i():
+        txt = ("Context from previous round:\n"
+               "> F52 VERDICT: SURVIVES -- built confirmed.\n\n"
+               "I did not run anything this round.")
+        k = set(CARDS3)
+        got = green_ids(txt, k)
+        if got:
+            return False, "green_ids=%r" % (got,)
+        d = tempfile.mkdtemp(prefix="fq_p20i.")
+        rc, out, _ = run_cli(
+            d, [F46, ("F52", "2026-09-17 07:47", "fixed after FALSIFIED verdict")],
+            memo=[CLAIM46, "\U0001f7e2 F52 修补丁 VERDICT: SURVIVES (fix)"],
+            agents=1, cards=CARDS3, replies=[("t1", txt)])
         ids = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         return ("drain F52" not in out and "RED F52" in out
                 and "F52" in ids), \
