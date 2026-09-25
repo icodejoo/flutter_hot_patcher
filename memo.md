@@ -11890,3 +11890,5 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 **F109 BLOCKED / F129 → `built`（同日）**：
 - **F109**：`run_vm_tests` 不是 precompiled runtime，根本跑不到 AOT 的 shape-A 调用点，子代理按指令停下，没拿 JIT 路径凑覆盖。能走到 no-scope 分支的办法是一个链接 precompiled runtime 的小 embedder 测试程序（ProductSimARM64 里已有 `samples/embedder` 骨架），**这是一个新构建目标，需要你拍板**。
 - **F129**：回退 `003f2759a68` 后 `nc4` 精确读出 missing **2 / 44**，全部落在 index 1332、fn#1580/fn#1633；另一个独立脚本给出同样结果。还原后回到 0/0，`gen_snapshot` 与 `prog.so` 的 sha 都回到原值；SDK 干净、三棵构建树 0 待办（父方复核）。顺手修了 `nc4` 在绝对路径 WORK 下的软链缺陷。**F68 至此只差一次针对改写后结论的证伪 pass 就能关。**
+
+**F133 → `built`（同日）**：那 17 个也全是 Thread 字段偏移，扩展替换后 **SELF_HASH MATCH 391/391**。F125 的规则漏了两种访问：数组成员内部的元素（`write_barrier_wrappers_entry_points_[1]/[2]`，12 个 stub）和经栈上溢出槽里的 THR 副本访问（`ExitHandleScope_entry_point_`、`MemoryMove_entry_point_`，5 个）。没有别的结构体、没有 mac/iOS 影响、没有缺口；四个负控制与 bl 目标交换控制都按预期变红（父方复读）。⇒ **「尺寸相同、self_hash 不同」的 391 个条目全部归因到 Thread 偏移。**
