@@ -12242,4 +12242,46 @@ target"这句话本身。
 （`comparability_check.sh` 不查 target_os、ios 陈旧守卫失败即开、F132 卡片引用的
 disassemble 残差数字已被 F122 的后续判决超越）。**F132 保持 `built`，不关卡**——
 F124 的核心预测与 mac 负控制都站得住，缺的是守卫本身的对称性与一处过期引用。
+
+## 2026-09-26 续：F113 修补丁（2a62058）与 F130 修补丁（9cd1b50）证伪 pass
+
+`built` 队列里下一批未过 pass 的修补丁：F113 的注释行处理修复（commit `2a62058`）
+与 F130 的 sha 去重修复（commit `9cd1b50`），两者都改的是同一个文件
+`tools/loop/fix_queue.py`，同轮派一个新鲜 Opus 子代理（agent `a56ad3bfeb0979c52`）
+一次审两张卡，逐卡给判决行。
+
+```
+F113 VERDICT: PARTIAL -- the two narrow bugs are fixed, but the criterion's "#SNAPSHOT-FAILED must still be recognized and acted on" clause is not met: a failed ledger snapshot is trusted as real, and the restore path then erases the operator's genuine ledger.
+F130 VERDICT: PARTIAL -- the sha dedup works for the one exact case tested, but the "red verdict read from this card's own lines" half changes only the message text. It is untested, and the same-line case still requeues a card whose own verdict is SURVIVES.
+```
+
+**F113 的破绽**：账本 restore 路径没有 `#SNAPSHOT-FAILED` 处理（队列路径 `:1289`
+与 cards 路径 `:353` 都有，唯独账本路径没有）——`run_round.sh` 的 `cp` 失败时会写一个
+`#SNAPSHOT-FAILED` 哨兵文件，但仍然对它取校验和，于是 `ledger_ok` 读到 `True`，
+restore 逻辑接着把真实的 operator 账本整个覆盖成失败副本，删掉真实的 drain 记录，
+日志还把责任栽给"本轮新增的行"。另外前导空格 `' #'`、`//`、UTF-8 BOM 开头的注释行
+仍会误报 `RED malformed ledger line`；哨兵匹配是精确字符串不是 `strip()` 后比较。
+负控制属实：子代理在私有副本上分别去掉两处修复，各自精确对应的自测用例变红
+（82/1），仓库文件全程未动，`--self-test` 仍 82/0。
+
+**F130 的破绽**：sha 去重是精确小写十六进制字符串匹配——同一个 sha 换大写
+（`ABC1234`）或换更长的缩写（`abc12345`）都会被判成"新修补丁"从而重新入队；
+一个只是提交信息里提到某卡号、并非真修复的新提交也会入队并刷新 `seen`；
+且"判决词只读这张卡自己的行"这条改动只影响打印文案，真正触发入队的仍是
+按整行设置的共享 `neg` 标志——同一行写 `F77 VERDICT: FALSIFIED; F78 VERDICT:
+SURVIVES` 会把 F78 也一起重新入队，尽管 F78 自己的判决是绿的（这正是本仓已记录的
+"整体判定、逐对象提取"缺陷同族）。负控制部分属实：去掉去重逻辑精确命中新增用例
+（82/1）；但把"判决词只读本卡行"这半改动还原回旧写法，`--self-test` 仍 82/0——
+说明这半没有任何用例在守，是没被测出来的空改动。
+
+**COST OF BEING WRONG**：F113 那半——一次磁盘写失败（本仓已发生过磁盘死循环）
+会静默抹掉 operator-drain 的审计轨迹，且日志会误指责本轮伪造；F130 那半——
+任何一行写两张卡判决、或任何提交信息顺带提到某卡号，都会让一张真正绿过的候选卡
+被静默打回、白白再派一次。
+
+**当场拆卡（不当场改 `fix_queue.py`——本轮已派过一次子代理，且这两处修复各自需要
+新的负控制，够格立卡而不是随手改）**：立 **F140**，收纳这两处缺口，判据与负控制见
+`cards.tsv`。F113、F130 均保持 `built`，不关卡。
 本轮到此结束。
+
+- [ ] **F140：F113/F130 修补丁证伪 pass 抓出的账本哨兵处理与 sha 去重两处缺口**（`open`，2026-09-26，F113 修补丁+F130 修补丁证伪 PARTIAL 拆出，deps=-）
