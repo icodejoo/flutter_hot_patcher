@@ -12513,3 +12513,37 @@ F140 修补丁 VERDICT: PARTIAL (fix) -- 全部 7 条既有负控制真的变红
 ---
 
 心跳：2026-09-26 05:41 本轮收到子代理回报（`9e2c0da`，`101 case(s), 0 failure(s)`，实测已核对 F140 在 `cards.tsv`/`.loop/UNREVIEWED_FIX` 均未被动过）。写回完毕，结束本轮。
+
+---
+
+## F140 修补丁证伪 pass 6（2026-09-26，Opus，commit `541ffdc`）
+
+```
+F140 fix pass 6 的证伪结果（Opus）
+
+结论是 PARTIAL：两处原缺陷在它们原本的形状下已经修好，但在仓库今天的实际状态下，底线（floor）仍然可以被一个轮次独自清空。全部复现在 /tmp/f140p6/，未改动仓库。
+
+ATTACK RESULTS:
+1. (a) 跨轮截断/改写 live 文件（真实 run_round.sh BEGIN/END 块，三轮：A bootstrap+锚定伪造行，B 截断 live 文件，C 重跑 snippet+update()）：snapshot 保留伪造行，stderr 报 floor 与 live 文件不一致，F46 仍被拦住。**已修好**。
+2. (b) git 报错时是否 fail-closed：`core.repositoryformatversion 99` 触发 `#SNAPSHOT-FAILED`、不重建 marker、stderr 给出原因，**已修好**。但有个看不见的变体：把 `.git/refs/heads` 移走同时删掉 marker 工作副本，此时 `git log --all -- <marker>` 返回 rc=0 且输出为空，块照常重新 bootstrap——攻击代价高、痕迹明显，列为残余非主缺陷。
+3. (c) 实现者自己报告的缺口，**实测为真且轮次单独就能利用，不需要操作者参与**：同时截断 live 文件和锚点，或截断 live 文件并删除锚点，两种都成功——snippet rc=0、stderr 为空、snapshot 为 `b''`，随后 `update()` 打出 `operator-drained F46 (ledger 2026-09-09 16:50)`，队列排空。
+4. **git 历史并集今天是空操作**：`.loop/UNREVIEWED_FIX.quarantine_floor` 在磁盘上不存在、`git ls-files --error-unmatch` 报 not matched、`git check-ignore` 显示它被 `.gitignore:70 .loop/` 忽略 ⇒ 从不会被顺手提交，`revs=[]`，并集里"历史"那一项恒为空。自测里的 history 用例能过，是因为它手动 `git add -f` 了锚点，真实仓库没有这一步——这是「问题被换成了更容易的那个」（本节通则的又一实例）。
+5. `--self-test` 仍是 109/0，但不覆盖 3、4 两条。
+
+FLAW: `if floor_raw is None and revs:`（revs 在真实仓库里恒为 `[]`，因为锚点被 gitignore）。锚点未被跟踪 ⇒ 它的工作副本是唯一依据，且和 live 文件同处一个轮次可写的目录 `.loop/`。复现：锚定之后执行 `: > .loop/UNREVIEWED_FIX.operator_drains.quarantine; rm .loop/UNREVIEWED_FIX.quarantine_floor`，下一轮即排空伪造行（`/tmp/f140p6/repro.py` 的 `both_trunc` 与 `live_trunc_floor_rm` 两个用例）。
+
+STILL OPEN:
+- 锚点需要一个轮次改不了的来源：要么操作者执行一次 `git add -f` 并提交（且需验证：轮次 `git rm` 提交后，历史旧版本仍会被并入）；要么把锚点放到轮次写不到的位置。
+- 在锚点被提交之前，代码应对"marker 存在但锚点不存在/为空且从未被提交"这种状态 fail-closed（写 sentinel），不能读成空底线。
+- refs 被删导致 git 返回 rc=0 空输出的变体：可考虑检查 HEAD 能否解析，或要求 marker 的提交必须可达。
+
+COST OF BEING WRONG: 若此处误判 SURVIVES，F113/F140 的"轮次不能让修补丁队列出队"就不成立——一个轮次两条命令就能洗白被隔离的伪造 ledger 行，把欠证伪的卡片排出队列。
+
+F140 修补丁 VERDICT: PARTIAL (fix) -- truncate/rewrite of only the live file and a real `git log` error now both fail closed, but because the anchor `.loop/UNREVIEWED_FIX.quarantine_floor` is untracked and gitignored, the git-history union is a no-op today, so a round that empties/deletes both the live quarantine file and the anchor makes the next round's real snippet snapshot `b''` and `update()` drains the forged F46 line.
+```
+
+**不许关卡**：F140 保持 `open`，第五次修补丁仍未过证伪 pass。下一轮的当场修至少要覆盖：
+① 让锚点文件被 git 跟踪（`.gitignore:70` 的 `.loop/` 目前把它挡在外面——需要一条显式排除规则或换路径），并由 `run_round.sh` 在锚定后强制 `git add -f` 并提交，使"历史并集"真正生效；
+② 在锚点被首次提交之前的窗口期，代码必须对"marker 存在但锚点缺失/为空/从未入库"这种状态 fail-closed（写 `#SNAPSHOT-FAILED` 之类的哨兵），不能默认读成空底线；
+③（次要）`git log --all -- <marker>` 在 refs 被移走时返回 rc=0 且输出为空，与"marker 从未存在"不可区分，可加一条 `HEAD` 可解析性检查或提交可达性检查。
+本轮到此结束。
