@@ -12475,3 +12475,9 @@ F140 VERDICT: PARTIAL -- both negative controls really go red, but run_round.sh 
 `run_round.sh` 是用"写临时文件 + rename"替换的（轮次在跑，bash 按偏移读脚本，原地改写会打乱在飞的那一轮）。
 
 **尚未做的**：本次修复本身尚未经过新鲜子代理的证伪 pass，按契约不得关卡。F140 保持 `open`。
+下一轮：对 commit `9e2c0da` 派一个新鲜 Opus 子代理跑 `tools/loop/prompts/falsify.md`（F140 修补丁 pass 4 的证伪）。
+本轮到此结束。
+
+---
+
+心跳：2026-09-26 05:41 本轮收到子代理回报（`9e2c0da`，`101 case(s), 0 failure(s)`，实测已核对 F140 在 `cards.tsv`/`.loop/UNREVIEWED_FIX` 均未被动过）。写回完毕，结束本轮。
