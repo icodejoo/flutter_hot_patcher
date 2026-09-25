@@ -12000,4 +12000,29 @@ size 规则、denominator（`EXAMINED == diff_units.sh UNITS`）与 offset+8 单
 
 派一个新鲜 opus 子代理按这条修法实现并重跑（不重建，只读现有 `out_pm`）；
 修补丁本身不继承这次证伪的审查结论，仍待下一轮欠一次新的证伪 pass。本轮到此结束。
+
+## 2026-09-25T21:39 心跳：F122 修补丁已落地（`3677f72`），欠证伪 pass
+
+opus 子代理把 offset 判据从"本侧内部连续性"改成"按对方布局序、逐对同名相邻对象核对
+`offset_diff[K] == offset_diff[K-1] + size_diff[K-1]`"，断链一律判 UNEXPLAINED。
+`evidence_disassemble_residual.sh` 已提交 `3677f72`（`fhp-research` 树，分支 `route-a-research`）。
+
+五条验收：① `EXAMINED == diff_units.sh UNITS` 三个 fixture 均 604/604/600，和之前一致；
+② 两个构造的零尺寸变化负控制（相邻交换、搬到末尾并带 567 个对象位移）**现在都产生新的
+UNEXPLAINED 行**（34→38），此前旧脚本把它们全部吸收为 `cumulative_code_offset`；
+③ 53 个重排 VM stub 里 **16 个**（每 fixture）因为布局前驱在我们这侧对不上而落入 UNEXPLAINED，
+另 37 个前驱确实同名相邻、级联等式成立，仍算 explained——**这是按规则字面定义的结果，
+不是残留 bug**；④ `offset+8` 单点注入检测未回归（0→2 行，修后 34→36 行）；
+⑤ `stub_and_code_size`/`unexplained_size_diff` 在真实产物上前后不变（68，22/22/24）。
+
+**UNEXPLAINED 从 68（22/22/24）涨到 170（56/56/58）**——这不是修坏了，是修之前
+"offset 桶已完全解释"这句话本身有假阴性，现在露出来了。
+
+⚠️ **子代理主动标出一处未替我做主的判断**：修法是"局部"规则（断一次链只罚那一环，
+链后续对象若自身链条完整仍判 explained）。若改成"锚定"规则（必须一路无断链地追溯到
+offset_diff=0 的起点才算 explained），真实产物上每个 fixture 的 stub 行会从 34 变成 374——
+即几乎全部 stub offset 差异都会变成 UNEXPLAINED。**这个"局部 vs 锚定"的判据强度选择
+本轮没有替它做决定，留给下一次证伪 pass 或 owner 判断规则本身是否够格当 structural 证据。**
+
+修补丁不继承本轮证伪的审查结论，派一个新鲜子代理复核 `3677f72`。本轮到此结束。
 - 「现有三个 fixture 覆盖面不够」今天被证实了三次（F121 池槽类型、F124 mac/iOS 目标、F134 float/SIMD 池加载）——换了输入就冒出来的缺口，说明 fixture 需要扩（float 常量、SIMD、FFI 调用点）。
