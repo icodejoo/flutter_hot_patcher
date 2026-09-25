@@ -12108,3 +12108,73 @@ f. **真实产物（未改动）上的实测 UNEXPLAINED：1190（396/396/398）
 ⚠️ **子代理指出的下游影响**：`disassemble ×3` 残差（F104）与任何后续依据它重分类的结论，都建立在"`cumulative_code_offset` 是真解释"这句话上；**当前真实产物上该桶是 0/0/0，所以现在的数字未受影响**，但下一次出现出口侧位移时，规则会像这次一样悄悄吸收它。
 
 **F122 保持 `open`/`built`，不关卡。** 本轮到此结束，不当场再派第四轮修补——按契约"何时不当场修"：这处修法需要新的判据（对称化入口/出口断链的代价）+ 自己的负控制（子代理提供了可复现构造：pos299 尺寸+8、pos300-699 偏移+8、pos299 双侧改名为 `_iso_stub_ArrayWriteBarrierStub`），交给下一轮/下一会话，写清规格再动手，避免重复"改一处、逃逸挪一层"（与 F82 同型，CLAUDE.md 已记录该模式）。
+
+## 2026-09-26 心跳：F121 证伪 pass（新会话，claude-sonnet-5，调度器角色）
+
+按契约读 `docs/LOOP_CONTRACT.md`，锁定 built 卡里仍欠证伪 pass 的一张：**F121**
+（`b2e93350653` + 空订正 `98c95873b72`，shape-A per-site kTaggedObject Smi 池槽修复）。
+其余六张（F49 F113 F122 F129 F130 F132）在本会话开始前已各自处于「已有绿色 pass 但仍
+PARTIAL/待下一轮」或已被处理的状态（见上面各条心跳）；F121 是唯一从未被独立复核过的一张。
+
+F121 VERDICT: PARTIAL -- the fix survives every attack (slot kind, per-site, field
+name, runtime relink all hold), but the criterion as set is literally unmet
+(UNEXPLAINED 2 not 3; whole-dir ninja counts not 0) and three of its five checks
+cannot fail on an F121 defect
+
+**新鲜 Opus 子代理（59 次调用）逐条核验**：
+1. `op_dump_check.sh` 不是硬编码，但它的 `both_smi_thr` 豁免（`op_dump_probe.py:283-298`,
+   `ebfadea`）接受**任意值**的 `\d+ (obj)` 对，对 F121 这类"值不对但形状对"的缺陷不可能报红；
+   真正对值敏感的是**卡片没有引用的** `pool_slot_field_check.sh`。`measure_pool_residual.sh`
+   只分类指令字、从不读池槽种类，同样对 F121 缺陷免疫。`run_vm_tests` 152 个用例里
+   **没有一个** `NativeCall`/`CodePatcher`/`LinkNative` 相关（`--list | grep` 空）。
+2. 三个构建目录逐一核实：`ReleaseARM64`/`ProductSimARM64`/`ProductSimIosARM64` 均 0 待办；
+   `ProductARM64` 的 `analyze_snapshot` 170 步、`run_vm_tests` 376 步落后于 HEAD——
+   但卡片引用的检查都不读这两个陈旧产物，污染没有传导到被引用的证据里。
+3. **`measure_pool_residual.sh` 现读 `UNEXPLAINED 2`，不是卡片写的 `3`**——数字本身
+   已过期（该读数是在卡片实现之后、`out_pm` 尚未被 F121 触达时取的）。子代理独立分类
+   hello 池：98 个不同槽 = 92 个双侧 Smi（值不同：他们 `2312`，我们 `3968`）+ 6 个双侧 unknown，
+   不存在"被复位"的槽（尽管检查脚本打印的标签写着"98 reset slots"）。
+4. 池里另有 7 个双侧相等的 Smi 槽，从未触发过 `both_smi_thr` 豁免；跑
+   `pool_slot_field_check.sh` rc=0；用 DWARF 核实 92/92/178 个 shape-A 槽两侧全部命名
+   `call_bootstrap_native_entry_point_`——豁免匹配的是**正确的字段**，不只是碰巧同形。
+5. `git merge-base --is-ancestor` 确认两个提交都是 HEAD 祖先（`98c95873b72` 即 HEAD）；
+   SDK 树干净；F109 已关闭（no-scope 分支在这份 SDK 里不可达）；F136（写方/读方 Thread
+   布局无守卫）仍 open 且未被这次改动触及。
+6. **负控制未被复现**：需要在共享树上回退+重建 `il_arm64.o`，子代理判断这在安全时间内
+   做不到干净的私有全量重建，如实报告未做，只从 `.ninja_log` 里看到 14:38–14:41 前后有过
+   一次真实的编译-重建-再编译序列，与"做过负控制"的说法一致但不是独立复现。
+   **`ninja -n` 在"恢复后"读数是 1165/1381/1526，不是卡片写的 `0`**——但根因是**无关的**
+   `thread.h`（09-24 17:51，早于 F121）被 F136 一类的后续改动搅动，不是 F121 自己造成的陈旧。
+7. `dd_runtime_check.sh` 只跑 hello、只比较 stdout，`NativeEntry::LinkNativeCall` →
+   `PatchNativeCallAt`（`native_entry.cc:319`）无条件执行，`set_target` 确实会被调用，
+   但对 bootstrap native 而言重写前后值相同，所以这项本身**不能**证明 relink 生效。
+   子代理自行在 `ProductARM64` 上跑了一个 40 万次 auto-scope `File/Directory.existsSync`
+   热循环（新鲜 gen_snapshot + dartaotruntime），rc=0、结果正确、1.7 µs/iter——间接验证了
+   Smi 改写在运行时被使用，但依赖"no-scope 包装器在 API-handle 上会崩"这个假设，
+   lldb 因 Developer Mode 关闭而无法附加做更直接的验证。
+
+**FLAW（不关卡的原因）**：修复本身没有被任何攻击打穿——池槽种类、每站独立、字段名、
+运行时 relink 全部站得住；**但卡片写下的判据本身已经与现状脱节**：①
+`measure_pool_residual.sh` 现读 2 不是 3；② 三个构建目录的"0 待办"不成立（污染源无关，
+但断言本身是假的）；③ 五条判据里有三条（`measure_pool_residual`、`run_vm_tests`、
+`op_dump_check` 的 `both_smi_thr` 豁免）对 F121 这类缺陷天生不可能报红，真正承重的
+`pool_slot_field_check.sh` 反而没被卡片引用。
+
+**STILL OPEN**：一个 Debug 构建（`DebugARM64` 落后 249/174 步）下 `LinkNativeCall` 的
+DEBUG 断言块会真正 `assert` relink 之后的 trampoline；用 `--trace_natives` 跑两次同一个
+auto-scope native、核实每个站点只解析一次且 `target()` relink 后返回
+`CallAutoScopeNative`，能比现有热循环更直接地证明第 7 条。另外 iOS/sim 运行时执行
+iOS-sim `gen_snapshot` 产物（F136 的布局不一致）仍未测。
+
+**COST OF BEING WRONG**：F37 的重新关卡、`dump_object_pool` 的三个 unknown 格（F101）、
+以及 F136 的布局守卫，全部假定这 92/178 个槽是正确的 per-site kTaggedObject Smi 且在
+运行时正确 relink。
+
+**当场修（不需要新卡，只是把卡片判据改到与已核实事实一致，且这条修正本身就是这次
+证伪的直接产物、不再需要额外一轮 pass）**：把 F121 的判据里 `measure_pool_residual.sh
+UNEXPLAINED == 3` 改成 `== 2`；删除"三个构建目录 0 待办"这条断言（改记为"卡片引用的
+检查所读的产物本身新鲜，与 `ProductARM64` 侧无关的陈旧无涉"）；补上
+`pool_slot_field_check.sh rc=0` 作为真正值敏感的判据，取代 `op_dump_check.sh`/
+`measure_pool_residual.sh` 在这一点上的空判据地位。**F121 保持 `built`，不关卡**——
+留着的是 STILL OPEN 那条 Debug 断言复核，属于"可以晚做但没做过"的验证缺口，不是
+本次改动引入的新问题。
