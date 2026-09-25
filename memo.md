@@ -11886,3 +11886,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - **F125 → `built`**：5 个名字（6 个条目）的 self_hash 差异全部是同名 Thread 字段的偏移差（`isolate_group_` 0x680/0x690、`predefined_symbols_address_` 0x2a8/0x2b8、`thread_locals_` 0x8f0/0x970，最后这个 +0x80 不在 F88 的台阶上）；按两侧 DWARF 字段名替换偏移后 **SELF_HASH MATCH 18/18**，三个负控制全红。同一规则套到全部同尺寸异哈希条目上 374/391，剩 17 个拆 F133。
 
 **F107 → `built`（同日）**：新检查 `pool_slot_field_check.sh` 用两侧各自的 DWARF 把池槽里的 Smi 翻成字段名再比，当前二进制 rc=0（92/92/178）；负控制（bootstrap→auto_scope）下**只有它变红**（362 处），`measure_dd_emission` 计数不动、`dd_runtime_check` 与 `op_dump_check` 都绿——正是卡片要求的形状。SDK 已还原，三棵构建树 0 待办，`gen_snapshot` sha 回到 `0bec6f28…`。已接进 `verify_all.sh`（44→45）但未在那里跑；共享 `out_pm` 重生成之前它会按设计 fail closed。父方在私有副本里复跑了检查与自测。
+
+**F109 BLOCKED / F129 → `built`（同日）**：
+- **F109**：`run_vm_tests` 不是 precompiled runtime，根本跑不到 AOT 的 shape-A 调用点，子代理按指令停下，没拿 JIT 路径凑覆盖。能走到 no-scope 分支的办法是一个链接 precompiled runtime 的小 embedder 测试程序（ProductSimARM64 里已有 `samples/embedder` 骨架），**这是一个新构建目标，需要你拍板**。
+- **F129**：回退 `003f2759a68` 后 `nc4` 精确读出 missing **2 / 44**，全部落在 index 1332、fn#1580/fn#1633；另一个独立脚本给出同样结果。还原后回到 0/0，`gen_snapshot` 与 `prog.so` 的 sha 都回到原值；SDK 干净、三棵构建树 0 待办（父方复核）。顺手修了 `nc4` 在绝对路径 WORK 下的软链缺陷。**F68 至此只差一次针对改写后结论的证伪 pass 就能关。**
