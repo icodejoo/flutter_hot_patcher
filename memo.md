@@ -11862,3 +11862,9 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 伞卡（不直接挑，子卡全关才关）：**F37**（→F107/F108/F109/F121）· F55（→F91–F95/F124/F126）· F65（→F65a–e）· F69（→F110/F111）· F82（→F112/F113）。
 判据已满足、只欠一次证伪就能关的：**F68**（数值目标经别的机制达成）· **F91**（证伪 pass 建议退休，实质已并入 F37 系列）。
+
+**F121 → `built`（同日）**：SDK `b2e93350653`（+ 空订正提交 `98c95873b72`）。shape-A 池槽改为 per-site kTaggedObject Smi，
+`op_dump_check` rc=0、池 1421/3849/1421、`dd_runtime_check` rc=0、`measure_pool_residual` UNEXPLAINED 3、`run_vm_tests` 152/152；
+负控制（改回 AddImmediate）重现 92 个 `0x1f00 (unknown)`。父方复核：三棵构建树 0 待办、树干净、私有副本里两项验收重跑一致。
+⚠️ **共享 `out_pm/` 尚未重生成，现落后于二进制**（ProductSimARM64 gen_snapshot `0bec6f280ac5…`）；要等 16:41 那批 agy 证伪（读 `out_pm`）结束后再重生成，
+届时 B/C 的钉值大概率要再钉一次。`measure_dd_emission.sh` 的红只因 `dd_emission.expected` 仍钉 ours=0（早于 `63716223bde`，属 F87）。
