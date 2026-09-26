@@ -401,12 +401,16 @@ FIX_QUEUE_BEFORE_SHA=""
 # trap so that "the round ended without ever running the gate" is a printed
 # WARNING rather than a silence indistinguishable from "nothing was owed".
 FQ_GATE_RAN=
-if ! python3 "$REPO/tools/loop/fix_queue.py" --self-test >/dev/null 2>&1; then
-  say "WARNING: fix_queue.py --self-test fails -- the fix-patch gate is OFF"
+# The case count is read from the self-test's own summary line rather than
+# written here: this text said "9 cases, 5 negative controls" long after the
+# suite had grown past 70 (F49, 2026-09-25 pass).
+if ! FQ_SELFTEST_OUT=$(python3 "$REPO/tools/loop/fix_queue.py" --self-test 2>&1); then
+  FQ_SELFTEST_SUMMARY=$(printf '%s\n' "$FQ_SELFTEST_OUT" | grep -E '^[0-9]+ case\(s\), [0-9]+ failure\(s\)$' | tail -1)
+  say "WARNING: fix_queue.py --self-test fails (${FQ_SELFTEST_SUMMARY:-no summary line}) -- the fix-patch gate is OFF"
   PROMPT="$PROMPT
 
-【仪器损坏】tools/loop/fix_queue.py --self-test 不通过 ⇒「修补丁待审队列」这道闸门现在是关的。
-在做别的事之前先修它，并跑通它自己那 9 个用例（含 5 个负控制，见文件头注释）。"
+【仪器损坏】tools/loop/fix_queue.py --self-test 不通过（${FQ_SELFTEST_SUMMARY:-没有打印汇总行}）⇒「修补丁待审队列」这道闸门现在是关的。
+在做别的事之前先修它，并跑通它自己的全部用例（0 failure(s) 为准；用例与负控制见 self_test()）。"
 fi
 if [ -s "$FIX_QUEUE" ]; then
   PROMPT="$PROMPT
@@ -1235,6 +1239,7 @@ PY
 fix_queue_gate() {
   local g_agents g_memo g_subjects g_cards fq_memo fq_commits fq_out fq_rc
   local fq_reported fq_file_n fq_owed fq_why fq_commits_n _n _g fq_replies
+  local g_bodies fq_bodies
 
   read -r g_agents _ _ _ _ <<<"$(round_dispatch_stats)"
   case "${g_agents:-}" in ''|*[!0-9]*) g_agents=0 ;; esac
@@ -1245,6 +1250,19 @@ fix_queue_gate() {
       t=${pair%%=*}; h=${pair#*=}
       [ "$h" = none ] && continue
       git -C "$t" log --format="%h $(basename "$t") %s" "$h..HEAD" 2>/dev/null
+    done)
+  # F49 E1: the commit message BODIES of the same commits, one "<sha> <line>"
+  # per body line. A red verdict recorded only in a body was invisible to the
+  # gate; fix_queue.py reads these for red verdicts and card ids, never for
+  # green claims. The sha prefix is ours, so a body line cannot forge another
+  # commit's line.
+  g_bodies=$(for pair in ${heads_before:-}; do
+      t=${pair%%=*}; h=${pair#*=}
+      [ "$h" = none ] && continue
+      for sha in $(git -C "$t" log --format="%h" "$h..HEAD" 2>/dev/null); do
+        git -C "$t" log -1 --format=%b "$sha" 2>/dev/null |
+          awk -v s="$sha" 'NF { print s " " $0 }'
+      done
     done)
   # F89b: for each of the same commits, whether its diff touched anything
   # besides memo.md/cards.tsv -- fix_queue.py's code_touch filter (F89a) needs
@@ -1282,8 +1300,9 @@ fix_queue_gate() {
   fq_commits=$(mktemp 2>/dev/null) || fq_commits=
   fq_replies=$(mktemp 2>/dev/null) || fq_replies=
   fq_code_touch=$(mktemp 2>/dev/null) || fq_code_touch=
-  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ] || [ -z "$fq_replies" ] || [ -z "$fq_code_touch" ]; then
-    rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" 2>/dev/null
+  fq_bodies=$(mktemp 2>/dev/null) || fq_bodies=
+  if [ -z "$fq_memo" ] || [ -z "$fq_commits" ] || [ -z "$fq_replies" ] || [ -z "$fq_code_touch" ] || [ -z "$fq_bodies" ]; then
+    rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" "$fq_bodies" 2>/dev/null
     FQ_GATE_RAN=1
     say "fix-queue: OWED UNKNOWN -- could not create a temp file to run the gate with"
     say "WARNING: the fix-queue gate did not run (no temp file) -- owed is UNKNOWN, not 0; reconcile $FIX_QUEUE by hand"
@@ -1292,6 +1311,7 @@ fix_queue_gate() {
   printf '%s\n' "$g_memo" >"$fq_memo"
   printf '%s\n' "$g_subjects" >"$fq_commits"
   printf '%s\n' "$g_code_touch" >"$fq_code_touch"
+  printf '%s\n' "$g_bodies" >"$fq_bodies"
   # The half of the drain decision the round did not write. Collected here
   # rather than passed in, for the same reason the memo lines and commit
   # subjects are: the two call sites reach this function at different points,
@@ -1312,6 +1332,7 @@ fix_queue_gate() {
       ${FIX_QUEUE_BEFORE_SHA:+--before-sha "$FIX_QUEUE_BEFORE_SHA"} \
       --memo-added "$fq_memo" --commits "$fq_commits" --agents "$g_agents" \
       --replies "$fq_replies" --code-touch "$fq_code_touch" \
+      --commit-bodies "$fq_bodies" \
       --ledger-before "$FIX_QUEUE_BEFORE.operator_drains" \
       ${LEDGER_BEFORE_SHA:+--ledger-before-sha "$LEDGER_BEFORE_SHA"} \
       --quarantine-before "$FIX_QUEUE_BEFORE.operator_drains.quarantine" \
@@ -1321,7 +1342,7 @@ fix_queue_gate() {
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
-  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" \
+  rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" "$fq_bodies" \
         "$FIX_QUEUE_BEFORE" "$FIX_QUEUE_BEFORE.operator_drains" \
         "$FIX_QUEUE_BEFORE.operator_drains.quarantine" "$CARDS_BEFORE"
   FQ_GATE_RAN=1

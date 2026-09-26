@@ -357,8 +357,20 @@ POS = "SURVIVES"
 # across 7364 added memo.md lines there are 0 with a word-bounded lowercase
 # "partial"/"falsified" and no uppercase token, so this costs no noise on the
 # corpus it will actually run against.
-NEG_RE = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za-z])",
-                    re.IGNORECASE)
+#
+# F49 E5 (2026-09-25 pass): a red verdict written only in Chinese -- "判决：
+# 证伪", "结论：部分成立", "被证伪" -- carried neither token and was invisible,
+# while the SURVIVES side already recognised 判决 phrasings (POS_VERDICT). Bare
+# "证伪" is NOT red: it names the review process ("证伪 pass"), so the Chinese
+# forms are anchored on a verdict word (判决/结论/裁决/判定/判为/VERDICT) or
+# are the passive/predicate forms that only a red outcome produces.
+NEG_ZH = (r"(?:判(?:决|定|为)?|结论|裁决|VERDICT)\s*为?\s*[:：]?\s*"
+          r"(?:(?:\*{1,2}|_{1,2})?[A-Za-z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s*)?"
+          r"(?:\*{1,2}|_{1,2})?"
+          r"(?:证伪|部分成立|部分通过|部分证伪|不成立|未通过|被推翻|推翻)"
+          r"|被证伪(?!\s*pass)|证伪成立")
+NEG_RE = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za-z])"
+                    r"|" + NEG_ZH, re.IGNORECASE)
 FIX_MARKERS = ("(fix)", "（fix）", "修补丁")
 
 # A SURVIVES has to be a *verdict* to count as one. Pass 2 of F49's own review
@@ -373,8 +385,19 @@ PASS_VOCAB = re.compile(r"(?<![0-9A-Za-z])pass(?![0-9A-Za-z])|证伪|VERDICT|fal
                         re.IGNORECASE)
 
 
-def ids_on(line, known=None):
+# F49 E4: the same shape with the letter in either case, used ONLY on the red
+# side (red verdicts and fix commits) and ONLY when a card table is given --
+# "f49" is then normalised to "F49" and kept only if the table lists it.
+# Unfiltered, a lowercase letter+digits shape is prose ("v2", "x86"), and on
+# the green side a looser id would make an approval easier, which is the
+# direction this file never loosens.
+ID_FOLD = re.compile(r"(?<![0-9A-Za-z_])([A-Za-z][0-9]+[a-z]?)(?![0-9A-Za-z_])")
+
+
+def ids_on(line, known=None, fold=False):
     found = set(ID.findall(line))
+    if fold and known is not None:
+        found |= {x[0].upper() + x[1:] for x in ID_FOLD.findall(line)}
     # The pattern is a shape, and a shape matches prose. Filtering against the
     # card table turns "looks like an id" into "is a card", which is the only
     # form of this test that cannot be fooled by a new piece of vocabulary.
@@ -565,6 +588,10 @@ RED_VERDICT = re.compile(
     r"|(?<![0-9A-Za-z])(?:证伪\s+)?pass\s*\d+\s*(?:[:：]|->|→)\s*(?:(?:\*{1,2}|_{1,2})?VERDICT\s*[:：]\s*)?(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
     r"|证伪(?:\s+pass)?(?:\s*\d+)?\s*[:：]\s*(?:\*{1,2}|_{1,2})?(?:FALSIFIED|PARTIAL)\b"
     r"|(?<![0-9A-Za-z])pass\s+\d+\s+(?:FALSIFIED|PARTIAL)\b"
+    # F49 E5: the structured Chinese red forms (verdict word + red outcome).
+    r"|(?:判(?:决|定|为)?|结论|裁决|VERDICT)\s*为?\s*[:：]\s*"
+    r"(?:(?:\*{1,2}|_{1,2})?[A-Za-z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s*)?"
+    r"(?:\*{1,2}|_{1,2})?(?:证伪|部分成立|部分通过|部分证伪|不成立|未通过)"
     r")", re.IGNORECASE)
 
 
@@ -1100,7 +1127,8 @@ def neg_ids_on_line(line, known=None, in_fence=False):
     direction. The F77/F78 shape (every red names its id, the green is
     issued, not quoted) still restricts.
     """
-    ids = ids_on(line, known)
+    # fold=True (F49 E4): a red verdict about "f49" is a red verdict about F49.
+    ids = ids_on(line, known, fold=True)
     if len(ids) <= 1:
         return ids if NEG_RE.search(line) else set()
     if not real_pos_verdicts(line, in_fence):
@@ -1111,7 +1139,7 @@ def neg_ids_on_line(line, known=None, in_fence=False):
     for m in CLAUSE.finditer(line):
         seg = m.group(0)
         if NEG_RE.search(seg):
-            out |= ids_on(seg, known)
+            out |= ids_on(seg, known, fold=True)
     return out
 
 
@@ -1196,13 +1224,48 @@ def unattributed_red(line, known=None):
     """
     for m in CLAUSE.finditer(line):
         seg = m.group(0)
-        if NEG_RE.search(seg) and not ids_on(seg, known):
+        if NEG_RE.search(seg) and not ids_on(seg, known, fold=True):
             return True
     return False
 
 
-def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
+def commit_ids(subjects, bodies=(), known=None, code_touch=None):
+    """{sha: ids} for this round's commits, from subject AND body (F49 E1/E3).
+
+    `bodies` are "<sha> <one body line>" lines (--commit-bodies). Ids are read
+    folded (F49 E4). A sha whose diff the caller declares prose-only
+    (code_touch[sha] is False) is left out -- F89a -- and an unknown sha
+    counts, as in scan(). A commit that names NO card at all maps to an empty
+    set: scan() links it to this round's red verdicts (E3).
+    """
+    out = {}
+    for line in subjects:
+        sha = line.split(" ", 1)[0]
+        if not sha.strip():
+            continue
+        if code_touch is not None and code_touch.get(sha, True) is False:
+            continue
+        out.setdefault(sha, set()).update(ids_on(line, known, fold=True))
+    for line in bodies:
+        sha = line.split(" ", 1)[0]
+        if sha in out:
+            out[sha].update(ids_on(line, known, fold=True))
+    return out
+
+
+def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
+         bodies=(), card_neg=frozenset()):
     """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
+
+    F49 standing escapes (2026-09-25 pass), all on the RED side only:
+      E1  `bodies` -- commit message body lines, "<sha> <text>" -- are read
+          for red verdicts (never for green claims) and for card ids.
+      E2  `card_neg` -- ids whose cards.tsv row gained a red verdict this
+          round (cards_red_ids()) -- is added to neg.
+      E3  a code-touching commit that names no card anywhere (subject or
+          body) is taken as a fix for EVERY id that went red this round. A
+          false link costs one dispatch; a missed one is an unreviewed fix.
+      E4  ids are matched case-folded on the red side (ids_on fold=True).
 
     `code_touch`, when given, is {sha: bool} saying whether that commit's diff
     touched code. Absence of a sha is treated as True on purpose -- a caller
@@ -1235,7 +1298,15 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
     neg, fix, surv, surv_fix = set(), set(), set(), set()
     memo_lines, subjects = list(memo_lines), list(subjects)
     fenced = fence_flags(memo_lines) + [False] * len(subjects)
-    for line, in_fence in zip(memo_lines + subjects, fenced):
+    bodies = list(bodies)
+    # F49 E1: commit body lines are read for red verdicts only -- a body's
+    # green claim is never trusted -- so they join the red pass below and are
+    # skipped for the green half.
+    body_lines = set(range(len(memo_lines) + len(subjects),
+                           len(memo_lines) + len(subjects) + len(bodies)))
+    fenced += [False] * len(bodies)
+    for i, (line, in_fence) in enumerate(zip(memo_lines + subjects + bodies,
+                                             fenced)):
         here = ids_on(line, known)
         # The legacy-id alias has to be computed BEFORE the early exit, not
         # after it: ID.findall("F--") is [] -- that IS the defect -- so a line
@@ -1243,7 +1314,10 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
         # skipped before the alias was ever consulted. Caught by control C2/F--,
         # which stayed red across the first attempt at this alias.
         alias = PARK_IDS if LEGACY_PARK_RE.search(line) else frozenset()
-        if not here and not alias:
+        if not here and not alias and not ids_on(line, known, fold=True):
+            continue
+        if i in body_lines:
+            neg |= neg_ids_on_line(line, known, in_fence)
             continue
         # Two different questions about one line, and conflating them cost a
         # case each way. "Did a red verdict happen" is answered by the token
@@ -1260,17 +1334,18 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None):
             surv |= here_pos
             if any(m in line for m in FIX_MARKERS):
                 surv_fix |= here_pos
-    for line in subjects:
-        # F89a: a commit that only edits prose (memo.md, cards.tsv) and
-        # happens to mention a card id was being counted as a code fix owed a
-        # falsify pass. `code_touch` lets a caller that knows the diff say so;
-        # a sha the caller never mentions still counts, since ignorance of a
-        # commit's diff is not evidence it was prose-only.
-        if code_touch is not None:
-            sha = line.split(" ", 1)[0]
-            if code_touch.get(sha, True) is False:
-                continue
-        fix |= ids_on(line, known)
+    neg |= set(card_neg)
+    # F89a: a commit that only edits prose (memo.md, cards.tsv) and happens to
+    # mention a card id was being counted as a code fix owed a falsify pass.
+    # `code_touch` lets a caller that knows the diff say so; a sha the caller
+    # never mentions still counts, since ignorance of a commit's diff is not
+    # evidence it was prose-only. commit_ids() applies that filter.
+    by_sha = commit_ids(subjects, bodies, known, code_touch)
+    for ids in by_sha.values():
+        fix |= ids
+    # F49 E3: a code commit naming no card is a fix for whatever went red.
+    if any(not ids for ids in by_sha.values()):
+        fix |= neg
 
     # ---- the half the round cannot author -----------------------------------
     # Everything above this line came out of the round's own pen: memo.md lines
@@ -1450,12 +1525,65 @@ def cards_gap_reason(cards_path, known, before_path):
     return None
 
 
+def cards_red_ids(cards_path, before_path, known=None):
+    """Ids whose cards.tsv row GAINED a red verdict during this round (F49 E2).
+
+    A verdict recorded only in the card table -- not in memo.md, not in any
+    commit -- was invisible to the gate. The round-start copy (--cards-before)
+    is already mandatory, so the row diff is available: for each row that
+    changed, the tokens the round inserted or replaced are joined and asked
+    NEG_RE's question. Bound to the ROW'S OWN id only: a row's prose names
+    other cards ("split F130") without judging them.
+
+    Asked of the inserted text, not the whole row, because old rows carry
+    every past verdict ("PASS 1 ... PARTIAL") and would read red forever.
+    """
+    import difflib
+
+    def rows(path):
+        out = {}
+        if not path or not os.path.isfile(path):
+            return out
+        try:
+            raw = io.open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            return out
+        for line in raw.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            cid = line.split("\t", 1)[0].strip()
+            if cid:
+                out[cid] = out.get(cid, "") + "\n" + line
+        return out
+
+    before, after = rows(before_path), rows(cards_path)
+    red = set()
+    for cid, new in after.items():
+        old = before.get(cid, "")
+        if new == old:
+            continue
+        a, b = old.split(), new.split()
+        added = []
+        for op, _, _, j1, j2 in difflib.SequenceMatcher(
+                None, a, b, autojunk=False).get_opcodes():
+            if op in ("insert", "replace"):
+                added.append(" ".join(b[j1:j2]))
+        if NEG_RE.search(" ".join(added)):
+            red.add(cid)
+    if known is not None:
+        red &= known
+    return red
+
+
 def update(queue_path, memo_lines, subjects, agents, now, known=None,
            allow_enqueue=True, before_path=None, before_sha=None,
            replies_path=None, code_touch=None, cards_gap=None,
            ledger_before=None, ledger_before_sha=None,
-           quarantine_before=None, quarantine_before_sha=None):
+           quarantine_before=None, quarantine_before_sha=None,
+           bodies=(), card_neg=frozenset()):
     """Returns (actions, rows_on_disk, settled).
+
+    `bodies` / `card_neg`: see scan() (F49 E1/E2).
 
     `settled` is the third element, added 2026-09-17 after the card was
     falsified a fourth time. It is False whenever this function could not
@@ -1609,8 +1737,17 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     except RepliesUnavailable as e:
         replies_gap = str(e)
 
+    bodies = list(bodies)
     neg, fix, pos_same, pos_drain, claimed = scan(
-        memo_lines, subjects, agents, known, replies, code_touch)
+        memo_lines, subjects, agents, known, replies, code_touch,
+        bodies, card_neg)
+
+    def fix_shas(cid):
+        """Commits this round linked to cid as its fix (F49 E1/E3/E4)."""
+        by_sha = commit_ids(subjects, bodies, known)
+        live = commit_ids(subjects, bodies, known, code_touch)
+        return {s for s, ids in by_sha.items() if cid in ids} | \
+               {s for s, ids in live.items() if not ids and cid in neg}
     pos = pos_drain          # what drains a standing entry
     reviewed = pos_same | pos_drain   # what prevents a new one
 
@@ -1634,7 +1771,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # mistaken for "nothing was owed".
     if known is not None:
         wide_neg, wide_fix, _, _, _ = scan(
-            memo_lines, subjects, agents, None, replies, code_touch)
+            memo_lines, subjects, agents, None, replies, code_touch,
+            bodies, card_neg)
         dropped = sorted((wide_neg & wide_fix) - (neg & fix))
         if dropped:
             actions.append(
@@ -2005,9 +2143,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                                for o in old)
 
             shas = " ".join(sorted(
-                s for s in {s.split(" ", 1)[0] for s in subjects
-                            if cid in ids_on(s, known)}
-                if _new_sha(s)))
+                s for s in fix_shas(cid) if _new_sha(s)))
             if shas:
                 # The verdict word comes from lines that name THIS card, not
                 # from any red line in the round.
@@ -2021,9 +2157,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
     enqueue_cids = sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []
     for cid in enqueue_cids:
-        shas = " ".join(
-            sorted({s.split(" ", 1)[0] for s in subjects if cid in ids_on(s, known)})
-        )
+        shas = " ".join(sorted(fix_shas(cid)))
         reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
             "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED",
             shas or "(none recorded)",
@@ -3675,6 +3809,86 @@ def self_test():
                    [], 0, k)[0]
         return neg == {"F52"}, "neg=%r" % (neg,)
 
+    # F49 standing escapes E1-E5 (2026-09-25 pass, PARTIAL). Each probe runs
+    # the real CLI, starts from an empty queue, and asserts the fix is HELD.
+    # Each was run against the unfixed code first and failed there.
+    def _f49_file(d, name, text):
+        p = os.path.join(d, name)
+        io.open(p, "w", encoding="utf-8").write(text)
+        return p
+
+    @probe("F49 E1: a red verdict recorded only in a commit BODY holds the fix")
+    def _f49_e1_body():
+        d = tempfile.mkdtemp(prefix="fq_f49e1.")
+        bf = _f49_file(d, "bodies", "abc1234 Falsification pass on F49 "
+                       "came back VERDICT: PARTIAL; this commit fixes it.\n")
+        rc, out, err = run_cli(d, [], memo=[],
+                               subjects=["abc1234 tree F49: tighten detection"],
+                               cards=["F49"],
+                               extra=["--commit-bodies", bf])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return q == ["F49"], "rc=%s q=%r out=%r err=%r" % (rc, q, out, err[-300:])
+
+    @probe("F49 E2: a red verdict recorded only in cards.tsv (this round's "
+           "row diff) holds the fix")
+    def _f49_e2_cards():
+        d = tempfile.mkdtemp(prefix="fq_f49e2.")
+        row = "F49\tbuilt\t-\t-\tclaim || PASS 1 VERDICT: SURVIVES"
+        cf = _f49_file(d, "cards.tsv", row + " || PASS 2 VERDICT: PARTIAL\n")
+        cbf = _f49_file(d, "cards.before", row + "\n")
+        rc, out, err = run_cli(d, [], memo=[],
+                               subjects=["abc1234 tree F49: fix the gate"],
+                               extra=["--cards", cf, "--cards-before", cbf])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        # Control: the same diff appending a GREEN verdict holds nothing.
+        d2 = tempfile.mkdtemp(prefix="fq_f49e2c.")
+        cf2 = _f49_file(d2, "cards.tsv", row + " || PASS 2 VERDICT: SURVIVES\n")
+        cbf2 = _f49_file(d2, "cards.before", row + "\n")
+        run_cli(d2, [], memo=[], subjects=["abc1234 tree F49: fix the gate"],
+                extra=["--cards", cf2, "--cards-before", cbf2])
+        q2 = [r[0] for r in read_queue(os.path.join(d2, "queue"))]
+        return (q == ["F49"] and q2 == [],
+                "q=%r control=%r out=%r" % (q, q2, out))
+
+    @probe("F49 E3: a fix commit whose subject omits the card id is still "
+           "linked to this round's red verdict")
+    def _f49_e3_no_id():
+        d = tempfile.mkdtemp(prefix="fq_f49e3.")
+        rc, out, _ = run_cli(
+            d, [], memo=["📋 **F49 pass 1 → PARTIAL**"],
+            subjects=["abc1234 tree fix_queue: requeue only on new verdict"],
+            cards=["F49"])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        # Control: the same commit declared prose-only links nothing.
+        d2 = tempfile.mkdtemp(prefix="fq_f49e3c.")
+        ct = _f49_file(d2, "ct", "abc1234 0\n")
+        run_cli(d2, [], memo=["📋 **F49 pass 1 → PARTIAL**"],
+                subjects=["abc1234 tree fix_queue: requeue only on new verdict"],
+                cards=["F49"], extra=["--code-touch", ct])
+        q2 = [r[0] for r in read_queue(os.path.join(d2, "queue"))]
+        return (q == ["F49"] and q2 == [],
+                "q=%r control=%r out=%r" % (q, q2, out))
+
+    @probe("F49 E4: a lowercase card id (f49) is recognised on the red side")
+    def _f49_e4_lower():
+        d = tempfile.mkdtemp(prefix="fq_f49e4.")
+        rc, out, _ = run_cli(d, [], memo=["📋 **f49 pass 1 → PARTIAL**"],
+                             subjects=["abc1234 tree f49: fix it"],
+                             cards=["F49"])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        return q == ["F49"], "q=%r out=%r" % (q, out)
+
+    @probe("F49 E5: a Chinese red verdict (判决：证伪) without FALSIFIED/"
+           "PARTIAL holds the fix; a Chinese SURVIVES verdict is not red")
+    def _f49_e5_chinese():
+        d = tempfile.mkdtemp(prefix="fq_f49e5.")
+        rc, out, _ = run_cli(d, [], memo=["📋 F49 证伪 pass 1 判决：证伪（门控仍可绕过）"],
+                             subjects=["abc1234 tree F49: fix it"],
+                             cards=["F49"])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        ctl = neg_ids_on_line("🟢 F49 证伪 pass 2 判决：SURVIVES", {"F49"})
+        return q == ["F49"] and ctl == set(), "q=%r ctl=%r out=%r" % (q, ctl, out)
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -4283,6 +4497,10 @@ def main():
                          "own git diff-tree check, 1=touched non-prose files. "
                          "Omitting it reproduces pre-F89 behavior (every "
                          "subject line counts, even prose-only commits).")
+    ap.add_argument("--commit-bodies", default="",
+                    help="F49 E1: file of '<sha> <body line>' lines, one per "
+                         "line of each commit message body; read for red "
+                         "verdicts and card ids, never for green claims")
     ap.add_argument("--now", default="")
     ap.add_argument("--render", action="store_true",
                     help="print the queue as prompt text and exit")
@@ -4386,6 +4604,8 @@ def main():
     if cards_gap is None:
         cards_gap = cards_gap_reason(
             args.cards, known, args.cards_before or None)
+    card_neg = (cards_red_ids(args.cards, args.cards_before or None, known)
+                if cards_gap is None and args.cards else set())
     actions, rows, settled = update(
         args.queue, lines(args.memo_added), lines(args.commits),
         args.agents, now, known, True,
@@ -4397,7 +4617,8 @@ def main():
         ledger_before=args.ledger_before or None,
         ledger_before_sha=args.ledger_before_sha or None,
         quarantine_before=args.quarantine_before or None,
-        quarantine_before_sha=args.quarantine_before_sha or None)
+        quarantine_before_sha=args.quarantine_before_sha or None,
+        bodies=lines(args.commit_bodies), card_neg=card_neg)
     for a in actions:
         print(a)
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # The fix-patch gate, run against synthetic rounds.
 #
-# fix_queue.py has its own nine cases; this covers the part that lives in
+# fix_queue.py has its own self-test (`--self-test`); this covers the part that lives in
 # run_round.sh and that those cases cannot see: whether the gate is wired to
 # anything. F42's first version was green with the rule sitting in a prompt and
 # no instrument behind it, and F38's first falsification pass came back red for
@@ -227,6 +227,21 @@ rm -f "$WORK/queue"
 out=$(run_round_gate '+state(B8): PATCHED_V2 verified after the PARTIAL verdict' 1 \
         'state(B8): PATCHED_V2 second round complete')
 expect "a phantom id from prose is not enqueued" "" "$out"
+
+# 7b. F49 E1, through the wired path: the red verdict is ONLY in the fix
+#     commit's body. Fails if run_round.sh does not hand bodies to the gate.
+rm -f "$WORK/queue"
+out=$(run_round_gate '+- 2026-09-25T ❤️ **心跳**' 1 \
+        'F77: tighten the detection
+
+Falsification pass on F77 came back VERDICT: PARTIAL; fixed here.')
+expect "a red verdict only in a commit body holds the fix (F49 E1)" "F77" "$out"
+
+# 7c. F49 E3, through the wired path: the fix subject names no card.
+rm -f "$WORK/queue"
+out=$(run_round_gate '+📋 **F77 pass 1 → PARTIAL**' 1 \
+        'fix_queue: requeue only on new verdict')
+expect "a fix subject without the card id still holds the fix (F49 E3)" "F77" "$out"
 
 # 8. The gate has to be audible even when it has nothing to say. Its first
 #    production firing (2026-09-09 20:16) ran, found nothing owed, printed
