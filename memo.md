@@ -13263,3 +13263,39 @@ F91 参照集为空时静默不打判决）。已定位真根因并修复，不�
 专门审这次修补丁本身（agentId 见工具调用记录，不采信本轮自报）。本轮到此结束，等待判决后再
 更新卡片状态（若 PARTIAL/FALSIFIED，按契约不许标记为已解决；若 SURVIVES，把它的 STILL OPEN
 原文抄进 memo.md）。
+
+### 心跳 2026-09-26 —— F95 pass-2 fix 收到独立证伪 PARTIAL；已修正、再派发 pass-3 复核
+
+**pass-2-fix (a9ab419f) 的独立证伪结果：VERDICT: PARTIAL。** 三条：
+① 「VACUOUS BY CONSTRUCTION」理论是假的——我在 pass-2 里主张 MATCHES 桶的负控制
+「按构造不可能命中 RULE A/B 的 map，因为任何真命中该 map 的函数早已 self-select 出
+MATCHES 桶」，证伪 pass 直接反例证伪：往 map 里塞一个额外 key（0x278 -> 0x280，
+一个 RULE A/B 从不用、但确实经 x26 出现在 MATCHES 桶里的偏移），得到 `fired=163
+broke=163`，我本人独立复现同一读数。⇒ `fired==0` 在真实 map 下是一个真实、非空洞
+的读数（只是不意外），但它**不证明** RULE A/B 那 62 条具体条目本身是对的（一个错在
+MATCHES 桶从不触达的偏移上的 map 同样会读出 `fired=0`）。
+② commit/卡片里「UNEXPLAINED 158->0」是误引用的数字——只删掉新增的 6 条偏移、
+其余 56 条不动，重跑得到的是 `EXPLAINED 391 UNEXPLAINED 3`（与本卡此前记录的
+pre-fix 状态一致），不是 158。158 其实是 `prog` fixture 的函数总数，也巧合等于
+`corrupt-map`/`drop-map` 扰动下的读数，与新增的 6 条偏移无关。真实的修复效果是
+`391/3 -> 394/0`。
+③（未被判为证伪，作为待关注项记录）`thread_map.json` 是从 `out_pm` 语料自身重新
+派生出来的，随后又用来解释同一份语料的差异——同源数字/分母问题的又一变体，但证伪
+pass 未证明它使 T1-T5 闸门或「只删 6 条即复现 391/3」这个测试失效。
+SECTION 1 的 UNDETERMINED 修复被独立核实为正确，未受挑战。
+
+**本轮已修（fhp-research `a564729d`）**：
+- 撤回「self-selection 保证 fired=0」的错误论断，改为准确表述：真实 map 下
+  `fired=0` 是预期读数，不是矛盾，也不单独验证那 62 条具体条目。
+- 新增 `--perturb inject-fake`（塞入 `0x278 -> 0x280`）作为该负控制**确有威力**
+  的可复现证明；本轮独立复现 `fired=163 broke=163 rc=1`。
+- 全部 7 种扰动模式（corrupt-map/drop-map/drop-named/identity/naive/noop/
+  inject-fake）+ 无扰动跑了一遍：无扰动 rc=0 `EXAMINED 394 EXPLAINED 394
+  UNEXPLAINED 0`；7 种扰动全部 rc=1。
+- 文档里过期的「56-entry map」更新为 62。
+- `cards.tsv` F95 行订正为 `391/3 -> 394/0`，`cards_check.sh` 复核：F95 不在
+  失败列表里（失败列表仅剩已知的 F49/F122/F132 commits-not-sha 老债）。
+
+**F95 卡保持 open，未关闭。** 按契约五之四，这个修补丁本身尚未经审查，
+本轮已派发一个全新、无共享上下文的 Opus 子代理对它做第三轮独立证伪。
+本轮到此结束，等待该判决。
