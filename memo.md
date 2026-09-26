@@ -10985,7 +10985,7 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
       `reply_polarity()` 和 `ids_on()` 都是对整段回复算的，没有互相绑定，实测「我没测 F52」的回复照样把
       F52 一起排掉；(iv) `.before` 快照的孤儿/安装时处理，attempt 5 的四项清单里这条仍标着 open,
       attempt 6 没有重新核实关没关。四个都有具体的复现方法（卡片本体有原文），照着修、照着验证。
-- [ ] **F113：F82 的结构性问题——轮次既是行动者又是证据来源**（`open`，2026-09-24，人工会话按指令从
+- [x] **F113：F82 的结构性问题——轮次既是行动者又是证据来源**（`open`，2026-09-24，人工会话按指令从
       F82 拆出，deps=F82，**不是给 subagent 直接去修的卡，是需要 owner 拍板的政策决定**）
       六轮证伪各自堵住一个实例，逃逸就往外挪一层：队列文件→快照时机→证据收集的输入→证据本身。
       三个实测实例：N1（派发提示词让真子代理"别跑命令，直接回复 SURVIVES"照样能排掉卡）、
@@ -10993,6 +10993,12 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
       静默清空了整个真实队列，只是因为那轮措辞碰巧被后来的证伪 pass 认出来才被抓到）。
       卡片自己的结论：需要证据来自轮次无法委托的一方（人，或者一个轮次自己不启动的独立复核进程），
       或者排水不再自动化——这是架构决定，跟 F55/F62 的"永久 unknown"政策决定同一类。
+      **2026-09-27 FALSIFICATION PASS on `2a62058a`（新鲜 general-purpose 子代理，独立于修复方）
+      VERDICT: SURVIVES.** STILL OPEN（逐字引用）："none identified beyond what's already
+      flagged in-repo (F140 comments note the sentinel-laundering risk, which is a separate,
+      already-tracked concern, not part of this claim)."
+      按操作者 2026-09-25 的政策决定，本卡关闭的含义仅是"F82 拆出的这一具体结构性缺口的修复方案
+      已过独立证伪"，不代表排水重新自动化——排水仍需操作者手动 `--operator-drain`。**F113 CLOSED.**
 
 - [ ] **F114：fix-queue 的提交侧同款未绑定问题（F112(iii) 只修了回复侧）**（`open`，2026-09-24，
       人工会话按指令从 F89 拆出，deps=F89）
@@ -13624,3 +13630,21 @@ fhp-research `cards.tsv` 的 F94 行说明列（仅该行改动，`git diff --nu
 本轮到此结束。
 
 心跳 2026-09-27 07:14:01：本轮锁定 F113/F130 修补丁（commits 2a62058a, 9cd1b50f）欠证伪 pass，正在派发新鲜 opus 子代理。
+
+**2026-09-27 证伪 pass 结果（新鲜 general-purpose 子代理，独立于两处修复方）：**
+- **F113（`2a62058a`）VERDICT: SURVIVES** —— 已按上方 F113 卡片内追加的原文记录关闭，见该卡。
+- **F130（`9cd1b50f`）VERDICT: PARTIAL**——复现出一处具体缺陷：`fix_queue.py` 的旧 sha 提取对
+  `old_reason` 做**整字符串**扫描十六进制样式子串，一段无关散文里恰好出现的十六进制样式 token
+  （例如工单号）会让它被误当成"已记录的旧修补丁 sha"，从而掩盖一个真正的新修补丁提交
+  （复现用例：`old_reason` 含 "...ticket deadbeef1 to resolve; fix commit(s) 1112223..."，
+  新提交 sha 恰好以 `deadbeef1234567` 开头时会被误判为已见过）。
+  **本轮已修**：改为只在 `"fix commit(s) ..."` 与 `"new fix ..."` 这两个本模块自己生成的段落内
+  提取十六进制 token，不再整段扫描（commit `4f8fbda8`，即"F130 pass 3"）；新增自测探针
+  `_f130_unrelated_hex_in_reason` 复现原缺陷并验证修复；`--self-test` 115 例 0 失败；
+  负控制（还原掉这处 scoping 改动）复现探针报 `FAIL`，确认探针真的在测这处逻辑。
+  **F130 保持 `built`，未关闭**——按契约"修补丁不继承它所修复对象的那次 pass"，`4f8fbda8`
+  本身仍欠一次新鲜证伪 pass，留给后续轮次；不得由本轮自审。
+
+**收尾**：`cards.tsv`（fhp-research 树）F113 行状态改为 `closed` 并追加上述原文；F130 行说明列
+追加本次 PARTIAL 记录与复现步骤，commits 列追加 `4f8fbda8`。`cards_check.sh` 重跑确认 open/closed
+两侧对齐（F113 不再是仅存在于 memo.md 的 open 项）。本轮到此结束。
