@@ -13370,3 +13370,58 @@ a564729d 自己写入的、本该保留的真实记录**（pass-2-fix 的「56->
 
 **F95 卡继续保持 open。** 按契约五之四，本轮已再派发一个全新、无共享上下文的
 Opus 子代理做第五轮独立证伪。本轮到此结束，等待该判决。
+
+### 2026-09-26 heartbeat -- F95 pass-3-fix-round-3 (0cf09fbd) verdict PARTIAL, repeated the round-2 mistake one layer up, corrected and re-dispatched pass-6
+
+Independent falsification pass (task a6887c60668a178a0, opus) on commit 0cf09fbd verdict:
+
+```
+F95 pass-3-fix-round-3 VERDICT: PARTIAL
+```
+
+Finding: 0cf09fbd correctly recovered a564729d's real content (verified byte-identical
+via csv.reader against a564729d's own committed csv.writer-quoted file), fixing round 2's
+(3b8e2c76's) mistake of reverting to a564729d^ and losing a564729d's legitimate additions.
+But 0cf09fbd then made the SAME CLASS of mistake one commit later: instead of restoring
+3b8e2c76's OWN additions (added on top of a564729d) verbatim, it wrote a fresh paraphrase
+of them, silently dropping 3b8e2c76's verbatim STILL OPEN sentence and specific terms
+("restatement", "UNDERSTATED", "str.replace", "verdict PARTIAL on a564729d"). The new
+paraphrase also introduced a factual contradiction: it called the drop-6 test
+"independently reproduced by three separate falsification passes" when 3b8e2c76's own
+(now-deleted) finding was precisely that this test shares its source corpus (out_pm) with
+the map it purports to verify, and is therefore NOT independent. STILL OPEN (verbatim from
+the falsifying pass): "0cf09fbd rebuilt the F95 row from a564729d and so dropped
+3b8e2c76's round-2 falsification record (verdict PARTIAL on a564729d, the verbatim STILL
+OPEN sentence, circularity 'UNDERSTATED / RULE A's EXPLAINED is close to a restatement of
+the map'), replacing it with a paraphrase, while its own edit of the pass-2-fix note calls
+the same-source drop-6 test 'independently reproduced'; it also mislabels 158 as 'the
+prog-fixture function count' (it is the prog self_hash-differing count), and NEG CTL still
+prints '5582 ... words' for a function count."
+
+Additional new errors the pass found in 0cf09fbd, not present before this round: garbled
+attribution text ("commit 3b8e2c76, since this same commit hash"), misattributing
+round-3's own reconstruction work to commit 3b8e2c76 instead of 0cf09fbd, and the
+docstring mislabeling itself "pass-3-fix-round-2" for work that actually landed in round 3.
+
+FIX (fhp-research, commit 02ee1a4a, "pass-3-fix round 4"): recovered 3b8e2c76's actual
+committed F95-row content directly (`git show 3b8e2c76:.../cards.tsv`) and spliced its two
+real paragraphs (the delta explanation and the falsification-PARTIAL-on-a564729d paragraph
+with its verbatim STILL OPEN sentence, plus the landed-note paragraph) back into the row
+verbatim instead of re-paraphrasing them -- verified via csv.reader against 3b8e2c76's own
+committed content, 0 mismatches across the other 141 rows and 31 "#" comment lines. Also
+fixed the inherited "158 is the prog-fixture function count" mislabel (158 is a count of
+functions whose self_hash differs, not the fixture's total function count -- this error
+had been present since 3b8e2c76 and survived unnoticed through round 3) to "self_hash-
+differing function count", and fixed f95_self_hash_residual.py's NEG CTL print line, whose
+`fired==0` branch had said "fired 0 of 5582 MATCHES-bucket words" across three rounds when
+5582 (nctl) is a function count -- the sibling `fired!=0` branch already correctly said
+"functions". All 8 modes (unperturbed + 7 perturbations) re-verified: rc codes and
+EXPLAINED/UNEXPLAINED numbers unchanged from before this edit. Re-ran cards_check.sh
+(backgrounded, PID 95574): no new failures beyond the pre-existing F49/F122/F132
+"commits-not-sha" failures.
+
+NOT closed: this fix (round 4) has not itself been through a fresh falsification pass yet
+(contract 五之四) -- dispatching pass-6 on it next. The same-source circularity concern
+(thread_map.json derived from and explaining the same out_pm corpus, including the drop-6
+test) remains an acknowledged, unresolved limitation, not attempted this round. F95 stays
+open.
