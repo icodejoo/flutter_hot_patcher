@@ -13299,3 +13299,43 @@ SECTION 1 的 UNDETERMINED 修复被独立核实为正确，未受挑战。
 **F95 卡保持 open，未关闭。** 按契约五之四，这个修补丁本身尚未经审查，
 本轮已派发一个全新、无共享上下文的 Opus 子代理对它做第三轮独立证伪。
 本轮到此结束，等待该判决。
+
+### 心跳 2026-09-26（续）—— F95 pass-3 fix 收到独立证伪 PARTIAL（发现更严重的问题：修复本身回归）；已修正、再派 pass-4
+
+**pass-3-fix (`a564729d`) 的独立证伪结果：VERDICT: PARTIAL，且这次抓到的是我自己
+「修复」引入的新回归，比原本要修的问题更严重：**
+① 我在 pass-3 里声称已把 cards.tsv 的「158->0」订正为「391/3->394/0」，
+但独立复核发现**那次 `str.replace()` 静默没匹配上，订正文字根本没写进文件**——
+F95 行原样保留着「158->0」字样，还指向一段实际不存在的「corrected text above」。
+② 更严重：pass-3 用 `csv.writer` 整份重写 cards.tsv，**把另外 53 行不相关的卡片
+全部加上了引号并把内部引号翻倍**，还把 3 行 `#` 开头的注释行变成了非注释行
+（首字符被替换成 `"`）——**改一张卡的说明字段，波及了 53 张不该动的卡**。
+③ 我给 `--perturb inject-fake` 写的注释说它是「唯一能让 MATCHES 桶 fired 计数器
+不为零的控制」，这也是假的：`--perturb naive` 本来就能让 `fired=5226 broke=3662`；
+naive 的真实问题是规则本身太宽、会撞到普通字段，不是「fired 打不动」。
+④（记录为待关注、非本轮证伪对象）circularity 比先前描述的更重：
+`thread_map.json` 硬编码读 `out_pm/as.*.{so,shorebird}`，与 `f95_self_hash_residual.py`
+默认的 `WORK=out_pm` 是同一份语料；新增的 6 条偏移只解释了一个 stub
+（`_iso_stub_ArrayWriteBarrierStub` #1177，3 个 fixture 各计一次，本质 1-2 个独立观测
+而非 3 个）；drop-6 测试同样跑在这份同源语料上，不构成独立确认。
+
+**本轮已修（fhp-research `3b8e2c76`）**：
+- 把 `cards.tsv` 整体还原到 `a564729d^`（逐字节核对：与还原前的原文件相比只有
+  F95 那一行不同，其余 141 行与全部 `#` 注释逐字节相同），只对 F95 行的说明列
+  重新做了一次**定点字符串替换**（不再用 `csv` 模块），这次把真实的
+  `391/3 -> 394/0` 数字实际写了进去（已核对，不再是空指向）。
+- 改写 `f95_self_hash_residual.py` 的 NEG CTL 提示与文档：不再声称
+  `corrupt-map/drop-map/drop-named/identity` 能「检验 map 正确性」——它们
+  分别只碰 `0x6C0` 一个 key / 5 个非-THR 成员 / 整张 map 清空，都不能逐条验证
+  62 个条目；改为准确表述「这些扰动只证明 UNEXPLAINED 对 map 敏感」。
+- 改写 `inject-fake` 的注释，撤回「唯一」这个说法，改为准确描述它与 `naive` 各自
+  隔离了什么问题（单条错误 key vs. 大范围规则本身就错）。
+- 全部 7 种扰动 + 无扰动重新跑过一遍：无扰动 rc=0 `394/394/0`；corrupt-map/
+  drop-map/drop-named/identity/naive/noop/inject-fake 全部 rc=1（各自读数不变）。
+- `cards_check.sh` 复核：F95 不在失败列表里（失败列表仍只是已知的
+  F49/F122/F132 commits-not-sha 老债）。
+- circularity（上面的 ④）**如实记为未解决的局限**，本轮没有尝试修它。
+
+**F95 卡继续保持 open。** 按契约五之四，这个修补丁本身尚未经审查，
+本轮已再派发一个全新、无共享上下文的 Opus 子代理做第四轮独立证伪。
+本轮到此结束，等待该判决。
