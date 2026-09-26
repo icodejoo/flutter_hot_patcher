@@ -81,6 +81,16 @@ command grep -n "关键词" docs/memo_archive_20260904.md   # 再查这份（更
   未跟踪锚点仍能洗白伪造行）。真正缺的是设计决定：floor 的"已 bootstrap"状态是否要挪到
   轮次无法单方面清空的位置（同 F113 方案 (b) 的路线）。第 5 轮后再重试，重试前先解决这个设计问题，
   不要在同一层继续打补丁。详见 memo 末尾"F140 移入挂起池"心跳条目。
+- **F95：卡片文字的「修好→独立证伪→再修好」循环连续 4 次 PARTIAL，全部是同一类错误**
+  （2026-09-27 移入）：pass-2-fix、pass-3-fix、pass-3-fix-round-2、pass-3-fix-round-3
+  四次修补丁全部被判 PARTIAL，且四次的病因是同一个模式——**每次"修复"都靠手写改述
+  （paraphrase）来拼接上一手真实记录，而不是从对应提交里逐字节取出原文**，于是修好上一层
+  暴露的问题时，改述本身又在更深一层丢字/编造归属/写错标签，问题只是往下挪了一层，没被消灭。
+  已排除的假设：不是"字符集/CSV 引号转义"这类工具问题（`0cf09fbd` 已证明用 `csv.reader`
+  能无损精确复原历史内容），真正的病根是"人工改述"这个修复动作本身。真正缺的是设计决定：
+  下一次修补丁必须**机械拼接**（`git show <sha>:path` 直接取原文本 + 字符串拼接），
+  **禁止手写复述**任何一段已经落盘的历史记录。第 4 轮 pass-6 已派发但结果未回收即移入本池；
+  重试前先把"机械拼接不许改述"这条写进任务卡本体，不要在同一层继续派"再修一次"。
 
 ---
 
@@ -13439,3 +13449,26 @@ NOT closed: this fix (round 4) has not itself been through a fresh falsification
 (thread_map.json derived from and explaining the same out_pm corpus, including the drop-6
 test) remains an acknowledged, unresolved limitation, not attempted this round. F95 stays
 open.
+
+### 2026-09-27 heartbeat -- F95 moved to pending pool (4 consecutive PARTIAL verdicts, same failure class)
+
+契约已读（`docs/LOOP_CONTRACT.md` 全文）；`cards_check.sh`（fhp-research 树）rc=0
+（open 53 closed 58，与本轮开头实测一致）。round.lock 确认本轮是 ralph.sh 派发的正规轮次
+（PID 17542，`run_round.sh`），未把循环误判为并发写方。
+
+四张 built 卡欠证伪 pass（F49 F113 F121 F130）逐一核对：F121 已被 SS6 判定移入 pending pool
+（`round switches independent task`，卡片本体原文），本轮不重派；F49/F113/F130 都是
+fix_queue.py 自身的循环机械修补丁，按规则 0「SDK 本体优先于循环机械」排在后面。
+
+本轮真正的动作：F95（`shorebird` 三格里 `self_hash` 824-unit 残差定位，SDK 本体工作）的
+"修补丁→独立证伪→再修补丁"循环已经连续跑了四轮（pass-2-fix / pass-3-fix / round-2 / round-3），
+**全部判 PARTIAL，且四次的病因是同一个模式**：每次修复都靠手写改述来拼接上一手的真实记录，
+而不是从对应提交里逐字节取出原文，于是问题只是往下挪一层，没被消灭。这与 F140 移入挂起池时
+记录的"同一种修法连续失败"完全同型（契约第六节），已按同一先例把 F95 移入挂起池
+（详见"挂起池"一节新增条目），**不再派 pass-6**，留给 5 轮之后按契约重试，重试前要求
+下一次修补丁改成机械拼接（`git show <sha>:path` 取原文 + 字符串拼接），不许手写复述历史内容。
+
+`cards.tsv`（F95 卡片本体）未改动——挂起池是 memo.md 的记账动作，不改卡片状态，
+与 F140 的先例一致。`memo.md`：本节 + 挂起池新增 F95 条目。SDK 树、研究树均无代码改动。
+
+本轮到此结束。
