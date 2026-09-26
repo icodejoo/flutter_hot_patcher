@@ -13622,3 +13622,5 @@ fhp-research `cards.tsv` 的 F94 行说明列（仅该行改动，`git diff --nu
 提交 + 本 memo 心跳）。
 
 本轮到此结束。
+
+心跳 2026-09-27 07:14:01：本轮锁定 F113/F130 修补丁（commits 2a62058a, 9cd1b50f）欠证伪 pass，正在派发新鲜 opus 子代理。
