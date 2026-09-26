@@ -2134,8 +2134,17 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # it is a prefix of a recorded one or a recorded one is a prefix of
             # it -- either direction, since an old_reason can itself hold the
             # short form and a new mention can be longer, or the reverse.
-            old_shas = {s.lower() for s in
-                        re.findall(r"[0-9a-f]{7,40}", old_reason, re.IGNORECASE)}
+            # F130 pass 3: scanning the WHOLE old_reason string for hex-looking
+            # tokens lets unrelated prose (a ticket id, a commit sha cited only
+            # for context) mask a genuinely new fix commit whose prefix happens
+            # to collide with it. Reason strings are only ever built by this
+            # module (see the "fix commit(s) %s" and "; new fix %s" templates
+            # above/below), so scope extraction to those two segments only.
+            old_shas = set()
+            for seg in re.findall(r"(?:fix commit\(s\)|new fix)\s*([^;]*)",
+                                   old_reason, re.IGNORECASE):
+                old_shas.update(s.lower() for s in
+                                 re.findall(r"[0-9a-f]{7,40}", seg, re.IGNORECASE))
 
             def _new_sha(sha, old=old_shas):
                 sha = sha.lower()
@@ -3653,6 +3662,24 @@ def self_test():
         q = read_queue(os.path.join(d, "queue"))
         ok = ("requeue F77" not in out
               and [r[1] for r in q if r[0] == "F77"] == ["2026-09-17 10:00"])
+        return ok, "rc=%s out=%r q=%r" % (rc, out, q)
+
+    @probe("F130 pass 3: an unrelated hex-looking token elsewhere in the "
+           "reason (e.g. a ticket id) must not mask a genuinely new fix sha")
+    def _f130_unrelated_hex_in_reason():
+        d = tempfile.mkdtemp(prefix="fq_f130hex.")
+        # "deadbeef1" here is prose (a ticket reference), not a recorded fix
+        # commit -- it must not end up in old_shas via a whole-string scan.
+        old_row = ("F77", "2026-09-17 10:00",
+                   "blocked pending infra ticket deadbeef1 to resolve; "
+                   "fix commit(s) 1112223; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["deadbeef1234567 tree F77: real new fix for the bug"],
+            agents=0, cards={"F77"})
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("requeue F77 -- new fix deadbeef1234567" in out
+              and any(r[0] == "F77" and "deadbeef1234567" in r[2] for r in q))
         return ok, "rc=%s out=%r q=%r" % (rc, out, q)
 
     @probe("F140 control: a genuinely new sha still requeues")
