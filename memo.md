@@ -11883,7 +11883,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 **F49 证伪 PARTIAL → 保持 `built`**：五个变异今天仍能让守卫变红，但 F113 带进来一处新逃逸 E7（拆 F130），同轮自审仍能免入队 E6（拆 F131，需拍板）；E1–E5 旧逃逸仍开着，其中 E2/E3/E5 09-16 就已登记。
 
-- [ ] **F132：gen_snapshot 用 `target_os="ios"` 构建（我们一直在对 mac 目标，他们是 iOS）**（`open`，2026-09-25，deps=F124，需操作者定时机）
+- [x] **F132：gen_snapshot 用 `target_os="ios"` 构建（我们一直在对 mac 目标，他们是 iOS）**（`closed`，2026-09-26，deps=F124，三轮证伪 PARTIAL→PARTIAL→SURVIVES(fix) 后关卡）
 - [x] **F133：偏移替换规则解释不了的 17 个条目**（`open`，2026-09-25，deps=F125）
 
 **同日 F124/F125 调查（opus，只读）——今天最大的发现**：
@@ -12969,3 +12969,96 @@ open 55 / closed 56 两个集合 memo.md 与 cards.tsv 完全一致（`ok`），
 
 本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树）；`memo.md`（本条心跳 +
 F122 复选框）。本轮到此结束。
+
+### 心跳 2026-09-26 18:29 —— 派发 F132 证伪 pass（built 卡待审队列之一）
+
+三棵树（sdk/research/主仓）与引擎构建树（probefree diff 匹配）均干净，无救援需要处理。
+本轮从「built 卡欠证伪 pass」清单（F113 F121 F129 F130 F132 F49）中选了 F132（SDK 本体，
+规则0优先）——F124 发现共享 harness 长期拿 macOS 目标产物对拍 Shorebird 的 iOS 目标产物，
+F132 是把 harness 切到新建的 iOS 目标树（xcodebuild/ProductSimIosARM64）的落地卡，
+本身尚未过新鲜证伪 pass。已派 1 个 opus 子代理（general-purpose，后台，agentId 见工具结果，
+未告知用户具体号因为这是 Agent 工具非 agy）跑 tools/loop/prompts/falsify.md 七项攻击，
+CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 已按卡片原文填入，要求单卡判决行
+`F132 VERDICT: ...`。本轮到此结束，等待完成通知后按判决续写。
+
+### 心跳 2026-09-26 18:49（续）—— F132 pass 1 判 PARTIAL，同轮已修，pass 2 复审已派
+
+**F132 pass 1 判决**：`F132 VERDICT: PARTIAL`（opus，七项攻击）。核心结论（切iOS目标树）本身站得住——
+四条可证伪预测与负控制全部当场复现（1096B/1060B、arm64 ios/arm64 macos、11384 位移字→0、
+UNITS 20274→19122）。抓到两处真缺陷，本轮当场修：
+(a) `verify_all.sh` 的 iOS 陈旧守卫在 ninja 报错时（目录不存在/拼错target）"失败开"——
+只 grep stdout 计数、丢弃了 ninja 自己的 exit code，空 stdout 读成 0 pending。已改为单独捕获
+ninja rc，非零即 BLOCKED；负控制实测：坏目录/坏target 现在都报 BLOCKED，真实健康树仍是
+0 pending 不受影响。
+(b) `nc2_f66_force_noselector.sh` / `nc3_f66_dedup_multiset.sh` / `nc3_f67_pool_seen_multiset.sh`
+三个实验脚本仍默认重建 `xcodebuild/ProductSimARM64`（mac 目标树）再调 `parity_matrix.sh --reuse`
+或直接读 mac 树的二进制，而 `parity_matrix.sh` 自 F132 起默认读 iOS 目标树——三个脚本的重建
+对实际测量值零效果，是静默空跑。已把三处 `BUILD` 默认值与二进制路径改到
+`xcodebuild/ProductSimIosARM64/clang_arm64`，`bash -n` 语法检查通过，`ninja -n` 确认新目标
+可解析（0 待办步）。
+附带发现两处非阻塞性瑕疵（已写进卡片本体，非本轮代码修复范围）：F138 卡片引用的
+"68 disassemble units" 已过期，实测当前是 1190（ios）/1212（mac），是真实且与目标无关的
+残差，已更新 F138 卡片文本更正数字；mac 树的 `Version::str_` 因未重建而陈旧，使 mac/ios
+对比多出一个非目标相关的字节差变量，已记为已知瑕疵不处理。
+STILL OPEN 原样抄录：a dart:ffi fixture（bring a Pointer/NativeFunction call with struct args）
+compiled by both gen_snapshots is the only test that can show whether the kArm64IOS vs
+kArm64MacOS ABI switch (compiler/ffi/abi.cc:57, shorebird/wrapper.cc:207/275) matches theirs
+-- no fixture here exercises it.
+
+已派第二个新鲜 opus 子代理（后台）专门复审这两处修补丁本身（不复审 F132 原始结论），
+要求判决行 `F132 修补丁 VERDICT: ...`。`cards_check.sh` 在后台跑（108 张卡全量审计较慢，
+超过 120s 未完成，转后台，结果留待下一次检查）。本轮到此结束，等待 pass 2 完成通知。
+
+本轮改动文件（研究树，均未提交）：`spikes/shorebird_linkinfo_oracle/verify_all.sh`、
+`nc2_f66_force_noselector.sh`、`nc3_f66_dedup_multiset.sh`、`nc3_f67_pool_seen_multiset.sh`、
+`cards.tsv`（F132、F138 两行）。
+
+### 心跳 2026-09-26 18:52（续）—— F132 pass 2 判 PARTIAL（更窄的瑕疵），已修，pass 3 复审已派
+
+**F132 修补丁 pass 2 判决**：`F132 修补丁 VERDICT: PARTIAL`（opus）。Fix 1（`verify_all.sh` 陈旧
+守卫）在五项攻击（含 pass 1 没试过的三种错误模式：空目录/权限拒绝/ninja 缺失/坏 build.ninja）
+下全部确认修复正确，被判"fully confirmed"。Fix 2（三个 nc2/nc3 脚本切到 iOS 树）代码本身
+也确认正确（`BUILD` 默认值、ninja target、`BIN` 路径、`binsha()` 哈希对象全部一致，
+`git diff --stat` 范围干净），但抓到一处遗留瑕疵：`nc3_f66_dedup_multiset.sh`/
+`nc3_f67_pool_seen_multiset.sh` 里各有一行"Restoration proof"注释仍写着
+"the ProductSimARM64 analyze_snapshot sha256"（旧 mac 树二进制名），
+而代码 `$BIN` 早已指向 iOS 树——纯注释性瑕疵，不影响脚本行为，但违反 pass 2 明确要求的
+"包括注释里"这条判据。
+附带一条与本次修补丁无关的既有发现：`ReleaseARM64` 真实落后 ninja 11 步
+（`ninja -d explain` 指向 `il_arm64.cc`/`gen_snapshot` 比产物新），所以
+`verify_all.sh`（不带 `SKIP_STALENESS_GUARD=1`）现在会在 Release 侧就先 BLOCKED——
+这是既有事实被 pass 2 顺带核实，不是本次修补丁引入的回归。
+
+本轮已修：两处注释改为 `ProductSimIosARM64` 并加一行 2026-09-26 订正说明。
+`bash -n` 全部通过、`grep` 确认两处旧注释已消失（其余 `ProductSimARM64` 出现处均为
+"历史上默认值是……"的过去时说明，非当前行为描述）。已派第三个新鲜 opus 子代理
+（后台）专门复审这处注释修复，范围收窄、要求判决行 `F132 修补丁 VERDICT: ...`。
+本轮到此结束，等待 pass 3 完成通知。
+
+本轮改动文件（研究树，均未提交）：`nc3_f66_dedup_multiset.sh`、`nc3_f67_pool_seen_multiset.sh`
+（各追加一处订正注释）。
+
+### 心跳 2026-09-26（续）—— F132 pass 3 判 SURVIVES (fix)，卡片关闭
+
+**F132 修补丁 pass 3 判决**：`F132 修补丁 VERDICT: SURVIVES (fix)`（opus，范围收窄到 pass 2
+抓出的注释瑕疵）。两处 "Restoration proof" 注释从 `ProductSimARM64` 改名为
+`ProductSimIosARM64` 且加了订正说明，复审判定改法正确、完整，未引入新问题。
+
+**F132 卡片按契约关闭**（`cards.tsv`：`built → closed`），三轮链路完整落盘：
+pass 1 PARTIAL（本轮修 verify_all.sh 陈旧守卫失败即开 + 三个 nc2/nc3 脚本读错构建树）→
+pass 2 PARTIAL（本轮修两处过期注释）→ pass 3 SURVIVES (fix)。
+memo.md 的 F132 复选框同步改为 `[x]`。
+
+**STILL OPEN 原样抄录（卡片已关，这些是残留风险不是阻塞项）**：
+(1) `nc3_f66_dedup_multiset.sh` 里一处旧例子（`6c0af45d...`→`e420c44b...`）测的是
+09-14 的 mac 树二进制，读者可能误当成 iOS 二进制的读数，判为「历史陈述不是活的假断言」，
+补一句「measured on the mac tree, 09-14」即可解决；(2) pass 3 没有真跑实验脚本，
+"iOS 二进制上还原检查会过"是从代码推出来的，不是实测的；(3) F132 pass 1 就留着的
+dart:ffi ABI fixture 缺口仍开着（`compiler/ffi/abi.cc:57`、`shorebird/wrapper.cc:207/275`
+的 kArm64IOS vs kArm64MacOS 切换从未被任何 fixture 真正测过）——这仍是唯一能推翻
+iOS 切换 parity 结论的东西。
+
+**账面**：本轮改动的四个文件（`verify_all.sh`、`nc2_f66_force_noselector.sh`、
+`nc3_f66_dedup_multiset.sh`、`nc3_f67_pool_seen_multiset.sh`）与 `cards.tsv` 均在
+研究树 `fhp-research` 里，尚未提交。`cards.tsv` TSV 形状已核对（NF 集合与改动前一致）。
+本轮到此结束。
