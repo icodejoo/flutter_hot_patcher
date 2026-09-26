@@ -13062,3 +13062,44 @@ iOS 切换 parity 结论的东西。
 `nc3_f66_dedup_multiset.sh`、`nc3_f67_pool_seen_multiset.sh`）与 `cards.tsv` 均在
 研究树 `fhp-research` 里，尚未提交。`cards.tsv` TSV 形状已核对（NF 集合与改动前一致）。
 本轮到此结束。
+
+### 心跳 2026-09-26（续）—— F129：修补丁派发 + 证伪 pass，判 PARTIAL，卡片不关
+
+**背景**：F129（`built`，SDK 本体，`~/dart-3122/sdk` 树）欠的是「在私有副本里精确还原
+`003f2759a68` 的 revert 并存盘 diff、核验 sha256」这一步（此前 agy pass 因缺一份精确
+存盘的 diff 判 PARTIAL）。本轮先派一个新鲜 opus 子代理去做这件事（在 `/tmp/f129_work/`
+私有 worktree 里操作，共享树 `~/dart-3122/sdk` 全程未动），再派第二个新鲜 opus 子代理
+按 `tools/loop/prompts/falsify.md` 独立证伪第一个子代理的结论——两次派发都不是自己审自己。
+
+**修补丁子代理结论（partial success）**：在私有副本里精确 revert 该 commit 唯一改的那个
+hunk（`revert.diff` 已存盘，核对为该 commit 的精确逆向），分别重建 revert 前/后的
+`ProductSimARM64` gen_snapshot 并各自算出 sha256——两者互不相同（`b692f98f...` vs
+`c23cd275...`），证明这个 hunk 确实改变了产物字节；但**未能**复现此前记的两个外部参照
+sha256（reverted 应为 `010166f4cc07...`，fixed 应为 `0bec6f280ac5...`），因为跨构建目录
+不是 bit-reproducible（自己解释为 STABS/OSO 绝对路径 + LC_UUID + 代码签名三个原因）。
+
+**证伪子代理判决**：`F129 VERDICT: PARTIAL -- 同一份私有副本内的 revert/no-revert 差分
+因果关系成立，但外部不可复现的归因半真半假、且原始判据从未在这份产物上重跑`。
+七项攻击逐条过了，抓到两处真实瑕疵：
+① 修补丁子代理给的三条「为什么复现不了外部参照 sha」的理由里，只有 STABS/OSO 绝对路径
+一条经得起检验（`otool -l` 三份二进制的 `LC_UUID` 都是常量全零、`codesign -dvvv`
+显示三份都完全未签名）——**LC_UUID 与代码签名这两条是假的，不是「未证实」，是被证否**；
+② 修补丁子代理与证伪子代理都把 F129/F68 **原始判据**（`nc4_f68_pool_skip_1332.sh` 必须
+在 revert 后精确读出 `SELF_PP missing 2 / SUBGRAPH_PP missing 44`，位点在 `fn#1580`/
+`fn#1633`，pool index 1332）换成了「sha 能不能复现」这个更容易的问题——**`/tmp/f129_work`
+里完全没有重新生成 `hello`/`prog` 或重跑 `nc4` 的任何产物**，这条链回到 F68 实际症状
+（pool-index-1332 缺失）的因果关系**没有被这一轮重新确立**，只确立了「这个 hunk 确实
+改变了 gen_snapshot 字节」这个更弱的结论。
+
+**卡片处理**：`F129` 保持 `built`，不关闭。已把这条判决连同两处瑕疵原样写入
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 的 F129 行
+（`|| 2026-09-26 FALSIFICATION PASS on fix ...`），`cards_check.sh` 结构性校验中。
+**STILL OPEN（下一轮该做的具体动作）**：在 `/tmp/f129_work` 那份已重建的 reverted
+`gen_snapshot` 上，重新生成 `hello`/`prog` 并重跑 `nc4_f68_pool_skip_1332.sh`，核对
+是否精确读出 `missing 2/44`；同时订正「LC_UUID/代码签名」这条错误归因的表述
+（只保留 STABS/OSO 绝对路径这一条成立的原因）。
+
+**账面**：本轮只写了 `cards.tsv`（研究树 `fhp-research`），未动共享 SDK 树、未动
+`memo.md` 之外的 flutter_hot_patcher 树文件（本条 memo 更新本身待落盘提交）。
+`~/dart-3122/sdk` 全程 HEAD 未变（`98c95873b72`）、`git status --porcelain` 全程干净。
+本轮到此结束，等待 `cards_check.sh` 结构性校验的最终读数后再提交。
