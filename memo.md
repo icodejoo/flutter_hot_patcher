@@ -13174,3 +13174,62 @@ PARTIAL 进入 pending pool」的告诫同型（这是本卡针对*本次修复*
 本轮到此结束，不再派发第三轮修补——留给后续轮次按契约第 6 节的常规节奏处理，
 其中 M2/M6 揭示的无守护回归风险应作为下一次修补的最高优先项（比 E1/E3/E5 的真实形态覆盖更急，
 因为它是完全没有测试覆盖的静默失效面，不是「覆盖不全」而是「零覆盖」）。
+
+### 心跳 2026-09-26 21:38 —— built 卡（F113/F121/F129/F130/F49）本轮无新动作，转 SDK 本体 F95
+
+**built 卡优先级复核**：F121（SDK 本体）仍在 pending pool（连续 3 次 PARTIAL，卡片自己写明
+"round switches independent task"，不追加第 7 次同型证伪）。F129 的证伪 pass 已在本轮之前完成
+（PARTIAL，见上一条心跳）。F113/F130 已在 F140 派发中被独立审查过。F49 上一条心跳刚拿到新鲜
+PARTIAL 判决（未到连续 3 次），按契约本轮不再重派同一张卡——转向规则 0 优先的 SDK 本体任务。
+
+**发现一处「产物已提交、卡片从未更新」**：`fhp-research` 树的 `f95_self_hash_residual.py`
+在 `a0c2a645`（2026-09-24）已完成对 F95（`shorebird` 格 `self_hash` 824-unit 残差定位）的
+实质分析并提交，但 `cards.tsv` 的 F95 行**从未被那次提交更新**——三个月的分析结论只活在
+commit message 里，卡片仍是 2026-09-21 创建时的原始 `open` 状态。这正是契约第五之四节
+"完成度不能只存在于提交信息里"那条的又一实例。
+
+**重新实测**（不采信旧 commit message 的数字，那是 F132 于 2026-09-25 把共享 `out_pm`
+切到 iOS 目标、重新生成之前的读数）：`python3 f95_self_hash_residual.py` 在今天的
+`out_pm` 上重跑，得 `self_hash` 差异 394（hello 118 / base_dd 118 / prog 158，全部
+RAW-only，0 LEN/KIND-differs），`RESIDUAL EXAMINED 394 EXPLAINED 391 UNEXPLAINED 3`
+（成因：`dart::Thread` 成员偏移重写规则，F88 的 THR 寄存器映射表 + `f88_root_buckets.tsv`
+里另外具名的 5 个非 THR 寄存器路径成员；负控制对 5582 个已匹配函数应用同一重写规则，
+破坏 0 个）；3 个未解释项全部是同一个 stub `[Stub] _iso_stub_ArrayWriteBarrierStub`
+（#1177），是 F88 已命名过的既有 locus，不是新缺口。**同时发现一处需要标注的疑点**：
+脚本 SECTION 1（卡片指定的强制前置检查——先核对是否与 F91 的 178 函数集合重叠）读出
+`0/0`（F91 集合与交集均为空），但该检查比对的是 `out_f88`（旧 macOS 目标产物）与
+`out_pm`（F132 之后重生成的 iOS 目标产物）——两者目标平台不同，这个「0 重叠」有多大
+可信度尚未核实，已写入卡片供后续证伪 pass 专门核查。
+
+**账面**：已把上述发现原样写入 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`
+的 F95 行（先前有一次自己的失误：初稿把追加文字接进了第 7 列"commits"而不是第 5 列"description"，
+导致 `cards_check.sh` 报 `F95(commits-not-sha)`；已定位并修正到正确列，`cards_check.sh` 复跑后
+F95 不再出现在失败列表里，仅剩三张已知的既有失败 F49/F122/F132（各自卡片文本已自述为既有结构性
+欠账，非本轮引入））。已派一个新鲜 Opus 子代理（general-purpose，后台）按 `falsify.md`
+独立证伪这份重新实测的结论，重点要求它核查上述 out_f88/out_pm 目标不一致的疑点、脚本内
+RULE B（非 THR 寄存器白名单）是否为拟合而非真实机制、以及负控制是否真的被扰动过并观察到变红。
+等待判决后再决定是否更新卡片状态；按契约本轮到此结束，`cards.tsv` 尚未提交（等独立判决落地后
+一并提交）。
+
+### 心跳 2026-09-26 22:1x —— F95 独立证伪 pass 落地，判 PARTIAL，卡不关
+
+派出的新鲜 Opus 子代理（task `a837cc341b806c0b1`）判决 **`VERDICT: PARTIAL`**（非 SURVIVES）。
+四条实质性缺陷：
+① **负控制结构性不能变红**——5582 个已匹配函数里没有一个真正命中 RULE A/B 的任何 map key，
+「应用同一重写规则破坏 0 个」不是证据，是这套 map 从未在那个集合上被真正行使过；
+② **3 个 UNEXPLAINED 不是独立于 F88 的新 locus，是 F88 自己那张 THR 偏移表缺了 6 条记录**
+（`0x6a0/0x6a8/0x6b0` 各 `+0x10`，`0x718/0x720/0x728` 各 `+0x20`）——补上这 6 条后
+`hello #1177` 与 `prog #3046` 残差归零（此前我写的 "prog #1177" 是错的，正确是 `#3046`；
+且 hello/base_dd 因产物逐字节相同被重复计数了两次）；
+③ SECTION 1 的 F91 重叠检查在**空集合**上做比较（`out_f88` 是切换前 mac 目标旧产物，
+`out_pm` 是 F132 之后的 iOS 目标新产物，两侧不可比），空集合上「交集为 0」不能说明任何事；
+④ RULE B 的 5 个非-THR 白名单成员的「部分拟合」自述未经验证。
+**COST OF BEING WRONG（pass 原话）**：F55 shorebird 格的 `self_hash` 788 units 会被凭一个
+不可能变红的负控制记成「已由 Thread 偏移解释」，`ArrayWriteBarrierStub` 残差会被错误地钉在
+F88/F124 头上而不是靠补全 map 真正修掉；F125/F133 的结构性论断依赖同一张 map，缺口也会藏在那里。
+
+**处置**：F95 卡**保持 `open`，不关**（PARTIAL 不许关卡）。已将这份判决原样写入
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 的 F95 行第 5 列（描述列，
+用与上次同样的按 tab 拆列方式写入，未破坏 7 列结构）。**下一步不在本轮做**：把 6 条缺失偏移
+补进 F88 的 `thread_map.json`，并重新设计一个真正能被扰动变红的负控制（例如从已匹配集合里
+挑出真正命中 map key 的子集，而不是任取 5582 个）。按契约本轮到此结束。
