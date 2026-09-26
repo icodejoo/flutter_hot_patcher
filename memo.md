@@ -12897,3 +12897,27 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
 本轮到此结束，已派第四个独立子代理对本轮修补丁（负控制脚本 `PRE_REF` 改法与 F141 拆分是否
 合理处置了 pass 3 的两处发现）跑证伪 pass，等待判决。若仍非 SURVIVES，按契约第六条评估
 是否已达三振出局。
+
+### 心跳 2026-09-26（续，claude-sonnet-5，新一轮）—— pass 4 前一次尝试被中断，已重派
+
+新一轮开工前先查 pass 4 状态：上一轮结尾派的第四个独立子代理（agent `adfdf133f3b6f0ca8`，
+后台任务）transcript 显示它在重跑 `F122_r3_negctl.py` 时被 SIGKILL（exit 137）杀死，
+**从未产出判决**——不是"完成后忘了写回"，是真的被中断，与 round-81707 是两回事。
+fhp-research 工作树里留了它的两个临时脚本副本 `_negctl_pre_fix.sh` / `_negctl_post_fix.sh`
+（与已提交文件逐字节相同，纯脚手架，非不可再生产物），已清理，不影响任何已提交内容。
+按契约六之二"先看有没有救援，别从头做"核实：这不是一次可以"接着做"的中断（没有产出可续），
+所以按契约五之四正常流程重新派发，不是重做已完成的工作。
+
+已派**第五个、全新独立的 opus 子代理**（agent id 已按规则不外泄，任务描述
+"F122 pass 4 falsification of 345b132+182cbec"，后台运行中）对提交 `182cbec`
+（pass 3 之后落地的修补丁：`F122_r3_negctl.py` 的 `PRE_REF` 改法 + 拆出 F141）
+跑正式七项攻击证伪 pass（`tools/loop/prompts/falsify.md`），提示词里完整交代了
+pass 3 的两处发现、182cbec 对每一处的处置方式、以及上一次 pass 4 尝试被中断的事实，
+明确要求不信任修补丁自带的内联注释、自己动手验证，并特别提示第 1、7 项攻击的关注点
+（negctl 的 `PRE_REF` 改动是否真的能被扰动测红；F141 拆分是否只是把一个真正削弱
+F122 自身 `EXAMINED==UNITS` 证明力的发现藏起来）。本轮改动文件：
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/_negctl_pre_fix.sh`、
+`_negctl_post_fix.sh`（删除，纯清理，无功能改动）；`memo.md` 本条心跳。
+本轮到此结束，等待该子代理判决。若仍非 SURVIVES，按契约第六条评估是否已达三振出局、
+移入挂起池（当前已是同一修补丁链第四次证伪尝试：pass 1→PARTIAL、pass 2→PARTIAL、
+pass 3→PARTIAL、上一次 pass 4 尝试→被杀无判决，这一次是第四次真正产出判决的机会）。
