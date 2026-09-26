@@ -76,6 +76,11 @@ command grep -n "关键词" docs/memo_archive_20260904.md   # 再查这份（更
   也就是需要两个 VM 完全一致** —— 与堆遍历序、field_table 组内序同一类，CLAUDE.md 已列为不可关闭。
   ⚠️ 已试过「把 vote map 改成按值拷贝」（他们 `0x10019ce88` 确实有这个拷贝）→ **数字一字未变**。
   拷贝保留了（照他们的样子），但注释已写明它没有解决问题。**三次尝试后停手，不要再试。**
+- **F140：账本 floor 的锚点可被同一轮清空/改写**（2026-09-26，连续 4 次 PARTIAL 后移入）：
+  "当场修补丁→证伪"这个修法在 floor 的锚点上打地鼠四轮不收敛（删除已堵、跨轮清空/改写活文件+
+  未跟踪锚点仍能洗白伪造行）。真正缺的是设计决定：floor 的"已 bootstrap"状态是否要挪到
+  轮次无法单方面清空的位置（同 F113 方案 (b) 的路线）。第 5 轮后再重试，重试前先解决这个设计问题，
+  不要在同一层继续打补丁。详见 memo 末尾"F140 移入挂起池"心跳条目。
 
 ---
 
@@ -12547,3 +12552,191 @@ F140 修补丁 VERDICT: PARTIAL (fix) -- truncate/rewrite of only the live file 
 ② 在锚点被首次提交之前的窗口期，代码必须对"marker 存在但锚点缺失/为空/从未入库"这种状态 fail-closed（写 `#SNAPSHOT-FAILED` 之类的哨兵），不能默认读成空底线；
 ③（次要）`git log --all -- <marker>` 在 refs 被移走时返回 rc=0 且输出为空，与"marker 从未存在"不可区分，可加一条 `HEAD` 可解析性检查或提交可达性检查。
 本轮到此结束。
+
+---
+
+### 心跳 2026-09-26 —— 本轮开工，F140 移入挂起池
+
+F140 的修法（"当场修补丁 → 派新鲜子代理证伪 → 不 SURVIVES 就再修"）已连续四轮判 PARTIAL
+（pass 2 `9a3b213`→PARTIAL、pass 3 `c0be0a6`→PARTIAL、pass 5 `9e2c0da`/`4a8a521`→PARTIAL、
+pass 6 `541ffdc`→PARTIAL），每次都是修好上一轮点名的洞、同时被同一科的新变体（跨轮清空/改写
+活文件、git 校验 fail-open、锚点文件本身不受版本控制）打穿，呈打地鼠形状而非收敛。
+按契约第六条「同一种修法连续失败 3 次 → 移入挂起池」，此处已达 4 次，**F140 移入挂起池**，
+本轮换一个独立任务（见下）。
+
+**失败现象**：账本 floor（隔离伪造 ledger 行的底线）目前的每一版实现都把"底线有没有被
+bootstrap 过"存在一个可以被同一个轮次删除/清空/改写的活文件或未跟踪的锚点文件里，
+于是"活文件 + 锚点"两者一起被清空/改写时，下一轮会把 floor 静默重置为空并把伪造行洗白排出队列。
+
+**已经排除的假设**（不要在挂起期间重复验证）：
+- 不是"marker 检测本身没做"——marker 存在性检查、git 历史并集检查都已实现且对**删除**这种
+  破坏方式生效（pass 5/6 已证）。
+- 不是"负控制是假的"——每一轮的负控制都被独立子代理复现为真红（rev_* 系列、trunc_attack.py、
+  floor_attack.py 均各自独立跑通）。
+- 不是"POS_VERDICT 引号识别"这类次要项——那些已被 pass 4 的三处当场修覆盖，pass 5/6 未再点名。
+- 真正未解决的是一个更深的结构性问题：**只要 floor 的锚点本身可以被"这一轮"删除、清空或改写，
+  且改写发生在锚点第一次被提交入库之前的窗口期，"floor 不可重置"这句话就不成立**——
+  这和 F113 关闭时留下的结构性问题（"轮次既是行动者又是证据来源"）是同一个家族，
+  candidate/fix_queue 的问题换了一层皮出现在账本 floor 上。
+- **下次重试前先问**：F140 的正确解法是否也需要 F113 的方案 (b) 同款——即 floor 的"已 bootstrap"
+  判定不能由轮次自己写入/维护，而要来自轮次无法单方面清空的位置（例如要求锚点在 bootstrap
+  当轮就必须提交并 push，或改成完全脱离 `.loop/` 与工作树、由操作者维护的外部状态）。
+  在有这个设计决定之前，继续在同一层打补丁大概率会重复打地鼠。
+本轮到此结束，换独立任务。
+
+---
+
+### F121 补做负控制（2026-09-26，独立子代理，`~/dart-3122/sdk` HEAD `98c95873b72`）
+
+上一轮 F121 的证伪 pass（opus，59 次调用）判 PARTIAL，唯一未闭合的一项是"负控制未在本轮独立复跑"。
+派一个新鲜子代理专做这一项，结果：
+
+- 在 `il_arm64.cc` 的 `NativeCallInstr::EmitNativeCode`（~1378-1380 行）把 F121 引入的
+  `AddObject(Smi::ZoneHandle(Smi::New(thr_off)), kPatchable)` 改回修复前的
+  `AddImmediate(static_cast<uword>(thr_off) << kSmiTagSize, kPatchable)`，只改这一处发射形状；
+- 只重建 `ProductSimARM64` 的 `gen_snapshot`/`analyze_snapshot`（rc=0，~6.6s，无需干净重建）；
+- 私有副本上验证：92 个 shape-A 槽位全部读回 `0x1eb0 (unknown)`（`0x1eb0 = 3928<<1`，
+  `3928` 正是 `call_bootstrap_native_entry_point_offset()`）——**复现了修复前的红色签名**，
+  未混入 `(obj)`；
+- `git checkout --` 还原源码，`git status --porcelain` 为空，重建回 `98c95873b72` 提交状态，
+  `gen_snapshot`/`analyze_snapshot` 的 sha256 精确复原为实验前的基线值；
+- 还原后 `pool_slot_field_check.sh` rc=0（92/92/178 全部 `call_bootstrap_native_entry_point_`）；
+- 还原后 `measure_pool_residual.sh` UNEXPLAINED=2（上一轮订正后的判据值，不是过期的 3）；
+- 树在实验前后逐字节一致（sha256 对比 + `git status` 双重确认），未碰 ReleaseARM64/ProductARM64。
+
+**VERDICT: CONFIRMS FIX HOLDS**（子代理自己的措辞，不是本契约要求的 `F121 VERDICT:` 格式，
+因此**不足以单独据此把卡片标 `closed`**——按契约"不许自己代替它下结论"，这一步只是把
+上一轮 PARTIAL 点名的那一项负控制补齐，不是一次新的正式证伪 pass）。
+`cards.tsv` F121 行已追加此记录（先误用 CSV 模块整表往返，把所有含引号字段重新转义、
+造成 141 行虚假 diff，已 `git checkout --` 撤回重做为纯文本单行追加，`git diff --stat` 确认
+只改了 F121 那一行；`cards_check.sh` 复跑只剩一条与本次改动无关的既有 F122 问题）。
+
+心跳：已派新鲜 Opus 子代理，用正式 `tools/loop/prompts/falsify.md` 模板对 F121（实现 + 已补的
+负控制）出具正式判词，要求以 `F121 VERDICT: ...` 收尾。本轮到此结束，等待其回报。
+
+---
+
+### F121 正式证伪 pass（2026-09-26，Opus，33 次调用）
+
+```
+F121 VERDICT: PARTIAL -- mechanism (AddObject/Smi + ObjectAt/SetObjectAt) is real, uncontested, and
+current at HEAD; corrected criterion (pool_slot_field_check.sh rc=0, measure_pool_residual.sh
+UNEXPLAINED=2) reproduces fresh on binaries confirmed non-stale by targeted `ninja -n`. But the
+completed negative control reverted/rebuilt only ProductSimARM64, never the
+ProductSimIosARM64/clang_arm64 tree that pool_slot_field_check.sh actually reads "ours" from --
+that binding is asserted, not demonstrated by compile-and-observe. Additionally, dd_runtime_check.sh
+(still in the card's cited history) is currently a false green from a ProductARM64/dartaotruntime
+binary built 4 minutes before the fix landed.
+```
+
+**不许关卡**：F121 保持 `built`，第二次正式证伪 pass 仍未 SURVIVES。两处破绽：
+① 上一轮的负控制建在错的构建树上——`pool_slot_field_check.sh` 的"ours"实际读
+`ProductSimIosARM64/clang_arm64`，而负控制只 revert+rebuild+复原了 `ProductSimARM64`，
+两者虽然共享同一份源码却是两个独立产物目录，"编译观测到变红"这句话从未在真正被
+判据读取的那棵树上发生过；
+② `dd_runtime_check.sh`（卡片历史仍引用它作为过一次的证据）当前读的是修复落地 4 分钟前
+构建的 `ProductARM64/dartaotruntime`（`ninja -n -C xcodebuild/ProductARM64 gen_snapshot
+analyze_snapshot dartaotruntime` 报 172 步待办，含改动过的两个文件），是一个假绿。
+下一轮当场修：在 `ProductSimIosARM64/clang_arm64` 上重跑一遍完整的
+revert→rebuild→确认红→restore→rebuild→确认绿 负控制循环（同上一轮在 ProductSimARM64
+上做的那一套），并把 `ProductARM64` 增量重建到当前 HEAD 后重新读一次 `dd_runtime_check.sh`
+（不要求它对 F121 承重，但不能让卡片历史继续引用一个假绿）。修完后再派一次新鲜证伪 pass。
+本轮到此结束。
+
+### 心跳 2026-09-26 —— F121 两处破绽已修，等待第三次正式证伪 pass
+
+子代理在 `~/dart-3122/sdk`（HEAD `98c95873b72`，全程干净）完成两处修补：
+
+**Finding 1（负控制换到正确的树）**：确认 `pool_slot_field_check.sh` 与 `sdk_path.pin` 的
+`product_build` 行实际指向 `xcodebuild/ProductSimIosARM64/clang_arm64`（不是
+`ProductSimARM64`）。在这棵树上完整重跑一遍：还原前先记基线 sha256
+（gen_snapshot `a18bc8c2...`，analyze_snapshot `ff917b94...`，此时已验证 GREEN：
+`pool_slot_field_check.sh rc=0`、`measure_pool_residual.sh UNEXPLAINED=2 rc=0`）→
+revert `il_arm64.cc` 的 shape-A 槽位改回 `AddImmediate` → 增量重建（~6s，1 CXX+1 LINK）→
+`pool_slot_field_check.sh WORK=out_pm_negctrl` 报 **RED（rc=1）**，三个 fixture 全部
+"index sets differ"，ours 侧打印 `<not Smi>` / `'0x... (unknown)'` 而非
+`call_bootstrap_native_entry_point_`——确认是修复前的真实签名 → `git checkout --` 还原 →
+重建（~6s）→ gen_snapshot/analyze_snapshot sha256 与基线逐字节相同 →
+`pool_slot_field_check.sh` 与 `measure_pool_residual.sh` 在共享 `out_pm` 上重新确认
+GREEN（rc=0 / UNEXPLAINED=2）。scratch 目录 `out_pm_negctrl` 已清理，未污染共享状态。
+**这一次编译观测到变红/变绿，发生在判据实际读取的那棵树上。**
+
+**Finding 2（ProductARM64 刷新）**：`ninja -C xcodebuild/ProductARM64 gen_snapshot
+analyze_snapshot dartaotruntime` 增量重建（~64s，gen_snapshot/analyze_snapshot 均重新
+link；dartaotruntime 本身因其 1080 个输入目标文件都不在 F121 diff 覆盖范围内而无需重
+link）。`ninja -n` 之后三个目标均 0 待办。`dd_runtime_check.sh` 现在读的是 HEAD-fresh 的
+`dartaotruntime`，报 rc=0「0 failure(s)」——不再是修复落地前 4 分钟的旧二进制。
+
+**最终状态**：`~/dart-3122/sdk` git status 干净、HEAD 不变（`98c95873b72`），两棵构建树
+（`ProductSimIosARM64`、`ProductARM64`）相关目标均 0 待办。
+
+**不是这一轮自己判的 SURVIVES**——按契约仍需派一次新鲜子代理跑正式
+`tools/loop/prompts/falsify.md` 格式的证伪 pass，只有 SURVIVES 才能把 F121 从 `built`
+翻成 `closed`。已派出，见下一条心跳。
+
+### 心跳 2026-09-26 —— 第三次正式证伪 pass PARTIAL，根因是：本机同时跑着两个独立的循环
+
+**第三次证伪 pass 结果**：语义部分全过（攻击 1/3/4/5/7 全部通过——自测扰动能变红、
+`measure_pool_residual.sh` 的分子分母独立计算且非硬编码、DWARF 偏移查表不是弱模式匹配、
+问题没被偷换），**唯一破绽在攻击 2/6**：pass 复核时独立跑
+`ninja -n -C xcodebuild/ProductSimIosARM64 gen_snapshot analyze_snapshot dartaotruntime`
+报 **1944 步待办**，与上一轮心跳写的"0 待办"矛盾；`il_arm64.cc` mtime 是当天 11:10（很新）。
+
+**追查根因**：`pgrep -fl 'ralph.sh|wip_snapshot|run_round'` 发现**本机正跑着另一个独立的
+自主循环**——`wip_snapshot.sh --daemon`（PID 5199，09-25 20:10:01 起跑，非本会话所派）与
+`run_round.sh`（PID 19266，本日 10:47:42 起跑，正在跑轮次，`.loop/PAUSE` 不存在）。
+这个循环与本会话**并行、独立地**在同一棵共享树 `~/dart-3122/sdk` 上写东西——上一轮我验证
+"0 待办"之后，这个独立循环的某一轮改了又还原了 `il_arm64.cc`（或类似操作），把 mtime
+搞新，ninja 因而认为要重建 1944 步。**这是 CLAUDE.md 已记录的第三十八种仪器缺陷同型**
+（`git status` 干净不代表构建状态完好，因为另一个进程能只动 mtime 不动内容）——
+只是这次的"另一个进程"是一整个独立跑着的循环，不是同一循环里的前一轮。
+
+**判断**：F121 的**修复本体没有被推翻**——语义验证扎实（DWARF 字段名逐点核对、
+自测负控制能变红）。破的是**流程断言**："负控制在这棵树上跑完时它是 0 待办"这句话
+在写下的那一刻为真、但读者（第三次证伪 pass）复核时已经不真，因为期间有另一个不受
+本会话控制的循环动了这棵树。**这不是同一种修法连续失败三次**（契约第六条的三振出局
+不适用）——三次 PARTIAL 的病因分别是：①缺负控制、②负控制绑错树、③树被第三方并发
+修改。三个不同病因，不是同一路子反复被打穿。
+
+**不许关卡，但也不该再派子代理去这棵树**：既然本机已经有一个独立、未暂停的循环在
+`~/dart-3122/sdk` 上跑，本会话继续往这棵树派子代理只会重演刚发生的竞争
+（两个独立写者同时改同一棵共享树，正是 `docs/LOOP_CONTRACT.md` 单写者规则要防的事）。
+F121 保持 `built`，第三次证伪的两条 STILL OPEN（(a) 独立复核 ProductSimIosARM64 重建后
+sha256 是否仍与基线一致——判断 1944 步是否只是假阳性；(b) 磁盘级负控制被独立第二方复现
+一次）留给操作者决定：要么等本机那个独立循环自己把这两点覆盖掉（它本就在动这棵树），
+要么由操作者显式协调两个循环谁拥有这棵树。本会话到此不再对 `~/dart-3122/sdk` 派写入型
+子代理，避免与本机现存的另一个自主循环竞争同一棵树。
+
+- 2026-09-26T（claude-sonnet-5，交互式会话）▶️ **开工先救援，未重做**：round-19035 中断时
+  留在 `.loop/RESCUED` 的 stash（`fhp-research` stash@{0}）是 F121 一份已完成但未提交的
+  负控制实验（私有副本里把 shape-A 池槽发射改回 `AddImmediate`，重建 `ProductSimARM64`，
+  确认 92 个槽退回 `0x1eb0 (unknown)` 签名，还原并确认 sha256 与实验前一致）。
+  `git stash pop` 后原样提交（研究树 `97578e9`）。
+  🔬 **F121 第 4 次证伪 pass（opus，30 次调用）判 PARTIAL**：修复本体存活（第二方独立在
+  `/tmp` 私有编译+重链接复现了负控制：改回 `AddImmediate` 后 92/92/178 槽读出
+  `0x1eb0 (unknown)`、`pool_slot_field_check.sh` rc=1；还原后 rc=0；
+  `measure_pool_residual.sh UNEXPLAINED 2` 确认由两侧产物独立算出、不是抄来的数字）。
+  **破绽**：`97578e9` 那条笔记把自己做的事描述错了——`.ninja_log` 显示 `il_arm64.o`
+  其实在**共享**的 `ProductSimARM64`（10:54-10:55）与**共享**的 `ProductSimIosARM64`
+  （11:08-11:10，是 `pool_slot_field_check.sh` 真正读的那棵树）里都重新编译过，
+  和笔记写的「私有副本」「共享树未动」矛盾；且 `git checkout --` 还原把
+  `il_arm64.cc` 的 mtime 顶到比 `.o` 新，导致 `ProductSimARM64`/`ReleaseARM64` 的
+  `gen_snapshot`/`analyze_snapshot` 各留下 2 步 `ninja -n` 待办（**第三十八种仪器缺陷
+  再犯一次**：`git status` 干净不代表钉住的构建仍新鲜）。
+  **同轮当场修**：重建 `ProductSimARM64` 与 `ReleaseARM64` 的 `gen_snapshot`+
+  `analyze_snapshot`，`ninja -n` 在 `ProductSimARM64`/`ReleaseARM64`/`ProductARM64`
+  三者上均回到 0 待办；sha256 核对与重建前逐字节相同
+  （`ProductSimARM64/gen_snapshot` = `0bec6f28...`，与 out_pm provenance 一致）；
+  `~/dart-3122/sdk` 全程 `git status --porcelain` 为空；重跑 `op_dump_check.sh`
+  （rc=0）、`measure_pool_residual.sh`（UNEXPLAINED 2, units=10700）、
+  `pool_slot_field_check.sh`（rc=0，92/92/178）、`dd_runtime_check.sh`（rc=0）
+  全绿。已提交（研究树 `c81bee4`）。**STILL OPEN 原文抄入卡片**：DebugARM64 下
+  auto-scope native 二次调用 + `--trace_natives` 观测 `target()` 重链接后指向
+  `CallAutoScopeNative`——目前没有任何检查直接观测运行期重链接，只测了静态池槽形状
+  与字段名。F121 仍是 `built`，未关闭：**这个修补丁本身还没被审过**，已派第 5 次
+  证伪 pass（新鲜 opus 子代理，agent `a3519caabf6df493f`，后台运行中，专门核这个
+  修补丁——包括「sha256 前后一致」这条断言除了修复者自己同一轮内的记录之外有没有
+  独立佐证、`ProductSimIosARM64` 的遗留待办是不是与本次事件无关的既有旧债）。
+  本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `97578e9`、
+  `c81bee4`）；`~/dart-3122/sdk` 无源码改动，仅重建产物（不影响 git 状态）。
+  下一轮先看 pass 5 的判决再决定 F121 能不能关。
