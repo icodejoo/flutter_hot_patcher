@@ -13103,3 +13103,29 @@ sha256（reverted 应为 `010166f4cc07...`，fixed 应为 `0bec6f280ac5...`）�
 `memo.md` 之外的 flutter_hot_patcher 树文件（本条 memo 更新本身待落盘提交）。
 `~/dart-3122/sdk` 全程 HEAD 未变（`98c95873b72`）、`git status --porcelain` 全程干净。
 本轮到此结束，等待 `cards_check.sh` 结构性校验的最终读数后再提交。
+
+### 心跳 2026-09-26 20:29 —— 救援 stash 核实为冗余已清理；派发 F49 标准逃逸修复
+
+**RESCUED 处理**：`.loop/RESCUED` 指向的 `fhp-research` stash（`loop-rescue
+2026-09-26T15:24:56 round-81707`，改动 `evidence_disassemble_residual.sh` 一处
+hunk）经核实与当前 HEAD **逆向可干净应用**（`git apply --check --reverse` 成功）
+⇒ 内容与 HEAD 逐字节相同，说明这份中断时的工作已在后续轮次（F122 pass 3/4，
+commit `14b1cf2b`/`182cbec`/`345b132`/`525174cd`）被独立重做并落地过。已确认
+内容冗余后清理掉该条并删除 `.loop/RESCUED`，未重做任何工作。
+
+**built 卡优先级复核**：F121（SDK 本体）已连续 3 次 PARTIAL 撞同一个
+defect-#38（ninja staleness whack-a-mole），卡片自己的 SS6 记录写明「earliest
+pending-pool 5 rounds contract SS6. round switches independent task」——按契约
+第六节移入挂起池，本轮跳过，不追加第 7 次同型证伪。F129 的证伪 pass 已在
+本轮之前的轮次完成（`5bc9b46c`），不重派。F113/F130 的最近一次修复
+（commit `2a62058`/`9cd1b50`）经核实**已经**在 F140 的派发中被独立审查
+（PARTIAL，问题已拆入 F140 自身），不构成本轮待办。
+
+**本轮实际派发**：F49（`built`）标准逃逸 E1-E5 五处仍未修复（详见 cards.tsv
+F49 行 2026-09-25 pass）：E1 红判决只在 commit body、E2 只在 cards.tsv、
+E3 fix commit 标题缺卡号、E4 小写卡号、E5 中文红判决缺 FALSIFIED/PARTIAL
+英文 token；外加 `run_round.sh:407` 陈旧文案（"9 cases, 5 negative controls"
+应为 76）。已派一个新鲜 Opus 子代理（general-purpose，后台）实现这五处修复
++ 自测负控制 + `test_fix_gate.sh` + 修正陈旧文案 + 提交（要求 commit subject
+含 "F49"）。子代理被要求不碰 cards.tsv/memo.md，只报告状态摘要。等待完成
+通知后再派独立证伪 pass（不可由实现方自己判定），按契约本轮到此结束。
