@@ -12834,3 +12834,36 @@ F121 保持 `built`，现处于挂起池，**契约要求每 5 轮回头重试�
 ### 心跳 （续）—— F122 修补丁第二次证伪判 PARTIAL，本轮到此结束
 
 第二个新鲜 opus 子代理（与提交 `5afa4b2` 的子代理完全独立）对该修补丁跑了正式七项攻击证伪 pass，判 **PARTIAL (fix)**：原先两处被点名的破绽（backward_anchored、名字白名单）确认已关（自建负控制 A100/C 独立复现，UNEXPLAINED 1190→1192、1194→1302，均与提交时自报数字一致）。**但发现两处新破绽**：①`offset_diff==0` 的点被无条件当作已验证锚点，从不检查该点是否满足 `offset[K]+size[K]==offset[K+1]`（即无重叠/无缝隙）——控制 E（单对象伪造：`FfiCallbackTrampoline` 的 offset -1344、size +1344）让新旧两版 UNEXPLAINED 都从 1190 掉到 922，"修复本应恢复的单调性"仍不成立；②`KNOWN_SIZE_DIFF_OBJECTS` 里 `ArrayWriteBarrierStub: 36` 是 mac 目标的期望差值，当前 iOS 产物真实差值已是 0（F132 切换所致），控制 A36（+36B 及其 202 对象级联）在新代码上仍 0 新增 UNEXPLAINED——回归到 mac 的 LSE/LLSC 路径会被静默判"已解释"。已写入 `spikes/shorebird_linkinfo_oracle/cards.tsv` F122 行（研究树 `b06fc93`，先前误写进了错误的列，已订正只改动该行的 note 字段）。**F122 仍是 `built`，未关闭**，且这是继 `748fbf2` 之后的第二轮真实破绽（不是同一根因的打地鼠——两次是完全不同的两类缺陷：backward_anchored/名字白名单 vs 无重叠校验/陈旧期望值）。下一步需要一次新的实现派发去修这两处（(a) 要求 `offset[K]+size[K]==offset[K+1]` 才能作为/喂给锚点；(b) 把 iOS 产物上的 ArrayWriteBarrierStub 期望差值改为 0 或移除该白名单项），随后再走一遍"新鲜子代理独立核实→新鲜子代理证伪"的两步流程。本轮已完成一件事（救援+验证+落地一个修补丁）并对它跑了证伪，判决非绿，按契约不许关卡；本轮到此结束，不在本轮内再派第三个实现子代理去修这两处新破绽（那是一次新的实现任务，需要自己的判据与负控制，留给下一轮）。
+
+### 心跳 （续，round-74205 延续）—— 实现 F122 修补丁欠的两处修复
+
+上一轮结束于"判决非绿，不许关卡，留给下一轮"。本轮锁定任务：修 `evidence_disassemble_residual.sh`
+第二次证伪 pass（研究树 `b06fc93`）点名的两处新破绽——①`offset_diff==0` 的点未经
+`offset[K]+size[K]==offset[K+1]` 无重叠/无缝隙校验就被当作已验证锚点（负控制 E：单对象伪造
+`FfiCallbackTrampoline` offset -1344/size +1344，UNEXPLAINED 1190→922，本应保持单调不降反降）；
+②`KNOWN_SIZE_DIFF_OBJECTS[_iso_stub_ArrayWriteBarrierStub]=36` 是 mac 目标的陈旧期望值，
+iOS 产物真实差值已是 0（F132），伪造回归到 +36 会被静默判"已解释"。
+已派新鲜 opus 子代理实现并自测两处修复，随后按契约要求另派一个完全独立的新鲜子代理跑正式证伪 pass。
+
+### 心跳 2026-09-26（续，claude-sonnet-5）—— 开工先救援：应用被中断轮次的 F122 修复，自测通过，已提交，已派独立证伪 pass
+
+开工先看 `.loop/RESCUED`：round-81707 中断时留在 `fhp-research` stash@{0}（`loop-rescue 2026-09-26T15:24:56 round-81707`）
+的改动，正是上一条心跳承诺要做的那两处修复本体（对 `evidence_disassemble_residual.sh` 的改动），
+连同一份新的负控制脚本 `reports_20260926/F122_r3_negctl.py`（均未提交）。**未重做，直接核验后落地**：
+`git stash apply "stash@{0}"`（用 apply 不用 pop，未删除该 stash 条目，遵守"脏树处理权不在你手上"）。
+自测：①真实（未注入）三个 fixture 跑 `evidence_disassemble_residual.sh`，`EXAMINED 1808`、
+`UNEXPLAINED 1190`（396/396/398，与修复前基线一致，`cumulative_code_offset` 三者均 0/0/0）——
+修复未改变真实读数；②跑 `reports_20260926/F122_r3_negctl.py`（把 HEAD 即修复前版本与当前工作树即
+修复后版本对同一份注入分别跑一遍）：Control E（伪造锚点：offset-X/size+X 使 `d_at[K]==0` 但破坏邻接）——
+修复前 UNEXPLAINED 1190→926（非单调，即原破绽复现）、修复后 1190→1190（不再下降，即已修复）；
+Control F（重新注入 `_iso_stub_ArrayWriteBarrierStub` +36B）——修复前 1190→1190（被白名单静默吸收，
+即原破绽复现）、修复后 1190→1192（正确报出，即已修复）；脚本打印 `ALL CONTROLS PASSED`。
+已提交（研究树 `345b132`，含脚本本体与负控制脚本，commit message 完整记录两处修复与自测数字）。
+**已派第三个、完全独立的新鲜 opus 子代理**（agent `abfd19f43bbf21bb5`，后台运行中）对 `345b132`
+跑正式的七项攻击证伪 pass（`tools/loop/prompts/falsify.md`），提示词里明确交代了两个前序破绽、
+修复的具体内容、以及 `F122_r3_negctl.py` 本身也是新代码、需要被批判性核查（不能只信它打印的
+PASS）。本轮改动文件：`~/Documents/fhp-research` 的 `evidence_disassemble_residual.sh` 与
+`reports_20260926/F122_r3_negctl.py`（提交 `345b132`）；`memo.md` 本条心跳。
+本轮到此结束，等待 pass 3 的判决（这是 F122 修补丁链上第三次证伪，前两次分别是
+`748fbf2`（对 5afa4b2 的第一版修复判 PARTIAL）与 `b06fc93`（对 5afa4b2 的第二版判 PARTIAL）——
+若这次仍非 SURVIVES，需按契约第六条评估是否已达三振出局、移入挂起池）。
