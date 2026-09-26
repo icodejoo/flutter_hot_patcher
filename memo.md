@@ -12776,3 +12776,49 @@ sha256 是否仍与基线一致——判断 1944 步是否只是假阳性；(b) 
   `~/dart-3122/sdk` 与 `~/Documents/flutter_hot_patcher` 均无代码改动。
   下一轮先看 pass 6 的判决：SURVIVES 则可考虑把 F121 从 `built` 转 `closed`
   （STILL OPEN 一行需原样抄进卡片）；再出 PARTIAL 则认真评估是否已达三振出局。
+
+### 心跳 2026-09-26（续）—— F121 第 6 次证伪判 PARTIAL，移入挂起池
+
+第 6 次证伪 pass（opus，24 次调用，专核 `68e53df`）判 **PARTIAL**：`68e53df` 里的每一句
+事实性陈述都独立复核为真（sha256、F129_10/F129_11 引用范围、`out_pm/.provenance.tsv`
+只覆盖 `ProductSimIosARM64`、`831ae0e2` 全仓确实无先例），**但"0 待办"这句话的范围
+只到 `gen_snapshot`+`analyze_snapshot` 两个具名 target**——`ninja -n -C <tree>` 不加
+target 限定，三棵树整树读数是 1381/1176/1356 待办，其中每棵树各有 13 行
+`libdart_compiler_jit.il_arm64.o older than … il_arm64.cc`——**与 pass 4 是同一个
+第三十八种仪器缺陷（同一次负控制的 `git checkout --` 顶了 mtime），只是这次出现在
+JIT 目标而不是已经修过的 AOT `gen_snapshot`/`analyze_snapshot` 目标上**，且三份笔记
+（`97578e9`/`c81bee4`/`68e53df`）都没披露过这一层。该 pass 顺带发现一条更强的论证：
+`analyze_snapshot` 在任何一棵树里 `ninja -t inputs` 都查不到 `il_arm64.o`（0 个输入）
+⇒ 那次还原的代码**结构上不可能影响到它**，它的重链接另有旧因（`thread.h` 09-25 就有
+203 步待办）——比 `68e53df` 用的"干净状态+HEAD 一致"更直接。`measure_pool_residual`
+读数 `UNEXPLAINED=2 units=10700` 与 pass 5 一致，无漂移。
+
+**移入挂起池的判断（契约第六条）**：F121 修补丁链已连续 **3 次** PARTIAL
+（pass4→pass5→pass6），且 **pass4 与 pass6 是同一个根因**（同一次负控制留下的
+`il_arm64.cc` mtime 顶新，只是这次在更宽的范围里被发现）——形状是打地鼠而非
+互相独立的三次失败。按契约第六条，达到三次判据，**F121 移入挂起池**，本轮不再
+派第 7 次同路数的"当场修→再证伪"，换独立任务。
+
+**失败现象**：每一版笔记对"重建/0 待办/未变"的断言都只做了目标级或文件级核对，
+而每一次新鲜证伪都能在更宽的 `ninja -n` 范围（整树、其他目标文件）里找到同一处
+还原留下的 mtime 痕迹未披露。
+
+**已排除的假设（挂起期间不必重验）**：
+- 不是池槽发射本体的语义缺陷——DWARF 字段名核对、负控制翻转到 `0x1eb0`/还原，
+  pass 3/4/5/6 全部独立复现，从未被推翻。
+- 不是 `68e53df` 的引用/披露内容本身有假——pass 6 逐条独立复核，全部为真。
+- 不是 `measure_pool_residual` 的读数漂移——`UNEXPLAINED=2` 在 pass 5、pass 6
+  两次独立重跑间保持一致。
+
+**重试前必须先做（不这样做大概率还是打地鼠）**：要么一次性披露三棵共享树
+不加 target 限定的完整 `ninja -n -C <tree>` 输出（而不是只报具名 target 的待办数），
+要么换掉判据本身——pass 6 已证明"干净 git 状态 + 0 个 `il_arm64.o` 输入"对
+`analyze_snapshot` 而言是比 ninja 待办计数更直接、更不依赖 mtime 模型的正确性论证，
+可以考虑改用这一条作为该 binary 的新鲜度判据。
+
+**STILL OPEN（原样抄录，自 pass 3 起未变）**：DebugARM64 下的 auto-scope native
+二次调用重链接测试，从未被任何检查直接观测过运行期 `NativeCallPattern::set_target`。
+
+F121 保持 `built`，现处于挂起池，**契约要求每 5 轮回头重试挂起池最早一项**。
+本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `8d69719`）。
+本轮到此结束，换独立任务。
