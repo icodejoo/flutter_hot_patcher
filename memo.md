@@ -12826,3 +12826,7 @@ F121 保持 `built`，现处于挂起池，**契约要求每 5 轮回头重试�
 ### 心跳 （claude-sonnet-5，交互式会话，round-74205）
 
 开工先救援：应用 fhp-research 的 `.loop/RESCUED` stash（`loop-rescue 2026-09-26T12:37:45 round-61757`，`git stash apply` 而非 pop，未删除该 stash 条目）。该 stash 内容是对 `spikes/shorebird_linkinfo_oracle/evidence_disassemble_residual.sh` 的单文件改动，恰好实现了 F122 2026-09-26 证伪 pass（`748fbf2`）要求的两处修复：(a) 移除 backward_anchored、只留 forward-only 锚定；(b) `KNOWN_SIZE_DIFF_OBJECTS` 从纯名字白名单改为精确期望差值校验。已派新鲜 opus 子代理（后台，agent 内部 id 见工具结果，不写入本文件）独立复核该改动（重跑三个 fixture、自建负控制、确认 EXAMINED==UNITS 不变），若通过则由它自己提交（仅这一个文件）。本轮到此暂停，等待该子代理完成后再派第二个新鲜子代理跑 F122 修补丁的正式证伪 pass（tools/loop/prompts/falsify.md），两者都不由同一方完成。
+
+### 心跳 （续）—— F122 修补丁已由独立子代理核实并提交
+
+第一个 opus 子代理独立复核了 rescued stash（未信任其内联注释，自建负控制、重跑三 fixture、复核 EXAMINED==UNITS）：**PASS**，实测 hello/base_dd/prog 的 UNEXPLAINED 396/396/398（与旧版逐字节相同，真实数据读数不变）；自建三组负控制中，旧代码吸收了两处注入腐败（ArrayWriteBarrierStub +100B 一处、55 对象块 ±64 位移一处），新代码都能报出（UNEXPLAINED 分别 1190→1192、1194→1302）；正例控制（真实 +36B）两版一致接受。已提交 `5afa4b2`（仅这一个文件）。已派第二个、完全独立的新鲜 opus 子代理对 `5afa4b2` 本身跑正式证伪 pass（`tools/loop/prompts/falsify.md` 七项攻击，要求 `F122 修补丁 VERDICT: ... (fix)` 格式），后台运行中。本轮到此结束，等待该 pass 的判决再决定 F122 是否可以关闭。
