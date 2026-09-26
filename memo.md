@@ -13541,3 +13541,32 @@ honest LEDGER_BEFORE_SHA and deletes the F46 row -- does it print operator-drain
 既有缺陷；`cards.tsv`、`queue` 均未改动（改动权在操作者）。SDK 树本轮无接触。
 
 本轮到此结束。
+
+### 2026-09-27 heartbeat -- F94 落地证伪 pass 已派发（SDK 本体，规则 0 优先）
+
+契约已读；本轮开局核对 built 卡欠 pass 清单（F49 F113 F121 F130）：F113 上一心跳已拿到
+SURVIVES (fix) 判决（不重派）；F121 已在更早一轮被 SS6 判入挂起池（不重派）；F49 的
+"待审 fix" 条目已过期——`8c71ab07`/`e767b0dc` 是记账用的 memo-only 提交，真正的修补丁
+`74d7f717` 早在 2026-09-26 就已经过一遍独立证伪（VERDICT: PARTIAL，卡片本体记着"下一步应
+优先修 M2/M6 不对称回归风险"）——这是待实现的修复工作，不是"待审的 fix"，本轮不重派 pass；
+F130 同理是循环机械、非阻塞。
+
+按规则 0（SDK 本体优先于循环机械）改读 F55 的子卡清单，发现 **F94 的记账已经过期**：
+memo.md 里 F94 仍写着"纯调查，此前从未有任何证据脚本碰过这个桶"，但 `cards.tsv` 里 F94 的
+真实状态是 `open` 且已有完整落地（fhp-research 提交 `84fff9a7`，
+`evidence_shorebird_offset_cascade.sh` + `perturb_f94_offset_cascade.sh`，9 项负控制，
+`RESIDUAL offset UNEXPLAINED 0`，`EXAMINED 11768 of 33702`）——但卡片原文明确记着
+"NOT wired into verify_all.sh (deliberately -- no hostile pass yet, would be a green with no
+owner)"，即它还欠一次真正敌对的独立证伪 pass 才能接闸门/关卡。这正是本轮该做的下一件事，
+且是纯 SDK 本体工作，不涉及循环机械。
+
+已派发一个全新、无共享上下文的 Opus 子代理（general-purpose，仅工作在 fhp-research 树，
+只读优先，不许碰 cards.tsv/其它三棵树），跑 `tools/loop/prompts/falsify.md` 七项攻击，
+CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 均取自 `cards.tsv` F94 行原文与
+`evidence_shorebird_offset_cascade.sh` 文件头注释。要求它按契约格式输出
+`F94 VERDICT: <SURVIVES|FALSIFIED|PARTIAL> -- <一句>`。任务在后台运行，尚未返回。
+
+**本轮未做**：未等待/催促子代理返回；未触碰任何工作树的代码；未改 `cards.tsv`。
+`memo.md`：仅本节心跳。三棵主工作树本轮均无代码改动。
+
+本轮到此结束，等待该判决。
