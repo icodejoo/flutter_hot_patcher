@@ -11874,9 +11874,23 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 ⚠️ **共享 `out_pm/` 尚未重生成，现落后于二进制**（ProductSimARM64 gen_snapshot `0bec6f280ac5…`）；要等 16:41 那批 agy 证伪（读 `out_pm`）结束后再重生成，
 届时 B/C 的钉值大概率要再钉一次。`measure_dd_emission.sh` 的红只因 `dd_emission.expected` 仍钉 ours=0（早于 `63716223bde`，属 F87）。
 
-- [ ] **F129：独立复现 `003f2759a68` 的因果控制（回退后 missing 必须精确回到 2/44）**（`open`，2026-09-25，从 F68 证伪拆出；要重建 SDK，与其他 SDK 写方串行）
+- [x] **F129：独立复现 `003f2759a68` 的因果控制（回退后 missing 必须精确回到 2/44）**（`closed`，2026-09-25 开卡，2026-09-27 第三次证伪 pass 判 SURVIVES 后关闭，deps=-）
 
 **同日证伪结果**：**F91 SURVIVES → 关卡（退休）**，STILL OPEN 原文抄进 `cards.tsv`（重建负控制未做，只靠 09-24 那次 pass）。**F68 PARTIAL → 不关**：数值目标在今天的二进制上成立，但卡片写的机制被它自己的证伪条款推翻（他们的 `analyze_snapshot` 也有同样的三字跳过，缺口是我们的代码生成补齐关掉的）；等 F129 复现因果控制后，改写结论再关。父方复跑了 `P91_setid_prog.out` / `P91_negctl.out` 与 `P68_fixed_skip_repro.py`。
+
+### 2026-09-27：F129 补做因果链重跑，第三次证伪 SURVIVES → 关卡
+
+前两次证伪都判 PARTIAL：第二次点名「修补丁把『重建产物 sha 可复现』换成了『真的重跑 nc4 得到 2/44』这个更容易的问题」，从未真正对回退后重建的 `hello`/`prog` 跑过 `nc4_f68_pool_skip_1332.sh`。
+
+本轮派了两个新鲜子代理（都是 opus/general-purpose，无共享上下文）：
+1. **补做代理**：在 `~/dart-3122/sdk`（HEAD `98c95873b72`）里真正回退 `003f2759a68` 的 hunk，重建 `ProductSimARM64` 的 `gen_snapshot`/`analyze_snapshot`（仅 `assembler_arm64.o` 重编译+重链，`.ninja_log` 可查），在私有目录 `/tmp/f129_redo_20260926_235957` 里重生成 `hello`/`prog` 的 ours 侧产物、拷贝 shared `out_pm/` 的 theirs 侧产物，跑 `nc4_f68_pool_skip_1332.sh` 与独立脚本 `F129_sites.py`：两者都读出 **self_pp missing=2 / extra=0，subgraph_pp missing=44 / extra=0，全部落在 pool index 1332，恰好是 fn#1580 与 fn#1633（各 14 ours vs 15 theirs）**——与卡片原始判据逐字吻合。还原后 `~/dart-3122/sdk` 的 `gen_snapshot` sha256（`0bec6f280ac5…489`）、HEAD（`98c95873b72`）、`git status --porcelain` 全部与实验前一致。
+2. **独立证伪代理**（不知道补做代理的存在细节以外的任何东西，只拿到 CLAIM/CRITERION/EVIDENCE）：自己重跑了 `nc4_f68_pool_skip_1332.sh` 与 `F129_sites.py`，从补做代理留下的产物目录独立得出同样的 2/44、index 1332、fn#1580/fn#1633；额外确认了 `rc=48` 按脚本自己的 `--codes` 位掩码表解码为「self_pp/subgraph_pp 两个 missing multiset 都偏离了 `{}` 这个 pin」——是可达的真实红码，不是恒真式（对着未回退的 shared `out_pm/` 跑同一脚本得到 `missing 0/0, rc=0`，证明这个红码有区分力）；核对 `.ninja_log` 只有回退所需的那一个目标文件被重建过；核对 `reports_20260925/F129_00_pre_sha.txt`（2026-09-25 15:02:09 落盘，早于本轮一天）里记录的 sha 与本轮「实验前」sha 一致，排除「实验前/实验后对比」是同一次自证。
+
+**判决**：`F129 VERDICT: SURVIVES -- 独立重跑 nc4 与 F129_sites.py 两个不同代码路径，从同一份产物里得到完全一致的 2/44/index 1332/fn#1580/fn#1633；shared 未回退的 out_pm 对照给出 0/0 排除假红；.ninja_log 与独立记录的实验前 sha 排除自证循环。`
+
+**STILL OPEN（原文抄进 `cards.tsv`）**：「the pass still didn't disclose whether other shared build trees (ReleaseARM64/ProductARM64) were touched or left stale during this experiment (the analogous F121 chain shows this exact omission recurring); an auditor should run whole-tree `ninja -n -C <dir>` on all three shared trees and diff pending-step counts against a pre-experiment baseline to rule out undisclosed collateral staleness.」
+
+⇒ **F129 关闭**。F68 仍然 `open`（PARTIAL，等改写结论后再关，见上方 09-25 记录），现在可以引用 F129 这次的因果链复现作为 F68 机制主张的独立佐证。
 
 - [ ] **F130：新修补丁被已有候选条目吞掉（F49 证伪 E7，父方已复现）**（`open`，2026-09-25）
 - [ ] **F131：同一轮自派子代理的绿回复能让新修补丁免于入队（F49 证伪 E6，需拍板）**（`open`，2026-09-25，deps=F113）
