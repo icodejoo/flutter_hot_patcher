@@ -13570,3 +13570,55 @@ CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 均取自 `cards.tsv` F94 行原文与
 `memo.md`：仅本节心跳。三棵主工作树本轮均无代码改动。
 
 本轮到此结束，等待该判决。
+
+### 2026-09-27 heartbeat -- F94 独立证伪 pass 返回：VERDICT PARTIAL（测量已过期，locus 是同义反复）
+
+`F94 VERDICT: PARTIAL`（general-purpose/opus，无共享上下文，14 次工具调用，590s）。
+
+**攻击 1 通过**：脚本在当前 `out_pm`（mtime 2026-09-26，研究树 HEAD `f354e6e1`）上确实能报红——
+`rc=1`，`NO POWER ×8`、`PREDICTION ... never move our value ×3`，不是恒真式。
+
+**但攻击 2 与攻击 4 各挖出一处更深的问题**：
+① **测量本身已过期**：730/11768/16.1x 这组数字是在 **F132（2026-09-25）把共享 harness 从
+mac-target 切到 iOS-target 之前**测的（`arm64 macos` vs `arm64 ios`，即 F124 记的 LSE 写屏障
+差异那次切换）。在切换后的 iOS-vs-iOS 语料上，**`size` 在 5976 个函数里 0 个不同**，`offset`
+桶已经不存在——原文的"他们的函数体多几个字节/大多数 +4 字节"整个是 mac/iOS 目标不一致的
+artifact，不是代码生成的真实分歧。
+② **CONTIGUITY 检查只是重述了收集器自己对 `size` 的定义，不是对镜像布局的独立测量**：
+`InstructionsTable::InstructionsLengthAt`（`~/dart-3122/sdk/runtime/vm/object.cc:16390-16411`）
+本身就返回 `entries[i+1].pc_offset - entries[i].pc_offset`，而 `entry.offset` 是
+`EntryPointAt - base`（`analyze_snapshot_api_impl.cc:1629,1657-1660`），所以
+`offset[i+1]==offset[i]+size[i]` 对任何一次 dump **恒成立**，与镜像是否真的"打包无间隙"
+无关——任何真实存在的 entry 间填充都会被计进 `size` 内部，永远不会以"间隙"的形式暴露出来。
+`--relayout` 负控制的 `EXAMINED 11946 = 2×(5976-3)` 是把每个非首元素的 offset 都动了一遍、
+饱和了整个桶，不是按比例验证；`--pad` 只改 offset 不改 size（真实收集器不可能产出这种形状），
+只证明闸门在读 JSON，没证明"打包布局"这个断言真的被冒过险。
+
+**STILL OPEN（原文抄录）**："F95 and F88 would inherit a false `size` population ('+4-byte
+codegen differences') that disappeared when the target was fixed. Wiring this script into
+`verify_all.sh` would add a check that is red by construction on today's corpus."
+
+**本轮已做的修补**：把这次证伪 pass 的完整发现（原样保留上述细节与 STILL OPEN 原文）追加进
+fhp-research `cards.tsv` 的 F94 行说明列（仅该行改动，`git diff --numstat` 确认 1 行差异，
+其余 141 行字节不变；`csv.reader` 复核字段数仍为 7）。**未当场重新测量或重写脚本**——
+按契约"修它本身够大到需要自己的判据与负控制"的例外条款，把"在当前 post-F132 iOS-target
+语料上重新测量、并判断这个 locus 剩下什么（如果还剩什么）"留给下一轮，不含糊写"待改进"，
+已在卡片文字里写清具体缺什么。`evidence_shorebird_offset_cascade.sh` 依旧不接入
+`verify_all.sh`（原本就是有意不接，这次证伪证实了不接是对的——接了会在今天的语料上产生一个
+"结构性该红"的检查）。
+
+`cards_check.sh`（fhp-research 树）本轮跑超过 120s 背景化，返回后拿到真实结果：
+**`F94(commits-not-sha)` 新增失败**——不是这一格本身的问题，是**我自己写卡片时把整段追加文字
+落到了第 7 列（commits）而不是第 5 列（description）**，字符串拼接时用了「整行去掉换行符再追加」
+而不是「只追加到某一列」，把 commits 列的 `-` 后面直接接上了那段散文。
+`cards_check.sh` 的判据是"每列内容要符合表头声明的形状"，commits 列只许放 sha 或 `-`——
+它当场抓到了这处自制的记账错误。已在同一轮修（fhp-research 提交，`git diff --numstat` 确认
+只有 F94 这一行、7 列不变、commits 列还原为 `-`、追加文字移到 description 列末尾）。
+`cards_check.sh` 重跑确认（fhp-research `03fce587`）：`FAIL` 列表回到
+`F49(commits-not-sha) F122(commits-not-sha) F132(commits-not-sha)`，`F94` 不在其中——
+修复生效，且没有引入除自己造成的这一处以外的新失败。
+
+本轮到此结束。SDK 树、状态树三棵主工作树本轮均无代码改动（仅 fhp-research 两次 cards.tsv
+提交 + 本 memo 心跳）。
+
+本轮到此结束。
