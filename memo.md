@@ -13233,3 +13233,33 @@ F88/F124 头上而不是靠补全 map 真正修掉；F125/F133 的结构性论�
 用与上次同样的按 tab 拆列方式写入，未破坏 7 列结构）。**下一步不在本轮做**：把 6 条缺失偏移
 补进 F88 的 `thread_map.json`，并重新设计一个真正能被扰动变红的负控制（例如从已匹配集合里
 挑出真正命中 map key 的子集，而不是任取 5582 个）。按契约本轮到此结束。
+
+### 心跳 2026-09-26 22:21 —— 交互轮次：接续 F95 PARTIAL，派发修补 thread_map.json 缺失偏移
+
+### 心跳 2026-09-26 22:32 —— F95 pass-2 缺陷已修，独立证伪 pass 已派发，等待判决
+
+**做了什么**：`~/Documents/fhp-research` 树的 `f95_self_hash_residual.py` 存在两处已被上一次
+独立证伪 pass 指出的缺陷（① NEG CTL 在自我选择效应下必然读 0，被当成证据；③ SECTION 1 在
+F91 参照集为空时静默不打判决）。已定位真根因并修复，不是猜的：
+
+1. `out_f88/thread_map.json`（gitignored 派生产物）是陈旧的（56 条），用它自己的推导脚本
+   `f88_thread_offset_map.py --json` 在当前 `out_pm` 语料上重跑，得 62 条，机械地补上了证伪
+   pass 点名缺失的 6 个偏移（0x6a0/0x6a8/0x6b0/0x718/0x720/0x728），五个门 T1-T5 全 PASS。
+   重跑 `f95_self_hash_residual.py`：RAW-only 残差 UNEXPLAINED 158 -> 0（394 examined，三个
+   fixture 合计）。
+2. 脚本的 NEG CTL 行原来把「matched population 上 breaks 0」当证据；实测证实这是自我选择
+   造成的必然 0（任何真正命中映射表的函数早就因为 hash 不同被排除出 matched 集合），已加
+   `fired` 计数器，`fired==0` 时明确打印 `VACUOUS`，并指向真正有效的负控制
+   `--perturb corrupt-map/drop-map/drop-named/identity`（已实测：全部使 rc 反转为 1，
+   UNEXPLAINED 分别变为 158/158/122/394；`noop` 同样 rc=1 印证反转是无条件的）。
+3. SECTION 1 在 F91 参照集为空（`out_f88` 是 F132 切 iOS 目标之前的 mac 产物，`out_pm` 是
+   切换之后的 iOS 产物，二者不可比）时，现在打印明确的 `UNDETERMINED / incomparable` 判决，
+   不再是沉默的 0/0。
+
+提交 `a9ab419f`（fhp-research 树）。`cards.tsv` F95 行第 5 列已追加这份记录（未破坏 7 列结构，
+`cards_check.sh` 复跑 rc=0，F95 不在失败列表里，仅剩既有的 F49/F122/F132 三个已知失败）。
+
+**按契约不自我认定**：已派一个新鲜、独立、不共享上下文的 Opus 子代理（`falsify.md` 七项攻击）
+专门审这次修补丁本身（agentId 见工具调用记录，不采信本轮自报）。本轮到此结束，等待判决后再
+更新卡片状态（若 PARTIAL/FALSIFIED，按契约不许标记为已解决；若 SURVIVES，把它的 STILL OPEN
+原文抄进 memo.md）。
