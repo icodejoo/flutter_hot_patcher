@@ -12740,3 +12740,39 @@ sha256 是否仍与基线一致——判断 1944 步是否只是假阳性；(b) 
   本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `97578e9`、
   `c81bee4`）；`~/dart-3122/sdk` 无源码改动，仅重建产物（不影响 git 状态）。
   下一轮先看 pass 5 的判决再决定 F121 能不能关。
+
+- 2026-09-26T（续，claude-sonnet-5）🔬 **F121 第 5 次证伪 pass（opus，14 次调用，专核
+  `c81bee4` 这个修补丁本身）判 PARTIAL（fix）**：修补丁本体（重建两棵树、sha256 逐字节核对、
+  四项检查全绿）未被推翻，**破绽是笔记的披露不完整，不是功能缺陷**：
+  ①`c81bee4` 把 `0bec6f28...` 等 sha 称为"与 out_pm provenance 一致"，但
+  `out_pm/.provenance.tsv` 只记录 `ProductSimIosARM64` 一棵树的 sha，根本没提到
+  `ProductSimARM64`/`ReleaseARM64`——真正独立佐证这几个 sha 的是 09-25 的
+  `reports_20260925/F129_10_rebuild_other_dirs.txt` 与 `F129_11_*`（早于本轮）；
+  ②`97578e9` 那次负控制实验其实**还重建了第三棵共享树** `ProductARM64`
+  （`.ninja_log`：`il_arm64.o` 11:11:08 重编译、`gen_snapshot` 11:11:53 重链接
+  出 `c7c82215...`——与 F129_10 旧记录一致，真的没变——`analyze_snapshot` 11:11:57
+  重链接出 `831ae0e2...`，这个 sha **在仓库任何地方都是第一次出现**，
+  `grep -rl` 全树无命中），而 `97578e9`/pass4/`c81bee4` 三份笔记都没提过碰过这棵树；
+  ③`c81bee4` 说"重跑四项检查全绿、确认与 out_pm provenance 一致"暗示做了额外核验，
+  但 `ProductSimARM64`/`ReleaseARM64` 的 `analyze_snapshot` 这次根本没被重链接
+  （只有 `gen_snapshot` 链接了改动的 `il_arm64.o`），"重新确认未变"这句对它们而言是
+  同义反复不是验证。**正确性本身不受影响**：`ProductARM64` 当前
+  `git status --porcelain` 为空、`ninja -n` 0 待办、HEAD 与全仓一致
+  （`98c95873b7225f0dfe5a72afdc62e570e7fb6136`）⇒ 内容必然匹配已提交源码，
+  不需要靠"sha 历史匹配"来担保。**同轮当场修**：改写笔记本体，
+  纠正引用来源（改引 F129_10/F129_11）、补披露 `ProductARM64` 的两个 sha 及各自的
+  佐证强度（一个有旧记录佐证、一个是首次记录但有独立正确性依据）、
+  说明 `ProductSimARM64`/`ReleaseARM64` 的 `analyze_snapshot` 这次未被触碰。
+  未改动任何源码或二进制——`ProductARM64` 的状态本来就对，只是没写清楚。
+  已提交（研究树 `68e53df`，仅 F121 一行、1 处改动，`git diff --stat` 核实过）。
+  **STILL OPEN 原样保留**：DebugARM64 auto-scope native 重链接测试仍未被任何检查覆盖。
+  F121 仍是 `built`：已派第 6 次证伪 pass（新鲜 opus 子代理，agent `ab2c94d7d9e01b5bf`，
+  后台运行中，专核 `68e53df` 这次修正——包括独立复核三棵树当前 sha256/git 状态/
+  ninja 待办、独立核对 F129_10/F129_11 与 `out_pm/.provenance.tsv` 各自的真实覆盖范围、
+  独立 grep 确认 `831ae0e2` 确实全仓无先例）。**这是 F121 修补丁链上第二次连续 PARTIAL**
+  （pass4 的病因是流程断言写错，pass5 的病因是引用来源写错+披露不全——两次病因不同，
+  不是同一路子反复被打穿的三振出局，契约第六条暂不适用）。
+  本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `68e53df`）；
+  `~/dart-3122/sdk` 与 `~/Documents/flutter_hot_patcher` 均无代码改动。
+  下一轮先看 pass 6 的判决：SURVIVES 则可考虑把 F121 从 `built` 转 `closed`
+  （STILL OPEN 一行需原样抄进卡片）；再出 PARTIAL 则认真评估是否已达三振出局。
