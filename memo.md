@@ -11857,7 +11857,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 ### 2026-09-25 拆卡（操作者指令「太大的卡片拆分」）
 
 - [ ] **F121：shape-A 池槽改回 per-site kTaggedObject Smi（R1 真回归）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
-- [ ] **F122：disassemble 残差的 offset/size 桶仍无条件吸收**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [x] **F122：disassemble 残差的 offset/size 桶仍无条件吸收**（`closed`，2026-09-25 开卡，2026-09-26 第 4 次证伪 pass 判 SURVIVES (fix) 后关闭，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F123：disassemble 1,086 单位 = 他们 ObjectPool 多出的引用元素，F121 后归因**（`open`，2026-09-25，deps=F121）判据与负控制见 `cards.tsv`。
 - [ ] **F124：ArrayWriteBarrierStub 我们 1060B / 他们 1096B（三张卡的共同残差）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [x] **F125：ThreadLocal 首字差异与 5 个 shape-A 函数的 self_hash 残差**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
@@ -12921,3 +12921,51 @@ F122 自身 `EXAMINED==UNITS` 证明力的发现藏起来）。本轮改动文�
 本轮到此结束，等待该子代理判决。若仍非 SURVIVES，按契约第六条评估是否已达三振出局、
 移入挂起池（当前已是同一修补丁链第四次证伪尝试：pass 1→PARTIAL、pass 2→PARTIAL、
 pass 3→PARTIAL、上一次 pass 4 尝试→被杀无判决，这一次是第四次真正产出判决的机会）。
+
+### 心跳 2026-09-26（续）—— F122 第 4 次证伪判 SURVIVES (fix)，卡片已关闭
+
+第五个独立 opus 子代理对修补丁链最新提交 `182cbec`（pass 3 之后：`F122_r3_negctl.py` 的
+`PRE_REF` 改法 + F141 拆分）跑正式七项攻击证伪 pass，判 **SURVIVES (fix)**：
+
+```
+F122 修补丁 VERDICT: SURVIVES (fix)
+```
+
+七项攻击逐一：①独立复现 `PRE_REF` 锚定的负控制脚本在修补丁被还原后确实报红（把脚本复制到
+`/tmp`、拿掉修复、对 `b06fc93` 版本重跑，rc=1，`AssertionError` 在 Control E 报 delta=-264）；
+②核实 `b06fc93` 的脚本内容与 `5afa4b2`（pass 3 审的那次修复）逐字节相同，`PRE_REF` 锚点没锚错
+对象；③`git diff 345b132 182cbec` 只动了 `cards.tsv` 与 negctl 脚本，`evidence_disassemble_residual.sh`
+本体分毫未动；④独立复现提交信息里的三组数字（1190/1190、-264/0、0/+2）分毫不差；⑤核实 F141
+的措辞与 pass 3 原文逐字一致，不是把发现的严重性改写变轻；⑥`cards_check.sh` 报 F122 commits
+列早在 `345b132` 就已是长散文（1415 字符），`182cbec` 只是让它更长（3515 字符）——既有结构性
+欠账，非本次引入；⑦对 F141 是否只是把一个真正削弱 F122 自身 `EXAMINED==UNITS` 证明力的发现
+藏起来这一核心问题，独立重实现了偏移判定逻辑，对三个 fixture 里全部 1190 处有差异的
+offset/size 字段逐一做单字段擦除攻击，0 例发生"擦除一处、连带解释另一处"的情况（擦除只会让
+`EXAMINED`/`UNEXPLAINED` 同步减 2，不会误吸收其他对象）；负控制侧证明修复前的锚定规则
+（仅 d==0）在同样的 Control-E 式伪造下确实会吸收 132 个对象（264 units），修复后的规则吸收 0
+——F141 拆分成立，不是甩锅。
+
+两处附带发现（不构成推翻）：(i) `cards_check.sh` 的 `F122(commits-not-sha)` 红是既有欠账，非
+本次引入；(ii) F141 卡片文本同时写着"不阻塞 F122 关闭"与"需要操作者拍板"，抢跑了它自己说
+还未定的那个判断——值得记录但不是 `182cbec` 范围内的缺陷。
+
+**STILL OPEN（原样抄录）**：「my brute-force only covers single-field erasure. A two-field
+forgery that uses no compensating offset/size pair -- for example, rewriting two objects'
+offsets so their order in our layout changes, which forges the predecessor_not_adjacent_ours
+adjacency at K=51 (FfiCallbackTrampoline, hello) -- could still attach the 133-object
+unanchored run to an anchor. Nobody has tried it. Separately, fixture tampering that leaves
+no diff at all can only be caught by F141 option (b), a provenance-hash check against a
+pristine copy (F81 has the same mechanism).」
+
+按契约，SURVIVES 可以关卡：`cards.tsv` 的 F122 行已改 `built → closed`，附完整 pass 4 判决文本
+（研究树，未提交前先复核 TSV 完整性——⚠️踩过一次坑：用 Python `csv` 模块整体重写整个文件时，
+它把全文件里所有含双引号的行都重新转义（例如把注释里的英文直引号 `"..."` 改写成反斜杠转义
+`\"...\"`），导致 57 行无关内容被静默改动；已 `git checkout --` 撤销该次整体重写，改用
+`Edit` 工具只动 F122 那一行的两处（状态字段、行尾追加），`git diff --stat` 确认只有 1 处改动）。
+`memo.md` 的 F122 复选框已从 `[ ]` 改 `[x]`，标签由 `open` 改 `closed`。`cards_check.sh` 复跑：
+open 55 / closed 56 两个集合 memo.md 与 cards.tsv 完全一致（`ok`），唯一剩余的 `FAIL` 是既有的
+`F122(commits-not-sha)` 结构性欠账（commits 列长期被当散文溢出区，早于本轮，pass 4 判决文本里
+已明确点名"非本次引入"），不阻塞本轮关卡。
+
+本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树）；`memo.md`（本条心跳 +
+F122 复选框）。本轮到此结束。
