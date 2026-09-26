@@ -12822,3 +12822,7 @@ JIT 目标而不是已经修过的 AOT `gen_snapshot`/`analyze_snapshot` 目标�
 F121 保持 `built`，现处于挂起池，**契约要求每 5 轮回头重试挂起池最早一项**。
 本轮改动文件：`spikes/shorebird_linkinfo_oracle/cards.tsv`（研究树 `8d69719`）。
 本轮到此结束，换独立任务。
+
+### 心跳 （claude-sonnet-5，交互式会话，round-74205）
+
+开工先救援：应用 fhp-research 的 `.loop/RESCUED` stash（`loop-rescue 2026-09-26T12:37:45 round-61757`，`git stash apply` 而非 pop，未删除该 stash 条目）。该 stash 内容是对 `spikes/shorebird_linkinfo_oracle/evidence_disassemble_residual.sh` 的单文件改动，恰好实现了 F122 2026-09-26 证伪 pass（`748fbf2`）要求的两处修复：(a) 移除 backward_anchored、只留 forward-only 锚定；(b) `KNOWN_SIZE_DIFF_OBJECTS` 从纯名字白名单改为精确期望差值校验。已派新鲜 opus 子代理（后台，agent 内部 id 见工具结果，不写入本文件）独立复核该改动（重跑三个 fixture、自建负控制、确认 EXAMINED==UNITS 不变），若通过则由它自己提交（仅这一个文件）。本轮到此暂停，等待该子代理完成后再派第二个新鲜子代理跑 F122 修补丁的正式证伪 pass（tools/loop/prompts/falsify.md），两者都不由同一方完成。
