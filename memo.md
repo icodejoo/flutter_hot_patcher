@@ -13472,3 +13472,72 @@ fix_queue.py 自身的循环机械修补丁，按规则 0「SDK 本体优先于�
 与 F140 的先例一致。`memo.md`：本节 + 挂起池新增 F95 条目。SDK 树、研究树均无代码改动。
 
 本轮到此结束。
+2026-09-26T17:59Z heartbeat: round start, cards_check.sh rc=0 (open 53 closed 58), round.lock confirmed ralph.sh-driven regular round. Dispatching F37-fix falsification pass (SDK substantive, rule 0 priority over loop-mechanism queue items F115-F118 F122 F140 F141 F49 F129).
+
+### 2026-09-26 heartbeat -- F37 修补丁独立证伪 pass: SURVIVES
+
+新鲜子代理（general-purpose，无共享上下文，49 次工具调用，510s）对 F37 的修补丁
+（`~/dart-3122/sdk` HEAD `98c95873b72`，含 `531c5356dda`/`63716223bde`/`edce6e25b77`/`b2e93350653`）
+跑了 tools/loop/prompts/falsify.md 七项攻击，结论：
+
+F37 修补丁 VERDICT: SURVIVES (fix) -- dd_runtime_check.sh green on freshly rebuilt ProductARM64 at current HEAD, and independently confirmed sensitive via a hand-made negative control on the exact mechanism (crash on corruption, green on restore).
+
+要点：① 发现 ProductARM64 在派发时已落后 HEAD 2 个 ninja 步骤（`verify_all.sh` 的保鲜守卫只查
+`$RELEASE`，从不查 `$PRODUCT`——与 CLAUDE.md 已记录的缺口一致），子代理自行重建后确认
+`ninja -n` 报 "no work to do" 才下结论；② 真实负控制：手工改坏 `531c5356dda` 新增的
+`call_bootstrap_native_entry_point_` Thread 缓存偏移，重建后 `dd_runtime_check.sh` rc=1、
+5 项失败、连普通 hello.dart 整程执行都 Bus error；还原后重建，rc=0、0 失败；③ 子代理事后
+`git checkout --` 还原了它改动的两个文件（`thread.cc`、`il_arm64.cc`），`git status --porcelain`
+与 `git diff` 为空，`ninja -n` 确认 ProductARM64 与当前 HEAD 一致（净效果：共享构建树从
+落后 2 步变为与 HEAD 同步，非回归）。
+
+STILL OPEN（原文抄录）：Card text (not independently re-verified by me here, budget-limited)
+claims `RELEASE_ASSERT il_arm64.cc:1361` fires on ProductSim/ProductSimIos/DebugARM64 due to
+differing Thread layouts (USING_SAFE_STACK/DART_DYNAMIC_MODULES offset deltas) -- i.e. the fix
+may only be proven on ProductARM64, which is exactly what the reclosing criterion asked for,
+but is not proven to generalize to the other configs the harness (F132) also relies on.
+Re-running the equivalent check on ProductSimIosARM64 would close that gap.
+
+**未做**：本轮只把这条判决标记为候选，不亲自执行出队操作（按 F113 方案 (b)：那一步专属
+操作者，且要在轮次之外单独手动做）。`.loop/UNREVIEWED_FIX` 里的 F37 行留给操作者按此判决处理。
+`cards.tsv` 未改动。SDK 树、研究树在子代理还原后均干净（子代理自证，未由本轮复核 diff 正文，
+按契约"不复跑验证、不读大文件"）。
+
+本轮到此结束。
+
+### 2026-09-27 heartbeat -- F113 fix-chain 独立证伪：VERDICT SURVIVES (fix)
+
+契约已读；`cards_check.sh`（fhp-research 树）确认无新增失败。四张欠 pass 的 built 卡
+（F49 F113 F121 F130）逐一核对：F121 已在上一轮被 SS6 判入挂起池、不重派；F37 已在上一轮
+拿到 SURVIVES (fix) 判决、留给操作者出队，不重派。本轮对剩余三张（F113 F130 F49，均为循环
+机械而非 SDK 本体）里最结构化、风险最高的一张派了一个全新、无共享上下文的 Opus 子代理
+（无写权限、只读调查），跑 `tools/loop/prompts/falsify.md` 七项攻击 + 一项针对性复合攻击。
+
+**F113 修补丁 VERDICT: SURVIVES (fix) —— 子代理独立复现：把两处评论行处理逻辑分别单独
+撤销后，自建的两个新自测用例（`comments_with_tabs` 与 F140 引入的 BOM/空白/`//` 用例）
+各自单独变红；用 `#` 或 `//` 伪装一条真实的伪造 drain 记录，round-end 的"实时账本 vs 快照"
+比对仍然独立识别出被追加的行并判 RED、还原该行——评论跳过逻辑（喂给 `operator_drained()`）
+与账本追加检测逻辑（喂给 round-end diff）是两条不同代码路径，没有被混为一谈。**
+
+订正实测细节：真正落地这处修复的提交是 `2a62058a`（不是卡片文字里写的 `311fba9`；
+`311fba9` 是更早一轮的交叉验证提交），后续 F140 的六个提交（`de723125`…`541ffdc2`）又把
+判据加固成 `lstrip()` + `#`/`//` + utf-8-sig；当前 `fix_queue.py` HEAD 是 `74d7f717`，
+自测用例数已从卡片记的 81 涨到 **114/0 failures**。`fhp-research` 树本身没有 `tools/loop`
+（这套机制只活在 v1 树），所以"两棵树"的顾虑不适用于这张卡。
+
+STILL OPEN（原文抄录，子代理指出的下一个可推翻点）：
+"After round N's fix_queue.py gate has run, a process the round left behind appends a forged
+'<date>\tF46\t...\t<row seen>' line to the live ledger; round N+1's cp snapshots it with an
+honest LEDGER_BEFORE_SHA and deletes the F46 row -- does it print operator-drained F46?"
+
+**顺带发现两处非本次修复引入的既有缺陷（如实记录，不在本次判决范围内，未开新卡）**：
+(a) round-end"实时账本必须等于快照"这条检查本质是**集合比较**——重排序、重复行、
+纯删除都能悄悄通过（子代理未能用它们真的伪造出一次 drain，但检查的强度弱于文字描述）；
+(b) 账本里出现非法 UTF-8 字节会抛未捕获的 `UnicodeDecodeError`，被删的队列行不会被还原，
+`run_round` 只打印 UNKNOWN 警告——这个 bug 在本次修复之前就已存在。
+两处都值得后续单独立卡，本轮按契约"不确定就退回一轮一件事"不当场展开。
+
+**本轮未做**：不亲自执行任何出队操作（F113 方案 (b)，出队专属操作者）；未修 (a)(b) 两处
+既有缺陷；`cards.tsv`、`queue` 均未改动（改动权在操作者）。SDK 树本轮无接触。
+
+本轮到此结束。
