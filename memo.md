@@ -13820,3 +13820,44 @@ bootstrap 偏移）后，`bad=0`，`shapeA_thr` 这个计数直接从输出里�
 **本轮到此结束**：SDK 树全程 0 提交（唯一一次改动是子代理的负控制，已 `git checkout --`
 还原并确认 `git status --porcelain` 为空、`ninja -n` 报 0 步）；fhp-research 三次提交
 （`76c3b0f6`、`bea0e81b`、`eb9314d3`）；flutter_hot_patcher 仅本节与前一节 memo 心跳。
+
+### 心跳 2026-09-27（续）—— F108 的 `a==b` 短路缺口已修（`a95d2fcc`），修补丁独立证伪：VERDICT PARTIAL，新缺口已入卡
+
+契约已读。锁定任务：上一节留下的具体修法——`op_dump_probe.py` 的 shape-A 桶计数
+（`shapeA_thr==92`、`reset_bootstrap==0`、`reset_unknown==6`）此前只被打印、从未被断言，
+一个能把 92 个 shape-A 槽强行伪造成 `a==b` 的攻击可以让 `bad=0` 且这三个桶数悄悄消失/归零，
+`check(not bad, ...)` 却照样报告成功。
+
+**第一次派发**（general-purpose/opus，fhp-research 树独占写方，36 次工具调用，517s）：
+在 `main()` 里 `classify_entries` 调用之后新增一条 `check(...)`，断言三个桶数分别等于
+92/0/6；在 `--self-test` 里新增一个用例，复现"强制全部 92 个 shape-A 槽 `a==b`"这个攻击，
+确认新断言能抓住它。`--self-test` rc=0；真实数据上非 self-test 的一次运行 rc=0，打印
+`shapeA_thr=92 reset_bootstrap=0 reset_unknown=6`；用一个独立单文件脚本对磁盘上真实
+fixture 复现原始攻击，确认旧的 `not bad` 检查单独会误判通过（bad=0），新断言正确读出
+`shapeA_thr=0`（≠92）从而抓住攻击；此前 `76c3b0f6` 留下的两个既有 self-test 用例（错的
+Thread 字段、kImmediate 写法）仍正确触发失败。提交 `a95d2fcc`（op_dump_probe.py）、
+`0e2925e9`（cards.tsv F108 行追加说明）。`cards_check.sh` rc=1，失败集合与既有已知债
+（`F49/F122/F132 commits-not-sha`）完全一致，无新增失败。
+
+**第二次派发**（新鲜、独立、只读的 general-purpose/opus 子代理，按
+`tools/loop/prompts/falsify.md` 模板对 `a95d2fcc` 跑证伪 pass，18 次工具调用，182s）：
+**F108 修补丁 VERDICT: PARTIAL (fix)** —— 卡片声称的"全体 92 槽塌缩为 `a==b`"攻击确实被
+独立复现并确认已修（子代理自建脚本对真实磁盘数据做了全量/半量/差一个/93 四种伪造，均被
+新断言抓住）；真实数据端到端重跑（重新触发 `gen_snapshot`/`analyze_snapshot`，非缓存
+JSON）rc=0 数字吻合；`--self-test` 独立复核 rc=0，23 项全过，含新用例与两个既有用例。
+**但发现一个新缺口**：一种"跨桶互换"伪造——把一个 `reset_unknown` 槽伪造成
+shape-A 形状（借用同一个 theirs-Smi 值）、同时把一个真 shape-A 槽伪造成
+`reset_unknown` 形状——能让三个桶数 92/0/6 原样守恒、`bad` 也保持空，
+从而同时骗过 `not bad` 检查与新的计数断言，而真实腐蚀确实发生在两个位置。
+**根因**：桶计数是基数（cardinality）检查，对"守恒总数的互换"这类攻击天生失明，
+需要逐槽身份校验而非只校验桶计数。判决原文已抄进 fhp-research `cards.tsv` F108 行
+（提交 `bbbde171`，仅改该行，`cards_check.sh` 重跑失败集合不变，无新增失败）。
+
+**F108 保持 `open`**：这一轮把 09-27 早些时候证伪 pass 点名的具体缺口修好并独立复核为
+PARTIAL（不是 SURVIVES）——本身又长出一个新的、已写清楚修法的具体缺口（逐槽身份校验，
+不能只查桶计数），留给下一轮当场修 + 再次证伪，不新开卡片（按契约"修它本身够大到需要
+自己的判据与负控制才立新卡"，这次不够大，是同一张 F108 卡的下一步）。
+
+**本轮到此结束**：SDK 树全程无接触；fhp-research 三次提交（`a95d2fcc`、`0e2925e9`、
+`bbbde171`）；flutter_hot_patcher 仅本节 memo 心跳，无代码改动。本轮共两次真实子代理
+派发（实现 + 证伪），均为独立、无共享上下文的新鲜代理，证伪代理未编辑任何共享树文件。
