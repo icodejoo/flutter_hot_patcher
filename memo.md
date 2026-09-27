@@ -14013,3 +14013,56 @@ padding fix"），尚未返回。
 **本轮到此为止**：`~/dart-3122/sdk`、`fhp-research`、`flutter_hot_patcher` 三棵树本轮
 交互式会话本身均未做代码改动（仅本节 memo 心跳）；等待子代理返回后再派一次独立证伪 pass，
 按契约五之四的四步流程走完（做完→证伪→修→重跑），不在本轮内抢先假设结果。
+
+**实现返回（2026-09-27）**：`~/dart-3122/sdk` HEAD 前进到 `abafbbbd51a`
+「F134: pad pool-relative S and Q loads to the object pool load footprint」，
+自报 fl/f2/f4/i4/main 与 theirs 逐字节一致、hello/prog/base_dd 不变、
+run_vm_tests 152/152、负控制复现又还原、Store S/Q 因无 PP 基址调用点而刻意不改；
+并自陈此前对「`ldst_regoff` 两侧本就一致」的判断是错的——旧扫描按「后面跟两个 NOP」
+计数误判为 4/4，真实是 theirs 1 个尾随 NOP、fix 前 ours 0 个。当场用
+`git show --stat` 核对树干净、commit message 与自报一致，未展开完整 diff 即派发独立
+证伪。
+
+**F134 独立证伪（2026-09-27，全新子代理，agent id 见任务记录，不与实现者共享上下文）**：
+
+`F134 VERDICT: SURVIVES -- on abafbbbd51a fl/f2/f4/i4/main are byte-identical to theirs, reverting the diff brings back exactly the claimed 8-byte shortfalls, and a second fixture I wrote also matches theirs on the aligned ldr q [PP,#imm] form, but the vm tests can't tell fixed from unfixed and offsets past 16K/64K were never exercised.`
+
+独立复核要点：
+- diff 范围核实：只改了 `LoadSFromOffset`/`LoadQFromOffset`，`kSWord`/`kQWord`
+  （非 `kEightBytes`），Store 侧与其余代码未动。
+- **自写测量工具**（`/tmp/f134rev/measure.py`，独立解析 ELF 符号表与 PP 相对寻址，
+  不复用实现者的 `/tmp/f134/*`），重新构建并测得：
+  `fl 88/[772,773]、f2 116/[779,781]、f4 116/[783,785]、i4 64/[774]、main 48/[]`
+  均与 theirs 逐字节一致；撤回后精确回退为
+  `fl 80/[772]、f2 108/同、f4 108/同`（772/773 缺 773，f2/f4 尺寸各短 8 字节），
+  与实现者自报数字吻合。
+- **`ldst_regoff` 反转结论核实为真但措辞需订正**：不是独立代码路径，是
+  `LoadQFromOffset` 内 `PrepareLargeOffset` 处理「偏移非 16 对齐」的分支；
+  theirs 该分支恒定 1 个尾随 NOP，fix 前 ours 是 0 个，旧 Q68 扫描按「非
+  nop,nop」计数导致两侧都读成 4/4 掩盖了 1-vs-0 的真实差异。
+- Store S/Q 侧独立核实：确无调用点以 PP 为基址（调用方均传 FP/SP/typed-data/
+  object 基址），`ObjectPoolOpKind` 无浮点/SIMD store 分类；也未发现绕过这两个
+  函数、直接从 PP 发 S/Q/D 载入的其它路径（`LoadSImmediate`/`LoadQImmediate`
+  均经由它们）。
+- hello/prog/base_dd `cmp` 逐字节不变（有无 fix 皆然）；`run_vm_tests` 152/152
+  两侧相同——**但该数字对本项修复无判别力**：无单测在预编译模式下专门触发
+  S/Q 补丁路径。
+- 负控制独立重跑：撤回 diff 复现 build hash `0bec6f28` 与上述缺口，重新应用
+  恢复 `da326778` 且输出与 HEAD 一致；结束前把源文件 mtime 复位，未使其它构建
+  目录变陈旧；`~/dart-3122/sdk` 收尾停在 `abafbbbd51a`、`git status --porcelain`
+  干净。
+- **发现但不构成推翻的缺口**（未覆盖，非缺陷）：①无单测在预编译模式下门控
+  S/Q 补丁路径；②S 偏移 >16K、Q 偏移 >64K 的多指令量表阶梯未被这份 fixture
+  触及；③本次测量用的是 mac 目标而非共享 harness 现在用的 iOS 目标构建
+  （对本卡无影响：fix 前 iOS 与 mac 在这份 fixture 上产出逐字节相同）。
+
+`cards.tsv` 只改了 F134 行（追加到第 5 列/criterion 说明，共 7 列不变，
+状态列保持 `open` 未动），已提交研究树 `8b9691b7`。**F134 卡片状态本身不在
+此次交互中改动**——按 F108 先例（`d7c604d0` 记录 SURVIVES 之后仍保持 `open`，
+留待更广的判据/操作者处理），此处同样只落实证伪记录，不单方面翻转
+`cards.tsv` 状态列。
+
+**下一步（留给下一轮）**：F134 的两条已知缺口（无门控单测、大偏移阶梯未测）
+可考虑开一张新的小卡补测；`.loop/UNREVIEWED_FIX` 其余条目（F37/F115-F118/
+F122/F140/F141/F129/F113，按此前心跳多已标「已有绿色 pass，留操作者出队」）
+本轮未重新派发。
