@@ -11932,6 +11932,11 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）
 - [x] **F142：F135 遗留的三项后续债务（探针脚本落盘+iOS 兼容、注释订正）**（`closed`，2026-09-27，deps=F135；
   实现→证伪 PARTIAL（注释仍指向已废弃的 mac 探针）→当场修（`feeedcdc09c`）→独立复核 SURVIVES(fix) 后关卡）
+- [x] **F143：analyze_snapshot 池加载跳过窗口 N7 外部分支分类缺口（F135/F142 明确搁置的一项）**（`closed`，
+  2026-09-27，deps=F135；实现（`c685a139f35f`，N7/N7b/N7c/N7d/N7f 全部 DIFF→SAME、39 条原 SAME 行无回归、
+  三基准字节不变）→全新子代理独立证伪 SURVIVES（自写 4 个未在探针里出现的对抗用例：外部
+  TBZ/TBNZ/CBNZ64 单独与叠加，修前 DIFF 修后 SAME）后关卡；STILL OPEN：`run_vm_tests` 未跑通（既有的、
+  与本卡无关的构建目标冲突）、未穷举所有分支目标边界情形与 hello fn#13 之外的函数）
 
 **F68 第二次证伪 FALSIFIED → 不关**：改写后的结论两处被实测推翻。① 补齐只修了 `LoadDFromOffset`；造一个用 float 常量的 fixture，**在今天的二进制上** `fl` 的 self_pp 他们 `[772,773]`、我们 `[772]`，同一机制仍在（父方读过原始输出）→ F134。② 跳窗并非完全一致：两边真实工具的动态差分显示池/字段加载一样被吞，但窗口里的 `bl` 他们照样分类、我们吞掉 → F135。这次差分顺带动态回答了 F72 在池加载那一半的问题。
 
@@ -14301,3 +14306,22 @@ ROWS 表仍把 N7 系列硬编码标注为"预期 DIFF/GAP"，因此脚本自己
 （撤回本卡改动同样复现同一冲突，确认非本卡引入）。两棵树收尾 tracked 状态干净。
 
 任务已派发第二个全新子代理跑独立证伪 pass（契约五之四），尚未返回。
+
+**F143 独立证伪（2026-09-27，全新 opus 子代理，未与实现者共享上下文）**：
+
+`F143 VERDICT: SURVIVES -- independent rebuild, full 44-row probe rerun, negative
+control (revert/reapply), 3-fixture byte-identity check, and 4 novel adversarial
+cases (external TBZ/TBNZ/CBNZ64, singly and combined in one window) all confirm
+the fix generalizes correctly with zero regressions. STILL OPEN: did not run
+run_vm_tests (confirmed unrunnable for this build tree) and did not exhaustively
+probe every branch-target boundary condition (e.g. target exactly at
+function-size boundary) or every fixture/function beyond hello fn#13.`
+
+独立复核要点：亲手重建、亲手重跑 44 行原始 battery（`SAME=44 DIFF=0`，`unexpected=5`
+经读探针源码 74-80 行核实确为探针自身 ROWS 表的过期期望，非代码缺陷）；亲手新写 4 个
+未在原探针里出现的对抗用例（外部 TBZ/TBNZ/CBNZ64，单独与三者叠加在同一窗口），
+修前全部 DIFF、修后全部 SAME；负控制两次读数与实现者一致；三基准 fixture 字节相同
+（已排除非确定性 mmap 地址字段）；抽查 F135 覆盖的 bl/pool/field 系列既有行确认无回归。
+
+**本轮判决：F143 关闭**。`cards.tsv` F143 行状态列改 `closed`，追加上面这段独立证伪记录
+（只改这一行）。
