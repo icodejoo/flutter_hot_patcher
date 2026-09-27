@@ -13861,3 +13861,54 @@ PARTIAL（不是 SURVIVES）——本身又长出一个新的、已写清楚修�
 **本轮到此结束**：SDK 树全程无接触；fhp-research 三次提交（`a95d2fcc`、`0e2925e9`、
 `bbbde171`）；flutter_hot_patcher 仅本节 memo 心跳，无代码改动。本轮共两次真实子代理
 派发（实现 + 证伪），均为独立、无共享上下文的新鲜代理，证伪代理未编辑任何共享树文件。
+
+### 心跳 2026-09-27（续，交互式会话）—— F108 逐槽身份校验已落地并独立证伪：VERDICT SURVIVES (fix)
+
+契约已读。锁定任务：上一节留下的具体修法——`op_dump_probe.py` 的桶计数检查对
+**跨桶互换攻击**（同时腐蚀一个 `reset_unknown` 槽与一个 `shapeA_thr` 槽，互换二者的
+分类形状，三个桶总数守恒、`bad` 保持空）天生失明，需要逐槽身份校验（比对每个桶的
+**索引集合**，不只是数量）。
+
+**第一次派发**（general-purpose/opus，fhp-research 树独占写方，18 次工具调用，318s）：
+把每个桶的合法索引集合从当前已知良好的真实语料（92/0/6）里冻结成常量，
+新检查断言观测到的索引集合与冻结集合**逐集合相等**，而非只比对大小；`--self-test`
+新增跨桶互换用例（槽 650↔28），复现攻击后旧检查（`not bad` + 桶计数）保持绿、
+新检查报 `conserved=True mismatch=['reset_unknown','shapeA_thr']` 并判红；既有五个
+`--self-test` 用例（a==b 短路、错 Thread 字段、kImmediate 写法、发散 Smi 常量、
+两个去重用例）全部保持通过；真实（非 self-test）运行 rc=0，打印
+"each bucket holds exactly its frozen set of pool indices"；额外用一个独立的 `/tmp`
+脚本（未提交）直接在磁盘上的真实 fixture 数据上手工复现跨桶互换攻击，确认新检查
+报 rc=1（`FAIL reset_unknown missing [650] extra [28]; shapeA_thr missing [28] extra
+[650]`），未扰动数据仍 rc=0。提交 `95d6e944`（fhp-research 树，仅 `op_dump_probe.py`
+与 `cards.tsv` F108 行追加说明，`~/dart-3122/sdk` 全程未接触）。
+
+**第二次派发**（新鲜、独立、只读的 general-purpose/opus 子代理，不与实现者交流，
+按 falsify.md 模板对 `95d6e944` 跑证伪 pass，10 次工具调用，153s）：
+**F108 修补丁 VERDICT: SURVIVES (fix)**——子代理自建攻击工具（挂钩 `json.load`，
+不碰共享 `out_dd/` 语料），用自己选的索引对（1117/1391）、一个跨三个桶的三方轮换、
+一次纯移动、一次索引改名攻击，逐一复现新检查判红（rc=1，逐字节确认是真实进程退出码
+而非打印文字）；未扰动真实运行确认 rc=0；桶内互换（预期不动）正确保持 rc=0（因为
+成员没变，这是设计内行为，不是缺陷）；确认 `git merge-base --is-ancestor 95d6e944
+HEAD` 为真、`git diff HEAD` 对两个文件均为 0 行。**STILL OPEN（原文照抄）**：
+(a) 桶内内容仍未校验——同一冻结桶内互换两个索引会通过，任何位于冻结
+`reset_unknown` 索引处的值不论内容是什么都会被接受；能推翻这一点的测试是只腐蚀
+一个合法 `reset_unknown` 槽自己一侧的 `(unknown)` payload 内容，看是否会报红；
+(b) 冻结索引集合是在落后 1979 个 ninja 步的陈旧 `ReleaseARM64` 上捕获的（F108 自己
+此前测出的构建陈旧问题），下一次真实重建后必须重新钉这批集合，而如果重钉方式只是
+照抄新观测到的集合，刚刚补上的这个漏洞会悄悄复活；(c) 实现者与复核者的负控制攻击
+脚本都是未提交的 `/tmp` 临时文件，不可重跑（铁律第 8 条）。
+
+已把这条 SURVIVES (fix) 判决与 STILL OPEN 原文追加进 fhp-research `cards.tsv` 的
+F108 行**第 6 列（criterion）**（这次特意避开了第 7 列 `commits`——第一次落笔时误把
+整段判决文字写进了 commits 列，`cards_check.sh` 因此把 F108 新增进
+`commits-not-sha` 失败集合；已用 `git checkout --` 撤回重写，改法是把判决文字放进
+criterion 列、commits 列只追加 `95d6e944` 这一个真实 sha；重跑 `cards_check.sh`
+确认失败集合恢复为仅 `F49/F122/F132 commits-not-sha`，无新增失败，rc 含义不变）。
+提交 `d7c604d0`（fhp-research 树，仅改这一行）。
+
+**F108 卡片保持 `open`**：本轮只closes了 `op_dump_probe.py` 这一处子修补丁的审查，
+不是整张卡——卡的判据是整个 `verify_all.sh` rc=0，此前记录的其余 7 处红仍未处理。
+
+**本轮到此结束**：SDK 树全程无接触；fhp-research 两次提交（`95d6e944`、`d7c604d0`）；
+flutter_hot_patcher 仅本节 memo 心跳，无代码改动。本轮两次真实子代理派发（实现 +
+证伪），均为独立、无共享上下文的新鲜代理。
