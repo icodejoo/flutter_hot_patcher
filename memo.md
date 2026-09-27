@@ -13683,4 +13683,69 @@ F122(commits-not-sha) F132(commits-not-sha)`，未新增失败）。`fhp-researc
 **本轮未做**：未修 `fix_queue.py`；未触碰 `cards.tsv` 以外的任何文件；未执行任何出队操作
 （F113 方案 (b)，出队专属操作者）；SDK 树本轮无接触。
 
+心跳 2026-09-27 09:56 PST：契约已读（LOOP_CONTRACT.md 全文）。核对三张 built 卡欠 pass 清单：
+F121 已在更早一轮被判入挂起池（不重派）；F130 上一轮已拿到 PARTIAL（深层缺陷需要重新设计，
+按契约"不确定就退回一轮一件事"留给后续，本轮不重派）；F49 上一轮已拿到 PARTIAL（74d7f717 仍有
+5 处未闭合的转义形状，属于待实现的修复工作而非待审的 fix，本轮不重派 pass）。三张均已在最近
+几轮内处理过，无新增待派 pass。按规则 0（SDK 本体优先于循环机械）改读 F55 子卡清单：F94 上一轮
+的独立证伪判定 PARTIAL，STILL OPEN 指出 F94 的测量（`offset` 730/11768/16.1x 一组数字）建立在
+F132（2026-09-25 切换到 iOS-target 语料）之前的 mac-target 语料上，且在切换后的语料里
+`size` 桶经证实已归零、`offset` 桶已不存在——需要在当前 post-F132 iOS-target 语料上重新测量，
+判断这一格还剩什么。本轮派一个全新、无共享上下文的 general-purpose/opus 子代理去做这次重新测量
+（含负控制），任务已派发，尚未返回。本轮未触碰任何工作树代码，未改 cards.tsv，仅本节心跳。
+本轮到此结束，等待该判决/测量结果回收。
+
+### 心跳 2026-09-27（续）—— F94 post-F132 重新测量已回收：offset/size 桶在今天的语料上已归零
+
+子代理（general-purpose，无共享上下文，32 次工具调用，869s）在 fhp-research 树完成重新测量：
+
+**核心数字**：在当前 post-F132 语料（`out_pm/`，双侧均为 iOS target，mtime 2026-09-26）上，
+`size` 三个 fixture 均 0 差异（hello 0/1380、base_dd 0/1380、prog 0/3216），`offset` 同理三者
+均 0/1380、0/1380、0/3216——offset/size 级联桶**真的空了，不只是变小**。独立交叉核实：
+`evidence_shorebird_residual.sh` 对 `shorebird` 格 19122 units 的按键分解里**根本不含
+`offset`/`size` 这两个键**，精确分解为 `op_subgraph_hash 9152 + subgraph_hash 9152 +
+self_hash 788 + 10 个标量 header 字段×3=30`，求和恰等于 19122。
+
+**负控制**（重新跑过，均按设计通过）：`--pad` 正确报红（rc=1，三个 fixture 的
+CONTIGUITY/PREDICTION/REPARSE 全部失败）；`--relayout` 正确保持绿但把计数搬动
+（UNITS 19122→31074，offset 桶 0→11946，size 桶 0→6，1991 倍放大），证明检查确实由语料驱动、
+不是构造性恒真式。
+
+**收尾**：`cards.tsv`（F94 行追加新 `||` 段落）已提交，fhp-research `089f4f0b`；
+`cards_check.sh` rc=0，既有失败（F49/F122/F132 的 commits-not-sha 列形状债）未变、无新增失败。
+
+**仍未解决**（原样保留）：上一轮证伪 pass 提出的更深一层质疑——CONTIGUITY 检查本质是
+收集器自己对 `size` 定义（`InstructionsLengthAt` 本身就是相邻 offset 相减）的同义反复，而非
+对镜像布局的独立测量——本轮重新测量**没有触及**，仍然成立；本轮只确立了"今天这份语料上
+offset/size 桶里已经没有剩余可归因的东西"这一经验事实。
+
+`memo.md`：仅本节心跳。SDK 树、状态树本轮均无代码改动。本轮到此结束。
+
 本轮到此结束。
+
+心跳 2026-09-26 20:22 PDT：契约已读。cards_check.sh 重跑发现新增失败 F113(no-commit)（此前已知失败集只有 F49/F122/F132 commits-not-sha 三个）——F113 本轮早些时候被关闭为 closed，但其 cards.tsv 行的 commits 列疑似被本轮的大段追加文字污染，不含真实 sha。正在派一个新鲜子代理调查并修复该行的列形状，不涉及 fix_queue.py 逻辑本身。
+
+**收尾**：子代理确认 F113(no-commit) 的根因是——该行本身列数正常（7 列，与 F66/F94 同型，commits 列内无残留换行/制表符），只是**关闭时 commits 列一直是占位符 `-`，从未真正填过 sha**（`cards_check.sh:212` 据此报红）。已修：commits 列填入 F113 修复链的五个真实提交 `7528f7b4,2ffe5e6d,5b00ed05,311fba9a,2a62058a`（逐个用 `git cat-file -t` 在 fhp-research 与 flutter_hot_patcher 两棵共享对象库的树上核实存在）。`git diff --stat` 确认改动窄至 1 行 1 列（+1/-1）。`cards_check.sh` 失败列表核对前后一致，仅 `F113(no-commit)` 消失，`F49/F122/F132 commits-not-sha` 与 `F122(<word>)` 噪声列表未变、未新增失败（脚本仍因这些既有已知债 rc=1）。提交：`45f6bb3a`（fhp-research 树，仅改 cards.tsv 一行）。本轮属纯数据/记账修复，不涉及 fix_queue.py 逻辑，不落入证伪 pass 闸门（未标 [x]、未推翻任何既有判决）。
+
+本轮到此结束：SDK 树无接触；fhp-research 一次提交（45f6bb3a）；flutter_hot_patcher 仅本节 memo 心跳。
+
+心跳 2026-09-27 12:42 PST：契约已读。锁检查：本会话即 run_round.sh 当前轮次（PROMPT 逐字匹配，round.lock 时间戳 12:37PM 与本会话一致），非法第二写方顾虑不适用。fhp-research/flutter_hot_patcher 两棵树 git status 干净（仅无关 untracked：.serena、test_work）。选定本轮任务：`.loop/UNREVIEWED_FIX` 队列第 10 项 F95（SDK 本体、matrix `self_hash` 残差，规则 0 优先于循环机械类的 F113/F130/F49），其最近一次落地（fhp-research commit 0cf09fbd「correction round 3」）尚未过审。正在派一个新鲜子代理跑 falsify.md 证伪 pass。
+
+**收尾**：证伪 pass 结论 `F95 修补丁 VERDICT: FALSIFIED -- 归因错，不是数值错`。
+子代理独立重跑 `f95_self_hash_residual.py` 并手工复现 drop-6 负控制（自建
+`thread_map.json` 副本删掉新增 6 个 offset 键：1696/1704/1712/1816/1824/1832），
+两者都独立复现历史数字（未扰动 EXAMINED 394/EXPLAINED 394/UNEXPLAINED 0；
+drop-6 下 391/3，残差精确落在 `#1177 ArrayWriteBarrierStub`）——**数值主张本身独立存活**。
+被证伪的是归因：队列里点名的提交 `0cf09fbd` 自己提交的内容里，两处被声称已修的文字缺陷
+（"158 是 fixture 总函数数" 误标、NEG CTL 打印行的 "words" 措辞）原样还在
+（`git show 0cf09fbd:.../f95_self_hash_residual.py` 与 `git show 0cf09fbd:.../cards.tsv`
+可验证），真正修好这两处的是它的直接子提交 `02ee1a4a`（未列在 `0cf09fbd` 自己的证据清单里）。
+**当前磁盘状态与 `02ee1a4a` 一致，不是 `0cf09fbd`** ⇒ 这是一条历史归因错误，不是当前产物的缺陷。
+已把这条证伪结论追加进 fhp-research `cards.tsv` 的 F95 行（仅改这一行这一列，
+`cards_check.sh` 重跑前后失败集合不变，仍是既有的 `F49/F122/F132 commits-not-sha` 噪声，
+无新增失败），提交 `8404491b`。F95 卡保持 `open`；同源循环论证的局限仍未解决，本轮未处理。
+本轮模型：dispatcher 用 Sonnet 5，证伪子代理用 Opus（27 次工具调用，只读，未改任何文件）。
+
+本轮到此结束：SDK 树无接触；fhp-research 一次提交（`8404491b`，1 行 1 列）；
+flutter_hot_patcher 仅本节 memo 心跳，无代码改动。
+2026-09-27 13:26 PST 心跳（交互式会话，claude-sonnet-5，调度器角色）：契约已读。built 卡欠 pass 四项复核：F37/F113/F122 已 SURVIVES(fix) 留给操作者出队；F130/F49/F121/F95/F140 已 PARTIAL/挂起池，不重派。按规则 0 改锁定 SDK 本体的 F108（open，未 built）——其卡片记录 09-25 已把四个红判定为过期钉值/反转判据（非本行动），唯一剩下的真实回归是 op_dump_check（F37 codegen 变更后对象池 dump 计数偏差 1323 vs 1421，delta 98=per-process 92+6）。ReleaseARM64 已再度落后（ninja -n 报 20 步待办，晚于 SDK HEAD 98c95873b72），派一个新鲜 general-purpose/opus 子代理先重建、再用 op_dump_probe.py 逐字节调查这处偏差，任务已派发，尚未返回。本轮未触碰任何工作树代码，未改 cards.tsv/memo 之外的文件。
