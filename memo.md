@@ -13749,3 +13749,40 @@ drop-6 下 391/3，残差精确落在 `#1177 ArrayWriteBarrierStub`）——**�
 本轮到此结束：SDK 树无接触；fhp-research 一次提交（`8404491b`，1 行 1 列）；
 flutter_hot_patcher 仅本节 memo 心跳，无代码改动。
 2026-09-27 13:26 PST 心跳（交互式会话，claude-sonnet-5，调度器角色）：契约已读。built 卡欠 pass 四项复核：F37/F113/F122 已 SURVIVES(fix) 留给操作者出队；F130/F49/F121/F95/F140 已 PARTIAL/挂起池，不重派。按规则 0 改锁定 SDK 本体的 F108（open，未 built）——其卡片记录 09-25 已把四个红判定为过期钉值/反转判据（非本行动），唯一剩下的真实回归是 op_dump_check（F37 codegen 变更后对象池 dump 计数偏差 1323 vs 1421，delta 98=per-process 92+6）。ReleaseARM64 已再度落后（ninja -n 报 20 步待办，晚于 SDK HEAD 98c95873b72），派一个新鲜 general-purpose/opus 子代理先重建、再用 op_dump_probe.py 逐字节调查这处偏差，任务已派发，尚未返回。本轮未触碰任何工作树代码，未改 cards.tsv/memo 之外的文件。
+
+### 心跳 2026-09-27（续，交互式会话）—— F108/op_dump_check 子代理返回：不是回归，顺带修了一处仪器缺陷
+
+子代理（general-purpose/opus，37 次工具调用，1769s）在新鲜重建（`ReleaseARM64` 20→0 步，
+`ProductSimIosARM64` 6→0 步，全程未用 `SKIP_STALENESS_GUARD`）上确认 **`op_dump_check.sh` 本身
+rc=0**——09-25 那次红来自 F37 早先 kImmediate 写法，`b2e93350653`（F121）已经修掉，改动前它
+就是绿的。**F108 保持 `open`**：判据要求整个 `verify_all.sh` rc=0，仍不满足，但剩下的红都与
+op_dump 无关（见下）。
+
+**1323/1421 的分解已查清**：两侧池大小都是 1421、385 pairs 逐项相同，没有丢槽。真正不一致的
+98 个里，**92 个是 Thread 偏移造成的结构性差异**（shape-A 原生调用槽：他们存 `2312(obj)`
+Smi 0x908，我们存 `3968(obj)` Smi 0xf80，0xf80 即我们的
+`Thread::call_bootstrap_native_entry_point_` 偏移，两侧各一个值一一对应）；**6 个是反序列化
+时被重置的进程内原始入口地址**，跨进程本就不可能相同。此前"98=进程内92+6"只对了一半。
+
+**顺带修了一处真实仪器缺陷**（研究树 `76c3b0f6`）：`op_dump_probe.py` 里 `ebfadea0` 加的放行
+条件只判"两边都是 Smi"，实测把一个 shape-A 槽伪造成 no_scope 字段、或让一个本应相同的 Smi
+常量出岔子，两种破坏都不报 bad、照样绿。已收紧为：我们一侧的值必须等于从 DWARF 读出的
+bootstrap 偏移；他们一侧同类槽必须全部同值；index/offset 必须一致。`--self-test` 新增三个
+用例（两种伪造 + kImmediate 写法）各报 1 bad。**负控制**：SDK 侧把 `il_arm64.cc` 写法改回
+`AddImmediate` 重建，`op_dump_check` 变红（1323/1421，`0x1f00 (unknown)`），`git checkout --`
+还原重建后回到 rc=0；SDK 树最终 0 行改动，未提交。
+
+**收尾**：`cards.tsv` F108 行仅追加末尾说明，commits 列填 `76c3b0f6`，状态仍 `open`
+（研究树提交 `bea0e81b`）；`op_dump_probe.py` 改动提交 `76c3b0f6`。**`76c3b0f6` 是新修补丁，
+自己还欠一次证伪 pass**（按契约"修补丁不继承它所修对象的审查结论"）。
+
+**顺带发现、本轮未修的其余 7 个红**（fresh `verify_all.sh`：改动前后一致，rc=1，
+41 ran / 7 failed / 4 blocked）：`evidence_disassemble_residual`（UNEXPLAINED 1190）、
+`evidence_pool_link_data_residual`（hello delta=101≠期望40，`00b1e95` 刚重钉过又对不上）、
+`evidence_dump_blobs_residual`（hello 1362≠1440，同样刚重钉过又对不上）、
+`evidence_shorebird_components`、`evidence_shorebird_subgraph_hash`、`cards_check`
+（F49/F122/F132 commits 列仍是散文非 sha）、`phase_gate`；另外 `verify_reproduction` 与
+`evidence_kernel_callgraph_independence` 新增阻塞，原因是缺 `~/fvm/versions/3.44.6/bin/dart`。
+
+**本轮**：`memo.md` 仅本节；SDK 树 0 提交；fhp-research 两次提交（`76c3b0f6`、`bea0e81b`）。
+正在派一个新鲜子代理对 `76c3b0f6` 跑证伪 pass（不许自审）。
