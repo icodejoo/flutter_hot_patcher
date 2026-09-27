@@ -14434,3 +14434,48 @@ XOR 1，`SUPPRESSION_TRACED`/`VERDICT` 原样不变。
 **本轮到此为止**：本轮把上一轮 PARTIAL 指出的缺陷在原地修完、重跑验证过一遍
 （含两个自己引入又自己抓到的新 bug），并按规则派出下一次独立复审；
 F69 状态仍是 `open`，`cards.tsv` 尚未改动——不到 SURVIVES(fix) 不动棘轮。
+
+### 心跳 2026-09-27 23:35 —— F69 修补丁复审再判 PARTIAL，当场修第二层缺陷，第三次派独立复审
+
+上一条派发的复审（针对 `a7d269a4`）已返回：**`F69 修补丁 VERDICT: PARTIAL`**。
+七项攻击里第 3/6/7 项抓到同一族缺陷：新加的 `cond_of()`/`EXHAUST_COND_OK` 只看
+分支条件码的助记符，**从不检查那个分支实际读的是不是它自己该读的那组 NZCV
+标志位**。两条独立复现（均在修补丁生效后仍给 `VERDICT: A`/`SUPPRESSION_TRACED=True`，
+本应变红）：
+(a) 把 level-1 的 `subs w8,w8,#0x1`（VA `0x100196968`）改成不设标志位的 `sub`
+    （字 `0x71000508`→`0x51000508`，即翻转 bit 0x20000000 这个 S 位）——
+    分支读的是别处遗留的陈旧标志位，与这次递减无关；
+(b) 在某个级联层的 `subs` 与分支之间插入一条会覆盖标志位的指令（例如把
+    level-2 那条 `ldr w24,[sp,#0x64]`，VA `0x100196994`，改成 `cmp w24,#0x0`，
+    字 `0x7100031f`）——分支读的是这条插入指令留下的标志位，不是原来那条
+    `subs` 的。审查者同时确认 `successors()` 本体确实一次都没被这次改动碰过，
+    但复核后维持上一次的结论：那不是本卡的缺口，是 `reach()` 单独的、已知的
+    结构性过近似，不影响 `SUPPRESSION_TRACED` 这条判据本身。
+
+按契约五之四本轮当场修：
+
+1. 加 `FLAG_SETTERS`（`subs/adds/ands/bics/negs/adcs/sbcs/cmp/cmn/tst/ccmp/ccmn`）
+   与 `branch_reads_live_flags(decr_idx, branch_idx)`——要求 (i) 递减指令本身
+   就是 `subs`（不是 `sub`），(ii) 递减指令与分支之间没有任何再次写 NZCV 的指令。
+   在 level-1 与级联循环两处都把这个结果 AND 进 `exhaust_cond_ok`/`cascade_conds`，
+   从而门到 `all_conds_ok`/`L["ok"]`/`SUPPRESSION_TRACED`。
+2. 新增两个自派生的负控制：**NC5**（把当次跑出的 level-1 递减指令的 S 位翻掉，
+   `subs`→`sub`）、**NC6**（把当次跑出的、级联里第一个"递减与分支之间确实有
+   间隙"的那个间隙指令，改写成 `cmp w24,#0x0`）——两个都读当次运行自己打出的
+   地址/原字（不硬编码），patch 副本后用 `F69_NC4_DISABLE=1` 递归重跑同一脚本，
+   断言 `SUPPRESSION_TRACED` 翻 False。
+3. 重跑真实二进制：`rc=0`、`F69 VERDICT: A`、`SUPPRESSION_TRACED=True`，
+   `NC1/NC1b/NC2/NC3/NC4/NC5/NC6` 全部 PASS。
+4. 独立重跑审查者给的原始两条复现命令本身（用同一份补丁工具、同样的地址/字），
+   两条都已变红：`VERDICT: C`、`SUPPRESSION_TRACED=False`。
+5. 顺带核实审查者点名"这不该变红"的两个合法同集合条件互换
+   （`b.lt`→`b.le` 字 `0x5400012d`、`b.lt`→`b.eq` 字 `0x54000120`）——两个都仍是
+   `VERDICT: A`，符合预期（`le`/`eq` 本来就在 `subs #1` 的耗尽自洽集合里，不是缺陷）。
+
+提交 `fhp-research 440280c3`（`f69_their_pool_skip_disasm.sh`，142(+) 6(-)）。
+
+已第三次派发全新独立 Opus 证伪 pass，专门审这一版修补丁（不审前两版，
+不与实现者共享上下文），尚未返回。
+
+**本轮到此为止**：F69 状态仍 `open`，`cards.tsv` 未改；这是同一张卡片上第三次
+"实现→独立证伪→PARTIAL→当场修→重派"的循环，尚未拿到一次 SURVIVES(fix)。
