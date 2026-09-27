@@ -13940,3 +13940,44 @@ body 那一行本身没有 id（`scan()` 的早退 `if not here and not alias ..
 F49 行追加一段 ` || 2026-09-27 <说明> <sha>` 记录本次改动（该树独占写，
 不要碰 SDK 或验证脚本），返回：改动文件、self-test 与 test_fix_gate 的实测
 退出码与用例数、提交 sha。
+
+### 心跳 2026-09-27 16:xx（续）—— F49 修补丁 `cf1dbd60` 独立证伪：VERDICT PARTIAL，同款 whack-a-mole
+
+**实现子代理**（general-purpose/opus，隔离 worktree，35 次工具调用，266s）：
+修了 E1（body 判决行没有自己的 id 时，按同一 sha 的 subject/其它 body 行找 id 挂靠）
+与 E3（引入 `commit_owned()`/`FIX_CLAIM`——只有 subject 里的 id，或 body 里伴随
+fix/patch/close/resolve/address/respond/repair/修/`(fix)`标记/判决词的 id，才算
+"被这条提交认领"，否则仍走 E3 兜底链给这一轮所有变红的卡）。子代理先在自己的
+worktree 里提交（分支从旧祖先切出，无法直接落 `v1`），本轮在主树上核实
+`v1` HEAD 与该提交是快进关系（`git merge-base --is-ancestor 118aceba HEAD`）后
+`git merge --ff-only` 落地为 `cf1dbd60`，独立重跑确认
+`python3 tools/loop/fix_queue.py --self-test` → `118 case(s), 0 failure(s)`，
+`tools/loop/tests/test_fix_gate.sh` → `0 failure(s)`。子代理自报三处未关的线索
+（(1) body 里"fix 词"与不相关 id 挨着但语义无关，如"the old F12 fix"，仍算认领；
+(2) 一条 body 判决行如果它所在的提交哪都没提任何卡号，仍无处挂靠、照样丢；
+(3) 判决词与"这是判决"的上下文词分写在两条 body 行时仍漏判）。
+
+**证伪子代理**（general-purpose/opus，隔离 worktree，30 次工具调用，213s，
+未与实现子代理交流）：**F49 VERDICT: PARTIAL**——三条线索全部用真实 CLI
+复现为真：(1) 逗号连写的 body 分句能骗过 `FIX_CLAIM` 的分句切分，例如
+`"Follow-up to F12, fixes gate."` 让这条提交被判定"认领了 F12"，F49 真正的红
+反而没人挂；(2) 否定语气（`"does not fix F12"`）依旧被判定为认领，同一种假取消
+换了个说法就能复现；(3) 不提任何卡号的提交里出现 id-less 红判决——如线索(2)所料
+——继续被静默丢弃；(4) 判决词与判决上下文词分写两行——如线索(3)所料——继续漏判。
+证伪子代理还做了一次"预修/后修混合"负控制：只回退 POST 代码里对应两处改动的
+hunk，得 `118 cases, 2 failures`（恰好是新增的两个探针），确认新探针确实在测
+真实代码路径而非恒真式；纯 PRE（`118aceba`）基线自测 `115/115` 全绿（无新探针）。
+
+**判决与收尾**：证伪结论已追加进 fhp-research `cards.tsv` 的 F49 行（提交
+`6fe29eed`，仅改该行，`awk -F'\t'` 确认字段数仍为 7、行数仍为 142，无结构损坏）。
+**F49 保持 `built`，不关闭**：这一轮暴露的形状与 F121 的 SS6 完全同构——
+每一轮的字面修法都被下一轮找到的相邻措辞（逗号分句、否定语气、多行判决）绕过，
+证伪子代理与本轮判断一致，建议比照 F121 的处理（转入待定池、本轮换独立任务），
+而不是再打一轮字面补丁。**本轮到此为止，不再第三次尝试字面修补 F49**——
+按契约"不确定就退回一轮一件事"，本轮已完成一次完整循环（实现 + 独立证伪），
+产出是这个 PARTIAL 判决本身，不是一张假 `[x]`。
+
+**本轮到此结束**：`~/dart-3122/sdk` 全程未接触；`flutter_hot_patcher`（v1）
+一次提交（`cf1dbd60`，快进合并）；`fhp-research`（route-a-research）一次提交
+（`6fe29eed`）；两次真实子代理派发（实现 + 证伪），均为独立、无共享上下文的
+新鲜代理，证伪代理未编辑任何共享树文件（其复现脚本在自己的隔离 worktree /tmp）。
