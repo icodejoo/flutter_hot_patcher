@@ -13648,3 +13648,39 @@ fhp-research `cards.tsv` 的 F94 行说明列（仅该行改动，`git diff --nu
 **收尾**：`cards.tsv`（fhp-research 树）F113 行状态改为 `closed` 并追加上述原文；F130 行说明列
 追加本次 PARTIAL 记录与复现步骤，commits 列追加 `4f8fbda8`。`cards_check.sh` 重跑确认 open/closed
 两侧对齐（F113 不再是仅存在于 memo.md 的 open 项）。本轮到此结束。
+
+心跳 2026-09-27 08:39:51：锁定 F130 修补丁的修补丁（commit 4f8fbda8，"F130 pass 3" sha dedup scoping fix）欠证伪 pass；本地 --self-test 115/0 基线确认后派发新鲜 opus 子代理。
+
+### 2026-09-27 heartbeat -- F130 fix-of-fix (4f8fbda8) 证伪 pass 返回：VERDICT PARTIAL
+
+一个全新、无共享上下文的 general-purpose/opus 子代理（19 次工具调用）跑 `falsify.md`
+七项攻击审查 F130 "pass 3" 的修补丁 `4f8fbda8`（`tools/loop/fix_queue.py` 里把 sha 去重的
+扫描范围从"整个 old_reason 字符串"收窄到"仅 `fix commit(s) ...` / `new fix ...` 这两个
+本模块自己生成的片段"）。
+
+**F130-fix VERDICT: PARTIAL** —— 09-27 那个具体复现案例（`deadbeef1` 工单号伪装成
+`deadbeef1234567`）确认已修好（在 pre-fix 副本上独立复现真实 FAIL，post-fix HEAD
+`--self-test` 115/0）；但新的范围收窄靠的是**字面短语匹配**（`old_reason` 里任何位置出现
+`"fix commit(s)"` 或 `"new fix"` 字样都会触发扫描），不是"这段文字只可能是本模块自己写的"
+这条结构性保证。子代理构造出对抗性 `old_reason`：`"F77 blocked, waiting on a new fix
+deadbeef1 from infra team; fix commit(s) 1112223; no pass on the fix"`，其中 `"a new fix"`
+是人类叙述性文字而非本模块生成的片段，仍然会把 `deadbeef1` 提进 `old_shas`，
+从而掩盖真正的新提交 `deadbeef1234567` —— 复现了这次修复本要消灭的那一类问题，只是触发条件
+更窄。代码没有强制"这段文字只能是机器写的"这条不变量，而本项目自己的文档已经写明存在人工
+操作者手动编辑队列/账本的工作流。
+
+STILL OPEN（原文抄录，子代理指出的下一个可推翻点）：无单独一行——已折叠进 FLAW，
+即上面那个对抗性构造案例本身就是尚未解决的破绽，不需要再造新测试去推翻。
+
+**收尾**：已把这次判决原文追加进 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/
+cards.tsv` 的 F130 行（仅第 5 列追加，逐字节确认只有这一行 diff，7 列不变，
+`cards_check.sh` 重跑确认 FAIL 集合仍是修复前就存在的 `F49(commits-not-sha)
+F122(commits-not-sha) F132(commits-not-sha)`，未新增失败）。`fhp-research` 提交 `5b47b3b5`。
+**F130 保持 `built`，未关闭**：`4f8fbda8` 自己仍欠一次针对这条更窄破绽的证伪/修复循环。
+按契约"不确定就退回一轮一件事"，本轮不当场重新设计去重逻辑（这需要新的判据与负控制，
+够格立一条独立后续），留给下一轮处理。
+
+**本轮未做**：未修 `fix_queue.py`；未触碰 `cards.tsv` 以外的任何文件；未执行任何出队操作
+（F113 方案 (b)，出队专属操作者）；SDK 树本轮无接触。
+
+本轮到此结束。
