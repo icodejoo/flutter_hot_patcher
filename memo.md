@@ -13786,3 +13786,37 @@ bootstrap 偏移；他们一侧同类槽必须全部同值；index/offset 必须
 
 **本轮**：`memo.md` 仅本节；SDK 树 0 提交；fhp-research 两次提交（`76c3b0f6`、`bea0e81b`）。
 正在派一个新鲜子代理对 `76c3b0f6` 跑证伪 pass（不许自审）。
+
+### 心跳 2026-09-27（续）—— F108 修补丁 `76c3b0f6` 独立证伪：VERDICT PARTIAL，真实缺口未修
+
+新鲜子代理（general-purpose/opus，隔离 worktree，17 次工具调用，203s）敌对审查 `76c3b0f6`
+（op_dump_probe.py 的 shape-A 槽 DWARF 校验收紧）。**基线确认**：`--self-test` rc=0，
+`1323/1421 identical, 98 reset slots (reset_unknown=6 shapeA_thr=92)`，三个已知伪造用例各报
+`1 bad`；dSYM UUID 与 `gen_snapshot` 二进制匹配。子代理**未编辑源码**，改用 `classify_entries`
+包一层、喂真实 1421 条目的构造攻击，攻击脚本留在自己的隔离 worktree（不影响任何共享树），
+`~/dart-3122/sdk`/`cards.tsv` 全程未动。
+
+**通过的三项**（如实复现原作者声称的负控制）：缺 DWARF 字段→92 槽全 bad；他方一侧出现两个不同
+值→bad=1；shape-A 槽被腐蚀成 `(unknown)`/`CallBootstrapNative` stub→各 bad=1。92 个 shape-A 槽
+全部被检查（无提前退出），positive 侧（新鲜未改动构建）无假阳性。
+
+**真实缺口**：`if a == b: continue` 这条相等短路跑在 shape-A 分类**之前**——把全部 92 个
+shape-A 槽的值改写成 Shorebird 那侧的值 `2312 (obj)`（我们 Thread 布局里某个无关字段，不是
+bootstrap 偏移）后，`bad=0`，`shapeA_thr` 这个计数直接从输出里消失。等价于"只要两侧凑巧相等就
+不再校验是不是真的该等于 DWARF 偏移"，与卡片声称的"我们一侧必须等于 DWARF 偏移"这条不符。
+另外两处非本次修复范围内、但仍开着的旧缺口：无最小计数断言（0 个 shape-A 槽会空过、没有任何地方
+钉死 `shapeA_thr==92`）；`reset_bootstrap`（Code→CallBootstrapNative stub 互换）与
+`(unknown)` vs `(unknown)`（如 `0xdeadbeef`）两类腐蚀仍无条件放行。
+
+建议修法（子代理未动手）：把 shape-A 分类挪到相等短路之前；把 `shapeA_thr==92`、
+`reset_bootstrap==0`、`reset_unknown==6` 从"打印出来"改成"断言"。
+
+**收尾**：判决原文已追加进 fhp-research `cards.tsv` F108 行（仅该行，`git diff --numstat` 确认
+1 行改动；commits 列去重后为 `76c3b0f6`），提交 `eb9314d3`。**F108 保持 `open`**：
+`76c3b0f6` 本身经证伪判 PARTIAL，未继承任何绿色结论，仍需一轮"补上这个 `a==b` 短路缺口 + 补
+最小计数断言 + 重跑证伪"才能推进。本轮不当场重修（一轮已完成两次派发：调查 F108 + 证伪其修补丁，
+按契约"不确定就退回一轮一件事"，把这处已经写清楚的具体修法留给下一轮）。
+
+**本轮到此结束**：SDK 树全程 0 提交（唯一一次改动是子代理的负控制，已 `git checkout --`
+还原并确认 `git status --porcelain` 为空、`ninja -n` 报 0 步）；fhp-research 三次提交
+（`76c3b0f6`、`bea0e81b`、`eb9314d3`）；flutter_hot_patcher 仅本节与前一节 memo 心跳。
