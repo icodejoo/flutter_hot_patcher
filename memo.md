@@ -15015,3 +15015,32 @@ shared tree picks up this commit.
 
 - [x] **F136：给 shape-A native-call 的三个 Thread 偏移加跨进程一致性守卫**（`closed`，2026-09-28，
       F37 拆出；实现早于本轮记账，独立证伪 SURVIVES；详见本节）
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：救援 round-67522，本轮无新工作
+
+契约六之二读完：开工前先看救援，别从头做。系统提示指向的
+`fhp-research` stash `round-67522`（`git stash show -p` 只含一行改动：
+`cards.tsv:137` `F136 open→closed`）与本文件里已经存在但**未提交**的
+F136 心跳文字逐字吻合——上一轮做完了实现旁的记账，卡在提交前被中断。
+
+核验后按契约"能接着做就接着做"：`git stash apply stash@{0}`（`pop`
+被 `.git/hooks` 的防误删钩子拦下，`apply` 不受影响，未 drop，留给操作者
+清理）；跑 `cards_check.sh` 发现原来 11970 行那条 `- [ ] F136`（旧的
+open 卡片声明）与文末新写的 `- [x] F136` 同时存在导致
+`FAIL: duplicate closed card id(s)`；改成一条指向权威关闭记录的引用后
+`cards_check.sh` 的 open/closed 集合一致性两项复核为 `ok`。
+
+分两个提交落盘（各自树各一个写方）：
+`fhp-research d22aa8d4`（cards.tsv）、本仓 `b890525b`（memo.md，含本节）。
+
+⚠️ `cards_check.sh` 还报了一个与本轮无关、覆盖 F36 到 F143 几乎全部卡号的
+`FAIL: closed cards commits do not exist in any tree (commits-not-sha)`——
+这是一个系统性的既有问题（所有卡片同一种失败模式，不是本轮改动引入的），
+不在本轮范围内处理，如实记录、不据此判断本轮任务失败。
+
+本轮没有做任何"新的" SDK 复刻工作——救援这份被中断的记账动作本身就是
+本轮的合格产出（契约"一件事 + 它的审查结论"）。下一轮任务：F37 的其余
+依赖（F107/F108/F109/F121 均已 closed/built，只剩 F108 状态待确认；F136
+现已 closed）已基本清空，可以重新评估 F37 本体是否已可关卡，或按规则 0
+挑选下一张无依赖 open 卡。`.loop/RESCUED` 与三棵树 `git status --porcelain`
+均已核对，无遗留脏树。本轮到此结束。
