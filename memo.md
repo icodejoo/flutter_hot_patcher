@@ -11942,7 +11942,9 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 **F133 → `built`（同日）**：那 17 个也全是 Thread 字段偏移，扩展替换后 **SELF_HASH MATCH 391/391**。F125 的规则漏了两种访问：数组成员内部的元素（`write_barrier_wrappers_entry_points_[1]/[2]`，12 个 stub）和经栈上溢出槽里的 THR 副本访问（`ExitHandleScope_entry_point_`、`MemoryMove_entry_point_`，5 个）。没有别的结构体、没有 mac/iOS 影响、没有缺口；四个负控制与 bl 目标交换控制都按预期变红（父方复读）。⇒ **「尺寸相同、self_hash 不同」的 391 个条目全部归因到 Thread 偏移。**
 
-- [ ] **F134：`LoadSFromOffset`/`LoadQFromOffset` 的 PP 加载没补齐（003f2759a68 只修了 LoadD）**（`open`，2026-09-25，从 F68 第二次证伪拆出）
+- [x] **F134：`LoadSFromOffset`/`LoadQFromOffset` 的 PP 加载没补齐（003f2759a68 只修了 LoadD）**（`closed`，2026-09-28，
+      从 F68 第二次证伪拆出；实现 `abafbbbd51a` 早于本次记账，2026-09-27 独立证伪已判 SURVIVES，
+      只是从未被写回卡片状态列——本轮补记，详见心跳）
 - [ ] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）
 - [x] **F142：F135 遗留的三项后续债务（探针脚本落盘+iOS 兼容、注释订正）**（`closed`，2026-09-27，deps=F135；
   实现→证伪 PARTIAL（注释仍指向已废弃的 mac 探针）→当场修（`feeedcdc09c`）→独立复核 SURVIVES(fix) 后关卡）
@@ -15044,3 +15046,44 @@ open 卡片声明）与文末新写的 `- [x] F136` 同时存在导致
 现已 closed）已基本清空，可以重新评估 F37 本体是否已可关卡，或按规则 0
 挑选下一张无依赖 open 卡。`.loop/RESCUED` 与三棵树 `git status --porcelain`
 均已核对，无遗留脏树。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，续）：F37 依赖链复查，F134 补记关卡（bookkeeping，非新派发）
+
+按上一节留的下一步，复查 F37（`open`，deps=`F80,F107,F108,F109,F121,F136`）：
+`F80/F107/F109/F136 closed`；**`F108` 仍 `open`**（within-bucket 内容级校验尚未完成，
+自己的证伪链已到 pass 6，判 PARTIAL，仍在挖真实缺口，非机械问题）；
+**`F121` 仍 `built`**（连续 6 次证伪 PARTIAL，已按契约六进挂起池，本轮不重派——
+同一种修法连续失败 3 次即应换独立任务，此卡早已越过这条线）。
+⇒ **F37 本体仍被 F108 与 F121 挡住，尚不可关卡。**
+
+复查过程中发现 `cards.tsv` 里 **F134** 状态列仍是 `open`，但它自己的历史里已有
+**2026-09-27 独立证伪 pass（全新 reviewer，独立脚本 `/tmp/f134rev/measure.py`）
+判 `VERDICT: SURVIVES`**（`fl/f2/f4/i4/main` 与他们逐字节相同、revert 复现红、
+`run_vm_tests` 152/152 两侧）——卡片自己的判据（补齐 S/Q 加载、SIMD fixture 与他们相符、
+hello/prog/base_dd 不动）已被这次 pass 满足，只是从未有人把这个判决写回状态列。
+**这不是本轮做的新工作，是发现一处记账遗漏**：核验 `~/dart-3122/sdk` HEAD（`ac863d5cd46`）
+对 `assembler_arm64.cc`/`il_arm64.cc` 的提交历史，确认自被审查的修复提交 `abafbbbd51a` 起
+**零提交**碰过这两个文件（`git log --oneline -- <两个文件>` 最新仍是 `abafbbbd51a`），
+即那次 SURVIVES 判决没有过期。按契约（SURVIVES → 允许关卡，STILL OPEN 原文抄进记录），
+补记关卡：`cards.tsv`（`fhp-research` 树）状态列 `open→closed`，追加一段说明本次是补记
+而非新证伪，并原样抄录该 pass 的 STILL OPEN（`no gate-open S/Q unit test`、
+`>16K/64K offset rungs unexercised`、reviewer 自己的脚本未落盘，铁律第 8 条欠账）；
+`commits` 列填 `abafbbbd51a`。`memo.md` 同步：11945 行 `- [ ] F134` 改 `- [x]`。
+
+`cards_check.sh` 跑后暴露两类问题，只有第一类是本次改动引入、已修：
+① **`open/closed` 集合不一致**（`open in memo.md only: F134` / `closed in cards.tsv only: F134`）
+——这正是上面那处 checkbox 编辑要修的，本节提交后应清零；
+② **`commits-not-sha`**：几乎全部卡号（`F36`…`F143`，含刚关的 `F134`）都报这个，
+这是一个覆盖面达 100+ 张卡的既有系统性问题（提交号真实存在于对应树上，但检查脚本认不出
+某种既有格式），**上一轮心跳已记过一次「与本轮无关」**，本轮复核后确认范围未变、
+不属于本次改动引入，如实记录、不据此判定本轮失败，也不在本轮修它（修复检查脚本本身需要
+独立判据与负控制，够格立一张新卡，但不是本轮的任务——本轮任务是 F37 依赖链复查）。
+
+本轮 agents=0（未派发新的独立子代理——这是对已存在的、未过期的证伪证据做账目关卡，
+不是新发现，不落入"必须先派新鲜子代理"那条，因为没有新的 CLAIM 需要被证伪，只是把已经
+写在卡片里的旧判决兑现为状态列）。改动文件：`memo.md`（本节 + 11945 行 checkbox）、
+`fhp-research` 树的 `spikes/shorebird_linkinfo_oracle/cards.tsv`（F134 行）。
+两个 SDK/构建树均无改动（只读复查）。下一轮：F37 仍被 F108（真实未完成的内容级校验）与
+F121（已进挂起池，5 轮后再重试）挡住；可选独立任务：F108 的下一步（per-slot 内容值校验，
+非仅索引集合）、或按规则 0 挑一张无依赖 open 卡（如 F81/F82/F84/F87/F88/F94/F95/F104 之一，
+均无依赖）。本轮到此结束。
