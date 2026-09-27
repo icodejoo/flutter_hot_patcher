@@ -14386,3 +14386,51 @@ commit 里含 `fd3bfcf3 feeedcdc09c`，与本会话上一轮 F142/F143 收尾提
 
 **本轮到此为止**：本轮只做了依赖图筛选与派发，未直接改代码/未跑构建；等子代理返回后
 按契约五之四记录判决，SURVIVES 才可能推进 F69/F68/F71/F72 的关卡状态。
+
+### 心跳 2026-09-27 23:10 —— F69 证伪 pass 判 PARTIAL，本轮当场修复，重派新一次独立复审
+
+上一条派发的独立 Opus 证伪 pass 已返回：`F69 VERDICT: PARTIAL`——
+`successors()` 对 `b.<cond>`/`cbz`/`cbnz`/`tbz`/`tbnz` 一律给出「分支目标 + fallthrough」
+两条可达边，**完全不看条件码本身**，导致 `trace_link()` 算出的 `SUPPRESSION_TRACED`
+对条件极性瞎——把真实二进制里那处倒计时耗尽分支（VA `0x10019696c`，字
+`0x5400012b`=`b.lt`）改成 `b.ge`（字 `0x5400012a`），复现步骤：patch 该地址的字、
+XOR 1，`SUPPRESSION_TRACED`/`VERDICT` 原样不变。
+
+按契约五之四「PARTIAL 不许关，能在本轮修的当场修，然后重跑一遍」，本轮直接修：
+
+1. 在 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/f69_their_pool_skip_disasm.sh`
+   加 `EXHAUST_COND_OK = frozenset(["eq","lt","le","mi","ls"])`（`subs reg,reg,#1`
+   耗尽写法唯一自洽的条件集）+ `cond_of()`，把条件校验串进 `trace_link()` 的
+   `cascade_conds`/`all_conds_ok`，把 `L["ok"]`（从而 `SUPPRESSION_TRACED`）
+   门在 `all_conds_ok` 上，两处 VERDICT 说明文本同步更新。
+2. 新增负控制 NC4：读当次跑出的耗尽分支 VA/字（`NC4_EXHAUST_BRANCH_VA`/`_WORD`），
+   用新写的独立小工具 `f69_nc4_patch.py`（刻意不复用主脚本自己的 Mach-O
+   解析代码——两边共用同一段代码可能把同一个 bug 同时藏在被测物与负控制里）
+   翻转该字 bit 0（ARM64 条件码架构事实：bit 0 翻转即取反条件），
+   用 `F69_NC4_DISABLE=1`（防止对补丁副本再次递归翻转、无限递归）递归重跑同一脚本，
+   断言递归输出里 `SUPPRESSION_TRACED=False` 且不再是 `VERDICT: A`。
+3. 落地过程中**当场抓到两个自己引入的新 bug**（这本身也是按规则 4「新装的工具/新写的
+   负控制在被信任前先亲手测」的例子）：
+   - `bash -n` 报语法错——加 `if [ "$NC4_SKIP" -eq 0 ]; then` 少配一个 `fi`；
+   - NC4 第一次实测 `NC4 FAIL`（明明手工验证同样的补丁能让 `SUPPRESSION_TRACED`
+     翻 False）——根因是 `print("  SUPPRESSION_TRACED=%s" ...)` 带两个前导空格，
+     而 grep 锚定 `^SUPPRESSION_TRACED=False$` 是行首无空格，永远匹配不到；
+     改成 `^ *SUPPRESSION_TRACED=False$` 后修复。
+4. 修完重跑 `bash f69_their_pool_skip_disasm.sh`（对 Shorebird 真实
+   `analyze_snapshot_arm64`，无 `THEIR_AS` override，自动发现路径）：
+   `rc=0`、`F69 VERDICT: A`、`SUPPRESSION_TRACED=True`、`[NC4] NC4 PASS`；
+   NC1/NC1b/NC2/NC3 四个既有负控制全部照常通过（`opposite readings: True`、
+   `classifier returned 'consumed': True`、`agree=True`、`NC3 PASS`）。
+
+提交 `fhp-research a7d269a4983edc8ad1f27df8f0414ade426c610f`
+（`f69_their_pool_skip_disasm.sh` + 新文件 `f69_nc4_patch.py`，2 files changed, 198(+) 10(-)）。
+
+按契约「修补丁不继承它所修的那个东西的审查」，已派发**第二个、全新、独立**的 Opus
+证伪 pass，专门审这个修补丁本身（七项攻击逐条覆盖，含独立重新推导补丁字节、
+独立重跑脚本、检查 `successors()` 本体是不是真的被修到还是只在
+`trace_link()` 里加了一层旁路记账、检查耗尽级联除第一层外其余层级是否同样被修到）。
+已派发（后台），尚未返回。
+
+**本轮到此为止**：本轮把上一轮 PARTIAL 指出的缺陷在原地修完、重跑验证过一遍
+（含两个自己引入又自己抓到的新 bug），并按规则派出下一次独立复审；
+F69 状态仍是 `open`，`cards.tsv` 尚未改动——不到 SURVIVES(fix) 不动棘轮。
