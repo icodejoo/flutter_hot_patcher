@@ -13912,3 +13912,31 @@ criterion 列、commits 列只追加 `95d6e944` 这一个真实 sha；重跑 `ca
 **本轮到此结束**：SDK 树全程无接触；fhp-research 两次提交（`95d6e944`、`d7c604d0`）；
 flutter_hot_patcher 仅本节 memo 心跳，无代码改动。本轮两次真实子代理派发（实现 +
 证伪），均为独立、无共享上下文的新鲜代理。
+
+### 心跳 2026-09-27 16:27（交互式会话）—— 锁定 F49（built，欠证伪 pass），派实现子代理
+
+契约已读。挑卡依据：F121 六轮 PARTIAL 后卡片自身写明"round switches independent
+task"（同一 whack-a-mole，SS6 pending pool），本轮不碰；F130 同样多轮 PARTIAL 且是
+纯循环机械；F49 是唯一有**具体、已写清楚修法**的 built 卡——上一轮（2026-09-26）对
+fix `74d7f717` 的证伪 pass 已点名两处剩余真实缺口：
+(a) **E1** 仍漏最常见形状——commit id 在 subject 里、红判决词在 body 散文里、
+body 那一行本身没有 id（`scan()` 的早退 `if not here and not alias ...: continue`
+在检查 `i in body_lines` 之前就跳过了这种行）；
+(b) **E3** 的链接会被同一提交里提到的**任何其它卡号**取消——哪怕只是无关散文里一句
+"Follow-up to the F12 approach"，`commit_ids()` 就会让该 sha 的 id 集合非空，
+`scan()` 里 `if any(not ids for ids in by_sha.values())` 因此不触发，本该被记为
+"未点名，链接给这一轮所有变红的卡"的提交反而谁都不链接。
+两处代码位置：`tools/loop/fix_queue.py`（v1 分支，本树 `flutter_hot_patcher`）
+`commit_ids()`（约 1231 行）与 `scan()`（约 1256 行）；现有 self-test 探针
+`_f49_e1_body`/`_f49_e3_no_id`（约 3847/3880 行）是回归基线，新增探针应复现
+上述两个真实反例（`c0be0a61`/`9a3b225e` 那种 subject-有-id、body-判决-无-id 的形状；
+以及 body 提到无关卡号导致 E3 取消链接的形状）。
+
+**派发**：general-purpose/opus 子代理，独占写 `~/Documents/flutter_hot_patcher`
+（v1 分支），任务：修 (a)(b) 两处、跑 `python3 tools/loop/fix_queue.py --self-test`
+与 `tools/loop/tests/test_fix_gate.sh` 全绿、新增至少两个复现上述真实反例的探针
+（先确认在未修代码上真的失败），提交（仅改 `tools/loop/fix_queue.py`），
+并在 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 的
+F49 行追加一段 ` || 2026-09-27 <说明> <sha>` 记录本次改动（该树独占写，
+不要碰 SDK 或验证脚本），返回：改动文件、self-test 与 test_fix_gate 的实测
+退出码与用例数、提交 sha。
