@@ -14103,3 +14103,57 @@ ours 读出 callees `[19]` / `c9dafe74`；distance 3 两侧一致。
 不要贴大段代码或日志正文。
 
 任务已派发（后台），尚未返回。
+
+**实现返回（2026-09-27）**：`~/dart-3122/sdk` HEAD 前进到 `aa6737ae4c0`
+（在 `abafbbbd51a` 之上），修改仅 `analyze_snapshot_api_impl.cc`：池加载跳过窗口内的
+`b`/`bl`/`b.cond`（`DecodeBranchDelta` 能接受的分支）现在照主循环那样被分类，且不占用
+窗口的字预算（窗口跳过分支继续往后滑），pool/field/mov/blr 字仍按原样吞掉。自报
+hello fn#13 battery 28 行原始行全部 SAME（此前 17 DIFF）；`hello`/`prog`/`base_dd`
+三基准逐字节不变；负控制撤回→复现 sha `050f3477`（回到 17 DIFF/11 SAME）→重新应用→
+28/28 SAME。自陈已知缺口：仓库里那份可复现脚本 `Q68_window_patch_probe.py` 硬编码
+mac 目标分析器，对 iOS 目标的 out_pm 会报不兼容，只在 `/tmp` 私有副本改过、未落盘修复
+（欠铁律第 8 条）；battery/summarizer 脚本本身也只在 `/tmp/f135/`，未提交。
+
+**F135 独立证伪（2026-09-27，全新 opus 子代理，未与实现者共享上下文）**：
+
+`F135 VERDICT: PARTIAL -- the fix holds on all 28 original rows, on a reproduced
+negative control and on 10 of my 11 new rows, but none of the evidence can be
+rerun from a committed script (rule 8), and the new code comment says more than
+was measured`
+
+独立复核要点：
+- 亲手加了 11 行新对抗用例（cbz/tbz、连续多个 bl、窗口内先 bl 后 pool / 先 pool 后 bl、
+  窗口滑到第 10 字、向后跳出函数的外部 bl 等），其中 10 行在修好的二进制上读 SAME，
+  在旧二进制上重跑 6 行确认变回 DIFF——修法确实改变了这些行为，不是巧合读数一致。
+- 唯一例外 N7（目标在函数外的 `b.cond`）：两侧 self_hash 在窗口内及窗口外的第 1/8/12 字
+  都仍 DIFF，且在旧二进制上同样 DIFF（N7b）——**这是主循环里一处既有的、与本卡无关的
+  缺口**，不是这次修补引入的回归，但新写的源码注释（声称"local or external"都已处理）
+  没有把这个未测的外部分支情形排除在外，**属于本次交付里的真实措辞缺陷**。
+- 亲手核实：`compute_dd_table`/`dump_object_pool_link_data` 返回 rc=255 是因为这两个
+  flag 在 Product 构建里根本没注册（"Unrecognized flags"），**从未被真正跑过**，不是
+  实现者所说的"两侧都失败的既有失败"——措辞不准但不构成回归。
+- 亲手重跑负控制：撤回源码改动、增量重建（ninja 显示真实 3 步 CXX/AR/LINK 而非空操作），
+  sha `050f3477` 与实现者读数一致；重新应用、重建，sha 回到 `e9a0b44f`，共享树
+  收尾时 `git status --porcelain` 干净、HEAD 仍是 `aa6737ae4c0`（额外一个与本卡无关的
+  旧 stash 依然在，未处理，见下）。
+- 亲手确认 `cards.tsv` 只有 F135 那一行改动（`git diff` 逐行核对），字段数仍是 7；
+  但指出该行此前的追加把 commit sha 写进了第 7 列（应为提交号列，属常规用法，非缺陷）。
+- **未排除的风险**（留作 STILL OPEN）：`subgraph_hash`/`op_subgraph_hash` 在所有行
+  （含未打补丁的 T0）两侧本就不同，是既有的整快照级差异，此次比较把它们排除在
+  "SAME" 判据之外；证伪者点名"若两行 theirs subgraph_hash 相等，ours 也必须相等，
+  反之亦然"这一条尚未验证，一个局限在这两个字段里的真实回归仍可能被掩盖。
+
+**本轮判决：F135 保持 `open`/`built`，不关闭**。已把这次实现与证伪的完整记录追加进
+`fhp-research` 的 `cards.tsv`（F135 行，提交 `121e9f56`），只改这一行、字段数不变。
+按契约五之四第 3 步"当场能修的就修"：本轮识别出的两处真实缺陷（(a) 仓库里的
+复现脚本仍未修好、(b) 新注释对外部分支情形的措辞过宽）都需要再进 `~/dart-3122/sdk`
+改动 + 再一轮独立证伪，属于契约允许的"够大就立新卡"情形，本轮到此为止不再展开，
+留给下一轮：新卡（暂定）应要求①把 battery/probe/summarizer 脚本落盘到
+`fhp-research` 仓库并修好 iOS 目标兼容性，②收紧或订正那条源码注释的措辞，
+③（可选）单独立一张卡处理 N7 那个既有的外部分支 self_hash 缺口。
+
+**本轮到此结束**：`~/dart-3122/sdk` 收尾时 HEAD `aa6737ae4c0`、
+`git status --porcelain` 干净（`stash@{1}` 那个与 F135 无关的旧 WIP stash 仍在，
+未处理，留给操作者/下一轮判断是否可丢）；`fhp-research` 一次提交（`121e9f56`）；
+`flutter_hot_patcher`（v1）两次提交（心跳 `75933a26` + 本节）；两次真实子代理派发
+（实现 + 证伪），均为独立、无共享上下文的新鲜代理。
