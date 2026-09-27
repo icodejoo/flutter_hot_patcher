@@ -11889,7 +11889,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [ ] **F121：shape-A 池槽改回 per-site kTaggedObject Smi（R1 真回归）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [x] **F122：disassemble 残差的 offset/size 桶仍无条件吸收**（`closed`，2026-09-25 开卡，2026-09-26 第 4 次证伪 pass 判 SURVIVES (fix) 后关闭，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F123：disassemble 1,086 单位 = 他们 ObjectPool 多出的引用元素，F121 后归因**（`open`，2026-09-25，deps=F121）判据与负控制见 `cards.tsv`。
-- [ ] **F124：ArrayWriteBarrierStub 我们 1060B / 他们 1096B（三张卡的共同残差）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
+- [x] **F124：ArrayWriteBarrierStub 我们 1060B / 他们 1096B（三张卡的共同残差）**（`closed`，2026-09-25 开卡，2026-09-28 独立证伪 pass 判 SURVIVES 后关闭，deps=-）判据与负控制见 `cards.tsv`。
 - [x] **F125：ThreadLocal 首字差异与 5 个 shape-A 函数的 self_hash 残差**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F126：shorebird_components 检查极性反了（需拍板判据）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
 - [ ] **F127：compute_dd_table ×3 的 structural 证据不能变红（需拍板撤回）**（`open`，2026-09-25，deps=-）判据与负控制见 `cards.tsv`。
@@ -14901,3 +14901,48 @@ WHERE TO LOOK：`~/dart-3122/sdk runtime/vm/compiler/stub_code_compiler_arm64.cc
 `xcodebuild/ProductSimIosARM64/clang_arm64/`、`out_pm/`）。
 等待其完成通知，完成前 F124 不得标 `[x]`/`closed`，本卡不得写入新的 STILL OPEN 定论。
 本轮到此结束；提交本次心跳。
+
+## 心跳 2026-09-28 03:34 PST（续）：F124 独立证伪 SURVIVES，卡片关闭
+
+新鲜 Opus 子代理（general-purpose，只读，28 次工具调用，无共享上下文）返回：
+
+```
+F124 VERDICT: SURVIVES -- write-barrier LSE/size gap is independently reproduced as closed
+on live re-measurement of current out_pm, not just cited from cached reports.
+```
+
+七项攻击逐条核验：① 现场重跑 `F124_awb_align.py`/`F124_lse_scan.py`/`F124_features_os.py`
+（不是读缓存 `.out`），当前 `out_pm/` 上 `ArrayWriteBarrierStub` 两侧 1096B/274 字、
+sha1 逐字节相同（`5492d8da8e4e`）、LSE=0/LDXR=5/STXR=5 两侧相同、features 字符串两侧均
+`arm64 ios`；同一脚本在切换前缓存的 `.out`（09-25 14:37）上产出的是不同的红判决
+（1060B/LSE=3/`arm64 macos`），证明判据本身能翻红。② 两个 build 的编译参数 diff 只有一个
+token（`-DDART_TARGET_OS_MACOS_IOS`），1151 个编译单元其余逐字节相同，both 侧二进制均确认
+为 host-runnable Mach-O arm64。③ 逐 fixture 单独测得 write-barrier stub 差异残差 = 0
+（hello/base_dd/prog 三者 sha1 双侧相同），不是从聚合 UNITS 数反推。④ 检查了唯一另一个
+write-barrier 桩 `WriteBarrierWrappersStub`：640B 两侧、sha1 相同，同一 LSE 扫描现在两侧
+均为 0（切换前缓存 `.out` 显示 LSE=5 ours/0 theirs，该文件本身已确认是切换前的陈旧产物）。
+⑤ SDK 树 HEAD 比构建二进制新 10 个提交，但 `git log --since=<mtime>` 对
+`cpu_arm64.h`/`stub_code_compiler_arm64.cc`/`compiler/ffi/abi.cc` 精确 0 命中——那 10 个提交
+（F134/F135/F142/F143 分支分类/池相关）不碰这张卡关心的任何文件；`git status --porcelain`
+在 sdk 树上为空。⑥ 负控制是真实的历史构建（非合成断言）：mac 目标的旧构建产物已在切换后被
+删除，本轮未能现场重建负控制，只能用 attack②里那份单 token diff 隔离出的历史记录佐证——
+**这是本次证伪唯一的软肋**。⑦ F124 的具体主张（stub 体积/LSE 计数/features 串）与 F132
+自己引用的 20274→19122 聚合 UNITS 数完全独立验证，没有把易测的聚合数换成难测的具体问题。
+
+**STILL OPEN（原文抄录）**：The dart:ffi ABI switch (`compiler/ffi/abi.cc:57`,
+`shorebird/wrapper.cc:207/275`, kArm64IOS vs kArm64MacOS) is explicitly flagged by F132's own
+pass 1 as untested by any current fixture -- no fixture exercises FFI Pointer/NativeFunction
+args, so that specific downstream effect of the ios-target switch remains unverified. A fixture
+that does exercise FFI callbacks/native args would be the test that could still overturn "the
+switch has no unintended side effects," though it would not overturn the write-barrier-stub-size
+claim itself, which is independently and freshly reproduced above.
+
+**COST OF BEING WRONG（原文）**：The shared comparison harness now points at
+`ProductSimIosARM64` for all downstream parity-matrix cells and cards (F122, F133, F137, F94,
+etc.); if this write-barrier claim were wrong, every card built on "post-F132 corpus" numbers
+(offset bucket, UNITS totals, self_hash counts) would be measuring the wrong baseline.
+
+按契约（SURVIVES → 关卡，STILL OPEN 原文抄进记录）：**F124 关闭**。`cards.tsv` 同步改为
+`closed`。本轮 agents=1（证伪 pass，opus，28 tool calls）；改动文件：`memo.md`（本节 +
+F124 复选框）、`spikes/shorebird_linkinfo_oracle/cards.tsv`（F124 行）。SDK 树、构建产物
+均无改动（只读证伪）。`cards_check.sh` 待本节提交后复核。本轮到此结束。
