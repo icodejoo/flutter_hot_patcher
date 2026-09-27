@@ -1235,8 +1235,8 @@ def commit_ids(subjects, bodies=(), known=None, code_touch=None):
     `bodies` are "<sha> <one body line>" lines (--commit-bodies). Ids are read
     folded (F49 E4). A sha whose diff the caller declares prose-only
     (code_touch[sha] is False) is left out -- F89a -- and an unknown sha
-    counts, as in scan(). A commit that names NO card at all maps to an empty
-    set: scan() links it to this round's red verdicts (E3).
+    counts, as in scan(). These are MENTIONS; whether E3 fires is decided by
+    commit_owned(), not by this set being empty.
     """
     out = {}
     for line in subjects:
@@ -1253,6 +1253,83 @@ def commit_ids(subjects, bodies=(), known=None, code_touch=None):
     return out
 
 
+# F49 E3, second half (2026-09-27, the 09-26 pass on 74d7f717). E3 fired only
+# for a commit that mentioned NO id anywhere, and "anywhere" included body
+# prose. So "Follow-up to the F12 approach." in the body of a commit that
+# fixed F49 made its id set {F12}, E3 never fired, and F49's fix -- red this
+# round, recorded elsewhere -- went unreviewed: an incidental mention
+# cancelled the fallback it had no bearing on.
+#
+# A mention is not a claim. What counts as the commit CLAIMING a card, and so
+# switching E3 off for it, is: an id in the SUBJECT (the one line a commit
+# uses to say what it is), or an id in a body clause that itself carries
+# fix/review language -- a fix verb, a (fix) marker, pass/verdict vocabulary,
+# or a red token. Clause, not line, so "Follow-up to the F12 approach; fixes
+# the gate." does not lend the second clause's verb to F12.
+#
+# This decides ONLY whether E3 fires. The links a commit already had (every
+# id it mentions, commit_ids()) are kept, so the change can only add links,
+# never remove one -- the cheap direction: a false link is one dispatch, a
+# lost one is an unreviewed fix. Known residue: a body clause that happens to
+# pair an id with a fix word ("the old F12 fix") still reads as a claim.
+FIX_CLAIM = re.compile(
+    r"(?<![0-9A-Za-z])(?:fix(?:e[sd]|ing)?|patch(?:e[sd]|ing)?|"
+    r"clos(?:e[sd]?|ing)|resolv(?:e[sd]?|ing)|address(?:e[sd]|ing)?|"
+    r"respond(?:s|ed|ing)?|repair(?:s|ed|ing)?)(?![0-9A-Za-z])|修",
+    re.IGNORECASE)
+
+
+def claims_on_body_line(line, known=None):
+    """Ids a body line CLAIMS (see FIX_CLAIM), per clause, folded."""
+    out = set()
+    for m in CLAUSE.finditer(line):
+        seg = m.group(0)
+        if (FIX_CLAIM.search(seg) or PASS_VOCAB.search(seg)
+                or NEG_RE.search(seg) or any(k in seg for k in FIX_MARKERS)):
+            out |= ids_on(seg, known, fold=True)
+    return out
+
+
+def commit_owned(subjects, bodies=(), known=None, code_touch=None):
+    """{sha: ids the commit CLAIMS} -- subject ids plus claimed body ids.
+
+    Same sha set and code_touch filter as commit_ids(); an empty set is what
+    makes E3 link the commit to this round's red verdicts.
+    """
+    out = {}
+    for line in subjects:
+        sha = line.split(" ", 1)[0]
+        if not sha.strip():
+            continue
+        if code_touch is not None and code_touch.get(sha, True) is False:
+            continue
+        out.setdefault(sha, set()).update(ids_on(line, known, fold=True))
+    for line in bodies:
+        sha = line.split(" ", 1)[0]
+        if sha in out:
+            out[sha].update(claims_on_body_line(line, known))
+    return out
+
+
+# F49 E1, second half (2026-09-27). A body line was read for a red verdict
+# only if it named an id itself, so "Falsification pass came back VERDICT:
+# PARTIAL" under the subject "F49: tighten detection" was dropped whole --
+# real commits c0be0a61 and 9a3b225e have exactly that shape (subject has the
+# id, first body line has the verdict and no id) and replayed at OWED 0.
+# A commit body is ABOUT its commit, so an id-less red there binds to the ids
+# that commit claims (commit_owned(), unfiltered by code_touch: a verdict is
+# recorded whether or not the commit touched code), or failing that to every
+# id it mentions. The id-less line needs more than NEG_RE, which is
+# case-insensitive and would read "partial rewrite" as a verdict: it must
+# also carry pass/verdict vocabulary or the token in verdict case.
+VERDICT_CASE_NEG = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za-z])")
+
+
+def idless_body_red(line):
+    return bool(NEG_RE.search(line)
+                and (PASS_VOCAB.search(line) or VERDICT_CASE_NEG.search(line)))
+
+
 def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
          bodies=(), card_neg=frozenset()):
     """Returns (neg, fix, pos_same, pos_drain, claimed) as sets of ids.
@@ -1262,8 +1339,9 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
           for red verdicts (never for green claims) and for card ids.
       E2  `card_neg` -- ids whose cards.tsv row gained a red verdict this
           round (cards_red_ids()) -- is added to neg.
-      E3  a code-touching commit that names no card anywhere (subject or
-          body) is taken as a fix for EVERY id that went red this round. A
+      E3  a code-touching commit that CLAIMS no card (commit_owned(): no id
+          in its subject, none in a body clause with fix/review language)
+          is taken as a fix for EVERY id that went red this round. A
           false link costs one dispatch; a missed one is an unreviewed fix.
       E4  ids are matched case-folded on the red side (ids_on fold=True).
 
@@ -1305,8 +1383,16 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
     body_lines = set(range(len(memo_lines) + len(subjects),
                            len(memo_lines) + len(subjects) + len(bodies)))
     fenced += [False] * len(bodies)
+    # F49 E1 (second half): where an id-less red body line lands.
+    sha_owned = commit_owned(subjects, bodies, known)
+    sha_named = commit_ids(subjects, bodies, known)
     for i, (line, in_fence) in enumerate(zip(memo_lines + subjects + bodies,
                                              fenced)):
+        if (i in body_lines and idless_body_red(line)
+                and not ids_on(line, known, fold=True)):
+            sha = line.split(" ", 1)[0]
+            neg |= sha_owned.get(sha) or sha_named.get(sha) or set()
+            continue
         here = ids_on(line, known)
         # The legacy-id alias has to be computed BEFORE the early exit, not
         # after it: ID.findall("F--") is [] -- that IS the defect -- so a line
@@ -1343,8 +1429,10 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
     by_sha = commit_ids(subjects, bodies, known, code_touch)
     for ids in by_sha.values():
         fix |= ids
-    # F49 E3: a code commit naming no card is a fix for whatever went red.
-    if any(not ids for ids in by_sha.values()):
+    # F49 E3: a code commit CLAIMING no card is a fix for whatever went red.
+    # "Claiming", not "mentioning" -- see FIX_CLAIM.
+    if any(not ids for ids in commit_owned(subjects, bodies, known,
+                                           code_touch).values()):
         fix |= neg
 
     # ---- the half the round cannot author -----------------------------------
@@ -1745,7 +1833,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     def fix_shas(cid):
         """Commits this round linked to cid as its fix (F49 E1/E3/E4)."""
         by_sha = commit_ids(subjects, bodies, known)
-        live = commit_ids(subjects, bodies, known, code_touch)
+        live = commit_owned(subjects, bodies, known, code_touch)
         return {s for s, ids in by_sha.items() if cid in ids} | \
                {s for s, ids in live.items() if not ids and cid in neg}
     pos = pos_drain          # what drains a standing entry
@@ -3915,6 +4003,60 @@ def self_test():
         q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
         ctl = neg_ids_on_line("🟢 F49 证伪 pass 2 判决：SURVIVES", {"F49"})
         return q == ["F49"] and ctl == set(), "q=%r ctl=%r out=%r" % (q, ctl, out)
+
+    # F49 E1/E3 second halves (2026-09-27, the 09-26 pass on 74d7f717). Both
+    # failed against 118aceba's fix_queue.py before the change.
+    def _f49_q(prefix, memo, subjects, cards, bodies=None):
+        d = tempfile.mkdtemp(prefix=prefix)
+        extra = []
+        if bodies is not None:
+            extra = ["--commit-bodies",
+                     _f49_file(d, "bodies", "".join(b + "\n" for b in bodies))]
+        rc, out, err = run_cli(d, [], memo=memo, subjects=subjects,
+                               cards=cards, extra=extra)
+        return [r[0] for r in read_queue(os.path.join(d, "queue"))], out
+
+    @probe("F49 E1b: an id-less red verdict in a commit BODY binds to the id "
+           "its own subject names (c0be0a61 / 9a3b225e shape)")
+    def _f49_e1b_body_no_id():
+        q, out = _f49_q("fq_f49e1b.", [],
+                        ["abc1234 tree F49: tighten detection"], ["F49"],
+                        ["abc1234 Falsification pass came back VERDICT: "
+                         "PARTIAL; this commit tightens it."])
+        # 9a3b225e's real subject and first body line, verbatim.
+        q2, _ = _f49_q("fq_f49e1b2.", [],
+                       ["abc1234 tree fix_queue: F140 falsification pass 2 -- "
+                        "quarantine, two-tier neg binding, real neg control"],
+                       ["F140"],
+                       ["abc1234 The falsification pass on de72312 returned "
+                        "FALSIFIED with three flaws:"])
+        # Control: "Partial" as prose (no verdict case, no pass vocabulary)
+        # is not a verdict.
+        q3, _ = _f49_q("fq_f49e1bc.", [],
+                       ["abc1234 tree F49: tighten detection"], ["F49"],
+                       ["abc1234 Partial rewrite of the helper."])
+        return (q == ["F49"] and q2 == ["F140"] and q3 == [],
+                "q=%r real=%r control=%r out=%r" % (q, q2, q3, out))
+
+    @probe("F49 E3b: an incidental body mention (\"Follow-up to the F12 "
+           "approach\") does not cancel E3 -- the commit links to red F49")
+    def _f49_e3b_incidental():
+        q, out = _f49_q("fq_f49e3b.", ["📋 **F49 pass 1 → PARTIAL**"],
+                        ["abc1234 tree fix_queue: requeue only on new verdict"],
+                        ["F49", "F12"],
+                        ["abc1234 Follow-up to the F12 approach."])
+        return q == ["F49"], "q=%r out=%r" % (q, out)
+
+    @probe("F49 E3b controls: a SUBJECT id, or a body id with fix language, is "
+           "a claim -- E3 does not sweep the commit into red F49")
+    def _f49_e3b_claims():
+        memo = ["📋 **F49 pass 1 → PARTIAL**"]
+        q1, _ = _f49_q("fq_f49e3c1.", memo, ["abc1234 tree F12: fix the thing"],
+                       ["F49", "F12"])
+        q2, _ = _f49_q("fq_f49e3c2.", memo,
+                       ["abc1234 tree fix_queue: tighten a regex"],
+                       ["F49", "F12"], ["abc1234 This fixes F12."])
+        return q1 == [] and q2 == [], "subject=%r body=%r" % (q1, q2)
 
     for name, fn in probes:
         try:
