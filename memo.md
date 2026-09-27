@@ -11967,7 +11967,8 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 **F113 修补丁第二次证伪 PARTIAL → 父方再修（第三处）**：单轮伪造已堵住，但把同一招拆成两轮能过（第 N 轮只往账本追加、第 N+1 轮兑现）。现在每轮结束时在线账本必须等于开局快照，轮次期间新增的行一律 RED 并删除；用审查方自己的 `attack.sh` 复放：两轮伪造在第 N 轮就被拦下（旧代码会放行），合法出队照常。自测 78/0，变异掉检查后新用例变红。**仍开着的是结构性问题**：轮次能改写正在执行的 `run_round.sh` 本身——证据来源和行动者仍是同一方。
 
-- [ ] **F136：写方与读方的 Thread 布局没有真守卫（F37 修补丁证伪拆出）**（`open`，2026-09-25）
+F136：写方与读方的 Thread 布局没有真守卫（F37 修补丁证伪拆出，2026-09-25 立）——**已关闭**，
+2026-09-28 独立证伪 SURVIVES，权威关闭记录（含 `- [x]` 复选框）见文末心跳一节。
 
 **F37 修补丁证伪 PARTIAL（opus）**：池槽类型、每站独立槽（92/92/178 两侧都无共享）、弱池序列化都站得住；但 pass 1 点名的那条 `RELEASE_ASSERT` 仍是恒真式——`exit_through_ffi_` 在所有配置里都是 1792，而那三个字段在 3928 与 3968 之间移动（父方复读 DWARF 表）。gen_snapshot 用自己进程的 Thread 布局写偏移，运行时第一次调用就按这个偏移跳，没有任何东西核对两边一致；今天各配置恰好一致，所以是**缺守卫、不是已发生的错误发射** → F136。另：DebugARM64 早于 F121，DEBUG 断言从没覆盖过 Smi 槽。
 
@@ -14946,3 +14947,71 @@ etc.); if this write-barrier claim were wrong, every card built on "post-F132 co
 `closed`。本轮 agents=1（证伪 pass，opus，28 tool calls）；改动文件：`memo.md`（本节 +
 F124 复选框）、`spikes/shorebird_linkinfo_oracle/cards.tsv`（F124 行）。SDK 树、构建产物
 均无改动（只读证伪）。`cards_check.sh` 待本节提交后复核。本轮到此结束。
+
+## 心跳 2026-09-28（新一轮）：发现 F136 已在 SDK 树上实现但从未记账，已派独立证伪 pass
+
+本轮开工前巡查 `~/dart-3122/sdk` 发现 HEAD（`ac863d5cd46`，作者日期 2026-09-28 01:05:19 +0800，
+`Co-Authored-By: Claude Opus 5.5`）已完整实现 **F136**（`cards.tsv:137`：给 shape-A native-call
+的三个 Thread 偏移加一道跨进程一致性守卫）：删掉恒真的 `RELEASE_ASSERT`（比较
+`exit_through_ffi_offset()`——这个字段在所有配置下都是 1792，从不随三个真实字段
+`call_{bootstrap,no_scope,auto_scope}_native_entry_point_offset()` 一起变化），改为把这三个偏移
+写进 `Dart::FeaturesString`（`runtime/vm/dart.cc` +19 行，`kind == Snapshot::kFullAOT` 且
+`TARGET_ARCH_ARM64` 下），依赖既有的 `SnapshotHeaderReader::VerifyFeatures` 在 features
+字符串不匹配时拒绝加载。
+
+**这不是本轮或任何已知轮次做的**：`round-32967` 的 rescue stash 里 grep 不到 "F136" 字样；
+`cards.tsv`、`memo.md` 均无 F136 被处理的记录。据铁律第 9 条 + 断言保鲜期规则，
+**不重做，先核验**：已派一个独立、无共享上下文的 opus 子代理，按 `tools/loop/prompts/falsify.md`
+七问模板对这次提交做证伪 pass（CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK 均取自 cards.tsv 第 137 行
+原文与该 commit 的 diff/message），要求它：确认 assert 真的被删、字段真的写进
+`FeaturesString`、`VerifyFeatures` 真的会因此拒绝加载（不是只加了一段永远被忽略的字符串）、
+卡片额外要求的 "rebuild DebugARM64 + 跑 hello AOT fixture" 是否真的做了、以及卡片自带的负控制
+（`dart_dynamic_modules` 开关翻转下，加载必须被拒绝；两侧一致必须能加载）是否真的被执行过而非
+仅在 commit message 里断言。SDK 树 `git status --porcelain` 派发前为空，子代理被告知禁止改动/
+回退该共享树、且必须在结束前确认仍为空。本轮到此结束，等待证伪 pass 回报后再决定关卡或修补。
+
+## 心跳 2026-09-28（续）：F136 独立证伪 SURVIVES，卡片关闭
+
+派出的 opus 证伪 pass（general-purpose，32 次工具调用，只读于 SDK 树）回报 **`F136 VERDICT: SURVIVES`**。
+七问逐条：①能不能报红——读了 `SnapshotHeaderReader::VerifyFeatures`（`app_snapshot.cc:9868-9898`），
+对长度或 `strncmp` 不一致一律拒绝；亲手把我们自己 hello 快照里那个 token 的最后一位偏移改动 1（`4520→4521`，
+`cmp` 确认恰好 1 字节差），在匹配的 DebugARM64 `dartaotruntime` 上加载，报
+`Snapshot not compatible with the current VM configuration`，`rc=134`——能报红。
+②两侧真的不同——`DebugARM64` 与 `DebugARM64DM` 只在 `dart_dynamic_modules`（args.gn）上有别，
+两者都比源码新（`ninja -n: no work to do`），产出的 token 分别是 `4504,4512,4520` 与 `4520,4528,4536`，
+其余 features 字符串逐字节相同。③归因是否覆盖全部——基本覆盖：三个 shape-A 用到的偏移都被记录；
+但同一个 Shorebird 追加块里的其余字段（`is_simulating_`、`simulator_*`、`base_instructions_*`）没被记录，
+只是这些字段与被记录的三个字段同源同步移动，所以现有的构建配置扰动仍能被抓到——但记录的是三个偏移不是
+一个布局哈希，若未来有构建只挪动块内顺序而不挪最后三个字段，这道守卫会漏。伪造 DM 快照的 token 为
+非 DM 值、在非 DM 的 Debug 运行时上跑，确实崩溃（`rc=134`），但崩的是 DEBUG assert
+（`safepoint.h:292`），不是 commit message 里写的 "SEGV at pc=0"——那句话只在 Release 构建下成立，
+本次未验证。④检测模式是否误伤其他代码——shape A 只在 `link_lazily() && FLAG_precompiled_mode` 下发出
+（`il_arm64.cc:1330`），卡在 `kFullAOT` 是对的；`TARGET_ARCH_ARM64` 也是对的守卫（`il_arm64.cc` 只为该
+目标编译）。⑤有没有过期——HEAD 确认是 `ac863d5cd46`；`exit_through_ffi` 在 `il_arm64.cc` 里只剩注释与
+无关 FFI 代码，assert 真的删了，"immediate" 注释真的改了；但同型恒真 assert 在
+`stub_code_compiler_arm64.cc:810` 依然健在（不在本卡范围内）。⑥负控制是否真跑过——commit 本身没有留下
+任何可复跑的产物或脚本（违反铁律第 8 条一半），证伪 pass 自己动态跑了一遍：新建 `hello_fresh.dill`，
+两侧 gen_snapshot 各出一份快照，匹配对跑出 `hello f136 610 true`（`rc=0`），两个交叉对都被拒绝且报出
+偏移（`rc=134`）。⑦问题有没有被偷换——没有，token 是两侧 features 字符串里唯一的差异，扰动和伪造都证明
+它就是决定加载与否的那个因素；Shorebird 自己的 `analyze_snapshot_arm64` 仍能正常 dump 带 token 的我们的
+快照（不影响交叉测试）。
+
+**STILL OPEN（原文抄录）**：rebuild a Release/Product pair with dynamic_modules on/off and confirm
+(i) clean refusal exit and (ii) the claimed 'SEGV at pc=0' on a forged token in Release (this pass
+only reproduced a DEBUG assert abort); re-run parity matrix once shared ProductSimIosARM64 tree
+picks up this commit (0 token hits there today).
+
+**COST OF BEING WRONG（原文）**：F136 closure and the safety of F37/F121 shape-A dispatch on any
+gen_snapshot/runtime pair with mismatched configs; also the header-bucket parity readings once the
+shared tree picks up this commit.
+
+按契约（SURVIVES → 关卡，STILL OPEN 原文抄进记录）：**F136 关闭**。`cards.tsv` 同步改为 `closed`
+（`fhp-research` 树，第 137 行，`||` 追加段，不整行重写）。次要未解决点已如实记入 cards.tsv，不影响
+关卡判据（不是「归因未覆盖全部差异」的那种缺陷，是范围外的两处遗留 + 一处缺失的落盘负控制脚本）。
+本轮 agents=1（证伪 pass，opus，32 tool calls）；改动文件：`memo.md`（本节）、
+`spikes/shorebird_linkinfo_oracle/cards.tsv`（F136 行）。SDK 树、构建产物均无改动（子代理确认派发前后
+`git status --porcelain` 均为空，只读证伪；子代理自己在 `/private/tmp/f136fp` 做的构建与产物不落
+本仓库）。`cards_check.sh` 待本节提交后复核。本轮到此结束。
+
+- [x] **F136：给 shape-A native-call 的三个 Thread 偏移加跨进程一致性守卫**（`closed`，2026-09-28，
+      F37 拆出；实现早于本轮记账，独立证伪 SURVIVES；详见本节）
