@@ -14066,3 +14066,40 @@ run_vm_tests 152/152、负控制复现又还原、Store S/Q 因无 PP 基址调�
 可考虑开一张新的小卡补测；`.loop/UNREVIEWED_FIX` 其余条目（F37/F115-F118/
 F122/F140/F141/F129/F113，按此前心跳多已标「已有绿色 pass，留操作者出队」）
 本轮未重新派发。
+
+### 心跳 2026-09-27（新一轮，交互式会话）—— 锁定 F135（SDK 本体，analyze_snapshot 池加载跳过窗口对 bl 的分类不一致），派实现子代理
+
+契约已读。检查三棵树：`~/dart-3122/sdk` HEAD `abafbbbd51a` 干净；F134 已在上一轮完整闭环
+（实现+独立证伪 SURVIVES，提交 `8b9691b7`/`6bcfa1d5`，队列侧 `.loop/UNREVIEWED_FIX` 尚未反映
+这次通过，是因为 F113 决定后出队只归操作者，我不碰队列文件）。built 卡欠 pass 的三张
+（F121/F130/F49）均已在此前多轮判 PARTIAL≥3 次，按契约第六条"连续 3 次同法失败→挂起池、
+换独立任务"处理，本轮不再重派同一字面修补。按规则 0 改锁一张未被操作者卡住、依赖已满足
+的 SDK 本体 open 卡：F135（`cards.tsv`，deps `-`）。
+
+**卡片内容**：我们的 `analyze_snapshot_api_impl.cc` 里的池加载跳过窗口
+（约 :1466-1488，`ahead = 3 - used`）会吞掉窗口内的每一个字，而 Shorebird 的实现对
+池/字段加载的吞法虽然一致，却仍会把窗口里的一条 `bl` 分类出来：用
+`reports_20260925/Q68_window_patch_probe.py` 把 fn#13 的 word 5 打成 `9400029f`
+（distance 1），theirs 读出 callees `[19,25]` / self_hash `d539947c`，
+ours 读出 callees `[19]` / `c9dafe74`；distance 3 两侧一致。
+
+**判据**：让 calls 的分类行为在 probe battery 的每一行都读 SAME（同时不破坏已经一致的
+池/字段吞法行）；顺带把 :1466 附近那句过期的 "KNOWN-SUSPECT, F68" 注释更新掉。
+**负控制**：撤回改动，distance-1/2 的 bl 行必须变回 DIFF；池/字段行两侧必须继续 SAME。
+
+**派发**：general-purpose/opus 子代理，独占写 `~/dart-3122/sdk`（当前 HEAD `abafbbbd51a`，
+派发前已确认树干净）。自包含指令：读 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`
+里 F135 整行、读 `reports_20260925/Q68_window_patch_probe.py` 复现探针脚本、
+读 `analyze_snapshot_api_impl.cc` :1440-1500 附近的池加载跳过窗口逻辑；判断在窗口内
+新增对 `bl`（分支链接指令）的识别应该走哪条路径，使其在跳过 pool/field 加载引用字的同时
+仍能把窗口内的 `bl` 当调用边输出；跑 probe battery 全部行确认 SAME；跑
+`hello`/`prog`/`base_dd` 三个基准 fixture 确认逐字节不变（不允许因这处改动引入新差异）；
+增量重建（禁止干净重建）用到的目标；负控制（撤回改动重跑 probe battery，确认 distance-1/2
+行变回 DIFF，再重新应用改动重跑确认变回 SAME）；提交到 `~/dart-3122/sdk`；只在
+`cards.tsv` 的 F135 行追加说明（不改状态列，不动其它行）。
+
+**返回格式要求**：只回状态(成功/失败/挂起) + 改动文件列表 + 判据实测值
+（probe battery 每行 SAME/DIFF 表 + 三基准 fixture 是否不变 + 负控制两次读数），
+不要贴大段代码或日志正文。
+
+任务已派发（后台），尚未返回。
