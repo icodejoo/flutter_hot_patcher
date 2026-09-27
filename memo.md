@@ -14325,3 +14325,38 @@ function-size boundary) or every fixture/function beyond hello fn#13.`
 
 **本轮判决：F143 关闭**。`cards.tsv` F143 行状态列改 `closed`，追加上面这段独立证伪记录
 （只改这一行）。
+
+### 心跳 2026-09-27（新一轮）—— 救援 round-32967，落盘 F143 关闭 + 修 cards_check 缺口
+
+上一轮（round-32967）被额度中断，改动已由 finisher stash 进 `fhp-research`
+（`loop-rescue 2026-09-27T21:33:16`），没有丢，本轮按契约六之二取用而非重做。
+`git stash apply`（`stash pop` 被本地 hook 拦，改用 `apply`）后核对内容与 memo.md
+里已提交的 F143 关闭记录一致（同一份独立证伪 SURVIVES 判决），提交
+`fhp-research bcaa3bc0`；memo.md 本身的未提交改动（本文件 24 行）随后提交
+`v1 38226ea6`。
+
+`cards_check.sh` 复跑发现 `F143(no-neg-control)`：F143 行第 6 列（NEGCTL 专用列）
+是占位符 `-`，负控制内容其实全写在第 5 列自由文本里——这是救援回来的那份改动本身
+未完成的一处（中断前没来得及规整成表格式）。已将 NEGCTL 摘要抽到第 6 列
+（`fhp-research` 提交 `30575588`，格式对齐 F142 等同类卡片）。
+
+⚠️ **第一次修复引入了新问题**：那次编辑用 Python 文本模式读写，把整份
+`cards.tsv` 的 CRLF 行尾静默改成了 LF，导致 diff 显示全部 144 行改动而不是
+只有 F143 一行——审查更难（每行都要看是不是"真的变了"），且若被忽略会成为
+一次隐藏在噪声里的格式漂移。发现后本想 `git reset --soft` 撤回重做，
+被 `reference-transaction` hook 拦下（不许丢弃只在旧值上可达的提交）——
+按规则改用**在其上再提交一次修复**，用二进制模式对 `bcaa3bc0` 那份原始
+CRLF 内容重新应用同一处字段编辑（`30575588` 之上的新提交 `aa1b9161`），
+实测 `git diff bcaa3bc0 HEAD -- cards.tsv` 现在只剩 F143 一行。
+
+`cards_check.sh` 三次跑（60-90 秒/次，不算「装不进一轮」但比预期慢，落盘供下次参考）：
+① 救援落盘后：`F143(no-neg-control)` + 项目级 `commits-not-sha`（全卡通用，卡片内
+`F122` 侧注已记为既有结构性债务，非本卡引入）；② 第一次修复后：`no-neg-control`
+消失，但引入了行尾污染；③ 行尾修复后：只剩 `F143(commits-not-sha)`，与所有其他
+关闭卡片同型，`rc=1` 的项目级根因不变，与本卡无新增缺口。
+
+改动文件：`fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`（3 次提交：
+`bcaa3bc0` 救援落盘、`30575588` 补 NEGCTL 列但误改行尾、`aa1b9161` 修正行尾）；
+`flutter_hot_patcher/memo.md`（`38226ea6` 落盘救援内容，本节追加）。
+本轮未新派子代理——这是把上一轮已完成且已独立证伪 SURVIVES 的工作正确落盘，
+不是新决定，契约五之四的证伪闸门在上一轮已经跑过、判决已抄进 memo。
