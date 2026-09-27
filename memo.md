@@ -13981,3 +13981,35 @@ hunk，得 `118 cases, 2 failures`（恰好是新增的两个探针），确认�
 一次提交（`cf1dbd60`，快进合并）；`fhp-research`（route-a-research）一次提交
 （`6fe29eed`）；两次真实子代理派发（实现 + 证伪），均为独立、无共享上下文的
 新鲜代理，证伪代理未编辑任何共享树文件（其复现脚本在自己的隔离 worktree /tmp）。
+
+### 心跳 2026-09-27（交互式会话，续）—— 锁定 F134（SDK 本体，SIMD 池加载补零缺口），派实现子代理
+
+契约已读（`docs/LOOP_CONTRACT.md` 全文）。三张 built 卡欠 pass 复核：F121（六轮 PARTIAL 后已在挂起池，不重派）、
+F130（多轮 PARTIAL，深层缺陷需重新设计，不重派）、F49（本轮之前刚拿到第二次 PARTIAL，
+两次判决与卡片自身文字都建议换独立任务，未达到契约第六条"连续 3 次"的挂起门槛，
+但按"不确定就退回一轮一件事"本轮不第三次重派同一字面修补）。按规则 0 改锁 SDK 本体的
+open 卡：`cards.tsv` 现有 53 张 `open`，F126/F127/F128/F131 明确标"待操作者拍板"不可派；
+F134（`open`，2026-09-25 从 F68 第二次证伪 pass 拆出）是其中判据最完整、根因已查清、
+不依赖操作者决定的一张：`LoadDFromOffset`（8 字节双精度池加载）已有 `PadLoadStore` 补零包装
+（`assembler_arm64.cc:1305`），但 `LoadSFromOffset`（单精度，:1300）与 `LoadQFromOffset`
+（128 位 SIMD，:1317）没有同款包装。复现证据已在磁盘上（`reports_20260925/Q68_simd_fixture.dart` +
+`Q68_simd_unpadded_loadS.txt`）：`fl` 函数（触发 S 形式）他们 88 字节/self_pp[772,773]，
+我们 80 字节/self_pp[772]，缺 2 个 NOP；`f2`/`f4`（触发 Q 形式）self_pp 列表已一致但函数尺寸
+各短 8 字节。第三种寄存器偏移 SIMD 形式（`ldst_regoff`）两侧本就一致，不属于这个缺口。
+
+**派发**：general-purpose/opus 子代理，独占写 `~/dart-3122/sdk`（HEAD `98c95873b72`，
+派发前确认树干净），任务：给 `LoadSFromOffset`/`LoadQFromOffset` 补上与 `LoadDFromOffset`
+同款的 `FLAG_precompiled_mode && base==PP` 门控 + `PadLoadStore` 包装（尺寸分别用
+`kSWord`/`kQWord`，不得复用 `kEightBytes`）；判断 Store 侧是否同样需要修（若证据不支持
+就明说不修，不许无凭据代做）；增量重建（禁止干净重建）`ProductSimARM64` 的
+`gen_snapshot dartaotruntime`；在 SIMD fixture 上验证 `fl`/`f2`/`f4` 三个函数的尺寸与
+self_pp 均与 theirs 一致，且 `ldst_regoff` 形式不受影响；确认 `hello`/`prog`/`base_dd`
+三个基准 fixture 逐字节不变；跑 `run_vm_tests` 无回归；负控制（撤回改动重建，确认
+`fl` 的 773 缺口复现，再重新应用改动重建）；提交到 `~/dart-3122/sdk`；仅在
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 的 F134 行追加说明
+（不改状态列，不动其它行）。任务已派发（后台，agent 描述"Implement F134 SIMD pool
+padding fix"），尚未返回。
+
+**本轮到此为止**：`~/dart-3122/sdk`、`fhp-research`、`flutter_hot_patcher` 三棵树本轮
+交互式会话本身均未做代码改动（仅本节 memo 心跳）；等待子代理返回后再派一次独立证伪 pass，
+按契约五之四的四步流程走完（做完→证伪→修→重跑），不在本轮内抢先假设结果。
