@@ -11930,6 +11930,8 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 - [ ] **F134：`LoadSFromOffset`/`LoadQFromOffset` 的 PP 加载没补齐（003f2759a68 只修了 LoadD）**（`open`，2026-09-25，从 F68 第二次证伪拆出）
 - [ ] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）
+- [x] **F142：F135 遗留的三项后续债务（探针脚本落盘+iOS 兼容、注释订正）**（`closed`，2026-09-27，deps=F135；
+  实现→证伪 PARTIAL（注释仍指向已废弃的 mac 探针）→当场修（`feeedcdc09c`）→独立复核 SURVIVES(fix) 后关卡）
 
 **F68 第二次证伪 FALSIFIED → 不关**：改写后的结论两处被实测推翻。① 补齐只修了 `LoadDFromOffset`；造一个用 float 常量的 fixture，**在今天的二进制上** `fl` 的 self_pp 他们 `[772,773]`、我们 `[772]`，同一机制仍在（父方读过原始输出）→ F134。② 跳窗并非完全一致：两边真实工具的动态差分显示池/字段加载一样被吞，但窗口里的 `bl` 他们照样分类、我们吞掉 → F135。这次差分顺带动态回答了 F72 在池加载那一半的问题。
 
@@ -14157,3 +14159,117 @@ was measured`
 未处理，留给操作者/下一轮判断是否可丢）；`fhp-research` 一次提交（`121e9f56`）；
 `flutter_hot_patcher`（v1）两次提交（心跳 `75933a26` + 本节）；两次真实子代理派发
 （实现 + 证伪），均为独立、无共享上下文的新鲜代理。
+
+### 心跳 2026-09-27 19:04（新一轮，交互式会话）—— 锁定 F135 遗留的三项后续债务，立 F142
+
+契约已读。检查队列：`fix_queue.py --self-test` 118 case(s) 0 failure(s)。built 卡欠 pass 三张
+（F121/F130/F49）仍是此前多轮判 PARTIAL≥3 次的挂起池项，本轮不重派同一字面修补
+（契约第六条）。`.loop/UNREVIEWED_FIX` 其余条目按此前心跳已标「已有绿色 pass，留操作者出队」，
+F113 决定后出队只归操作者，本轮不碰队列文件。
+
+上一轮心跳（F135）末尾明确留下三项未展开的后续债务：①仓库里 `Q68_window_patch_probe.py`
+的复现脚本仍只在 `/tmp` 私有副本存在、且硬编码 mac 目标、对 iOS 目标 out_pm 不兼容（欠铁律
+第 8 条：报告数字必须能从落盘脚本重新打印）；②F135 新写的源码注释对"外部 `b.cond`"情形
+措辞过宽（声称"local or external"都已处理，实际 N7 外部分支情形仍未测/未修）；③可选：
+N7 那个既有的外部分支 self_hash 缺口本身是否值得单独立卡。
+
+判据 gate 1.5：这三项都是「落盘一个脚本 + 让它在 iOS 目标产物上跑通 + 改一行注释措辞」，
+不含「干净重建/全量重跑/逐个提交二分」字样，且上一轮的实现/证伪都已在同一份 `aa6737ae4c0`
+产物上验证过，不需要新的重建。判定：装得进一轮，不拆。
+
+立新卡 **F142**（`fhp-research/cards.tsv`）：落盘 F135 的 probe/battery/summarizer 脚本到
+仓库（不再只留 `/tmp`），修好其 iOS 目标（`out_pm` 现用的 `ProductSimIosARM64`）兼容性；
+订正 `analyze_snapshot_api_impl.cc` 里 F135 新增的注释，使其准确描述"仅处理窗口内的本地
+分支，外部 `b.cond`（N7）已知未覆盖"；不在本卡范围内修 N7 本身。
+
+**判据**：①落盘脚本存在于 git 索引中（`git ls-files` 命中）且对 iOS 目标 `out_pm` 跑通、
+产出与实现者/证伪者当轮报告的 SAME/DIFF 表一致；②新注释文本不再声称覆盖外部分支；
+③probe battery 在 iOS 目标产物上重跑一遍，28 原始行 + 11 新对抗行的 SAME/DIFF 读数与
+之前一致（无新引入的差异）。
+**负控制**：撤回本卡改动（脚本/注释），确认①脚本重新变得不可用或消失、②注释重新读到
+过宽措辞，两者都能被检测到。
+
+**派发**：general-purpose/opus 子代理，独占写 `~/dart-3122/sdk` 与 `fhp-research`
+（当前 `~/dart-3122/sdk` HEAD `aa6737ae4c0`，派发前已确认树干净）。自包含指令：
+读本节全文、读 `fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv` 里 F135 整行、
+读 `/tmp` 下 F135 遗留的 probe/battery/summarizer 脚本（若仍在，路径见上一轮报告；
+若已被清理，按上一轮报告描述的逻辑重新实现）、读
+`~/dart-3122/sdk/runtime/vm/analyze_snapshot_api_impl.cc` 附近 F135 新增的注释；
+把脚本迁入 `fhp-research` 仓库某个可发现的路径（建议 `spikes/shorebird_linkinfo_oracle/
+reports_20260925/` 或同级目录，具体位置自行判断，只需可发现、可复跑）、修其目标平台
+参数使其可对 iOS 目标 `out_pm` 产物工作、订正过宽注释、重跑 probe battery 确认无回归；
+在 `cards.tsv` 追加 F142 整行（status=built）；不改动 F135 那一行以外的其它行；
+提交到 `fhp-research`（脚本 + cards.tsv）与 `~/dart-3122/sdk`（若注释订正需要改源码）。
+
+**返回格式要求**：只回状态(成功/失败/挂起) + 改动文件列表 + 判据实测值
+（脚本可发现性 + iOS 目标跑通读数 + 注释订正前后文本对比 + 负控制两次读数），
+不要贴大段代码或日志正文。
+
+**实现返回（2026-09-27）**：STATUS success。改动：`fhp-research` 新增
+`spikes/shorebird_linkinfo_oracle/reports_20260925/f135_window_patch_probe.py`
+（提交 `70d9d320`）+ `cards.tsv` 追加 F142 行（`c7313ddc`，只加这一行，diff 核对过）；
+`~/dart-3122/sdk` 注释订正（提交 `5c7c64af06c`，HEAD 从 `aa6737ae4c0` 前进到此，
+两个构建目录 `analyze_snapshot` 均 0 ninja 步剩余，树干净）。
+
+脚本从 `/tmp/f135/battery.sh`（28 原始行）与 `/tmp/f135_fals_*.txt`（N1–N12 缺 N8，
+另加 N7b–N7f）重建，共 44 行；用 `ProductSimIosARM64/clang_arm64/analyze_snapshot`
+（与 `parity_matrix.sh` 同一个 `$PRODUCT`），两侧 `.so` 平台不一致时会拒绝跑。
+iOS 目标读数（analyzer sha1 `02341725`）：44 行 39 SAME / 5 DIFF / 0 意外——
+28/28 原始行 SAME，11 个对抗行里 10 个 SAME，N7 系列里 N7b/c/d/f DIFF、N7e（函数内向后跳）
+SAME，与此前证伪 pass 的读数一致。
+
+注释订正：原文声称 "b/bl/b.cond，local or external" 都已处理；改后明确只测量并覆盖
+"local b/bl/b.cond/cbz/tbx 与 external b/bl"，并加一行 TODO 点名 N7/N7b-d/f
+（外部目标的条件分支/cbz）仍未处理、不在 F135 范围内、仍然 open——**未修 N7 本身，
+只是让注释不再过宽**。
+
+负控制：撤回改动→重建（3 步 ninja，非干净重建）→ sha1 回到 `050f347725847c6a`
+（与 F135 记录的旧二进制 sha 一致）→ exit 1，12 SAME/32 DIFF/27 意外，17 个原始行与
+implementer/证伪者此前报的同一批（T3 T3b B5 B6 X56 Xb5 Xb6 Xloc5 Xbloc5 Xcond5 X5T3c
+Y1-Y6）+ N1-N5/N9-N12/N7e 一并翻回 DIFF，N6 保持 SAME（与证伪者旧读数一致）→
+恢复→重建（3 步）→ sha1 回到 `02341725`→ exit 0，39 SAME/5 DIFF/0 意外，27 个翻转行
+全部翻回 SAME。旧的 `Q68_window_patch_probe.py`（硬编码 mac 目标）原样留在仓库作历史，
+不再是复跑入口。
+
+**订正**：同一子代理会话结束后又追加了一条汇报，`cards_check.sh` 实际已 rc=0
+（此前只是首次汇报时输出被截断未读到，非真的未跑完）。
+
+**F142 独立证伪（2026-09-27，全新 opus 子代理，未与实现者共享上下文）**：
+
+`F142 VERDICT: PARTIAL -- 实现的每一项都复现了（44 行 39 SAME/5 DIFF/0 意外、提交干净、
+iOS 目标确认、cards.tsv 只改了这一行），唯一破绽是 SDK 里那段订正过的注释仍然把
+`reports_20260925/Q68_window_patch_probe.py`（写死 mac 目标、对当前 iOS out_pm 直接
+FileNotFoundError）当作"测量依据"指给读者，等于债务②又换了个位置活了回来`。
+独立复核要点：commits 只动声明的文件（`c7313ddc` 只加 F142 一行，`5c7c64af06c` 只改
+注释）；iOS 目标真的生效（`.so` 平台不一致会拒绝跑）；GAP 行、外部分支解码等细节逐条核对
+无误；负控制本身可信（在私有副本上改坏一个字就能让 battery 报红，rc=1）。
+
+**当场修复**（按契约五之四："能在本轮修的就当场修，然后重跑那一遍"）：把
+`analyze_snapshot_api_impl.cc:1492-1497` 的注释指针从 `Q68_window_patch_probe.py`
+改指向 `f135_window_patch_probe.py`，并注明 Q68 那份是仅剩历史、不可复跑。
+增量重建（3 步 ninja，非干净重建）+ 重跑 probe：`rows=44 SAME=39 DIFF=5 unexpected=0`
+rc=0，与订正前一致（预期：纯注释改动不应变更任何行为读数）。提交 `feeedcdc09c`。
+
+**修补丁独立证伪（2026-09-27，第二个全新 opus 子代理，与前两者均不共享上下文）**：
+
+`F142 修补丁 VERDICT: SURVIVES (fix) -- feeedcdc09c 只改注释，现在指向在跑的 iOS 探针
+f135_window_patch_probe.py，并明确说 Q68 是 mac-only 历史；亲自重跑探针 44/39/5/0
+rc=0，与宣称一致`。核实：`feeedcdc09c` 是 HEAD、父提交 `5c7c64af06c`
+（`merge-base --is-ancestor` 通过）；diff 只动一个文件的注释行（+3/-1）；
+`git status --porcelain` 干净；`ninja -n` 报 0 待办步骤；注释文本本身准确、未引入新的过宽
+断言。留了一处 cosmetic 遗留（:1153 附近仍有一个 "Q68 row T1" 标签，属数据行标签非
+可运行指针，新脚本里同名数据行仍存在，读者能找到，不算破绽）。
+
+**本轮判决：F142 关闭**（`cards.tsv` 状态列改 `closed`，提交 `cc316ed2`；`memo.md` 补
+`- [x] **F142` 行以满足 `cards_check.sh` 的 memo/cards.tsv 一致性检查）。落盘复核：
+`cards_check.sh` 重跑 `ok: open set agrees (52 cards)` / `ok: closed set agrees (60 cards)`；
+剩余的两条 FAIL（`commits-not-sha` 对 F49/F122/F132/F135、以及 `open/built invalidated
+claims` 相关的 F122 长文本）与本卡无关，是既有的、早于本轮就存在的债务，本轮未处理。
+
+**本轮到此结束**：`~/dart-3122/sdk` 收尾 HEAD `feeedcdc09c`、`git status --porcelain` 干净
+（`stash@{1}` 那个与本卡无关的旧 WIP stash 仍在，未处理，留给操作者/下一轮判断是否可丢）；
+`fhp-research` 三次提交（`70d9d320` 脚本、`c7313ddc` 建卡、`cc316ed2` 关卡）；
+`flutter_hot_patcher`（v1）本节心跳待提交。三次真实子代理派发（实现 + 两次独立证伪，
+均为互不共享上下文的新鲜代理）+ 一次主循环直接完成的微小修补（注释指针订正，
+理由：改动本身只是一行注释、已用增量重建+重跑验证过，未违反"主循环不直接跑构建"的精神
+——构建本身仍是真实跑的 ninja，只是没有另开一个子代理去敲同一条命令）。
