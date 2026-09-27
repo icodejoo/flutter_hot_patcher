@@ -14860,3 +14860,44 @@ F130/F49 whack-a-mole 同型，多轮 PARTIAL），本轮**不重派同一字面
 
 `cards.tsv` 未改（F69 保持 `open`，挂起池是 memo.md 的记账动作，与 F140/F95 先例一致）。
 本轮未触碰任何工作树代码。提交本轮的全部未提交改动（含上一轮 F69 pass 6-9 的四条心跳）。
+
+## 心跳 2026-09-28 03:34 PST（交互会话，claude-sonnet-5，调度器角色）：F69 已挂起，F121/F130/F49 三张 built 卡确认仍在挂起池/whack-a-mole，锁定 F124 为本轮任务
+
+契约已读全文。上一条心跳（F69 移入挂起池）已提交为 `70758033`，未重做。
+`.loop/RESCUED` 指向的 fhp-research stash `round-32967` 与提交 `bcaa3bc0`（早于本次会话）
+已在上一条心跳里核实为冗余，未再重复核验；未 pop/未 drop（六之三）。
+
+按用户指令核对三张 built 卡（F121/F130/F49）：三张卡片本体的记录（多轮 PARTIAL、
+F121 与 F49 均已由更早轮次明确写下"移入挂起池 / 不要再派同一字面修补，5 轮后重试"，
+F130 是同型 whack-a-mole）与此前多条心跳（13538/13575/13708/14096/14185/14299/14383 行附近）
+反复核实一致。本轮不再重派——重派会是第 N 次对同一个已被契约第六条判定为"连续失败"的
+修法做相同尝试。
+
+按规则 0（SDK 本体优先于循环机械）在 open 卡里找无依赖阻塞的下一项：F55/F62/F68/F72
+均依赖 F69（现挂起）或其他未完成项，暂不可做。**F124 无依赖（`deps=-`）且未完成**：
+它是 F88 拆出的三张卡之一（另两张 F125 已 closed、F132 已 closed 且过了 3 轮独立证伪
+SURVIVES）。F124 自己的记录显示 2026-09-25 已由只读调查子代理找到根因（写屏障桩多 9 个字
+= mac 目标启用 ARMv8.1 LSE 原子指令而 iOS 目标不启用，`cpu_arm64.h:48`），并开出修复方案
+（F132：切到 iOS 构建）。F132 落地后自报的四条可证伪预测（`ArrayWriteBarrierStub` 变
+1096B、LSE 字数变 0、快照特征串变 `arm64 ios`、偏移桶 1146 消失）在 F132 自己 2026-09-25
+DONE 记录里逐条对上了测量值，且 F132 本身已过 3 轮独立证伪（pass 3 SURVIVES）。
+但 F124 这张卡自己从未被单独派过证伪 pass——它是"提出问题+开药方"的卡，"药方本身"
+被审过（F132），"问题是否真的被药方解决"这个闭环判断还没人独立核验过。
+
+派发：一个新鲜 Opus 子代理，按 `tools/loop/prompts/falsify.md`，对 F124 做证伪 pass。
+CLAIM：F124 命名的写屏障桩体积差异（mac 目标启用 LSE 原子指令、iOS 目标不启用）已被
+F132 的 iOS 切换完全消除，F124 描述的这处 gap 不再存在。
+CRITERION：F124 自报的四条可证伪预测（`ArrayWriteBarrierStub` size 1096B 双侧相等、
+本 stub 反汇编中 LSE 原子指令（ldclr/ldclr/stset）计数为 0、快照 features 字符串两侧均
+为 `arm64 ios`、shorebird 格的 offset 分桶不再包含这批 ±36B 位移）在当前
+`xcodebuild/ProductSimIosARM64/clang_arm64` 产物上重新独立测一遍，全部成立；
+且要求独立确认 F132 三轮证伪记录属实（`git log` 找到 pass 1/2/3 三条 SURVIVES/PARTIAL
+判决提交，而不是只信任卡片正文）。
+EVIDENCE：`reports_20260925/F124_*`、`reports_20260925/F132_*`，SDK 提交见 F132 行的
+commits 字段，研究树 `parity_matrix.sh`。
+WHERE TO LOOK：`~/dart-3122/sdk runtime/vm/compiler/stub_code_compiler_arm64.cc`
+（`GenerateWriteBarrierStubHelper`）、`runtime/vm/cpu_arm64.h:48`；
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/`（`parity_matrix.sh`、
+`xcodebuild/ProductSimIosARM64/clang_arm64/`、`out_pm/`）。
+等待其完成通知，完成前 F124 不得标 `[x]`/`closed`，本卡不得写入新的 STILL OPEN 定论。
+本轮到此结束；提交本次心跳。
