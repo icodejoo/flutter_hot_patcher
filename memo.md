@@ -16114,3 +16114,50 @@ NO-CHEAP-PATH 档（Array/Instance/placeholder 的绝大多数）仍是已测量
 本轮不计入其轮次）；F130/F140 对 `d98a324b` 的未修复发现（留在修补丁队列）；规则 0 下
 其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；`verify_all.sh` 本轮暴露的 8 个既有
 红/阻塞项（操作者待拍板）。
+
+---
+
+心跳 2026-09-28 22:5x（交互会话，claude-sonnet-5，调度器角色）：读契约 + memo 尾部，按规则 0
+从「下一轮」清单挑第一项 —— F104 剩余的 STILL OPEN 边界（同名 Field 重复配对顺序歧义可能错配
+Type 身份而不拒绝）。定位到 `build_alignment` 里 `TYPE_REFERRERS` 投票循环：referrer（Field/Code）
+自身的 `(type, name)` 对齐键若在任一侧被多个对象共享，其配对就是「按 id 序摆位」而非证明过的
+1:1 匹配，而该配对此前被直接信任用于向 `type_class`/`owner` 目标传播 Type 身份，不经过任何
+`conflict_skipped`/`kind_mismatch_skipped` 拒绝检查（因为每个歧义 referrer 仍只投一票）。
+判据能在一轮内跑完（对已有脚本加一处过滤 + 复跑现有闸门，不需要重建）。
+
+**改动**（`fhp-research` 树，`evidence_disassemble_residual.sh` 单文件）：`build_alignment`
+新增 `ambiguous_pair_ids_o` 集合，记录任一侧 by-key 分组大小 >1 的对象 id；`TYPE_REFERRERS`
+投票循环对这些 id 直接拒绝并计入新增统计 `ambiguous_referrer_skipped`，不再投票。
+
+**自测**：
+1. 合成负控制（两个同名 Field，`type_class` 目标在两侧互换）：改前 `build_alignment`
+   （对 `git show HEAD~:...` 抽出的旧版本函数直接调用）给出 `type_ref_pairs={3: 4, 4: 3}`、
+   `paired_same_id=0`（两个都是错误配对，且不报错）；改后给出 `type_ref_pairs={}`、
+   `ambiguous_referrer_skipped=2`（正确拒绝）。
+2. 真实语料（`out_pm/`）复跑 `./evidence_disassemble_residual.sh`：`EXAMINED 1808`/
+   `UNEXPLAINED 1190` 改前改后逐字节不变；`type_referrer_pairs` 的 `paired` 从
+   70/70/151（hello/base_dd/prog）降到 67/67/149（被拒绝的 3/3/2 对都只有一个歧义 referrer
+   支撑，且原本 `paired_same_id` 就等于 `paired`，说明当前语料上拒绝它们不损失任何东西，
+   修复是为未来语料预防）。
+3. `./structural_evidence_check.sh` 改前改后均 `13 row(s), 0 failure(s)`，rc=0。
+
+提交 `fhp-research eeccd654`（1 个文件）。
+
+**证伪 pass 已派发**（Opus，独立子代理，agentId `a790cd957c1393d4c`，后台运行中）：
+七项攻击清单，要求它自建合成用例（不复用实现方的脚本）、独立核对 `cards.tsv` F104 行确实
+含被引用的 STILL OPEN 原文、判断修复是否只覆盖了部分歧义场景。**结论尚未回收**，本轮先记录
+待办：下一轮开工先收这个子代理的判决，若 SURVIVES 则把它的 STILL OPEN 原文抄进本节结尾
+（本轮不主张任何卡片状态变化——F104 本身仍 `open`，这只是清掉它上一次 STILL OPEN 记录里的
+一条具体边界，不等于关闭该卡）。
+
+**本轮改动**：`fhp-research` 提交 `eeccd654`（1 个文件）+ `memo.md` 本节。另两棵树
+（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。`cards.tsv` 未改
+（F104 `open` 状态未变）。本轮 agents=1（证伪 pass，结论待回收）。本轮到此结束。
+
+下一轮：回收 agentId `a790cd957c1393d4c` 的证伪判决并按结果处理（SURVIVES→抄 STILL OPEN
+原文；FALSIFIED/PARTIAL→按其指出的破绽当场修，重跑）；F104 的 NO-CHEAP-PATH 天花板
+（Array/Instance/placeholder）是否值得投入或记为结构性天花板（需要人决定）；是否订正
+`reports_20260925/R4_rows.txt` 里的过期数字（历史快照）；`sdk_path.pin` alternates
+伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试）；F130/F140 对 `d98a324b` 的
+未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；
+`verify_all.sh` 本轮暴露的 8 个既有红/阻塞项（操作者待拍板）。
