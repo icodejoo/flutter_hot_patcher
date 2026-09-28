@@ -105,6 +105,19 @@ command grep -n "关键词" docs/memo_archive_20260904.md   # 再查这份（更
   （`fhp-research` pass 9 给出具体字节复现）、入边/跨基本块缺口。第 5 轮后再重试，
   重试前先解决"要不要换方法"这个设计问题，不要在同一层继续派"再修一次"。
   `cards.tsv` 未改，F69 保持 `open`。
+- **F130：fix_queue.py 的旧-sha 提取连续 4 次在"字面短语匹配"这个模式上落地
+  （2026-09-28 移入，E7 fix / `9cd1b50f` pass / `4f8fbda8` pass / 本轮 pass 全部不绿）**：
+  `old_shas` 的抽取只认字面短语 `fix commit(s)` / `new fix` 出现的位置，不问那段文字是不是
+  模块自己写的。四次修补丁各自堵住了当轮出示的具体复现（整串扫描→逐段扫描、大小写/前缀匹配、
+  票据号误伤），但本轮独立证伪给出的对抗性 `old_reason`
+  （`"...waiting on a new fix deadbeef1 from infra team; fix commit(s) 1112223; no pass on the fix"`，
+  即人类前言本身就含触发短语 `"new fix"`）仍能让 `deadbeef1` 吞掉真实新提交 `deadbeef1234567`，
+  证据：真实 CLI 路径下打印 `hold F77`，且负控制显示"修复前/修复后"对这个攻击面完全无差别。
+  已排除的假设：不是转义/前缀匹配/大小写这类实现细节（这些子问题各自都已修过且有测试覆盖）。
+  真正缺的是设计决定：`old_reason` 需要一个只有模块自己能写的结构化字段来记录 sha 列表，
+  与操作者自由文本分开存储，而不是继续在同一个自由文本字段上用更精细的正则去猜"这段是不是
+  机器写的"。第 5 轮后再重试，重试前先解决这个设计问题，不要在同一层继续派"再修一次"。
+  `.loop/UNREVIEWED_FIX` 与 `cards.tsv`（`fhp-research` 树）均未改，F130 保持 `built`。
 
 ---
 
@@ -15223,3 +15236,56 @@ F121（挂起池，5 轮后再试）挡住；F108 下一步是"给 reset_unknown
 改动文件：`memo.md`（本节）、`.loop/UNREVIEWED_CLOSURE`（清空）。三棵源码/研究/构建树均无改动。
 下一轮：`built` 欠证伪 pass 的三张卡（F121 F130 F49）仍待派；F37 仍被 F108（PARTIAL，open）
 与 F121（挂起池）挡住。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：F130 第四次证伪 FALSIFIED，移入挂起池
+
+契约已读全文。锁定「built 卡欠证伪 pass」三张（F121 F130 F49）中的 F130——F121 已按其自身
+pass 6（SS6）判入挂起池，F49 的 pass 4 已建议照 F121 办理（同款 whack-a-mole），两者都不该
+再派同类型的字面补丁轮。F130 是三者里最近一次仍在走"字面补丁→再证伪"这条路的，派一个全新
+opus 子代理（general-purpose，9 次工具调用，独立，未见任何实现方会话）对 `4f8fbda8`（及其
+后续 `682ec748`/`90b919f5`/`ff6e7114`，均在 `flutter_hot_patcher` v1 树 `tools/loop/fix_queue.py`）
+跑七问证伪 pass。
+
+**F130 VERDICT: FALSIFIED -- prose containing the literal "new fix <hex>" still hides a
+genuinely new fix sha (the adversarial repro holds instead of requeueing)**
+
+子代理逐条实测（不是复述卡片）：① 读代码确认 `old_shas` 的抽取只认字面短语
+`fix commit(s)` / `new fix` 出现的位置，不问那段文字是不是模块自己写的；用现有探针
+（`fix_queue.py:3755` 附近）把逐段 scoping 改回整串扫描，探针确实变红，证明它不是恒真式。
+② `--self-test` 现读 **118/0**（不是卡片记的 115——`cf1dbd60` 在 `4f8fbda8` 之后又落了地，
+计数已过期）；构造上一次 PARTIAL 判决给出的对抗性 `old_reason`
+（`"F77 blocked, waiting on a new fix deadbeef1 from infra team; fix commit(s) 1112223; no pass on the fix"`），
+喂给真实 CLI 路径（非自己重写的复本），结果 `hold F77`——`deadbeef1234567` 被 `deadbeef1` 吞掉，
+真实新提交没有入队。③ 现有修复只堵住了更窄的那个复现，同一族的任何人类前言只要含
+`"new fix"`/`"fix commit(s)"` 字样后跟一个像十六进制的词，仍能吞掉真提交；这条攻击面自己的
+self-test 完全没覆盖。④ `command grep -niE "new fix|fix commit\(s\)" memo.md` 命中 13 行，
+证实这个项目的记账风格里操作者原话确实会包含这两个触发短语，不是虚构场景；同时发现旧格式
+`"fixed PARTIAL commit(s) X"` 根本不触发当前正则，那类历史记录的 sha 现在完全读不回来（另一个
+未被本卡覆盖的漏洞，暂不展开）。⑤ `git merge-base --is-ancestor 4f8fbda8 HEAD` rc=0，非陈旧。
+⑥ 真负控制：在 `/tmp` 副本上把逐段正则换回整串扫描，现有探针变红；对抗性探针在"修复后"与
+"改坏后"两侧都是 FAIL——即这条修复对这个攻击面**毫无差别**，仓库本体未被触碰。⑦ 现有 self-test
+测的是"票据号 deadbeef1"（不含触发短语）而不是上一轮判决给出的"新 fix deadbeef1"（含触发短语），
+问题被换成了更容易的那一个。
+
+**判定：不当场再修。** 这是 F130 在"字面短语补丁"这条路上第 4 次判决不绿
+（E7 的 fix→PARTIAL、`9cd1b50f` 的 pass→PARTIAL、`4f8fbda8` 的 pass→PARTIAL、本次→FALSIFIED），
+且四次的病因同属一族：**用字面短语匹配文本，而不是用一个只有模块自己能写的结构化标记**去
+区分"这段文字是机器写的"与"这段文字是人类前言"。按契约六"同一种修法连续失败 3 次 → 移入
+挂起池"，比照 F121（SS6）与 F49 自己 pass 4 的建议，将 **F130 移入本文件顶部挂起池**
+（见该节新增条目），本轮不再派"再补一个正则"式的轮次。已排除的假设：不是"没转义大小写"
+"没做前缀匹配"这类细节问题（这些子问题在 F140/G130f 里已经修过且测试覆盖），真正缺的是设计
+决定——`old_reason` 需要一个结构化字段（例如把"这是模块写的 sha 列表"与"这是操作者的自由文本"
+分开存储），而不是继续在同一个自由文本字段里用更精细的正则去猜。第 5 轮后再重试，重试前先
+解决"要不要给队列行加结构化字段"这个设计问题，不要在同一层继续派"再修一次"。
+
+`.loop/UNREVIEWED_FIX` 未被本轮编辑或删除（契约明令只有操作者能出队/改队列文件），F130 那一行
+原样保留，仍记着"no pass on the fix"——**这不准确**（现在确实有一次 pass，结果是 FALSIFIED，
+非绿），但按契约"你不要编辑或删除队列文件"，本轮不碰它；出队与否留给操作者按 `--operator-drain`
+判断。`cards.tsv`（`fhp-research` 树）与 `flutter_hot_patcher` 根目录的 `cards.tsv`/`queue` 等
+未跟踪文件本轮均未改动（那些是历史遗留的未跟踪 scratch 文件，非本轮改动对象）。
+
+本轮 agents=1（证伪，opus，9 次工具调用）。改动文件：仅 `memo.md`（本节 + 挂起池新增条目）。
+三棵源码/研究/构建树均无改动，`.loop/UNREVIEWED_FIX` 未改。下一轮：`built` 欠证伪 pass 的
+F121/F49/F130 三张现全部在挂起池，按契约五轮后再重试；F37 仍被 F108（PARTIAL，open）与
+F121（挂起池）挡住；下一轮应按规则 0 挑一张无依赖 SDK 本体 open 卡（F82/F84/F87/F88/F94/F104
+之一）或处理 F108 的"给 reset_unknown 设计更强锚点"后续。本轮到此结束。
