@@ -15507,3 +15507,36 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - self-test **123/0**；四个变异各自只让对应的新探针变红：不作废 → `_f130_cand_same_minute`；去掉数字要求 → `_f130_hexword_in_segment`；去掉锚点 → `_f130_prose_new_fix`（第一版探针的散文在这个变异下不红，已改）；子串哨兵 → 2 条 F140 新 case
 
 下一步：两张卡各派一次 fresh Opus pass（2026-09-28 已派）。
+
+### F130 / F140 第二轮（2026-09-28）—— 对 `6a8d6b77` 的两次 pass 都判 PARTIAL，修补丁 `d98a324b`
+
+**F130（agent a33a1d877c74646cd）PARTIAL**：
+- 三个 NEGCTL 都能复现
+- 但有两个变异 suite 仍报 123/0：去掉末尾锚点（g），以及只取第一个 token（h）。h 在 17 条 live 行上一个 sha 都取不到（0/120），还会抹掉 F141 的绿色标记
+- 另外，同一轮里既有绿色回复、又有 `SURVIVES (fix)` 行时，新 fix sha 会被豁免出重新入队：标记照样显示，新 sha 也没记下来
+
+**F140（agent a3b3bb9e7b74fb28d）PARTIAL**：
+- 墙纸 RED 端到端确认已消失；上一轮 STILL OPEN 的伪造账本行，在第 N 轮就被移除
+- 但：(a) 单独把 queue 处或 quarantine 处改回子串匹配，suite 仍报 123/0
+- (b) restore 块和 `operator_drained` 碰到 UTF-8 解码错误会崩溃：往账本写一个 `\xff` 字节，轮次就能删掉一条队列行，直到 OWED 0（这个问题在本次修补丁之前就存在）
+- (7) 删掉 live 账本现在是静默的
+
+**修补丁 `d98a324b`**：
+- F130：重新入队不再减去 `reviewed`；新增 3 个探针，其中 same-round 探针在 `AUTO_DRAIN` 关闭下跑，即生产语义
+- F140：账本和 quarantine 的读写一律用 `errors="surrogateescape"`；restore 块发现 live 账本被删或不可读、且快照里有出队记录时，报 RED 并从快照恢复；新增 4 个 `F140 p7` 探针
+- self-test **130/0**；7 个变异各自只让对应探针变红（strict decode 那个直接 `UnicodeDecodeError`）
+
+**顺带修了 memo 与 cards.tsv 的状态不同步**：F69、F135 改为 `[x]`；F69 续节与 F108 子修补去掉复选框。`cards_check` 从 5 个失败降到 2 个，剩下的都是既有的 commits 列塞散文的债。
+
+### 三格 unknown 调查（2026-09-28）—— 两份在溯源这一步就停了：产物过期，而且共享二进制不对应任何提交
+
+`shorebird` 与 `disassemble` 的两个调查代理各自独立发现、且我已复核：
+- SDK 工作树（分支 `agent/sdk-batch1`，HEAD `52a498586cc`）有一处**未提交**的 `runtime/vm/stub_code_list.h` 改动（mtime 09-28 13:56:41），内容是把 14 个模拟器 stub 挪到 `EnsureDeeplyImmutable` 之后
+- `ProductSimIosARM64/clang_arm64` 的 `gen_snapshot` / `analyze_snapshot` 是 14:01 带着这处改动构建的 ⇒ **共享二进制不对应任何提交**
+- 现在的 `analyze_snapshot` 拒读 `out_pm` 里全部三个 ours `.so`：`Wrong full snapshot version, expected dbebe6fb… found 8b59e404…`
+- `out_pm` 的生产者 `a18bc8c2…` 对应 SDK `98c95873b72`，此后又进了 11 个提交
+
+过期读数（只作基线）：`shorebird` = 19,122（op_subgraph 9152 · subgraph 9152 · self_hash 788 · snapshot_data 30）；`disassemble` UNITS 1808，`evidence_disassemble_residual.sh` 报 UNEXPLAINED 1190。
+脚本在研究树 `reports_20260928/{shorebird,disassemble}/`，未提交。
+`dump_object_pool` 调查已由操作者中止。
+**恢复顺序**：先由 stub 重排的主人提交或还原 → 重建 iOS 树 → `parity_matrix.sh --reuse` → `S1_provenance.sh` 必须 rc=0，然后才做归因。
