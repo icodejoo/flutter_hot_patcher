@@ -15623,3 +15623,41 @@ provenance 变化的敏感度不同，`dump_object_pool` 那格已实测两个�
 （`op_subgraph_hash 9152 · subgraph_hash 9152 · self_hash 788 · snapshot_data 30`）与新读数逐项核对，
 如实记录是否有变化；不要求它下 structural/gap 判决，只要求它交出一张核验过 provenance 的分量表。
 下一轮按其结论决定是否需要另派一次归因或证伪 pass。本轮到此结束前先派发。
+
+**子代理返回（general-purpose，8 次工具调用，只读 `~/dart-3122/sdk` 与
+`~/Documents/flutter_hot_patcher`，只在 `fhp-research` 树内产出）：**
+
+- `diff_units.sh shorebird`：UNITS **19122**（hello 4282 · base_dd 4282 · prog 10558），
+  与旧读数逐位相同
+- `evidence_shorebird_residual.sh`：`EXAMINED 0/19122, UNEXPLAINED 19122`，分桶
+  `op_subgraph_hash 9152 · subgraph_hash 9152 · self_hash 788`，随后
+  `snapshot_version/dart_version/vm_data_hash/vm_data_length/adjusted_vm_instructions_hash`
+  各 6，合计 30——**与旧表的"snapshot_data 30"数值相同，只是现在拆成了 5 个具名字段**
+- `evidence_shorebird_components.sh`：`CONTAINMENT VACUOUS: real_gap == 0`，
+  `distinct_missing 0`（每个字段每个 fixture 皆然）——延续既有"是重复不是缺口"的结构，
+  这个脚本本身不产出 op_subgraph_hash/subgraph_hash/self_hash 的总数，是独立的多重集
+  包含关系检查
+- `evidence_shorebird_thread_offset.sh`：**需要一个位置参数 `locus`，裸调用报
+  `locus required` 且无用法说明**（脚本本身的一个小缺陷，未修，只记录）。
+  带参 `Thread+0x678` 跑：`rc=0`，`LOCUS_OK`，**hello fixture 报 118/1380 个 self_hash 差异**
+  （size_diff ⊆ hash_diff 子集关系仍成立）
+
+**核对结论：与旧分量表基本吻合，但有一处真实数值变化**：
+`op_subgraph_hash`/`subgraph_hash`/`self_hash`（788 合计）/`snapshot_data`（30，现拆 5 字段）
+四项与旧表逐位相同；**唯一的差异是 `evidence_shorebird_thread_offset.sh` 现在对 hello fixture
+报 118/1380，而该脚本自己的头注释里引用的是 205/1380**（此前 09-17 那条记录引用的是另一个
+不同指标——`sg-only 0 · op-only 0 · BOTH 4576 · neither 1400` 与 `3100/4576=67.7%`，
+是对 4576 个函数的归因，不是这个 1380 分母的 self_hash 计数；**两个数字不是同一件事，
+不要混着引用**）。118 与脚本注释里的 205 之间的差异**原因未查**（子代理明确未展开，
+budget 限制内如实标注"留给 Thread-offset 归因的负责方复核"）。
+
+**本轮判定**：这是一次纯重新计数任务，没有产出需要证伪的新 CLAIM（没有改判任何格、
+没有改动任何证据脚本、`cards.tsv` 未动），故不派证伪 pass。**唯一留下的待办**：
+`evidence_shorebird_thread_offset.sh` 头注释里的 205/1380 基线可能已过期（现读 118/1380），
+下一次真正做 Thread-offset 归因判定时要先核对这个数字，不能直接引用头注释里的旧值。
+
+改动文件：仅 `memo.md`（本节）。`fhp-research`/`~/dart-3122/sdk`/`flutter_hot_patcher` 三棵树
+本轮均无代码改动（子代理只读，未落盘新文件）。本轮 agents=1（纯测量，非证伪/实现）。
+下一轮：可选 F108 的"给 reset_unknown 设计更强锚点"、`evidence_shorebird_thread_offset.sh`
+头注释订正（205→118 需要先查清原因，不是简单替换数字）、或规则 0 下任一无依赖 SDK open 卡
+（F82/F84/F88/F94/F104）。本轮到此结束。
