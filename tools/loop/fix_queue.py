@@ -207,7 +207,7 @@ def load_quarantine(path):
     if not path or not os.path.exists(path):
         return out
     try:
-        with io.open(path, encoding="utf-8-sig") as fh:
+        with io.open(path, encoding="utf-8-sig", errors="surrogateescape") as fh:
             for line in fh:
                 line = line.rstrip("\n")
                 if not line or line.lstrip().startswith(("#", "//")):
@@ -244,7 +244,7 @@ def operator_drained(ledger_path, actions=None, quarantine=None):
         return out
     if os.path.exists(ledger_path) and os.path.isfile(ledger_path):
         try:
-            with io.open(ledger_path, encoding="utf-8-sig") as fh:
+            with io.open(ledger_path, encoding="utf-8-sig", errors="surrogateescape") as fh:
                 for line in fh:
                     # Comment lines (a header, or the #SNAPSHOT-FAILED sentinel)
                     # are not drains and must not be parsed as malformed ones.
@@ -1994,7 +1994,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         ledger_ok = False
         if quarantine_read_ok(qpath):
             try:
-                with io.open(qpath, "a", encoding="utf-8") as fh:
+                with io.open(qpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
                     fh.write("# %s re-quarantined -- missing from the live "
                              "quarantine file at round start\n" % now)
                     for l in sorted(missing_from_live):
@@ -2060,7 +2060,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # more dispatch) rather than a forged one being trusted later.
         live_now_path = operator_ledger(queue_path)
         try:
-            with io.open(live_now_path, encoding="utf-8-sig") as fh:
+            with io.open(live_now_path, encoding="utf-8-sig", errors="surrogateescape") as fh:
                 live_now_lines = [l.rstrip("\n") for l in fh
                                   if l.strip()
                                   and not l.lstrip().startswith(("#", "//"))]
@@ -2069,7 +2069,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         newly = [l for l in live_now_lines if l not in quarantine]
         if newly:
             try:
-                with io.open(qpath, "a", encoding="utf-8") as fh:
+                with io.open(qpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
                     fh.write("# %s quarantined -- ledger snapshot could not "
                              "be trusted this round\n" % now)
                     for l in newly:
@@ -2089,7 +2089,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     floor_add = sorted(quarantine - floor_quarantine)
     if floor_add and quarantine_read_ok(fpath):
         try:
-            with io.open(fpath, "a", encoding="utf-8") as fh:
+            with io.open(fpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
                 for l in floor_add:
                     fh.write(l + "\n")
         except (IOError, OSError):
@@ -2108,15 +2108,28 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     if ledger_before and ledger_ok:
         live_path = operator_ledger(queue_path)
         try:
-            with io.open(ledger_before, encoding="utf-8") as fh:
+            with io.open(ledger_before, encoding="utf-8", errors="surrogateescape") as fh:
                 snap_lines = fh.read().splitlines()
         except (IOError, OSError):
             snap_lines = []
         try:
-            with io.open(live_path, encoding="utf-8") as fh:
+            with io.open(live_path, encoding="utf-8", errors="surrogateescape") as fh:
                 live_lines = fh.read().splitlines()
         except (IOError, OSError):
             live_lines = None
+        snap_data = [x for x in snap_lines if x and x != SNAPSHOT_FAILED]
+        if live_lines is None and snap_data:
+            # F140 pass 7: a ledger deleted (or made unreadable) mid-round was
+            # silently left gone, and the next round bootstraps it empty.
+            actions.append(
+                "RED the live ledger was deleted or made unreadable during "
+                "the round (%d drain record(s) at round start) -- restoring "
+                "it from the round-start snapshot" % len(snap_data))
+            try:
+                with io.open(live_path, "w", encoding="utf-8", errors="surrogateescape") as fh:
+                    fh.write("".join(x + "\n" for x in snap_data))
+            except (IOError, OSError) as e:
+                actions.append("RED could not restore the ledger (%s)" % e)
         if live_lines is not None:
             snap_set = set(snap_lines)
             added = [x for x in live_lines if x and x not in snap_set]
@@ -2127,7 +2140,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                     % (len(added), "; ".join(x.split("\t")[1] if "\t" in x
                                              else x[:20] for x in added)))
                 try:
-                    with io.open(live_path, "w", encoding="utf-8") as fh:
+                    with io.open(live_path, "w", encoding="utf-8", errors="surrogateescape") as fh:
                         fh.write("".join(x + "\n" for x in snap_lines
                                          if x and x != SNAPSHOT_FAILED))
                 except (IOError, OSError) as e:
@@ -2216,7 +2229,10 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
     requeued = set()
     if allow_enqueue:
-        requeue_cids = sorted((neg & fix) & {r[0] for r in kept} - reviewed)
+        # F130 pass 5: a same-round green pass does not exempt a NEW fix
+        # sha -- nothing binds the pass to that commit, so the requeue (and
+        # the mark invalidation below) still happens; no new sha, no requeue.
+        requeue_cids = sorted((neg & fix) & {r[0] for r in kept})
         for cid in requeue_cids:
             row_i = next(i for i in range(len(kept)) if kept[i][0] == cid)
             old_reason = kept[row_i][2]
@@ -3871,6 +3887,67 @@ def self_test():
         return ("requeue F77 -- new fix abc99990" in out), \
                "rc=%s out=%r" % (rc, out)
 
+    @probe("F130 pass 5: prose after the shas in a 'new fix' clause is not a "
+           "segment (end anchor)")
+    def _f130_prose_after_shas():
+        d = tempfile.mkdtemp(prefix="fq_f130tail.")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after FALSIFIED verdict; new fix abc9999 was proposed "
+                   "only; fix commit(s) 1112223; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["abc99990 tree F77: real new fix"],
+            agents=0, cards={"F77"})
+        return ("requeue F77 -- new fix abc99990" in out), \
+               "rc=%s out=%r" % (rc, out)
+
+    @probe("F130 pass 5: a same-round green fix pass does not absorb a new "
+           "fix sha -- the row is requeued and no mark is left")
+    def _f130_green_same_round():
+        d = tempfile.mkdtemp(prefix="fq_f130green.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        # Production semantics (F113): rounds never drain, so a green pass
+        # only writes a candidate mark -- the shape this probe is about.
+        saved = os.environ.pop("FHP_FQ_SELFTEST_AUTO_DRAIN", None)
+        try:
+            rc, out, _ = run_cli(
+                d, [old_row],
+                memo=["F77 pass 3 VERDICT: FALSIFIED",
+                      "\U0001f7e2 F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+                subjects=["fff0001 tree F77: second fix"],
+                agents=1, cards={"F77"},
+                replies=[("t1", "VERDICT: SURVIVES for F77 (fix)")])
+        finally:
+            if saved is not None:
+                os.environ["FHP_FQ_SELFTEST_AUTO_DRAIN"] = saved
+        q = read_queue(os.path.join(d, "queue"))
+        cand = candidates(os.path.join(d, "queue"))
+        ok = ("requeue F77 -- new fix fff0001" in out
+              and any(r[0] == "F77" and "fff0001" in r[2] for r in q)
+              and "F77" not in cand)
+        return ok, "rc=%s out=%r q=%r cand=%r" % (rc, out, q, cand)
+
+    @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
+           "re-mentioning the second one neither requeues nor drops the mark")
+    def _f130_multi_sha_segment():
+        d = tempfile.mkdtemp(prefix="fq_f130multi.")
+        io.open(os.path.join(d, "queue.candidates"), "w",
+                encoding="utf-8").write("2026-09-17 11:00\tF77\n")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after PARTIAL verdict; fix commit(s) 14b1cf2 182cbec; "
+                   "no pass on the fix; new fix 355c5af 5afa4b2")
+        outs = []
+        for sub in ("182cbec tree F77: mentioned again",
+                    "5afa4b2 tree F77: mentioned again"):
+            rc, out, _ = run_cli(
+                d, [old_row], memo=["F77 pass 3 VERDICT: PARTIAL"],
+                subjects=[sub], agents=0, cards={"F77"})
+            outs.append(out)
+        cand = candidates(os.path.join(d, "queue"))
+        ok = (all("requeue F77" not in o for o in outs)
+              and cand.get("F77") == "2026-09-17 11:00")
+        return ok, "outs=%r cand=%r" % (outs, cand)
+
     @probe("F140: a memo line with two per-id verdicts marks a RED verdict "
            "only for the id whose OWN block says so")
     def _f140_negline():
@@ -4287,6 +4364,48 @@ def self_test():
                  is_sentinel(b"#SNAPSHOT-FAILED\n") and is_sentinel(" #SNAPSHOT-FAILED ")
                  and not is_sentinel("why: a #SNAPSHOT-FAILED round")
                  and not is_sentinel(b""), None))
+
+    def f140_gate(qrows_b, ledger_b, ledger_now, quar_b=None, drop_live=False):
+        d = tempfile.mkdtemp(prefix="fix_queue_f140p7.")
+        qp, bp = os.path.join(d, "q"), os.path.join(d, "b")
+        lb, qb = bp + ".operator_drains", bp + ".quarantine"
+        write_queue(qp, qrows_b)
+        write_queue(bp, qrows_b)
+        io.open(lb, "wb").write(ledger_b)
+        if not drop_live:
+            io.open(operator_ledger(qp), "wb").write(ledger_now)
+        sha = lambda p: hashlib.sha256(io.open(p, "rb").read()).hexdigest()
+        kw = {}
+        if quar_b is not None:
+            io.open(qb, "wb").write(quar_b)
+            io.open(quarantine_path(qp), "wb").write(quar_b)
+            kw = dict(quarantine_before=qb, quarantine_before_sha=sha(qb))
+        acts, _, _ = update(qp, [], [], 0, "2026-09-09 17:00", {"F46"},
+                            before_path=bp, before_sha=sha(bp),
+                            ledger_before=lb, ledger_before_sha=sha(lb), **kw)
+        live = operator_ledger(qp)
+        return acts, (io.open(live, "rb").read() if os.path.exists(live) else None)
+
+    quoting_b = quoting.encode("utf-8")
+    acts, _ = f140_gate([(row[0], row[1], "reason quotes %s here" % SNAPSHOT_FAILED)],
+                        b"", b"")
+    f113.append(("F140 p7: a queue snapshot whose reason quotes the sentinel is "
+                 "not a failed snapshot",
+                 not any("snapshot was not taken" in a for a in acts), acts))
+    acts, _ = f140_gate([row], b"", b"", quar_b=quoting_b)
+    f113.append(("F140 p7: a quarantine snapshot line quoting the sentinel is "
+                 "not a failed snapshot",
+                 not any("snapshot was not taken" in a for a in acts), acts))
+    acts, live = f140_gate([row], quoting_b, quoting_b + b"\xff forged\n")
+    f113.append(("F140 p7: a non-UTF-8 byte written into the live ledger is "
+                 "RED and removed, not a crash",
+                 any("added during the round" in a for a in acts)
+                 and live == quoting_b, (acts, live)))
+    acts, live = f140_gate([row], quoting_b, None, drop_live=True)
+    f113.append(("F140 p7: deleting the live ledger mid-round is RED and "
+                 "restored from the snapshot",
+                 any("deleted or made unreadable" in a for a in acts)
+                 and live == quoting_b, (acts, live)))
 
     # F140: a comment header with leading whitespace, a leading BOM, or the
     # '//' spelling must not be read as a malformed drain line. The first

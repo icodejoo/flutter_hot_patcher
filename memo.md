@@ -4962,7 +4962,7 @@ OFFENDER prog ours 1633 ...parseNumber: code refs 15, self_pp 14, missing index 
 
 ---
 
-- [ ] **F69：读他们出厂 `analyze_snapshot` 的那三条指令，判定那个固定 3 字跳是不是我们独有的**
+- [x] **F69：读他们出厂 `analyze_snapshot` 的那三条指令，判定那个固定 3 字跳是不是我们独有的**（2026-09-28 closed，见第 15405 行附近的四计数器级联节）
       🔴🔴 **2026-09-16 证伪 pass 判 FALSIFIED —— VERDICT A 不成立，撤回。**
       审的是 `5e77b84` 的 `f69_their_pool_skip_disasm.sh`（682 行，sha256 `cdab4402…`）。
       **字节层通过**：胖 Mach-O 的 arm64 切片在 `0x3E8000`，`+0x197434 = 0x57F434`，
@@ -11956,7 +11956,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 - [x] **F134：`LoadSFromOffset`/`LoadQFromOffset` 的 PP 加载没补齐（003f2759a68 只修了 LoadD）**（`closed`，2026-09-28，
       从 F68 第二次证伪拆出；实现 `abafbbbd51a` 早于本次记账，2026-09-27 独立证伪已判 SURVIVES，
       只是从未被写回卡片状态列——本轮补记，详见心跳）
-- [ ] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）
+- [x] **F135：我们的解码器跳窗会吞掉窗口里的 `bl`，他们的不吞**（`open`，2026-09-25，从 F68 第二次证伪拆出）（2026-09-28 closed，pass 5 SURVIVES）
 - [x] **F142：F135 遗留的三项后续债务（探针脚本落盘+iOS 兼容、注释订正）**（`closed`，2026-09-27，deps=F135；
   实现→证伪 PARTIAL（注释仍指向已废弃的 mac 探针）→当场修（`feeedcdc09c`）→独立复核 SURVIVES(fix) 后关卡）
 - [x] **F143：analyze_snapshot 池加载跳过窗口 N7 外部分支分类缺口（F135/F142 明确搁置的一项）**（`closed`，
@@ -15402,7 +15402,7 @@ address shape is actually certified."
 `spikes/shorebird_linkinfo_oracle/cards.tsv`（F69 行）。`flutter_hot_patcher` 与
 `~/dart-3122/sdk` 两棵树均无代码改动。
 
-- [x] **F69：`analyze_snapshot_arm64` 的四计数器级联脚本**（`closed`，SURVIVES 2026-09-28）
+- **F69（续）：`analyze_snapshot_arm64` 的四计数器级联脚本**（`closed`，SURVIVES 2026-09-28）
 
 ---
 
@@ -15431,7 +15431,7 @@ address shape is actually certified."
 
 fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、`e7753da2`（cards PARTIAL）、`fb7eaacd`（cards SURVIVES）。
 
-- [ ] **F108：`op_dump_probe.py` within-bucket 内容检查**（`built`，sub-fix SURVIVES 2026-09-28；卡片仍 open 等 verify_all 重建）
+- **F108（子修补）：`op_dump_probe.py` within-bucket 内容检查**（`built`，sub-fix SURVIVES 2026-09-28；卡片仍 open 等 verify_all 重建）
 
 **F95 round-4-PARTIAL fix chain（2026-09-28）**：
 - `4c4db9f3`：fix (a) 和 (b)（PARTIAL——fresh Opus pass task a661f67fdf826b3f4 发现指针说"two sections below"，实际目标在 section 5 即 immediately below，差一节）
