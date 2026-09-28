@@ -15197,3 +15197,29 @@ F108 实现+证伪记录、`2caa092f` F81 记账补写、`4c3bdcf0` 订正上一
 F121（挂起池，5 轮后再试）挡住；F108 下一步是"给 reset_unknown 设计一个能扛 ASLR 又能拒绝
 页对齐伪造的更强锚点"，或按规则 0 挑一张无依赖 open 卡（F82/F84/F87/F88/F94/F104 之一）。
 本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：`.loop/UNREVIEWED_CLOSURE` 是陈旧标记，非真缺口
+
+开工前先处理 `.loop/UNREVIEWED_CLOSURE`（写着「08:37 那一轮关闭 F81 没有绑定证伪判决」，
+"before doing anything else"）。核实：F81 的证伪 pass **早已跑过并已提交**——本文件 15089–15138 行
+（"F81 记账遗漏补记" 心跳）记着一次全新 opus 子代理（45 次工具调用，只读 `fhp-research` 树）跑
+`falsify.md` 七问 pass，`VERDICT: SURVIVES`，并原样抄了 STILL OPEN 与 COST OF BEING WRONG；
+`cards.tsv`（`fhp-research` 树）F81 行已改 `open→closed`；提交号 `0a4c3d87`
+（"memo: F108 within-bucket content check (PARTIAL) + F81 cards.tsv bookkeeping fix"）
+已在 `git log -- memo.md` 里，`git diff HEAD -- memo.md` 为空，工作树干净——**不是待做的事，是已做完但没被关卡机制看见的事**。
+
+**根因**（读 `tools/loop/run_round.sh:1960-1994` 定位）：轮末闸门用 `grep -qE` 逐行匹配
+`<id>\b.*(VERDICT:...|证伪)`，要求卡号与判决词**同一行**。而实际写法把卡号和判决词分在了
+两行（15137 行 `F81：...`，15138 行 `...证伪 SURVIVES 后补记关卡`——Markdown 里这是同一段落的
+换行折行，不是两句话），闸门逐行扫描时两行互不可见，永远匹配不上，尽管判决确实存在于同一轮的
+`memo_added` 里。⇒ 这是「判据问的是形状不是语义」的又一例（同族见 CLAUDE.md 第四十三种缺陷：
+`fix_queue.py` 的极性对整段算、身份对整段提取）。**没有新证据要写、没有新卡要立**——
+这是闸门自身的已知盲区，值不值得单独立卡修（把正则改成跨行窗口）留给下一次真正撞到它的轮次判断，
+本轮不展开（只读复查，未改 `run_round.sh`）。
+
+按契约六之三/五之四的精神（不替代已结束的判决，只补记账）：手动清除这个陈旧标记——
+`.loop/UNREVIEWED_CLOSURE` 已置空（保留文件存在，内容清空，与闸门自身清除时的效果一致）。
+本轮 agents=0（无新 CLAIM 需要证伪，纯只读复查+账目修正，同 F134/F108 记账遗漏补记的先例）。
+改动文件：`memo.md`（本节）、`.loop/UNREVIEWED_CLOSURE`（清空）。三棵源码/研究/构建树均无改动。
+下一轮：`built` 欠证伪 pass 的三张卡（F121 F130 F49）仍待派；F37 仍被 F108（PARTIAL，open）
+与 F121（挂起池）挡住。本轮到此结束。
