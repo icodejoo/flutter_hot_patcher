@@ -16427,3 +16427,51 @@ F121/F49/F130 三张 built 卡均已在自身卡片文本里记录过连续 ≥3
 遗留的未跟踪文件，无异常残留）。本轮只做一件事：派一个**新鲜**子代理（Opus，独立、不知情于本次实现）
 对 31700acc 跑 `tools/loop/prompts/falsify.md` 的完整七项攻击证伪 pass，CLAIM/CRITERION/EVIDENCE
 取自 `cards.tsv` F144 行原文。派发后本轮结束，等待判决回收。
+
+---
+
+心跳 2026-09-29 02:10（交互会话，claude-sonnet-5，调度器角色）：回收 F144 修补丁（`31700acc`）证伪 pass，PARTIAL，当场修补，仍未过修补丁自己的证伪 pass
+
+派发 1（general-purpose/opus，独立、未知情于实现）对 `fhp-research 31700acc`（F144 的实现）跑 falsify.md
+完整七项攻击：
+
+```
+F144 修补丁 VERDICT: PARTIAL (fix) -- 31700acc really does wire the check in, repin the pin and
+fail closed on bad pins (criteria 1-3 hold), but criterion 4 is only met in the python scanner:
+the shared count_dd_sites.awk, which the dd_pass_check.sh gate runs, still uses the nop proxy
+that the commit itself calls "a proxy, not the distinction", and nothing records that as accepted scope.
+```
+
+具体破绽（攻击 4，真实复现）：在 `out_pm/as.hello.ours.so` 副本 0x60800 处注入一段**无 nop 填充**
+的原生池加载调用（`ldr x16,[x27,#0x10]; asr; ldr x30,[x26,x16]; blr`）——`classify_site()`（Python，
+`measure_dd_emission.sh` 用）正确判它为 native，但 `count_dd_sites.awk`（`dd_pass_check.sh` 用，
+接入 `verify_all.sh`）仍按老的「asr x16 前面有没有 nop」判据把它计成 DD，是假阳性。三个 fixture 的
+干净语料（92/92/92/92/178/178）本轮不受影响（因为它们里没有真实 DD 站点、也没有无填充原生调用），
+但曝露面 > 0 只是运气，不是修好。其余六项攻击（可比性、denominator、staleness、负控制真实性、
+问题偷换）均未发现新破绽，见子代理完整报告（`agentId a238fff34af4a8e2a`）。
+
+**当场修补**（同一交互会话，第二个 opus 子代理，`fhp-research 3eaeb619`，父 `c76a4be6`）：把
+`classify_site()` 的真实判据（跳过 nop 填充后看 x16 的来源——池加载 `ldr x16,[x27,#imm]` /
+`add x16,x27,#hi; ldr x16,[x16,#lo]` ⇒ native；立即数 `movz/movn[+movk]` 或 `orr`-imm ⇒ dd；
+其余不归类）移植进 `count_dd_sites.awk`（原样保留"无需 blr"匹配行为）。新增
+`count_dd_sites_selftest.sh`：复现上述注入的假阳性（新规则下不再计入 DD）+ 四个额外扰动
+（`movz x16` 直接立即数、8 处混合扰动、`movz` 但非 `blr` 收尾）+ 干净语料三 fixture 双侧计数
+不变（92/92/92/92/178/178，全 native、0 dd）。`./count_dd_sites_selftest.sh` 实测 `rc=0`；
+`dd_pass_check.sh` 五个既有 fixture（`no_map`/`one`/`theirs_no_map`/`theirs_voters`/`voters`）
+本轮重跑全部 `OK`（`voters.asm` 命中 3 个真实 DD 站点，与既有钉值一致，未受影响）。
+
+⚠️ **F144 与其修补丁均未关闭**：修补丁 `3eaeb619` 修的是这一轮证伪 pass 找到的具体破绽，但按契约
+「修补丁不继承被修对象的审查结论」，`3eaeb619` 自己还没被一个新鲜子代理审过。预算与轮次纪律考虑，
+本轮不再派第三个子代理去审 `3eaeb619`，留给下一轮。`cards.tsv`（F144/F145 行）本轮未改（子代理
+之前已从 F144 拆出 F145，记录另两个未解决发现，本轮未重新触碰）。
+
+`fhp-research` 树本轮结束时 `git status --porcelain` 干净（仅历史遗留的 `.serena/`、
+`test_work/` 未跟踪目录），`HEAD=3eaeb619`。`flutter_hot_patcher`（本树）仅改动 memo.md。
+本轮到此结束。
+
+下一轮：为 `3eaeb619`（count_dd_sites.awk 判据移植）派一个新鲜子代理跑证伪 pass，SURVIVES 才能把
+F144 标记为可关（仍需回头核对 F145 的另两项发现是否需要一并处理）；其余同上一心跳末尾清单——
+`reports_20260925/R4_rows.txt` 过期数字清理；`sdk_path.pin` alternates 伪造防御；built 卡
+F121/F130/F49（挂起池，仍在等第 5 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；
+规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项
+（操作者待拍板）。
