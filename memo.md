@@ -10356,6 +10356,23 @@ F65 的 `compute_dd_table/*` 是在说一个伪造头**祝福了哪一格**。
       **负控制**：翻转一对 entry 顺序 → 残差脚本报红且只有该格变红。
 
 - [ ] **F101：`dump_object_pool` ×3 —— 10,782 units**（`open`，2026-09-22，F98 拆出）
+      🔴 **2026-09-28 订正：分母是 10,700 不是 10,782**（`diff_units.sh dump_object_pool` 实测
+      base_dd 2450 + hello 2450 + prog 5800 = 10,700；旧分母已过期，引用前先重跑）。
+      **本卡仍未关闭（PARTIAL，非仪器缺陷，是真实未归因缺口）**：新脚本
+      `fhp-research` `evidence_dump_object_pool_ge_residual.sh`（commit `06885f55`，
+      证伪 pass 后订正 `805f8dc5`）把已知两项因子（per-process 池条目 98/98/184、
+      Thread+0x678 self_hash 差 118/118/158）打进产物后，仍剩 `UNEXPLAINED
+      1782/1782/4800`（合计 8364/10700）。真实驱动是 op_subgraph_hash 分歧：
+      每个 fixture 里 self_hash 相等而 op_subgraph_hash 不等的条目为 **891/891/2400**
+      （`1009/1009/2558` 是含 self_hash 也不等的 118/118/158 在内的总数，二者之差
+      正是这 118/118/158），是 `--shorebird` 同一 op_subgraph_hash 差集
+      （1009/1009/2558，F88）的**真子集**而非逐项完全相同；该差集按 F88（`open`，
+      与 F125/F133 已关闭的 self_hash 差集不相交）只解释 67.7%（3100/4576），
+      **不许**当前就把 UNEXPLAINED 强行归零。负控制（`--negctl-corrupt-poolsize`
+      扰动 hello 的 `object_pool_size`）实测 UNEXPLAINED 1782→1784，证明脚本确实读
+      内容而非恒真。`parity_matrix.tsv`/`structural_evidence.tsv` 均未动，三格仍
+      `unknown`（已降级）。**依赖 F88 先把 67.7% 提高到能覆盖 891/891/2400 这个子集，
+      本卡才可能关。**
       **分母**（来自 F56，不许重测）：hello 2,450 + base_dd 2,450 + prog 5,882 = **10,782 units**。
       **已知（F56 B-2 路径，三项 UNEXPLAINED 已点名）**：
       (1) `[Stub] _iso_stub_ArrayWriteBarrierStub` —— 我方多 +9 words（stub 实现差异）
@@ -16303,3 +16320,24 @@ built 卡 F121/F130/F49（挂起池，仍在等第 5 轮）；F130/F140 未修�
 
 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：读契约，提交上一轮遗留的 F104 未提交心跳，锁定下一项——F101（dump_object_pool ×3，10,782 units）补 G-e 合规 locus
 上一轮末尾列的清单里，F101 的两个已知因子（ArrayWriteBarrierStub、ThreadLocal 偏移）已分别由 F124、F125/F133 于 2026-09-25/28 关闭并给出具体偏移，本卡具备一轮内可交的判据（写 structural_evidence.tsv 三行 + residual 行 + 负控制），派一个新鲜子代理执行。
+
+心跳 2026-09-28（同一交互会话，回收 F101 结构性证据子代理与其证伪 pass，agentId 已回收）：F101 判 PARTIAL，真实缺口非仪器缺陷
+派发 1（general-purpose/opus）：写 `evidence_dump_object_pool_ge_residual.sh`（fhp-research
+`06885f55`），发现两项已知因子只解释 21.8%（8364/10700 UNEXPLAINED），如实不关卡、不动
+`parity_matrix.tsv`/`structural_evidence.tsv`，负控制（`--negctl-corrupt-poolsize`）实测通过。
+派发 2（general-purpose/opus，证伪 pass）：`F101 VERDICT: PARTIAL -- 关卡判断本身正确（数字复现
+EXAMINED 10700/UNEXPLAINED 8364，负控制 8364→8366 复现），但证据文本里两处引用错误：
+① 把 1009/1009/2558（含 self_hash 也不等的 118/118/158 在内的总数）错标成"self_hash 仍相等"
+的那部分，真实值是 891/891/2400；② 把 67.7% 的 Thread+0x678 归因错记成 F125/F133（那两张卡
+的种群已 100% 关闭且与本差集不相交），真实出处是 F88（open，与本差集有 118/118/158 的交集，
+其余不相交）。两处均已当场修（`805f8dc5`），重跑确认 EXAMINED/UNEXPLAINED 数字不变。已把订正
+写入本文件对应的 F101 行。
+`cards.tsv`/`parity_matrix.tsv` 本轮未动；仅 `fhp-research` 两个提交（`06885f55` `805f8dc5`）
+与本文件。本轮到此结束。
+
+下一轮：F101 依赖 F88（把 67.7% 归因提高到覆盖 891/891/2400 子集）才可能关，暂不可关卡；
+其余同 16298-16301 行清单——F104 的 NO-CHEAP-PATH 天花板；`reports_20260925/R4_rows.txt`
+过期数字清理；`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，仍在等第 5
+轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
+（F82/F84/F88/F103，F101 已从"无依赖"移除因依赖 F88）；`verify_all.sh` 8 个既有红/阻塞项
+（操作者待拍板）。
