@@ -15975,3 +15975,142 @@ rc=0，未受影响。提交 `fhp-research 30de2347`。
 负控制）；built 卡 F121/F130/F49（挂起池，第 5 轮后再试，本轮为第 1 轮起算）；
 F130/F140 对 `d98a324b` 的未修复 PARTIAL/FALSIFIED 发现（留在修补丁队列，交给循环）；
 规则 0 下任一无依赖 SDK open 卡（F82/F84/F88/F94/F104）。
+
+---
+
+心跳 2026-09-28 21:07（交互会话，claude-sonnet-5，调度器角色）：读契约 + memo 尾部，
+按规则 0（SDK 正面工作优先于循环机制/文档订正）从「下一轮」清单挑规则 0 项，锁定
+**F94**（`open`，`offset` 4104-unit locus）。card 本体（`fhp-research/cards.tsv`）显示这张卡
+的因果链已在此前多轮独立证伪/再测量中闭环（locus 找到 → 2026-09-27 证伪 PARTIAL 指出
+mac/ios 目标混淆 → 2026-09-27 独立重测量：在 F132 切换后的 iOS-vs-iOS 语料上，
+offset/size 两个桶在三个 fixture 上都精确为 0），**唯一逐字留下的 STILL-OPEN 是**
+"Wiring verify_all.sh add check red construction on today's corpus"——把已实现且已过负控制
+的 `evidence_shorebird_offset_cascade.sh` 接进 `verify_all.sh`。这是本轮任务，判据能在一轮
+内跑完（纯接线 + 复跑既有闸门，不需要重新推导）。派一个独立子代理执行并回收结论，
+不自己复核细节（契约第三条）。
+
+**子代理结论（已回收）**：`verify_all.sh` 新增一条 `run_script evidence_shorebird_offset_cascade.sh`
+（`EXPECTED_CHECKS` 45→46），接线本身正确——闸门自报的 `accounted` 与 `EXPECTED_CHECKS`
+对上（46/46）。新检查在当前语料（`out_pm`，F132 切换后的 iOS-vs-iOS）上报 **rc=1 / NO POWER**：
+这是**预期的正确读数，不是接线缺陷**——F94 卡本体已记录 offset/size 两个桶在当前语料上
+精确为空，脚本按设计在"无可归因内容"时拒绝报绿（不制造虚假 PASS）。负控制通过：
+`perturb_f94_offset_cascade.sh --pad` 在临时语料上正确变红（`offset` 0→5976，
+CONTIGUITY/PREDICTION/RESIDUAL 三处），且证实未触碰真实 `out_pm`（扰动后在 `out_pm`
+上复跑，读数与扰动前逐字一致）。整体 `verify_all.sh` 仍以 rc=2 收尾，但驱动它的是
+**8 个与本次改动无关的既有红/阻塞项**（`disassemble_check.sh`、
+`evidence_disassemble_residual.sh`、`evidence_pool_link_data_residual.sh`、
+`evidence_dump_blobs_residual.sh`、`evidence_shorebird_components.sh`、
+`evidence_shorebird_subgraph_hash.sh`、`cards_check.sh`、`phase_gate.sh`，另有
+`verify_reproduction.sh`/`evidence_kernel_callgraph_independence.sh` 新增 BLOCKED，
+疑为本次子代理执行环境缺少 fvm dart 二进制），这些在 CLAUDE.md 里已记为操作者待拍板项，
+子代理按约束未动。提交 `fhp-research 05a65409`（仅 `verify_all.sh` 一个文件）。
+
+**未做（留给下一轮）**：这次接线本身不是「把 F94 标绿」——脚本此刻对当前语料如实报红
+（NO POWER），F94 在 `cards.tsv` 里仍是 `open`，本轮**未**触碰任何 `- [ ]`/`- [x]`，
+不需要走证伪 pass（契约第五之四的强制证伪 pass 只在"要把卡片标 [x]"时触发；本轮结果
+是接线且新检查如实报非绿，没有主张卡片完成）。是否需要为"当前语料下这个桶应该恒为空"
+这件事另开一张卡（例如决定它该不该在语料再生后当回归哨兵）留给规则 0 下的后续轮次决定，
+card 本体已明确点名这个决定超出 F94 范围。
+
+**本轮改动**：`fhp-research` 提交 `05a65409`（1 个文件，`verify_all.sh`）+ `memo.md` 本节。
+另两棵树（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。`cards.tsv` 未改
+（`open` 维持不变）。本轮 agents=1。本轮到此结束。
+
+下一轮：是否订正 `reports_20260925/R4_rows.txt` 里同一处过期数字（历史快照）；
+`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试）；
+F130/F140 对 `d98a324b` 的未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK open 卡
+（F82/F84/F88/F104）；`verify_all.sh` 本轮暴露的 8 个既有红/阻塞项（操作者待拍板，非本轮引入）。
+
+---
+
+心跳 2026-09-28 21:40（交互会话，claude-sonnet-5，调度器角色）：读契约 + memo 尾部，
+按规则 0（SDK 正面工作优先）从「下一轮」清单挑 SDK open 卡，锁定 **F104**
+（`spikes/shorebird_linkinfo_oracle/cards.tsv`，disassemble 证据，规则 0 下 `unknown` 四桶之一）。
+card 本体最新一条写着 `STILL OPEN: offset/size absorption (F122)`，而 `cards.tsv` 实测
+`F122` 状态已是 `closed`（不是 F104 卡文本写的那个未闭环状态）——这条阻塞前提可能已过期，
+需要核实 F122 关闭后 F104 的 `evidence_disassemble_residual.sh` 读数是否变化。判据能在一轮内
+跑完（单一 fixture 集合上复跑一个已存在脚本 + 读卡比对，不需要重建）。派一个独立子代理去
+核实并按结果更新卡片文本，本轮结束时回收摘要，不自己复核细节（契约第三条）。
+
+**子代理结论（已回收）**：F122 已于 2026-09-26 关闭（修复提交 `182cbec`，独立证伪 pass
+判 SURVIVES），修的正是 F104 文本点名的那个机制——`evidence_disassemble_residual.sh` 的
+`cumulative_code_offset`/`stub_and_code_size` 锚点逻辑，从"无条件吸收一切差异"改成
+"只吸收通过锚定链检查的差异"。⇒ **`STILL OPEN: offset/size absorption (F122)` 这条阻塞已解除**，
+F104 文本里引用的 `EXAMINED 4068 / UNEXPLAINED 1086`（offset/size 分桶 276/276/534）已过期——
+不是因为读数下降本身可疑，而是**两件事叠加**（F132 切到 iOS 语料在先，F122 修复在后）。
+在当前 `out_pm`（iOS `ProductSimIosARM64`）上不重建、原样重跑 `evidence_disassemble_residual.sh`：
+`EXAMINED 1808（与 diff_units.sh 的 UNITS 相等，守卫成立）/ UNEXPLAINED 1190`，
+`cumulative_code_offset=0`、`stub_and_code_size=0`（两者已完全可解释、不再吸收），残差分散到
+更细的桶：`diff_block_padding 196`、`unexplained_offset_diff 34`、
+`offset_displaced_by_unattributed_break 340`、`offset_ok_downstream_of_break 170`、
+`unexplained_size_diff 22`、`thread_metadata 4`、`snapshot_data_and_root 8`。这组数字与
+F122 自己关闭时记录的数字（1808/1190，逐 fixture 396/396/398）**逐字吻合**，不是新读数下降。
+负控制通过：`reports_20260926/F122_r3_negctl.py`（pin 修复前提交 `b06fc93` vs 当前工作树）——
+基线 pre==post（1190==1190）；伪造互相抵消的 offset/size 对在修复前把 UNEXPLAINED 拉低到 926
+（复现旧吸收 bug），修复后纹丝不动仍是 1190；注入 +36B 大小差异，修复前静默吸收（delta 0），
+修复后正确报红（delta +2, rc=1）——证实当前脚本仍有报红能力。
+**F104 未关闭**：这次测量只解除了一个过期的阻塞引用，卡片真正未闭环的内容
+（2026-09-23 记录的堆对象身份范围问题——Array/Instance/Type 的 unaligned-lines 缺口）
+**未被这次测量触及，仍然开着**。提交 `fhp-research a0435f8b`（1 个文件，`cards.tsv`，
+仅追加 2026-09-28 核实记录，`open` 状态未动，未走证伪 pass——本轮未主张卡片完成）。
+
+**本轮改动**：`fhp-research` 提交 `a0435f8b`（1 个文件，`cards.tsv`）+ `memo.md` 本节。
+另两棵树（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。`cards.tsv`
+的 F104 `open` 状态未变。本轮 agents=1。本轮到此结束。
+
+下一轮：F104 真正未闭环的内容（堆对象身份范围，Array/Instance/Type 的 unaligned-lines 缺口，
+2026-09-23 记录的"无廉价路径"结论）；是否订正 `reports_20260925/R4_rows.txt` 里的过期数字
+（历史快照）；`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后
+再试）；F130/F140 对 `d98a324b` 的未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK
+open 卡（F82/F84/F88/F101/F103）；`verify_all.sh` 本轮暴露的 8 个既有红/阻塞项（操作者待拍板）。
+
+---
+
+心跳 2026-09-28 22:2x（交互会话，claude-sonnet-5，调度器角色）：读契约 + memo 尾部，按规则 0
+从「下一轮」清单挑第一项——**F104 真正未闭环的内容**（堆对象身份范围缺口）。核对
+`F104_UNALIGNED_IDENTITY_SCOPING.md` 后判定：MODERATE 档（`Type` 经 `Field.type_class`/
+`Code.owner` 引用可达，70/564=12.4%，已量出非猜测）是唯一有明确、已量化边界、不需要
+额外设计决策就能实现的子任务；NO-CHEAP-PATH 档（Array 54%、Instance 主体 96.3%、
+placeholder 97.5%）已被前序测量证明无廉价锚点，本轮不碰。1.5 关卡判断：这个子任务
+判据能在一轮内跑完（纯 Python/bash 脚本改动，对着已存在的 `out_pm/` 只读操作，不需要
+重建任何二进制），不拆卡，直接派发。
+
+**实现子代理（Opus，前台，128k tokens/59 次调用）结论**：在 `evidence_disassemble_residual.sh`
+新增一步引用传播配对——由已按 name 对齐的 `Field.type_class`/`Code.owner`（当其 owner
+`IsAbstractType()`）向被引用的 `Type` 对象传播身份，遇到歧义/冲突拒绝配对而非猜测，
+配对对象的后续内容差异仍走既有 `classify()` 分类逻辑（未被短路）。**真实效果为零**：
+`UNEXPLAINED` 改动前后逐 fixture 均为 396/396/398（合计 1190），因为**当前 iOS 语料上
+`Type` 对象在两侧已经逐位对齐、字节相同**（`unaligned_no_identity_ours/theirs` 改动前就是
+0/0/0）——F104_UNALIGNED_IDENTITY_SCOPING.md 的 70/564=12.4% 是在旧 mac 语料上量的，
+与 09-25 R6 "ids equal by position" 的记录一致。三组负控制（断开引用、扰动配对对象内容、
+伪造一次真实 id 重编号）均证实机制本身有效、不吸收内容差异、能正确失败关闭。
+提交 `fhp-research d09d569b`（脚本）+ `cd57830d`（`cards.tsv` F104 行追加历史，`open`
+状态未动）。
+
+**证伪 pass（Opus 5.5，新鲜代理，87k tokens/21 次调用）VERDICT: SURVIVES**。七项攻击逐条独立复核
+（自建 `/tmp/fx_ctl` 私有副本，不复用实现子代理的扰动文件）：guard 未被削弱、`EXAMINED==UNITS`
+改动前后均成立、"已对齐"结论用独立 Python 直接验证（564/564、564/564、935/935 逐位内容相同）、
+负控制可独立复现且能报红、`cards.tsv` 只追加未覆写、"零效果"是数据的真实性质不是桶分类的假象。
+**STILL OPEN（原文抄录）**：「Swap the order of two duplicate-named Fields whose target Types
+have no other referrer. The mechanism would then pair the wrong Types without refusing.
+Also, if a future corpus moves Type objects into the diff, check that
+type_reachable_via_referrer does not absorb real content differences on wrongly paired
+Types.」——即同名 Field 若指向的 Type 恰好没有其他引用者，重复配对顺序可能配错而不拒绝；
+这个边界本轮未修，留给下一次触及这段代码的人。
+
+**F104 仍未关闭**：这次measurement 确认了 MODERATE 档已经实现且诚实报告零效果，但
+NO-CHEAP-PATH 档（Array/Instance/placeholder 的绝大多数）仍是已测量、未解决的天花板，
+卡片状态维持 `open`。
+
+**本轮改动**：`fhp-research` 提交 `d09d569b` + `cd57830d`（2 个文件：
+`evidence_disassemble_residual.sh`、`cards.tsv`）+ `memo.md` 本节。另两棵树
+（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。`cards.tsv` 的 F104
+`open` 状态未变。本轮 agents=2（实现 + 独立证伪，均 Opus）。本轮到此结束。
+
+下一轮：F104 剩余的 STILL OPEN 边界（同名 Field 重复配对顺序歧义，未修）；NO-CHEAP-PATH
+档（Array/Instance/placeholder）是否值得投入堆图模型，或正式记为该 dump 格式的结构性天花板
+（需要人决定）；是否订正 `reports_20260925/R4_rows.txt` 里的过期数字（历史快照）；
+`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试，
+本轮不计入其轮次）；F130/F140 对 `d98a324b` 的未修复发现（留在修补丁队列）；规则 0 下
+其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；`verify_all.sh` 本轮暴露的 8 个既有
+红/阻塞项（操作者待拍板）。
