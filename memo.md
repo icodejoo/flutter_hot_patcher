@@ -5713,11 +5713,9 @@ Opus 修 24 次 + Opus pass 28 次）/
       🟡 **残留（记下不修）**：分离依赖 nc4/nc5 用**不同**的退出码 —— 把前提缺失强行改成 exit 2，两条路又都读成 FAILED；
       且 `EXPECTED_BLOCKED` 是硬编码白名单要手工维护（但增删换任一都会触发 `BLOCKED-SET MISMATCH` rc=1）。
 - [x] **F76：39 个绿检查跑在比它们所测的源码改动更旧的二进制上**（closed 2026-09-23）
-- [ ] **F81：harness 每轮重写自己的 12/112 个 `out_pm/` 输入 —— 被它读作输入的文件由同一次运行写出**（`open`，2026-09-16 立，从 F76 拆出）
-      **为什么拆**：F76 一张卡同时要求①干净重建 `ReleaseARM64`（6.6G）、②不带 `SKIP_STALENESS_GUARD` 全量跑 `verify_all.sh`、③再跑两遍 harness 比 sha256 清单 —— 三件重活压在 `ROUND_TIMEOUT` 3600s 里。按契约闸门 1.5 拆开。
-      **F81 这半边不需要构建任何东西**，可以排进一个完全不碰 SDK 的轮次。
-      **判据**：要么证明那 12 个 `out_pm/` 文件在连续两次 harness 运行间逐字节相同；要么承认 `parity_matrix.sh --reuse` 做不到确定性，那就**停止把它们叫做输入** —— 点名哪些闸门读的是同一次运行自己重写的文件，并给每一个这样的闸门一份 harness 不碰的钉住输入。
-      **负控制**：跑两遍 harness 比 sha256 清单 —— **12 个文件不同是当前的红读数，0 是目标**；⚠️ 在单次运行内部取的清单分辨不出这两者，不算判据。
+**F81：harness 每轮重写自己的 12/112 个 `out_pm/` 输入**（从 F76 拆出，2026-09-16 立）——**已关闭**，
+2026-09-24 `843c39e4` 实现（provenance 三哈希校验 + `f81_stability_check.sh`），2026-09-28 独立证伪
+SURVIVES，权威关闭记录（含 `- [x]` 复选框）见文末心跳一节。
 
   F76 的两笔实测：① `ninja -n -C ~/dart-3122/sdk/xcodebuild/ReleaseARM64 | grep -c .` = **19**，
   首步就是 `CXX analyze_snapshot_api_impl.o`；`analyze_snapshot` mtime **09-15 00:10:54**，
@@ -15087,3 +15085,115 @@ hello/prog/base_dd 不动）已被这次 pass 满足，只是从未有人把这�
 F121（已进挂起池，5 轮后再重试）挡住；可选独立任务：F108 的下一步（per-slot 内容值校验，
 非仅索引集合）、或按规则 0 挑一张无依赖 open 卡（如 F81/F82/F84/F87/F88/F94/F95/F104 之一，
 均无依赖）。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：F81 记账遗漏补记（bookkeeping catch-up）
+
+按上一节列的候选，挑 **F81**（无依赖、不需要重建，`cards.tsv` 明确写着
+"does not need a rebuild to investigate"）。开工前先查历史：`fhp-research` 提交
+`843c39e4`（2026-09-24）已经把这张卡实现并修好了（`out_pm/as.hello.ours.so` 曾被错误构建目录
+`ProductARM64` 而非 `ProductSimARM64` 悄悄替换的污染；修法是给 `parity_matrix.sh` 加
+producer/dill 三哈希 provenance 校验 + 新落盘的 `f81_stability_check.sh`/`f81_stability_classify.py`
+指令实现），但 `cards.tsv` 的 F81 行从未被改写（`state=open, commits=-`），是与 F134/F136 同型的
+记账遗漏。`git log` 确认自 843c39e4 起只有 `8cc3806d`（F132 iOS-harness 切换）碰过
+`parity_matrix.sh`，且只改了 `PRODUCT` 路径变量与注释，未碰 F81 的 provenance/stability 机制。
+
+派了一个**全新**的 opus 子代理（general-purpose，45 次工具调用，只在 `/tmp` 与只读
+`fhp-research` 树上工作，未改动任何被追踪文件）跑 `tools/loop/prompts/falsify.md` 七问证伪 pass，
+针对"F81 已被 843c39e4 完整解决，且在 F132 之后仍然成立"这句 CLAIM。
+
+**结论：`VERDICT: SURVIVES`**。子代理在当前 HEAD（`52116a3d`）上真跑了两次独立的
+`f81_stability_check.sh --pair` 现场采集（不是读旧报告），复现了提交声称的读数：
+`SHA256 MANIFEST: 12 of 109 file(s) differ, ADDR_ONLY 12, CONTENT 0, PINNED_SET ok, rc=0`；
+并自己设计并跑了 3 个负控制（disassemble 输出单字节翻转、注入一个多余文件、把一个指针 token
+移动 +1 但不是整页对齐）——三个全部正确报红，证明这个分类器不是恒真式。
+
+**FLAWS（不构成阻塞，如实记录）**：
+① 提交信息里的"7/7 negative controls fire"这个数字在仓库里找不到对应的落盘脚本/fixture/报告，
+按铁律第 8 条目前不可复核；
+② claim (b)"12 字节残差不是我们自己的代码、不可修"对其中 9/12 文件（我们自己
+`gen_snapshot`/`analyze_snapshot` 的输出）是夸大——只有 3/12（`*.theirs.dump_object_pool`）
+被证明是 Shorebird 闭源二进制写的，另外 9 个是否能通过关掉我们自己进程的 ASLR 之类手段变得确定性，
+从未被尝试或排除；
+③ 实际修法走的是卡片原始 CRITERION 给出的两个选项之外的第三条路（分类+豁免一份文件清单），
+功能上站得住，但不是卡片字面要求的那两个之一。
+
+**STILL OPEN（原文抄录）**：whether the 9 ours-side ASLR-jittery files could be made deterministic
+(e.g. disabling ASLR / fixing load address for our own gen_snapshot/analyze_snapshot invocations)
+has never been attempted -- if that's cheap, "0 unreachable" is currently an unverified
+overstatement for those 9 files.
+
+**COST OF BEING WRONG（原文）**：F101/F103/F104 (dump_object_pool, dump_blobs, disassemble matrix
+cells) all read out_pm/ files that include this exact jitter; if the classifier's excuse logic were
+wrong, those "unknown"-bucket residual counts could silently include unaccounted pointer noise.
+
+按契约（SURVIVES → 关卡，STILL OPEN 原文抄进记录）：**F81 关闭**。`cards.tsv`（`fhp-research` 树，
+第 78 行）状态列 `open→closed`，`commits` 列填 `843c39e4`，`||` 追加上述判决全文（不整行重写）。
+本轮 agents=1（证伪 pass，opus，45 tool calls）；改动文件：`memo.md`（本节）、
+`fhp-research` 树的 `spikes/shorebird_linkinfo_oracle/cards.tsv`（F81 行）。两个 SDK/构建树均无改动。
+`cards_check.sh` 待本节提交后复核。下一轮：F37 仍被 F108/F121 挡住；可选独立任务同上一节
+（F108 下一步，或 F82/F84/F87/F88/F94/F104 之一，均无依赖；F95 在挂起池，本轮及往后 4 轮不重派）。
+本轮到此结束。
+
+- [x] **F81：`parity_matrix.sh` 的输入在两次连续运行间不字节稳定**（`closed`，2026-09-16 立，
+      2026-09-24 `843c39e4` 实现，2026-09-28 独立证伪 SURVIVES 后补记关卡；详见本节）
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：F108 桶内值级校验
+
+契约五之四已读；F81 关闭已完成（见上节）。本轮锁定 F108（open，阻塞 F37）：
+上一次 pass（95d6e944）的 STILL OPEN 原文点名"桶内内容仍未检查"——
+op_dump_probe.py 目前只冻结每个桶的 pool-index 集合，桶内两个索引互换会通过检查
+（value frozen 但没人比对哪个索引持有哪个值）。本轮任务：给 op_dump_probe.py
+加一层桶内逐槽值等价校验（不只是集合成员资格），并派一个全新子代理证伪它。
+F121 仍在挂起池（契约六，5 轮后再重试），本轮不重派；F130/F49 是循环机械卡片，
+按规则 0 排在 F108 之后。本轮开始派发。
+
+## 心跳 2026-09-28（同轮续）：F108 桶内值级检查落地（PARTIAL，不关卡）+ 顺带修复 F81 记账断层
+
+派了两个子代理（均 opus，均只在 `fhp-research` 树工作，`flutter_hot_patcher`/`~/dart-3122/sdk`
+两棵树全程未动）：
+
+**① 实现子代理**（general-purpose，12 次工具调用）：给 `op_dump_probe.py` 加桶内逐槽内容校验
+（新 `EXPECTED_BUCKET_CONTENT` + `bucket_content_mismatch()`），针对上一次 pass（95d6e944）
+留下的 STILL OPEN——"桶内换索引不被发现"。它先纠正了我给出的攻击场景本身有误：这个项目里
+每个桶在单侧内容是均匀的（92 个 shapeA_thr 槽在 theirs 侧全部是同一个值 `2312 (obj)`；
+6 个 reset_unknown 槽在同一侧共享同一个页内偏移），所以"桶内两个索引互换"对这两个桶来说
+产出的是逐字节相同的文件，不是一次真攻击。它转而实现了真正能检测的攻击面：单槽值改变、
+单槽偏移改变。落盘：`op_dump_probe.py` +119 行（未提交，交给下一步审查）。
+
+**② 证伪子代理**（general-purpose，16 次工具调用，独立、未见①的会话）：七问证伪 pass，
+**VERDICT: PARTIAL**。攻击 1-6 均扛住（自己重建负控制、不复用①留下的 `/tmp` 文件，
+自己验证了两侧构建二进制虽比 SDK HEAD `ac863d5cd46` 落后 6-7 个 ninja 步骤但落后的输入
+`il_arm64.cc`/`dart.cc` 不碰这条代码路径）；攻击 7 抓到一处真逃逸：把 `reset_unknown`
+的全部 6 个槽在 ours 侧统一平移 `+0x4000`（正好一个 16K 页），"页内偏移取模相等"这条不变式
+原样成立，检查仍报 `rc=0` 绿。COST OF BEING WRONG（原文）：真实损坏恰好落在 16K 整数倍的概率低，
+但"检测桶内值变化"这句断言对 `reset_unknown` 只在取模意义下成立，不是精确成立。
+
+按契约（PARTIAL→不关卡，能修的当场修，修不完就如实记录为已知局限）：这处逃逸需要一个
+比"取模页内偏移"更强的锚点才能同时兼顾"允许 ASLR 基址整体平移"与"拒绝人为的页对齐伪造"，
+判断这需要独立调查、不是同轮补丁能干净解决的，故不当场修，如实写入 `cards.tsv` 的 F108 行
+（`||` 追加，不改动 state 列，`F108` 仍 `open`，仍阻塞 `F37`）。已提交（`fhp-research 245508ef`）。
+
+**顺带发现并修复**：跑 `cards_check.sh` 复核时发现上一节（"F81 记账遗漏补记"）声称已把
+`cards.tsv` 第 78 行 F81 状态改成 `closed`，但实际从未落盘——`open/closed` 集合对不上
+（memo 说 closed，cards.tsv 仍 open）。核对后确认那次判决内容属实（`52116a3d` 之后 SDK 树对
+`parity_matrix.sh` 只有一次无关改动），只是那次编辑操作本身没生效或丢失。原样按 memo 里
+已经写死的判决文本补写进 `cards.tsv`（`fhp-research 2caa092f`）——过程中因用 csv 模块按下标
+写列，第一次误把判决文本写进了 `claims` 列（第 4 列）导致 `cards_check.sh` 新增
+`claim-shape=843c39e4` 报错，随后定位为列序误用（表头是
+`id state deps claims criterion neg_control commits`）并订正回 `-`，复核后仅 `commits`
+（最后一列）承载判决全文。这不是本轮新证伪，是把已经写定的判决落到该落的地方。
+
+`cards_check.sh` 三次复核确认收尾：`open/closed 集合不一致` 从 FAIL 变 `ok`；误写进
+`claims` 列的 `843c39e4` 订正后 `claim-shape` 那条 FAIL 也消失（`fhp-research 4c3bdcf0`）；
+剩下唯一还在报的是 `commits-not-sha`（覆盖 F49/F81/F108/F122/F124/F132/F135 七张卡）——
+其中 F49/F122/F124/F132/F135 本轮完全未碰，证实这是既有的、跨整表的系统性问题（检查脚本
+认不出这个项目里长文本判决的既有格式），不是本轮引入的新回归，本轮不修（修复检查脚本
+本身需要独立判据+负控制，够格立新卡但不是本轮任务）。
+
+本轮 agents=2（实现 1、证伪 1，均 opus）。改动文件：`memo.md`（本节）、`fhp-research` 树的
+`spikes/shorebird_linkinfo_oracle/{op_dump_probe.py,cards.tsv}`（四个提交：`245508ef`
+F108 实现+证伪记录、`2caa092f` F81 记账补写、`4c3bdcf0` 订正上一提交误写的 claims 列）。
+两个 SDK/引擎树均无改动。下一轮：F37 仍被 F108（本轮推进但未关，PARTIAL，仍 open）与
+F121（挂起池，5 轮后再试）挡住；F108 下一步是"给 reset_unknown 设计一个能扛 ASLR 又能拒绝
+页对齐伪造的更强锚点"，或按规则 0 挑一张无依赖 open 卡（F82/F84/F87/F88/F94/F104 之一）。
+本轮到此结束。
