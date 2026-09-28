@@ -118,6 +118,26 @@ command grep -n "关键词" docs/memo_archive_20260904.md   # 再查这份（更
   与操作者自由文本分开存储，而不是继续在同一个自由文本字段上用更精细的正则去猜"这段是不是
   机器写的"。第 5 轮后再重试，重试前先解决这个设计问题，不要在同一层继续派"再修一次"。
   `.loop/UNREVIEWED_FIX` 与 `cards.tsv`（`fhp-research` 树）均未改，F130 保持 `built`。
+- **F121：F37 shape-A 池槽修复本身连续 3 次证伪 pass（4/5/6）不绿，但病因不在修复本体**
+  （2026-09-28 补记账，卡片本体已在 2026-09-26 记过这条 SS6 决定，本条只是把它同步进本节）：
+  `pool_slot_field_check.sh`（DWARF 字段名）与 `measure_pool_residual.sh`（UNEXPLAINED=2）
+  从 pass 3 起就没再变过，即语义修复本身已稳定；连续 PARTIAL 的真因是同一个仪器缺陷
+  （已记录的第 38 种：共享构建树里 `il_arm64.o` 相对 `.cc` 的 mtime 过期），
+  每次证伪 pass 只是把"没被披露"的检查范围越扩越大（从命名目标到整棵树的 `ninja -n`）。
+  已排除的假设：池槽值/字段语义本身有问题（三轮独立复核 unchallenged）。
+  真正缺的是设计决定：要不要停止依赖"按命名目标读 `ninja -n`"这种可以被局部披露蒙混过去的
+  判据，改成要求"三棵共享树全量 `git status` + 全量 `ninja -n` 都为 0"这一条更强、
+  不能分批披露的门槛。第 5 轮后再重试，重试前先解决这个设计问题。
+  `cards.tsv` 未改，F121 保持 `built`。
+- **F49：修补丁队列的"红判决检测"连续多轮在"字面短语/位置匹配"这个模式上落地
+  （2026-09-28 补记账，与 F121/F130 同型 whack-a-mole，SS6 已在卡片本体点名）**：
+  每一轮的修复都精确堵住当轮出示的具体攻击（逗号并列从句、否定句、跨行判决、
+  票据号误伤），但方法本身仍是"给定攻击列表逐条收紧正则"，不是结构性地把
+  "判决从句"与"操作者自由文本"分开存储。已排除的假设：不是转义/大小写/边界这类
+  实现细节（各自都已修过且有测试覆盖）。真正缺的是设计决定：红判决是否应该要求
+  一种模块自己写、操作者不能自由混排的结构化格式（与 F130 完全同一个设计缺口，
+  两张卡的修法应该合并考虑，不要分别继续打补丁）。第 5 轮后再重试。
+  `cards.tsv` 未改，F49 保持 `built`。
 
 ---
 
@@ -15661,3 +15681,63 @@ budget 限制内如实标注"留给 Thread-offset 归因的负责方复核"）�
 下一轮：可选 F108 的"给 reset_unknown 设计更强锚点"、`evidence_shorebird_thread_offset.sh`
 头注释订正（205→118 需要先查清原因，不是简单替换数字）、或规则 0 下任一无依赖 SDK open 卡
 （F82/F84/F88/F94/F104）。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：记账 F121/F49 挂起 + 派发 205→118 追查，发现真实回归
+
+契约已读。开工前核实：F121/F130/F49 三张 `built` 卡里，F130 已在上一节正式记入挂起池，
+但 F121（卡片本体 2026-09-26 已写明 "PENDING POOL DECISION SS6"）与 F49（同型 whack-a-mole，
+卡片本体已多次自称"与 F121 同型"）**从未被同步进本文件的挂起池小节**——这是记账漏项，
+不是新决定。已按契约第六条把两条正式写入挂起池（见上文两条新增，紧接 F130 之后）。
+`cards.tsv`（`fhp-research` 树）未改，三张卡状态仍是 `built`——挂起池只是调度决定，不改卡片状态。
+
+随后派了一个新鲜 `general-purpose` 子代理（只读，9 次工具调用），去追查上一节留下的悬念：
+`evidence_shorebird_thread_offset.sh` 现在对 hello fixture 报 118/1380，
+但脚本自己的头注释、以及 `structural_evidence.tsv`、`evidence_dump_blobs_thread_offset.sh`、
+`evidence_thread_offset_pool.sh`、`evidence_compute_dd_thread_offset.sh`、`parity_matrix.sh`
+里散落的"205/1380"文字描述是否已经过期、是否影响任何一格的机器判据。
+
+**子代理返回（PROVENANCE FRESH rc=0，确认 out_pm 未过期）**：
+- `evidence_shorebird_thread_offset.sh` / `evidence_dump_blobs_thread_offset.sh`：
+  两者今天都算出 **118/1380**（一致，不是脚本间分歧）；两处硬编码的"205/1380"文字
+  **已过期**（应更新为 118），但这两行的机器判据不看具体数字，只看
+  `LOCUS_OK`/子集关系是否成立，rc=0 未受影响
+- `evidence_compute_dd_table_residual.sh`：`UNEXPLAINED=0`（rc=0），
+  `EXAMINED 23752 of 23752`；三个 fixture 的 `self_hash_diff` 分别是
+  hello 118、base_dd 118、prog 158（脚本头注释里的"205/205/331"同样过期，
+  机器判据 `UNEXPLAINED 0` 不受影响）
+- 🔴 **`structural_evidence_check.sh`（这是真正读 `structural_evidence.tsv` 逐行 `verify_cmd`/`expect`
+  的机器闸门）今天实测 rc=1，13 行证据里 6 行 FAIL**：
+  ① `dump_object_pool` 与 `dump_object_pool_link_data` 各自的 `Thread+0x678` 与
+  `kResetToBootstrapNative` 两条 locus 共 4 行 FAIL，真因是 `evidence_thread_offset_pool.sh`
+  自己的 `sdk_path.pin` 分支名严格相等守卫（脚本 :51-53，`_have_branch = $SDK_BRANCH` 否则
+  `REFUSED`）——它在祖先关系已经验过（:48-50 `--is-ancestor` 对基线提交）之后，
+  又对**分支名字面量**做了一次多余的强匹配，而 `~/dart-3122/sdk` 现在合法地处在
+  `agent/sdk-batch1`（`git status --porcelain` 空，HEAD `52a498586cc`，确系当前真实工作分支，
+  不是误操作）。**这是脚本的假阴性，不是 SDK 回归**——祖先关系判据本身仍然满足，
+  只是分支名守卫比它需要的更严格。**未修**：改守卫需要自己的证伪 pass，本轮不做。
+  ② `print_field_table_link_info_to` 与 `print_field_table_link_debug_info_to` 两行 FAIL
+  （`evidence_field_table_order.sh IterateObjects <locus>` 未报出 `LOCUS_OK` 字符串），
+  **原因未查**，与①无关，需要独立一轮。
+  ③ 其余 7 行（含 `dump_blobs`/`compute_dd_table` 的 thread-offset 行）今天仍 `ok`。
+
+⇒ **这条 205→118 的追查，副产品比主线本身更重要**：主线（"205"文字过期）只是文档债，
+无损于任何机器判据；但顺手跑闸门本体时**撞见一个此刻真实存在的 `rc=1`**——
+`structural_evidence_check.sh` 现在不是全绿。CLAUDE.md 顶部记的
+"矩阵 `na 35 / structural 12 / unknown 12 / gap 0`"这行**没有因此作废**
+（判据 2 的门槛看的是"每一格是否有 residual 行证明解释了全部差异"，
+不是"闸门今天 rc 是不是 0"）；但**引用"harness 全绿"之前必须带上这一条新前提**，
+和 CLAUDE.md 里已经记录的"ReleaseARM64/ProductARM64 落后步数"性质相同——都是
+"读数本身没错，但读数依附的机器此刻处于一个已知偏离状态"。
+
+**本轮未做（留给下一轮，各自需要自己的判据与负控制）**：
+1. 修 `evidence_thread_offset_pool.sh` 的分支名守卫（改成只信 :48-50 的祖先关系，
+   去掉 :51-53 的字面量强匹配，或者把 `SDK_BRANCH` 的语义从"必须相等"改成"记录仅供参考"）——
+   小改动，但仍要过一遍证伪 pass 才能关卡（契约五之四）
+2. 追查 `print_field_table_link_info_to`/`print_field_table_link_debug_info_to` 两行 FAIL 的真因
+3. 把"205/1380"→"118/1380"（连带 prog 的"331"→"158"）的文字更正同步进
+   `structural_evidence.tsv` 与四个脚本的头注释——纯文档更正，但仍需确认改完之后
+   `structural_evidence_check.sh` 的 `expect` 字符串没有依赖旧数字（子代理已确认今天没有，
+   但改之前建议再跑一遍 `structural_evidence_check.sh` 做前后对照）
+
+改动文件：仅 `memo.md`（本节两处）。三棵树代码均未改动。本轮 agents=1（测量）。
+`cards.tsv` 未改（挂起池是调度决定，不是卡片状态变更）。本轮到此结束。
