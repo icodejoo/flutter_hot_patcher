@@ -15403,3 +15403,32 @@ address shape is actually certified."
 `~/dart-3122/sdk` 两棵树均无代码改动。
 
 - [x] **F69：`analyze_snapshot_arm64` 的四计数器级联脚本**（`closed`，SURVIVES 2026-09-28）
+
+---
+
+## 心跳：2026-09-28（本轮，交互式会话）F108 op_dump_probe.py 子修复 SURVIVES
+
+**任务**：对 F108 的 `op_dump_probe.py` `bucket_content_mismatch()` within-bucket 内容检查进行证伪轮次。F108 阻塞 F37（规则 0）。
+
+**pass 1（`6a6f80b8`，Opus，PARTIAL）**：找到三处缺陷——
+1. ACCURACY BOUND 注释写「ASLR image-base slide」机制（错误：实际是 snapshot 映射位置偏移，禁用 ASLR 后地址仍在变）；
+2. (iv-b) self-test 无断言 `po != oe`，zero-shift 也能静默通过；
+3. 零滑移攻击（bare 0x524 页偏移，无映射 slide）通过所有检查。
+
+**修补丁（`843b7a03`，Sonnet 4.6）**：三项修复——
+1. `bucket_content_mismatch()` 加 arm64 用户空间范围守卫 `[0x100000000, 2^47-1]`，out-of-range 即报错；
+2. (iv-b) 加 `assert sum(p != o ...) == 6` 防空扰动静默通过；
+3. (iv-c) 新增 self-test：全 6 个 reset_unknown 槽置为裸页偏移（0x524），断言报红；
+4. ACCURACY BOUND 注释改为「user-space 范围内的 0x4000 整数倍移位不可检测」（准确描述实际映射对齐）。
+
+**pass 2（`843b7a03`，Opus，SURVIVES）**：
+- (A) `--self-test` rc=0；(B) 零滑移 RED cm=6；(C) page_all +0x4000 GREEN（by design）；
+- (D) 注释在数值上准确；(E) zero-perturbation 触发 assert。
+- FLAW（不推翻 SURVIVES）：(a) assert 在 `python3 -O` 下消失（`op_dump_check.sh` 跑普通 python3，当前不受影响）；(b) 仅验证 8 次运行地址在范围内（需 50+ 次）；(c) 注释说 `__TEXT` 段，实为 snapshot ELF 可执行段。
+- **STILL OPEN（verbatim）**：`assert disappears under python3 -O; 50+ run sample not checked for address-layout false-red; frozen pins tied to current binaries (may need re-pin after rebuild).`
+
+**op_dump_probe.py 子修复状态：`built`（已通过独立 pass）**。F108 卡片本身仍 `open`——顶层判据是 `verify_all.sh rc=0`，需要 ReleaseARM64 重建（目前仍落后 ninja 步骤）。
+
+fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、`e7753da2`（cards PARTIAL）、`fb7eaacd`（cards SURVIVES）。
+
+- [ ] **F108：`op_dump_probe.py` within-bucket 内容检查**（`built`，sub-fix SURVIVES 2026-09-28；卡片仍 open 等 verify_all 重建）
