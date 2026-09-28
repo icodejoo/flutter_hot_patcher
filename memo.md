@@ -15471,3 +15471,17 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 
 下一步：对 `2370f82b` 再派一次 fresh Opus 证伪 pass。
 
+
+### F135 证伪链（续）—— PARTIAL×2 + 修补丁 adc196a0 + c9db0a75
+
+**Pass 3（agent ae32c34be9e03e644）PARTIAL**：
+- C1-C5 全部通过；ONE FLAW：docstring 说"leaves N7b/N7c/N7d SAME"——实测全部 5 条 N7 系列翻 DIFF
+- Fix `adc196a0`：改为"flips ALL FIVE N7-family rows to DIFF (unexpected=5)"
+
+**Pass 4（agent ad792af7f454661ef）PARTIAL**：
+- C1-C5 全部通过；ONE FLAW："ALL FIVE N7-family rows" 有歧义——ROWS block header 将 N7b/c/d/e/f 归为 N7 family，但 N7e 是本地向后分支，F143 revert 下仍 SAME
+- Fix `c9db0a75`：明确列出"flips N7, N7b, N7c, N7d, N7f ... N7e 是本地分支，stays SAME"
+
+两轮 PARTIAL 都是探针 docstring 文字缺陷，非逻辑/判据缺陷。
+下一步：对 `c9db0a75` 派 5th Opus pass。
+
