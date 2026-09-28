@@ -16300,3 +16300,6 @@ so this is small enough to record as a known upper bound and move on without a f
 `reports_20260925/R4_rows.txt` 过期数字清理；`sdk_path.pin` alternates 伪造防御；
 built 卡 F121/F130/F49（挂起池，仍在等第 5 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；
 规则 0 下其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；`verify_all.sh` 8 个既有红/阻塞项（操作者待拍板）。
+
+心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：读契约，提交上一轮遗留的 F104 未提交心跳，锁定下一项——F101（dump_object_pool ×3，10,782 units）补 G-e 合规 locus
+上一轮末尾列的清单里，F101 的两个已知因子（ArrayWriteBarrierStub、ThreadLocal 偏移）已分别由 F124、F125/F133 于 2026-09-25/28 关闭并给出具体偏移，本卡具备一轮内可交的判据（写 structural_evidence.tsv 三行 + residual 行 + 负控制），派一个新鲜子代理执行。
