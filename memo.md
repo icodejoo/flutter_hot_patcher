@@ -15432,3 +15432,10 @@ address shape is actually certified."
 fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、`e7753da2`（cards PARTIAL）、`fb7eaacd`（cards SURVIVES）。
 
 - [ ] **F108：`op_dump_probe.py` within-bucket 内容检查**（`built`，sub-fix SURVIVES 2026-09-28；卡片仍 open 等 verify_all 重建）
+
+**F95 round-4-PARTIAL fix chain（2026-09-28）**：
+- `4c4db9f3`：fix (a) 和 (b)（PARTIAL——fresh Opus pass task a661f67fdf826b3f4 发现指针说"two sections below"，实际目标在 section 5 即 immediately below，差一节）
+- `161782d3`：把"two sections below/BELOW"改为"immediately below/BELOW"
+- 证伪 pass（task a080412c596d5241e，fresh Opus）：**SURVIVES**
+- **STILL OPEN（verbatim）**：`The card has no record of the 4c4db9f3 PARTIAL pass or of the 161782d3 fix. 161782d3 edited section 9 in place, so it now says "immediately BELOW" under "2026-09-28 round-4-PARTIAL fix (this round)". But 4c4db9f3, which wrote that section, actually said "two sections BELOW". Section 9 also still says "This fix has not itself been independently reviewed yet", which is stale for 4c4db9f3. The test that would overturn SURVIVES: check whether git show 161782d3 has a section mentioning 161782d3 or the 4c4db9f3 PARTIAL verdict.`
+- **应对**：在 F95 row 追加 section 10 作为该轮次的审计记录（见下方提交 `cards.tsv`）。F95 卡片本身仍 `open`——同源循环论证局限未解决。
