@@ -15540,3 +15540,12 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 脚本在研究树 `reports_20260928/{shorebird,disassemble}/`，未提交。
 `dump_object_pool` 调查已由操作者中止。
 **恢复顺序**：先由 stub 重排的主人提交或还原 → 重建 iOS 树 → `parity_matrix.sh --reuse` → `S1_provenance.sh` 必须 rc=0，然后才做归因。
+
+### SDK 未提交的 stub 重排已还原（2026-09-28 18:39，操作者指令）
+
+- 还原前先存了 patch：`~/dart-3122/stub_code_list_reorder_20260928.patch`（58 行，sha256 `89f10a28…02e4`，在仓库外，`git apply --check -R` 通过）。要恢复就跑 `git -C ~/dart-3122/sdk apply ~/dart-3122/stub_code_list_reorder_20260928.patch`
+- 用 `git apply -R` 还原后，`git status --porcelain` 0 行，SDK 回到 `52a498586cc` 的内容
+- ⚠️ **构建状态并没有跟着恢复**：iOS 树的二进制是 14:01 带着这处改动构建的，而还原又把这个文件的 mtime 改成了 18:39 ⇒ 按 dry-run 实测，这些二进制既不对应任何提交，也落后于源码：
+  `ninja -n -C xcodebuild/ProductSimIosARM64 clang_arm64/gen_snapshot clang_arm64/analyze_snapshot | grep -vc '^ninja: '` = **372**
+  ReleaseARM64 为 377，ProductSimARM64 为 375（只算 gen_snapshot 与 analyze_snapshot 两个目标）
+- 🔴 **又一种仪器缺陷，刚踩到的**：`ninja -n -C xcodebuild/ProductSimIosARM64/clang_arm64 …` 读出 **0**。原因是那个目录下没有 `build.ninja`，报错行以 `ninja: ` 开头，被 `grep -v '^ninja: '` 过滤掉了。**「0 步陈旧」和「探针根本没跑起来」是同一个读数。** 用这个探针之前，先确认 `-C` 指向的目录里真有 `build.ninja`
