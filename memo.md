@@ -16244,3 +16244,59 @@ F104「非 referrer 路径同名歧义」的规模（agentId 已记录在本轮�
 过期数字；`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试）；
 F130/F140 未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK open 卡
 （F82/F84/F88/F101/F103）；`verify_all.sh` 8 个既有红/阻塞项（操作者待拍板）。
+
+心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：读契约，锁定下一项——F104 重复名 positional-pairing 曖昧性范围，补一次带负控制的严格格式测量
+上一心跳（16207-16246 行）末尾指定下一轮首项：为 F104 的一般性重复名 positional-pairing
+歧义范围（`build_alignment` 里的 `ambiguous_pair_ids_o`，此前粗测约 2.48%/2.48%/3.33%）
+补一次符合契约要求的测量——需含负控制确认、临时脚本路径、`F104-SCOPE VERDICT` 判断句。
+判据：这类任务是只读测量（读 `out_pm`，不碰构建、不改脚本），能在一轮内跑完，不触发
+1.5 节的拆卡条件。不满足 2.5 节的并发四条（无并发需求），按默认一轮一件事单派。
+本轮派出一个新鲜 Opus 子代理执行该测量并要求其自带负控制与严格返回格式。
+
+心跳 2026-09-28（同一交互会话，回收 F104 重复名歧义范围测量子代理，agentId 已回收）：带负控制的严格测量已完成，采信为结论
+子代理（Opus，10 次工具调用，370s）交付：脚本 `/Users/Cruz/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/f104_ambiguous_scope.py`
+（commit `1bdc5d6c`，复用 evidence_disassemble_residual.sh 内嵌的 Python 原文，未重实现 classify()）。
+
+REAL MEASUREMENT（三 fixture + 汇总）：
+| fixture | ambiguous_count | landed_EXPLAINED | landed_UNEXPLAINED(行) | content_identical | fixture_EXAMINED | fixture_UNEXPLAINED |
+|---|---|---|---|---|---|---|
+| hello | 846 | 0 | 4 对/8 行 | 842 | 604 | 396 |
+| base_dd | 846 | 0 | 4 对/8 行 | 842 | 604 | 396 |
+| prog | 2310 | 0 | 5 对/10 行 | 2305 | 600 | 398 |
+| TOTAL | 4002 | 0 | 13 对/26 行 | 3989 | 1808（== diff_units.sh UNITS 1808） | 1190（与 evidence_disassemble_residual.sh 当前 UNEXPLAINED 1190 一致） |
+判定口径：一对只要有一行落 UNEXPLAINED 就整对计入；这 13 对另带 50 行 EXPLAINED（15/15/20）。
+26 行 UNEXPLAINED 全部落在 `offset_displaced_by_unattributed_break` 桶，没有一行是
+`matched_literal_mismatch` 或 `reference_*`。
+
+NEGATIVE CONTROL（真实执行，非描述）：fixture=hello, object_id=2808（Field `_state@5048458`，
+4 元素歧义组，扰动前 content-identical），在 /tmp/f104_negctl 的 ours 副本上把 `is_reference`
+从 false 改成 true（out_pm/ 未被触碰，cmp 确认两份 diff）。结果：该 fixture 的
+content_identical 842→841、UNEXPLAINED 行 8→10（新增桶 matched_literal_mismatch=2）、
+fixture_EXAMINED 604→606、fixture_UNEXPLAINED 396→398、UNITS 1808→1810，
+base_dd/prog 两行不受影响。**delta 完全符合预期** ⇒ 测量工具确实对它声称测量的东西敏感，不是恒真式。
+
+F104-SCOPE VERDICT（子代理原句，按规则抄录）：「Ambiguous positional pairing touches at most
+26 of 1190 UNEXPLAINED lines (2.2%; 13 of 4002 ambiguous pairs, 8/8/10 per fixture), and all 26
+are offset-chain displacements rather than content mismatches a wrong pairing would produce,
+so this is small enough to record as a known upper bound and move on without a fix.」
+
+⚠️ 子代理自陈的两条限定（原样保留，不要在后续引用时丢掉）：
+① `content_identical` 只在「当前 Nth-对-Nth 定位」下成立——如果两个同名同内容对象被错配（互换），
+   本脚本看不出来，但 classify() 的结果也不会因此变化（互换两个真正相同的对象无观测后果）。
+② 负控制只证明了「脚本对歧义对上的内容变化敏感」，**没有**证明「一次错误的配对本身会被本脚本发现」
+   ——这是两个不同的命题，后者仍未验证。
+
+**结论采纳**：F104 的重复名 positional-pairing 歧义范围已从未经负控实认的粗测（2.48%/2.48%/3.33%，
+按 ambiguous_pair_ids_o 原始规模口径）收敛为经负控实证的上界 **2.2%（26/1190 UNEXPLAINED 行）**，
+且这 26 行的桶归类（全部 offset-chain）与「歧义配对本该产生的内容级错配」性质不同，量级判定为
+「小到可记录为已知上界、不必专门修」。`parity_matrix.tsv` / `cards.tsv` / F104 卡片状态**均未改动**
+（子代理确认，本轮也未改）——这是范围测量，不是关卡判定。
+
+`cards.tsv`、三棵源码树本轮均未改动源码；本轮改动仅 `fhp-research` 的新脚本提交 `1bdc5d6c`
+与本文件心跳。本轮到此结束。
+
+下一轮：memo.md 16242-16246 行列出的剩余项，按顺序次于本项——F104 的 NO-CHEAP-PATH 天花板
+（~81% Instance/Array/placeholder 无法归因，需要新堆图模型，规模更大，先问是否值得投入）；
+`reports_20260925/R4_rows.txt` 过期数字清理；`sdk_path.pin` alternates 伪造防御；
+built 卡 F121/F130/F49（挂起池，仍在等第 5 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；
+规则 0 下其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；`verify_all.sh` 8 个既有红/阻塞项（操作者待拍板）。
