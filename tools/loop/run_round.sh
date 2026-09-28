@@ -615,7 +615,7 @@ trap 'rm -f "$LOCK"; if [ "${FQ_GATE_RAN:-}" = 0 ]; then say "WARNING: round end
 # as the $13.36/M eq above, two days apart. RATIOS of eq are trustworthy here;
 # CONVERSIONS of eq into any external unit are not, until two dated readings pin
 # them. Both times the wrong anchor moved this constant in the tight direction.
-COOLDOWN=${FHP_LOOP_COOLDOWN:-1800}
+COOLDOWN=${FHP_LOOP_COOLDOWN:-30}
 LAST_END=$STATE/last_round_end
 if [ -f "$LAST_END" ] && [ "${COOLDOWN:-0}" -gt 0 ] 2>/dev/null; then
   last=$(cat "$LAST_END" 2>/dev/null || echo 0)
