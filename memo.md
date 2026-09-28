@@ -15741,3 +15741,77 @@ budget 限制内如实标注"留给 Thread-offset 归因的负责方复核"）�
 
 改动文件：仅 `memo.md`（本节两处）。三棵树代码均未改动。本轮 agents=1（测量）。
 `cards.tsv` 未改（挂起池是调度决定，不是卡片状态变更）。本轮到此结束。
+
+---
+
+### 2026-09-28 心跳：修 `evidence_thread_offset_pool.sh` 分支名守卫（上条待办 1），三轮证伪-修-再证伪，闸门 13/0 全程未变
+
+**任务**：上一心跳待办 1——去掉 `evidence_thread_offset_pool.sh` :51-53 对
+`sdk_path.pin` 分支名字面量的多余强匹配（祖先关系已在 :48-50 验过），改成仅记录不拒绝。
+先确认 stash 账干净：`fhp-research` 5 笔历史 stash 逐一 `git stash show -p/-u --stat`
+核对，均与当前 HEAD 冗余，未 pop、未 drop（无新工作丢失）。
+
+**Fix 1**（commit `836139aa`，本轮之前已做）：四个脚本
+（`evidence_thread_offset_pool.sh`/`evidence_field_table_order.sh`/
+`evidence_pool_perprocess.sh`/`evidence_shorebird_field_dedup.sh`）的分支名 `REFUSED`
+改为 `NOTE`（不再拒绝），`structural_evidence_check.sh` 从 `13 行 6 FAIL`（rc=1）恢复到
+`13 行 0 FAIL`（rc=0）。派新鲜 Opus 子代理证伪：**PARTIAL**——fix 本身没丢保护，
+但新加注释过度断言："祖先关系检查已经确立身份，伪造品无法满足"，子代理当场构造反例
+（借用真 SDK 的 git objects 走 alternates、HEAD 精确设成 pinned commit、磁盘上文件任意伪造）
+证伪，该反例确实通过祖先检查并被消费脚本当真读取。
+
+**Fix 2**（commit `f5763356`）：改写四脚本 + `sdk_path.pin` 头部注释，如实描述祖先检查
+"证明什么、不证明什么"，明确点名 alternates 伪造与"真 SDK 里未提交的改动"两个未关闭缺口。
+再派一个新鲜子代理证伪：**PARTIAL**——(a) `evidence_shorebird_field_dedup.sh:98-102`
+残留一段**早于 836139aa 分支检查移除**的旧文字，仍断言"必须是 HEAD 等于 pinned 分支的仓库"，
+与同文件 20 行之后刚改对的说法自相矛盾；(b) `sdk_path.pin:1` 仍写"证明"（proves）；
+(c) 全部 5 个文件里"指向别处会在 `git status` 里现形"这句对**已提交的替换 / amend 过的
+提交 / `git update-index --skip-worktree`** 三种情况均为假（子代理逐一实测确认 `git status`
+静默），且**没有任何消费脚本真的读 `git status`**，所以这句话即便为真也不相关。
+
+**Fix 3**（commit `0da35a1f`）：修上述 (a)(b)(c)，四脚本共享注释块统一改词为
+"an `objects/info/alternates` file"（而非误导性的"`git init --separate-git-dir` / alternates"），
+`sdk_path.pin` 头部改"证明"为"检查"（checks against, not proves）。闸门复跑仍 13/0。
+第三次派新鲜子代理证伪：**PARTIAL**——(a) 我在 `evidence_shorebird_field_dedup.sh` 改写时
+**把祖先方向写反了**："要求 HEAD 是 pinned base commit 的祖先"，而实际检查
+`merge-base --is-ancestor "$SDK_BASE" HEAD` 是反过来：base commit 必须是 HEAD 的祖先
+（HEAD 从 base 派生）。子代理实测：把 HEAD 设成 `$SDK_BASE~1`（这时 HEAD 才是 base 的祖先，
+不是派生）验证真实检查正确拒绝（rc=1），恰好证伪我写反的那句话所暗示的行为；
+(b) `verify_all.sh:765` 有同一处"whose tree must prove its identity with git"的旧断言，
+因为前一轮的 grep 只扫了改动过的文件、没扫全目录，漏掉了它。
+
+**Fix 4**（commit `e3d67128`，本轮最后一次修正）：修正祖先方向措辞（"HEAD 从 pinned base
+commit 派生"），修 `verify_all.sh:765`，全目录 grep 已知过度断言模式（
+`prove(s) its identity|whose HEAD is the pinned branch|shows up in .git status.` 等）
+确认归零。`structural_evidence_check.sh` 复跑仍 `13 行 0 FAIL`（rc=0），全程四次 fix
+**闸门本体的行为读数从未变过**——四次都是纯注释/文案改动，唯一一次触及非注释行的是
+fix 2 里一条 `NOTE:` echo 字符串的措辞（子代理 pass 2 的攻击 #1 指出，不影响 rc）。
+
+🔴 **本轮到此为止，不再派第四次证伪**：三次连续 PARTIAL（fix1→fix2→fix3 的证伪结论）
+已经是契约第 6 条定义的"打地鼠"形状——每一遍证伪都在同一批文件里找到新的措辞缺陷，
+而不是新的行为缺陷。**区别于契约第 6 条的典型场景**：这里三次 PARTIAL 的根因彼此不同
+（过度断言强度 → 陈旧文案+失实的 git-status 断言 → 祖先方向写反+遗漏一处 grep 范围），
+不是同一个 fix 手法反复失败；且**闸门的可执行行为 13/0 全程未变**，风险敞口是文档准确性，
+不是机器判据。按契约"一轮只做四步"的字面要求，本轮已经循环了四轮"做-证伪-修"，
+理应就此结束，把"是否还有第五处措辞缺陷"留给未来一轮的独立证伪 pass 去找，
+而不是无限期自证自纠。
+
+**本轮改动**：`fhp-research` 提交 `f5763356` / `0da35a1f` / `e3d67128`，共 7 个文件
+（4 个 evidence 脚本 + `sdk_path.pin` + `verify_all.sh`，纯注释/字符串，无逻辑改动）。
+三次派发均为新鲜 Opus 子代理，未使用做 fix 的那个子代理自证。
+
+**本轮未做（留给下一轮）**：
+1. 上条待办 2：`print_field_table_link_info_to`/`print_field_table_link_debug_info_to`
+   两行 FAIL 的真因排查——与本轮的分支名守卫问题无关，仍未查
+2. 上条待办 3："205/1380"→"118/1380"（`prog` 的"331"→"158"）同步进
+   `structural_evidence.tsv` 与四脚本头注释——纯文档更正，仍未做
+3. 本轮子代理点名的**真实安全缺口**（不是措辞问题，是机制缺口，需要自己的判据与负控制才能动）：
+   `sdk_path.pin` 的 ancestor-of-base-commit 检查对 alternates 伪造与"真 SDK 里未提交的改动"
+   均无防御；`sdk_path.pin` 头部与四脚本注释里已如实记录为"unclosed follow-up work"，
+   建议的方向是加 `git -C "$SDK" diff --quiet HEAD -- <consumed paths>` 一类检查，尚未实现
+4. 原始指令里列出的 built 卡（F121/F130/F49）与修补丁证伪积压（F37/F115-F118/F122/F140/
+   F141/F49/F95/F129/F113/F130/F108/F134/F135/F69）**本轮完全未碰**——本轮工作是新发现的
+   闸门问题（分支名假阴性），不在这份清单内
+
+改动文件：`fhp-research` 三个提交（见上）。其余两棵树（`flutter_hot_patcher`/`~/dart-3122/sdk`）
+均未改动。`cards.tsv` 未改。本轮到此结束。
