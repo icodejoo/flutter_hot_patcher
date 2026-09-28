@@ -12958,6 +12958,18 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
 不阻塞本轮改动落盘。已在研究树提交 cards.tsv 改动。
 
 - [ ] **F141：`diff_units.sh` 的 EXAMINED/UNEXPLAINED 分母对字段擦除类腐化是盲的（全项目通用限制，需操作者拍板判据）**（`open`，2026-09-26，F122 pass 3 证伪拆出，deps=-）判据与负控制见 `cards.tsv`。
+- [ ] **F144：`measure_dd_emission.sh`（F87 的修补丁）没有接进任何闸门，且在 HEAD 上当前是红的，红被静默写进报告而不是被处理**（`open`，2026-09-28，F87 证伪 pass 拆出，deps=-）
+      F87 的修补丁本身是真的（独立验证过：恒真式互换检测、钉值断言、section 过滤在未扰动输入上
+      都正确触发且保持绿），但从未被接到任何自动跑它的地方，且当前红且未被解释
+      （`ours.native_patched moved 0 -> 92`）。判据：① `verify_all.sh` 把 `measure_dd_emission.sh`
+      接成有编号的检查项（不只是注释），其 rc 计入通过/失败总数；② 当前的红要么补一条带日期的
+      变更记录钉回去（候选：F121 的 shape-A `AddImmediate`→`AddObject` Smi 修复，
+      `b2e93350653`/`98c95873b72`），要么被证明是虚假的并修掉；③ 缺失但未测量的钉值字段与
+      畸形钉值行的扰动要走 `rc=2` 的 fail-closed 路径，不是 `rc=1` 带 Python traceback；
+      ④ attack-4 判别器过拟合（`ws[i-2] != MOVZ_X16` 能通过注入负控制但不是真判别器）要么关掉
+      要么记成已接受的窄化范围。负控制：接入 `verify_all.sh` 后撤回接线，确认总检查数掉一个且仍
+      exit 0（证明是接线本身、不是巧合产生的计数）；重新钉值后退回旧钉值，确认脚本重新变红
+      （证明重钉不是空操作）；收紧畸形钉值处理后喂一行畸形钉值，确认 `rc=2` 且无 traceback。
 
 本轮到此结束，已派第四个独立子代理对本轮修补丁（负控制脚本 `PRE_REF` 改法与 F141 拆分是否
 合理处置了 pass 3 的两处发现）跑证伪 pass，等待判决。若仍非 SURVIVES，按契约第六条评估
@@ -15289,3 +15301,43 @@ self-test 完全没覆盖。④ `command grep -niE "new fix|fix commit\(s\)" mem
 F121/F49/F130 三张现全部在挂起池，按契约五轮后再重试；F37 仍被 F108（PARTIAL，open）与
 F121（挂起池）挡住；下一轮应按规则 0 挑一张无依赖 SDK 本体 open 卡（F82/F84/F87/F88/F94/F104
 之一）或处理 F108 的"给 reset_unknown 设计更强锚点"后续。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：救回 round-18264 的遗留改动（F144）
+
+契约已读全文（含六之二「先看有没有救援，别从头做」）。`.loop/RESCUED` 指向 `fhp-research` 树
+一个 1 行 diff 的 stash（`loop-rescue 2026-09-28T09:50:26 round-18264`）：那一轮已经把 F144
+写进了 `cards.tsv`（F87 证伪 pass 拆出的新卡：`measure_dd_emission.sh` 没接进任何闸门且当前是红的），
+但被中断在两处半成品状态：① 那一行本身不是合法的 7 列 TSV——它把 criterion/neg_control/commits
+三列的内容打包成一个 Python 风格的元组字面量塞进了单个字段（`cards_check.sh` 报
+`F144(NF=5)`）；② `memo.md` 从未同步这张新卡（`cards_check.sh` 报
+`memo.md and cards.tsv disagree on the open set: open in cards.tsv only: F144`）。
+
+本仓库的 stash 保护钩子拒绝直接弹出那个 stash 条目（"blocked: pops/drops/clears a stash
+entry"，这是刻意设计，见 CLAUDE.md 与契约六之三），改用只应用不删除的方式把它的内容合并回
+工作树（stash 条目原样保留在列表里）。应用后手工解析那个损坏字段，识别出它是
+`(criterion, neg_control, '-', commits)` 四元组的 repr（多出的那个 `'-'` 与已有的 `claims` 列
+重复，丢弃），重写成合法的 7 列（参照 F87 行的既有写法：纯文本，不加外层引号），
+`awk -F'\t'` 确认 `NF=7`。随后在 `memo.md` 里补上 F144 的卡片条目（紧跟 F141 之后，`- [ ]` 格式，
+内容与 `cards.tsv` 的 criterion/neg_control 逐字对应）。
+
+`cards_check.sh` 复核两次：第一次仍报开放集合不一致（补 memo.md 之前）；补完之后
+`open set agrees (49 cards)` / `closed set agrees (65 cards)` 均转绿，剩下的
+`commits-not-sha`（F144 与另外 8 张既有卡同款）与 `closed cards citing commits that do not
+exist`（F81 一张）**是本轮之前就存在的系统性缺陷**——commits 列惯例上放长散文判决记录而不是
+纯 sha 列表，`cards_check.sh` 的 sha 存在性检查对这类字段逐词误判；这条已在此前多轮
+（09-27/09-28 心跳）记成"既有债务、检查脚本本身需要独立判据"，本轮未新增、也未修复它
+（修复它需要给 `cards_check.sh` 设计新判据+负控制，够格立新卡，不是本轮任务范围）。
+
+已提交（`fhp-research 5c905f25`）：`cards.tsv` 的 F144 行改成合法 7 列。`.loop/RESCUED` 指向的
+stash 条目（`loop-rescue 2026-09-28T09:50:26 round-18264`）**未删除**（只合并未弹出，删除
+stash 由操作者决定，本轮不做）。
+
+本轮 agents=0（纯只读救援+记账，无新 CLAIM 需要证伪——F144 卡片本身的内容来自上一轮已经跑过的
+F87 证伪 pass，本轮只是把它正确落盘，不构成新判决）。改动文件：`memo.md`（本节 + F144 卡片条目）、
+`fhp-research` 树的 `spikes/shorebird_linkinfo_oracle/cards.tsv`。`flutter_hot_patcher` 与
+`~/dart-3122/sdk` 两棵树本轮均未改动（`~/dart-3122/sdk status --porcelain` 确认为空）。
+
+下一轮：`built` 欠证伪 pass 的 F121/F49/F130 三张仍在挂起池（契约六，5 轮后再试，本轮不重派）；
+F37 仍被 F108（PARTIAL，open）与 F121（挂起池）挡住；应按规则 0 挑一张无依赖 SDK 本体 open 卡
+（F82/F84/F88/F94/F104 之一，F87 本体已因 F144 拆出待办而暂告一段落）或处理 F108 的
+"给 reset_unknown 设计更强锚点"后续。本轮到此结束。
