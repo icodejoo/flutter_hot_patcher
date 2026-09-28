@@ -15909,3 +15909,36 @@ fix 2 里一条 `NOTE:` echo 字符串的措辞（子代理 pass 2 的攻击 #1 
 建议的 `sdk_path.pin` alternates 伪造防御（需要自己的判据与负控制）；
 built 卡 F121/F49（挂起池，5 轮后再试）；F130/F140 对 `d98a324b` 的未修复 PARTIAL/FALSIFIED
 发现（留在修补丁队列，交给循环）；规则 0 下任一无依赖 SDK open 卡（F82/F84/F88/F94/F104）。
+
+---
+
+心跳 2026-09-28（续，交互会话，claude-sonnet-5，调度器角色）：读契约 + memo 尾部，
+锁定「下一轮」清单第一项：`op_subgraph_hash 1096/1096/2731` vs 实测 `1009/1009/2558` 的核实与更正。
+判据能在一轮内跑完（纯文档订正 + 复跑既有闸门，上一条心跳同型任务已示范耗时），不拆卡。
+派一个独立子代理去核实并按结果更正文档，本轮结束时回收其摘要。
+
+**子代理结论（已回收）**：核实 `./evidence_compute_dd_table_residual.sh` 的 `op_hash_diff`
+字段，三个 fixture 实测 `hello=1009 / base_dd=1009 / prog=2558`，与心跳里引用的
+`1009/1009/2558` 一致，证实文档里的 `1096/1096/2731` 确已过期。全文件搜索
+`1096/1096/2731` 后确认**唯一命中处**是 `structural_evidence.tsv:47`
+（`evidence_shorebird_thread_offset.sh`/`evidence_dump_blobs_thread_offset.sh`/
+`evidence_thread_offset_pool.sh`/`evidence_compute_dd_thread_offset.sh`/`parity_matrix.sh`
+逐一核对，均未引用这个字符串，无需改动）。已更正并提交
+`fhp-research 36eebe53`。改后复核 `structural_evidence_check.sh` 仍
+`13 row(s), 0 failure(s)`，rc=0，与改动前一致。本次为纯文档数字订正（非关卡），
+按上条心跳同型先例不需要走证伪 pass。
+
+**子代理顺带发现、本轮未处理**：同一行（`structural_evidence.tsv:47`）里的
+`"All 25,750 bytes explained"` 疑似同样过期——脚本实测输出
+`EXAMINED 23752 UNEXPLAINED 0`，与文字里的 25,750 不符。**留给下一轮核实与订正**，
+本轮不动（超出本轮任务范围，且未核实清楚不能瞎改）。
+
+**本轮改动**：`fhp-research` 提交 `36eebe53`（1 个文件，`structural_evidence.tsv`）+
+`memo.md` 本节。另两棵树（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。
+`cards.tsv` 未改（本轮不涉及任何卡片开/关）。本轮 agents=1。本轮到此结束。
+
+下一轮：`"All 25,750 bytes explained"` vs 实测 `EXAMINED 23752` 的核实与订正
+（`structural_evidence.tsv:47`）；建议的 `sdk_path.pin` alternates 伪造防御
+（需要自己的判据与负控制）；built 卡 F121/F49（挂起池，5 轮后再试）；
+F130/F140 对 `d98a324b` 的未修复 PARTIAL/FALSIFIED 发现（留在修补丁队列，交给循环）；
+规则 0 下任一无依赖 SDK open 卡（F82/F84/F88/F94/F104）。
