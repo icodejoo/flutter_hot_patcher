@@ -15574,3 +15574,22 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - (a)，以及 (c) 的窄义部分，成立
 
 **不在会话里修**，留在修补丁队列交给循环。
+
+### dump_object_pool ×3：`EXAMINED 10700 UNEXPLAINED 0`（2026-09-28，agent ae0e9f2ca3a83d640，研究树 `75f06446`）
+
+- **分母** 10700（hello 2450 · base_dd 2450 · prog 5800），命令 `./diff_units.sh dump_object_pool`，WORK=out_pm。
+  ⚠️ **这是陈旧基线**：out_pm 的 ours `.so` 出自 `98c95873b72`
+- **陈旧对这一格的影响已实测**：拿 18:40 那对二进制（HEAD + 未提交的 stub 重排）重跑，结果是 `.so` 变了 261k 字节，而 dump_object_pool 只差 36 units，全在每个 fixture 那 6 个每次运行都会变的条目里。**干净 HEAD 构建（18:43）上尚未测**
+- **三个分量**：
+  - C1 = 724：shape-A 池槽里的 Smi(Thread 偏移)，362 条，全部是 `call_bootstrap_native_entry_point_`，ours `0xf58` / theirs `0x908`，两侧各从自己的 DWARF 读出。旧矩阵注记里的「92 条 kResetToBootstrapNative per-process」已不存在，变成了这些池槽
+  - C2 = 36：`kResetToSwitchableCallMissEntryPoint` 的 per-process 地址，他们的工具在他们的 `.so` 上多次运行之间就会变
+  - C3 = 9940：code_infos 哈希里的 Thread 布局台阶。hasher 模型两侧 5976/5976 复现；只按 DWARF 成员名改写我们 `.so` 里的 Thread 访存，就能复现**他们的**哈希，全程不读他们的指令字
+- 🔴 **现有 structural 行引用的 `Thread+0x678 isolate_` 只解释 10700 里的 6 个 unit**；而且那两行背后的脚本今天都 REFUSED（分支不是 pin 的那个）
+- **我亲手核过承重的两条**：
+  - 复跑 `dop_residual.py` → `EXAMINED 10700 UNEXPLAINED 0`，rc=0
+  - 自选扰动：把 theirs hello 第 825 条（与 ours 相等）的 offset +8 → `UNITS 10702 / EXAMINED 10702 UNEXPLAINED 2`，rc=1。
+    ⚠️ 第一次扰动是**假控制**：我按行找相等行，可文件是单行 JSON，一处都没改，读数照旧全绿。`cmp` 才暴露出来
+- **建议**：改判 structural，用 `dop_proposed_rows.tsv` 的四行替换 `structural_evidence.tsv` 第 31–32 行。**但本轮不改**，理由：
+  1. out_pm 重生成后 10700 必然变，要在新产物上重跑
+  2. 改判需要一次独立证伪 pass
+  3. 10664/10700 押在「Thread 布局差异是 structural」这条前提上。代理指出，这条前提的依据是 CheckOffsets 加上本机磁盘放不下偏移表重生成，是**实际限制而非不可能**，需要操作者拍板
