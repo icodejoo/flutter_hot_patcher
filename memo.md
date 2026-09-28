@@ -16161,3 +16161,43 @@ Type 身份而不拒绝）。定位到 `build_alignment` 里 `TYPE_REFERRERS` �
 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试）；F130/F140 对 `d98a324b` 的
 未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；
 `verify_all.sh` 本轮暴露的 8 个既有红/阻塞项（操作者待拍板）。
+
+---
+
+心跳 2026-09-28 23:1x（同一交互会话，回收上一节派发的证伪 pass）：agentId
+`a790cd957c1393d4c` 已返回，**VERDICT: PARTIAL**。它核实了修复机制本身（攻击 1/2/4/6 全部
+通过：独立构造的合成 Field/Code 用例复现「改前静默错配、改后正确拒绝」，真实语料上的
+70/70/151→67/67/149 与 `EXAMINED`/`UNEXPLAINED` 不变均独立复核成立），但攻击 5（「引用的
+东西是不是新鲜的」）抓到一个真破绽：**我在派发提示词里向它断言「被引用的 STILL OPEN 原文
+`Swap the order of two duplicate-named Fields...` 记在 `cards.tsv` F104 行里」，这是假的**——
+它用 `grep` 在 `cd57830d`→`eeccd654` 之间的每一次提交上查过 `cards.tsv`，零命中；我随后独立复核
+（`grep -n "Swap the order of two duplicate" memo.md` → 命中于 16094 行）确认那句原文其实只活在
+`memo.md` 的心跳叙述里，从未被抄进 `cards.tsv`——这正是本仓库反复强调的「断言必须可在权威账本里
+复核，不能只活在旁路叙述里」这条规则本身要抓的那类破绽，这次是我自己的派发提示词违反了它。
+
+**当场修（本轮，不等下一轮）**：在 `fhp-research` 树的 `cards.tsv` F104 行追加一段
+` || 2026-09-28 CITATION GAP FOUND BY FALSIFICATION PASS ...` 记录：(a) 指明那句 STILL OPEN
+原文的真实出处是 `memo.md:16094`、从未进过 `cards.tsv`，本次予以订正登记；(b) 把 `eeccd654`
+这次修复的机制、合成负控制结果、真实语料 `paired 70/70/151→67/67/149`、
+`EXAMINED 1808`/`UNEXPLAINED 1190` 不变、`structural_evidence_check.sh 13/0` 原样搬进
+`cards.tsv`（此前只在 memo.md 里，现在权威账本里也有）；(c) 明确标注该修复**只覆盖了
+referrer 投票路径上的同名歧义**，`classify()` 里普通（非 referrer）同名对象的按位配对歧义
+**未被这次改动触及、仍然开着**，并把这句 STILL OPEN 原样写回 `cards.tsv`（不再只写在 memo.md）。
+`awk -F'\t'` 确认改动后 F104 行仍是 7 个字段（未破坏 TSV 结构）；`structural_evidence_check.sh`
+与 `cards_check.sh` 已重跑确认无回归（见下方本轮改动清单里的 rc）。
+
+**范围澄清**：这次订正只解决"证据引用的东西存在于权威账本"这一条，不构成对 F104 卡片状态的
+任何改判——F104 依旧 `open`；`eeccd654` 依旧只是"清掉上一次 STILL OPEN 记录里的一条具体边界"，
+不是整卡关闭。本条 PARTIAL 判决本身按契约不需要再派一轮独立证伪（它核的是「引用是否新鲜」这一
+纯文本可复核事实，订正后可由任何人直接 `grep`/`git show` 复核，不依赖对代码行为的信任）。
+
+**本轮改动**：`fhp-research` 提交（`cards.tsv` 追加 F104 引用订正，1 个文件）+ `memo.md` 本节。
+`flutter_hot_patcher`（除 memo.md）、`~/dart-3122/sdk` 均未改动。`cards.tsv` 中 F104 状态未变
+（仍 `open`）。本轮 agents=1（已回收的证伪 pass，非本轮新派）。本轮到此结束。
+
+下一轮：F104 的 NO-CHEAP-PATH 天花板（Array/Instance/placeholder）是否值得投入或记为结构性
+天花板（需要人决定）；F104 剩余的「非 referrer 路径同名歧义」（本轮未触碰，仍开着，尚未评估
+规模）；是否订正 `reports_20260925/R4_rows.txt` 里的过期数字（历史快照）；`sdk_path.pin`
+alternates 伪造防御；built 卡 F121/F130/F49（挂起池，第 5 轮后再试）；F130/F140 对 `d98a324b`
+的未修复发现（留在修补丁队列）；规则 0 下其余无依赖 SDK open 卡（F82/F84/F88/F101/F103）；
+`verify_all.sh` 本轮暴露的 8 个既有红/阻塞项（操作者待拍板）。
