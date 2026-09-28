@@ -16754,3 +16754,23 @@ set agrees (68 cards)` / `ok: no open/built card rests on an invalidated claim`�
 发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101 依赖
 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）；③ F145 自报里"编译器为何
 在这些 DD 站点发出非 blr 尾字"这一根因未定，值得下一轮判断是否要单独立卡追踪。
+
+---
+
+心跳 2026-09-29 04:2x（交互会话，claude-sonnet-5，调度器角色）：读契约，锁定任务 = 上一心跳①，
+判断 `cards_check.sh` 对 F69 引用提取噪声是否需要处理。先确认这不是新缺陷而是旧缺陷第五次
+复现：check 5 自己的注释（`cards_check.sh:233` 附近）明确写着"check 4 tests each comma-separated
+token in commits as a sha, so a prose field makes it test every word"，并点名 F77 曾用同型缺陷、
+被 `ac4a118` 逐行手工修过、随后在四张卡上复发——"repairing one row is not a fix"是该注释自己的
+原话。实测确认 F69（`state=closed`）column 7 确实是"真实短 sha 列表 + ` || ` + 长散文（含大量逗号）"
+的混合形状（`898a05d,8202a54,eea89d3,84566df || 2026-09-28 FALSIFICATION PASS 10 ...`），
+与 F77 当年的形状同型。判定：这是同一个"缺失的不变量"第五次复现，不是需要新讨论的问题，
+直接修脚本本身（而不是再手工改一行数据）才是本项目自己记录过的正确修法。1.5 拆卡检查：
+改动面是单个 shell 脚本的一个检查块，判据不含"干净重建"类字样，装得进一轮，不拆。
+
+派发一个新鲜子代理（general-purpose/opus）：修 `cards_check.sh` check 4，让它只把形状像
+sha（7-40 位十六进制）的 token 当作待验证的 commit，非 sha 形状的 token 不再被 check 4
+误判为"不存在的 commit"（这仍是 check 5 `commits-not-sha` 的职责，两者不重复报同一根因）；
+同时要求负控制证明一个真正缺失的 sha（形状合法但三棵树都没有）仍然会被 check 4 抓到。
+禁止改 `cards.tsv`（含 F69 那一行本身）。派发后本轮结束，等待完成通知，下一轮回收结果、
+派证伪 pass、写回结论。
