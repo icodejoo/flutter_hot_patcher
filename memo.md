@@ -16341,3 +16341,11 @@ EXAMINED 10700/UNEXPLAINED 8364，负控制 8364→8366 复现），但证据文
 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
 （F82/F84/F88/F103，F101 已从"无依赖"移除因依赖 F88）；`verify_all.sh` 8 个既有红/阻塞项
 （操作者待拍板）。
+
+心跳 2026-09-29（交互会话，claude-sonnet-5，调度器角色）：读契约，检查 built 队列——
+F121/F49/F130 三张 built 卡均已在自身卡片文本里记录过连续 ≥3 次 PARTIAL 判决、同一根因反复打地鼠
+（F49 卡片正文自己建议"operator F121 got (pending pool, switch independent task)"；F130 亦累计 5 次
+连续 PARTIAL）。按契约第六节"同一种修法连续失败 3 次 → 移入挂起池，换下一个独立任务"，本轮不对这三张
+再派窄修补丁-复审循环，转做规则 0 下的独立任务：F144（open，未经任何实现尝试，判据具体、不需要干净
+重建，直接服务 SDK 验证 harness——把 F87 修好但从未接入 verify_all.sh 的 measure_dd_emission.sh 接线
+并重钉）。
