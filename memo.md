@@ -15439,3 +15439,35 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - 证伪 pass（task a080412c596d5241e，fresh Opus）：**SURVIVES**
 - **STILL OPEN（verbatim）**：`The card has no record of the 4c4db9f3 PARTIAL pass or of the 161782d3 fix. 161782d3 edited section 9 in place, so it now says "immediately BELOW" under "2026-09-28 round-4-PARTIAL fix (this round)". But 4c4db9f3, which wrote that section, actually said "two sections BELOW". Section 9 also still says "This fix has not itself been independently reviewed yet", which is stale for 4c4db9f3. The test that would overturn SURVIVES: check whether git show 161782d3 has a section mentioning 161782d3 or the 4c4db9f3 PARTIAL verdict.`
 - **应对**：在 F95 row 追加 section 10 作为该轮次的审计记录（见下方提交 `cards.tsv`）。F95 卡片本身仍 `open`——同源循环论证局限未解决。
+
+### 心跳 2026-09-28（续）—— F135 证伪 PARTIAL + 修补丁 2370f82b
+
+**F135 第二次证伪 pass（fresh Opus，agent adbd8c2a3b03f7e6b）判 PARTIAL，非 SURVIVES：**
+
+三处缺陷：
+1. `f135_window_patch_probe.py` 仍将 N7/N7b/N7c/N7d/N7f 标为 `'GAP'`（预期 DIFF）；
+   在正确（post-F143）二进制上跑出 `unexpected=5 rc=1`；
+   把 F143 还原后反而 `rc=0` —— 探针在奖励错的二进制。
+2. setup 错误用 `sys.exit(str)` 退出码为 1，与探针失败无法区分（应为 2）。
+3. docstring 仍写 N7 是"已知缺口"，与 F143 的 SDK 注释矛盾。
+
+**私有构建核实**（agent 自建四份 binary，未动真实树）：
+- `56b5`（post-F143）：`rc=0 SAME=44 DIFF=0 unexpected=0`
+- `neg`（F135 reverted）：`rc=1 unexpected=29`
+- `f135`（F143 reverted）：`rc=1 unexpected=5`
+
+**修补丁（fhp-research `2370f82b`）**：
+- N7 系列期望改为 `'SAME'`（F143 已关闭该缺口）
+- setup 错误改为 `rc=2`
+- docstring 更新
+
+本机验证（使用 agent 遗留的私有 bins）：
+- `56b5`：`rc=0 SAME=44` ✅
+- `neg`：`rc=1 unexpected=29` ✅（负控制有效）
+- `f135`：`rc=1 unexpected=5` ✅（F143-only revert 也有效）
+
+**STILL OPEN（verbatim from PARTIAL）**：
+`Fixing FLAW 1 means marking the N7 rows 'SAME', adding cbnz, tbnz and external tbz/tbnz/cbnz rows, and running the battery on both 56b5 and f135 to get rc=0 and rc=1. out_pm has to be regenerated from a HEAD-built gen_snapshot before criterion 1 can run on the shared binary. Every test pokes a single site: hello fn#13, whose pool load is 1 word. A branch in the window of a 2-word pool load is covered only by N9 and T4.`
+
+下一步：对 `2370f82b` 再派一次 fresh Opus 证伪 pass。
+
