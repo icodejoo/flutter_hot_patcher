@@ -13008,7 +13008,7 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
       exit 0（证明是接线本身、不是巧合产生的计数）；重新钉值后退回旧钉值，确认脚本重新变红
       （证明重钉不是空操作）；收紧畸形钉值处理后喂一行畸形钉值，确认 `rc=2` 且无 traceback。
 
-- [ ] **F145：`measure_dd_emission.sh`（F144 的修复）留下两处未消解的缺口，由 F144 的证伪 pass 发现**（`open`，2026-09-29，F144 证伪 pass 拆出，deps=-）
+- [x] **F145：`measure_dd_emission.sh`（F144 的修复）留下两处未消解的缺口，由 F144 的证伪 pass 发现**（`closed`，2026-09-29 开卡，2026-09-29 (a)(b) 实现 + 独立证伪 pass SURVIVES 后关闭，deps=-）
       (a) 判别器范围负控制只测了三个具名参照实现（恒真式、pre-F144 的 nop-proxy、
       过拟合的 exact-word-proxy），没有覆盖会捕获 `classify_site()` 本体被削弱的变异：
       去掉 x27 基址寄存器检查（任意 `ldr x16,[xN,#off]` 都判 native）、去掉 asr 前一词的
@@ -13045,6 +13045,62 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
       生成它，不是第五个 fixture）unclassified 仍为 0，判定不受影响。负控制：接线前先把上述
       任一变异注入生产路径构建，确认 `dd_pass_check.sh` 现状是 exit 0（漏报复现）；接线后
       同一份注入必须变成非零退出；再把注入还原，确认恢复 exit 0（证明是接线本身而非误报）。
+
+**(a)(b) 实现完成 + 独立证伪 pass SURVIVES（2026-09-29，fhp-research/route-a-research
+提交 `aeda8896`，详细自报已在本文件更早的心跳段落记录，此处只摘落地判据）**：
+`gen_snapshot` 增量重建后按目标专测 `ninja -n -C xcodebuild/ReleaseARM64 gen_snapshot`
+读 0 步待执行（整棵 `ReleaseARM64` 的默认目标仍落后 1527 步，与此判据无关，见下方
+STILL OPEN (iii)）；`out_ddpass/voters.so` 由该新鲜二进制产出，含 3 个真实 DD 站点；
+`ldr x30,[x26,x16]` 后三个尾字（新鲜读数 `0xd63f03d8`/`0xd63f02f4`/`0xd63eff92`）经
+公开 ARMv8 编码逐位解码判定均非合法指令（含 PAuth 分支变体），三方工具
+（Apple llvm-objdump、Homebrew llvm-objdump、Capstone）交叉确认；`measure_dd_emission.sh`
+的 `scan()` 据此去掉 `ws[i+1]==BLR_X30` 要求（与 `count_dd_sites.awk` 对齐），
+`no_blr` 降级为纯信息计数；4 个新负控制形状（非 x27 基址、非 16 rd、远池错基址、
+x17 来源）接入 `count_dd_sites_selftest.sh` 与 `measure_dd_emission.sh`；全套既有测试
+（`dd_pass_check.sh`/`count_dd_sites_selftest.sh`/`measure_dd_emission.sh` 自测）rc=0，
+`voters` fixture 读数 `native 92 dd 3 unclassified 0 no_blr 3`。
+
+```
+F145 VERDICT: SURVIVES -- both sub-claims (a) discriminator-scope negative controls
+and (b) BLR-relaxation on a real DD build hold under independent reconstruction
+```
+
+七项攻击要点（新鲜 general-purpose/opus，未复用实现代理任何脚本）：①自建
+`classify_site()` 与 3 个手写 mutant（`no_x27`/`no_rd16`/`no_farpool_base`），确认
+均在修复前不可检出、修复后可检出（第 4 个"x17 来源"形状不对应 `classify_site()`
+的任何单一可移除谓词，是补充覆盖而非变异捕获，已记入 STILL OPEN）；②实测
+`gen_snapshot` 专测目标 0 步落后，`voters.so` mtime 晚于 `gen_snapshot`，`theirs_voters.so`
+是从未被本地重建触碰的 Shorebird 缓存产物；③自写 `scan_compare.py` 独立实现新旧两版
+`scan()`，确认 `voters.so` 上 OLD 读 dd=0、NEW 读 dd=3，native 92 不变；④在无 DD 站点的
+`out_pm/as.hello.ours.so` 上新旧读数一致（92/0/0），且直接跑 pre-fix 版
+`measure_dd_emission.sh`（`git show 31700acc`）在 `out_pm` 上复现旧读数，无回归；
+⑤`git merge-base --is-ancestor aeda8896 HEAD` 为真；⑥独立逐位解码三个尾字，
+确认均不满足 `opc==0001` 分支寄存器指令类的 `op4==00000`/`op2==0b11111` 要求，
+用独立安装的 Capstone 5.0.7 交叉确认无解码结果；⑦确认 `voters.so` 是真实新鲜构建
+而非陈旧/错配产物，3 个 DD 站点被两套独立扫描器同时证实存在。
+
+**STILL OPEN（原文照抄）**："(i) whether an undisclosed/vendor-private AArch64 encoding
+extension (outside the public architecture spec and outside all 3 disassemblers checked)
+could still decode these words as valid on real silicon -- my decode and all cited tools
+use the public spec only; (ii) the "four mutants" framing conflates 3 actual
+predicate-removal mutants with 1 shape (x17-sourced) that has no corresponding removable
+guard -- worth tightening the wording in future references to this commit, though it does
+not affect correctness; (iii) the broader ReleaseARM64 build ("all" target) is still 1527
+ninja steps behind, so any *other* check that reads that tree's binaries besides
+gen_snapshot specifically should not inherit this pass's freshness finding."
+
+F145 现在带三个子判据 (a)(b)(c)，均已实现且各自独立证伪 pass SURVIVES，卡片整体关闭
+（`cards.tsv` 提交 `0f981b6d`）。关闭不代表消灭上面三条 STILL OPEN——它们是给未来
+复用这些 mutant 形状或引用 `ReleaseARM64` 新鲜度的工作留的边界注记，不是重新打开
+本卡的理由（该编译器为何在这些 DD 站点发出非 blr 尾字这一根因仍未定，按实现代理指令
+未新开卡片，留给下一轮判断是否需要单独追踪）。
+
+改动：`fhp-research` 本轮两次提交（`aeda8896` 实现、`0f981b6d` 记录证伪结论到
+`cards.tsv`）。`cards_check.sh` 已启动确认（该脚本约需 4+ 分钟，结果待下一轮读取或本轮
+结尾补记）。两棵源码树 `git status --porcelain`：`fhp-research` 仅遗留 `.serena/`、
+`spikes/shorebird_linkinfo_oracle/test_work/` 等已知未跟踪杂项；`sdk` 树本轮由子代理
+增量重建 `gen_snapshot`/`dartaotruntime`，未提交（源码未改，只是产物新鲜度变化，符合
+契约第八节对 sdk 树"干净"判据的预期，重建不产生源码 diff）。
 
 **F144 证伪 pass 判决（2026-09-29，新鲜 general-purpose/opus 子代理，agentId 已回收）**：
 
@@ -16626,3 +16682,50 @@ SDK 本体工作，建议连同本轮新发现的「x16-以外寄存器来源 / 
 第 5 轮，本轮未碰——契约第六节"连续失败 3 次"已在上一轮把它们移出候选）；F130/F140
 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101
 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。本轮到此结束。
+
+---
+
+心跳 2026-09-29 04:1x（交互会话，claude-sonnet-5，调度器角色）：锁定任务 = 上一心跳末尾第一项，
+F145(a)(b)（判别器范围补形状 + 真实 DD 尾指令解码 + 遗留 (c) 的两个渗漏形状）。
+1.5 拆卡检查：criterion (a) 字面提到"Rebuild ReleaseARM64"，触发词命中，但按契约"关键词
+不是判据，真触发条件是耗时没人量过"——本轮先量：`ninja -n -C xcodebuild/ReleaseARM64`
+实测 **1904** 个待执行步骤（`ProductARM64` 1886，两者未被本轮触碰，`git status --porcelain`
+在 sdk 树干净）。按 F80 已钉的模型（`P≈10.35x`、`T∞≈103.2s`）外推，量级与 F80 当时的
+"冷构建上限约 18–20 分钟"同阶，落在 ROUND_TIMEOUT（7200s=120min）的 30% 左右，判定
+**装得进一轮，不拆**；若实测跑增量构建期间明显超出这个量级，派出去的子代理有责任
+中途停手、提交已完成的部分判据（如 (1) 的控制形状扩展不依赖构建）、把剩余部分写回
+新卡而不是被砍。
+
+派发一个新鲜子代理（general-purpose/opus）执行 F145(a)(b)，随后派第二个新鲜子代理跑
+falsify.md 证伪 pass；两者结论写回本文件后结束本轮。
+
+**已派发（后台异步，agentId 内部标识不外泄）**：任务范围 = (a) 扩展 8-shape 控制覆盖
+`classify_site()`/`classify()` 的三个未覆盖谓词移除（x27 基址检查、pool-load/add-hi 字
+rd==16 检查、far-pool add 的 POOL_REG 基址检查）+ 顺带纳入 (c) 遗留的两个渗漏形状
+（x16 非标准来源寄存器、未检查位置的 nop）；(b) 在增量重建 `ReleaseARM64`（实测 1904
+步待执行）之后，用新鲜产物解码 `measure_dd_emission.sh` 的 `scan()` 要求 `ws[i+1]==BLR_X30`
+时被隐藏的三个真实 DD 尾字（stale 读数 `0xd63f03d8`/`0xd63f03c7`/`0xd63f02e4`），据解码
+结果放宽扫描门或在头注释显式记录窄化范围；(3) 全套既有测试（三 fixture + 8-shape 控制 +
+injection 控制 + section-filter 控制）回归确认。已告知子代理：重建若明显超出 15-25
+分钟量级则中止重建、先交（a）部分产物、如实标注重建未完成，不许让重建拖垮整个 dispatch。
+禁止子代理动 `cards.tsv`/`memo.md`，交回结论由调度器落盘。等待完成通知，本条心跳到此，
+不预判结果。
+
+**实现代理已完成（agentId 内部标识不外泄，109 次调用，`fhp-research` 分支
+`route-a-research` 提交 `aeda8896`，未动 `cards.tsv`/`memo.md`）**，自报如下（未经证伪，
+先如实记录再派证伪 pass，不预先当结论）：重建已在此前一个 turn 完成并确认新鲜；三个
+post-`ldr x30,[x26,x16]` 尾字（新鲜读数 `0xd63f03d8`/`0xd63f02f4`/`0xd63eff92`，与
+2026-09-29 早些的 stale 读数不完全相同）经 Apple/Homebrew llvm-objdump 与 Capstone 三方
+交叉确认**均不是任何已测目标下的合法 AArch64 指令**（非 BLR、非 PAuth 分支变体、非其他
+已知编码）；选择"放宽扫描门"路径——`measure_dd_emission.sh` 的 `scan()` 去掉
+`ws[i+1]==BLR_X30` 要求（与 F144 时已放宽的 `count_dd_sites.awk` 对齐），`no_blr` 降级为
+纯信息计数；新增 4 个控制形状（非 x27 基址、非 16 rd、far-pool 错基址、x17 来源）+ 3 个
+mutant 分类器，各自证明 before-undetected/after-flagged；`count_dd_sites_selftest.sh`
+同步镶入相同 4 形状以断言 awk/python 一致；三脚本套件全绿（`dd_pass_check.sh` rc=0，
+`count_dd_sites_selftest.sh` rc=0，`measure_dd_emission.sh` rc=0，新鲜 fixture
+`voters` 读数 `native 92 dd 3 unclassified 0 no_blr 3`，其余三个 fixture
+`unclassified=0`）。自报"编译器为何在这些位置发出非 blr 尾字"这一根因未定且未落卡，
+按指令未新开卡片，留给下一轮决定是否需要单独追踪。
+
+派第二个新鲜子代理（不是实现代理）跑 falsify.md 证伪 pass，目标是这份自报——尤其是
+"三个尾字均非合法指令"与"控制形状确实之前测不出、之后测得出"这两条最容易被证伪的断言。
