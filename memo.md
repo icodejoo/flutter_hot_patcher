@@ -15593,3 +15593,33 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
   1. out_pm 重生成后 10700 必然变，要在新产物上重跑
   2. 改判需要一次独立证伪 pass
   3. 10664/10700 押在「Thread 布局差异是 structural」这条前提上。代理指出，这条前提的依据是 CheckOffsets 加上本机磁盘放不下偏移表重生成，是**实际限制而非不可能**，需要操作者拍板
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-5，调度器角色）：`out_pm` 实测已 FRESH，「等重建」的前提已不成立
+
+契约已读。开工前先核实上一节留的悬念——「`out_pm` 重生成后数字必然变，要在新产物上重跑」——
+这句话本身有没有过期。三处独立实测：
+① `git -C ~/dart-3122/sdk status --porcelain` 空，HEAD `52a498586cc`（F145，13:50:12 提交），
+与 03190c37 记录的"还原 stub 重排"后状态一致；
+② `ninja -n -C xcodebuild/ProductSimIosARM64 clang_arm64/{gen_snapshot,analyze_snapshot,dartaotruntime,run_vm_tests}`
+按点名目标形式（非裸命令，CLAUDE.md 已记录裸命令会把无关目标算进去）算得 **0** 步待办；
+③ 跑 `reports_20260928/shorebird/S1_provenance.sh`（现成脚本，P1-P6 六项检查）：
+`gen_snapshot`/`analyze_snapshot` 当前哈希与 `out_pm/.provenance.tsv` 记录的生产者哈希一致
+（`3a327c646e8e19...`），产物 mtime（19:33:4x）晚于二进制 mtime（18:43:2x）晚于源码提交（13:50:12），
+脚本落地判词 **`PROVENANCE FRESH`**，`rc=0`。
+
+⇒ **有人已经在这一心跳与上一心跳之间把 iOS 树重建过、`out_pm` 也重生成过**（不是本轮做的，
+本轮只是核实）；`03190c37` 提到的"372 步陈旧"读的是裸命令（覆盖默认目标组），点名目标口径
+从未真的陈旧过。上一节"本轮不改"的三条理由里，**理由①（等新产物）现已满足**，
+理由②③（需要独立证伪 pass、需要操作者拍板 Thread 布局前提）仍然成立，**不因此关卡**。
+
+顺带复核 `diff_units.sh shorebird` = **19122**（与上一节记的"过期基线"读数逐位相同），
+说明该特定命令对这次 provenance 变化不敏感——**这不能反过来证明它没意义**（不同脚本对同一份
+provenance 变化的敏感度不同，`dump_object_pool` 那格已实测两个二进制状态之间只差 36 units，
+说明这类数字本身对小改动就是低敏感的，不代表 provenance 检查是徒劳）。
+
+本轮任务：派一个全新子代理，在已确认 `PROVENANCE FRESH` 的产物上重跑 `shorebird` 格的分量分解
+（`evidence_shorebird_residual.sh` / `evidence_shorebird_components.sh` /
+`evidence_shorebird_thread_offset.sh` 等既有脚本，不新写脚本），把旧分量表
+（`op_subgraph_hash 9152 · subgraph_hash 9152 · self_hash 788 · snapshot_data 30`）与新读数逐项核对，
+如实记录是否有变化；不要求它下 structural/gap 判决，只要求它交出一张核验过 provenance 的分量表。
+下一轮按其结论决定是否需要另派一次归因或证伪 pass。本轮到此结束前先派发。
