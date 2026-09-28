@@ -13028,6 +13028,24 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
       产出真实 DD 站点的构建上，实测数出 `dd_dispatch`=3（或真实数字），与
       `count_dd_sites.awk` 读同一批字节的 objdump 结果一致。
 
+      (c)（2026-09-29，由 F144 第二版修补丁 `3eaeb619` 的证伪 pass 追加）：`3eaeb619`
+      正确给 `classify_site()`/`count_dd_sites.awk` 加了第三个桶 `unclassified`（既不算
+      native 也不算 dd），但只有 `count_dd_sites_selftest.sh` 检查这个桶非零就报错；
+      `dd_pass_check.sh`（`verify_all.sh` 实际接线的那条路径）从不带 verbose 调 awk、也
+      从不读/断言 unclassified 计数。后果（已复现）：一个真实 DD 派发站点，只要它的 x16
+      来源不是 64 位 `movz`/`movn`[+`movk`] 或 `orr`-imm（例如 `movz w16,...` 或 pool-load
+      后插入一条无关指令再 `asr`），就从"旧规则：dd 0→1，报红"变成"新规则：unclassified
+      0→1、dd 不变，`dd_pass_check.sh` 仍 exit 0"——修好误报的同一个补丁又开了一条静默漏报
+      通道。判据：①`dd_pass_check.sh` 读取并断言 `count_dd_sites.awk` 的 unclassified 计数
+      （不只是 dd/native），在任何 fixture 或生产输入上 unclassified > 0 且未被明确记为可
+      接受范围时非零退出（不是静默通过）；②F145(a) 里已知的会触发 unclassified 的变异各自
+      接线后使 `dd_pass_check.sh` 退出非零，不只是 `count_dd_sites_selftest.sh`；③既有四个
+      fixture（`no_map`/`theirs_no_map`/`voters`/`theirs_voters`——顺带订正此前 memo 里
+      "五个既有 fixture"的误数：`out_ddpass/one.*` 是 2026-09-01 的陈旧遗留目录，脚本从不
+      生成它，不是第五个 fixture）unclassified 仍为 0，判定不受影响。负控制：接线前先把上述
+      任一变异注入生产路径构建，确认 `dd_pass_check.sh` 现状是 exit 0（漏报复现）；接线后
+      同一份注入必须变成非零退出；再把注入还原，确认恢复 exit 0（证明是接线本身而非误报）。
+
 **F144 证伪 pass 判决（2026-09-29，新鲜 general-purpose/opus 子代理，agentId 已回收）**：
 
 ```
@@ -16475,3 +16493,81 @@ F144 标记为可关（仍需回头核对 F145 的另两项发现是否需要一
 F121/F130/F49（挂起池，仍在等第 5 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；
 规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项
 （操作者待拍板）。
+
+---
+
+心跳 2026-09-29 03:0x（交互会话，claude-sonnet-5，调度器角色）：回收 `3eaeb619`（F144 修补丁）证伪 pass，PARTIAL，未关卡，新增第三处未消解缺口
+
+派发（general-purpose/opus，独立、未知情于实现）对 `fhp-research 3eaeb619` 跑 falsify.md 完整七项攻击：
+
+```
+F144 修补丁 VERDICT: PARTIAL (fix) -- 误报已消除且自测可红，但新增的 unclassified 桶在
+dd_pass_check 生产路径上不可见也不报红（selftest 未接入 verify_all），形成静默漏报通道
+```
+
+要点：①三处手造的判别器退化变异（把 nop-proxy 判据换回来、把 pool load 判成 dd、去掉
+orr-imm 分支）均正确 rc=1 报红——判据本身不是恒真式；②`classify_site()` 与 awk 的操作码
+掩码逐一核对一致（ldr-imm/add/movz+movk/orr/ldr-reg 全部匹配），6 个 fixture `.so` 双侧
+逐桶一致（native 92/92/92/92/178/178，dd 0，unclassified 0）；③子代理自行构造 14 个额外
+扰动（含 `movz w16`、pool-load 后插入无关指令等），awk/python 全部一致，未找到新的假阳性；
+④真实 DD 构建三站点后一词均非 `blr`（`d63f03d8`/`d63f02f4`/`d63eff92`），确认 F145(b) 的
+扫描门缺口仍然成立、未被本次修补触及；⑤`dd_pass_check.sh` 实际只跑 4 个 fixture
+（`no_map`/`theirs_no_map`/`voters`/`theirs_voters`），memo 里写的"五个既有 fixture"多算了
+一个陈旧遗留目录 `out_ddpass/one.*`（2026-09-01 产物，脚本从不生成它），是既有措辞错误；
+⑥字面回退负控制（`c76a4be6` 版本的 awk）确实报 rc=1，但红是靠 Python `KeyError: 'dd'`
+崩溃触发的（旧 awk 不打印 verbose 分桶），不是靠判据本身——真正有信息量的红是攻击①里的
+三处判别器退化变异；⑦确认 `dd_pass_check.sh` 与 selftest 调的是同一个 `count_dd_sites.awk`
+程序（无捷径替代）。
+
+**新发现（真实缺口，非仪器缺陷）**：修补丁把"不认识的 x16 来源"正确分类为 `unclassified`
+（既不算 native 也不算 dd），这本身是对的；但这条第三分支**只在 `count_dd_sites_selftest.sh`
+里被检查非零就报错**，`dd_pass_check.sh`（`verify_all.sh` 实际跑的那条路径）从不带
+`verbose=1` 调用 awk，也从不检查 unclassified 计数——于是一个真实 DD 派发站点，只要它的
+x16 来源不是 64 位 `movz`/`movn`[+`movk`]或 `orr`-imm（子代理复现：`movz w16,...`、以及
+pool-load 后插入一条无关指令再 `asr` 的变体），会从"旧规则下 dd 计数 0→1（报红）"变成
+"新规则下 unclassified 计数 0→1、dd 计数不变（`dd_pass_check.sh` 不看这个桶，静默不报红）"。
+`grep -n selftest verify_all.sh` 确认 selftest 未接入 `verify_all.sh`。
+
+`cards.tsv` 本轮未改（F144/F145 行仍为既有文本）。为避免把这条新发现和 F145 已有的两处
+（判别器范围负控制覆盖不全 / 扫描门漏真实 DD 尾指令）混在一起变成第三个不相关的判据，
+**先如实记录，不当场扩写 cards.tsv**——留给下一轮决定是并入 F145(c) 还是拆 F146，
+按契约"修补丁不继承审查结论"，F144 仍开、F145 仍开，`3eaeb619` 本身也不视为已过审。
+
+两棵树本轮 `git status --porcelain`：`fhp-research` 干净（仅历史遗留 `.serena/`/
+`test_work/`），`flutter_hot_patcher` 仅改动本文件。本轮到此结束。
+
+下一轮：把上面这条新发现落成 F145(c) 或独立 F146（把 unclassified 计数接进
+`dd_pass_check.sh` 的判据、或至少让它在生产路径上可见并 fail-closed），带判据与负控制；
+同时顺手订正 memo 里"五个既有 fixture"为"四个"（`out_ddpass/one.*` 是陈旧遗留，非
+`dd_pass_check.sh` 生成的 fixture）。其余同上一条清单未变：`reports_20260925/R4_rows.txt`
+过期数字清理；`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，仍在等
+第 5 轮）；F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
+（F82/F84/F88/F101 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。
+
+---
+
+心跳 2026-09-29 03:4x（交互会话，claude-sonnet-5，调度器角色）：把上一轮的第三处未消解发现落成 F145(c)，本轮不派子代理，只做卡片落盘
+
+本轮任务是上一心跳末尾明确列出的第一项：把 `3eaeb619` 证伪 pass 新发现的
+「unclassified 桶在生产路径上不可见、不 fail-closed」写成正式判据，并顺手订正"五个既有
+fixture"的误数。这是把已经在上一轮子代理报告里核实过的事实（未经改动、未经新推理）落成
+`cards.tsv`/`memo.md` 格式，不需要新派子代理去发现新事实，故本轮直接由调度器落盘，不算
+违反"主循环禁止直接跑构建/测试/大范围搜索"（未跑任何构建或测试，只编辑两处文档）。
+
+改动：
+1. `fhp-research` `cards.tsv`（F145 行第 7 列 notes 追加 (c) 判据 + 负控制 + fixture 计数
+   订正）——提交待做。
+2. 本文件 `memo.md`：F145 卡片正文（13011 行起）追加 (c) 小节，措辞与 cards.tsv 一致。
+
+`cards.tsv` 状态未变：F144 `open`、F145 `open`（deps=-，(c) 是新增判据，不是新卡号，因为它
+与 (a)(b) 共享同一个"`measure_dd_emission.sh` 修复留有缺口"的主张与同一个 owner）。三棵源码
+树本轮未改源码（未跑构建/测试）。本轮 agents=0（纯文档落盘，无子代理派发，无需证伪 pass——
+本轮产出不是"某项声称已完成"的判据，是给一张已经 open 的卡补充判据文本，契约的证伪 pass
+关卡只管"把 `- [ ]` 改成 `- [x]`"，本轮未动任何复选框）。
+
+下一轮：F145 现在带三个子判据 (a)(b)(c)，可以派一个新鲜子代理去实现其中任意一个（建议先做
+(c)，判据最具体、改动面最小：给 `dd_pass_check.sh` 接上 unclassified 计数的读取与
+fail-closed 判定）；其余同上一条清单未变：`reports_20260925/R4_rows.txt` 过期数字清理；
+`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，仍在等第 5 轮）；
+F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
+（F82/F84/F88/F101 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。
