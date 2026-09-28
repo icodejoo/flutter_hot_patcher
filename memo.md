@@ -2992,7 +2992,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       (b) 头部期望 `theirs 92 ours 0` 只打印、从不比较,而今天实测 `theirs 92 ours 92`,无人报。
       (c) 潜在、今日暴露为零:python 扫描器**没有节区过滤**(注在文件偏移 `0x1000` 的位点被计入,
       而 `.text` 从 `0x4c000` 起),awk 版只看 objdump 反汇编出的部分,**两个定义域从没被比较过**。
-- [ ] **F84：被审计的生成器自己挑选「审计哪些格」**（`open`，2026-09-16 由 F65 第三次证伪 pass 拆出）
+- [ ] **F84：被审计的生成器自己挑选「审计哪些格」**（`built`，2026-09-16 由 F65 第三次证伪 pass 拆出；2026-09-24 FIXED，commits `0c3ec65`+`0e4283e`，未过证伪 pass——2026-09-29 状态字段订正，此前列 2 误留 `open`）
       `parity_matrix.sh:937-938` 是 `: > $GAP_EVIDENCE; ./gap_evidence.sh > $GAP_EVIDENCE`，
       而它同时写 `parity_matrix.tsv` 的第 5 列 ⇒ **direction B 审的那组格子，由被审的生成器决定**。
       与第十种仪器缺陷同科（分子分母同源），但高一层：**这里自选的是「格子集合」而不是计数**。
@@ -11030,7 +11030,7 @@ F37 卡片本身仍 `open`（证伪 pass 判 PARTIAL，拆出 F107/F108/F109）�
       计数槽互换 `#0x60↔#0x64`）去攻击**主张本身**（四个计数器是否真的各自独立门控），报
       SURVIVES/PARTIAL/FALSIFIED。负控制：喂一个故意错的重述（比如说成三个计数器，或者说成 OR
       不是 AND）混在真的旁边，必须能分辨出来，不能来者不拒。
-- [ ] **F111：F69 需要一版读语义而非地址的检查脚本**（`open`，2026-09-24，人工会话按指令从 F69 拆出，deps=F110）
+- [ ] **F111：F69 需要一版读语义而非地址的检查脚本**（`built`，2026-09-24，人工会话按指令从 F69 拆出，deps=F110；DELIVERED，commit `c9c7c2ee`，未过证伪 pass——2026-09-29 状态字段订正，此前列 2 误留 `open`）
       前两版（`f69_defuse_sp60.sh`、`f69_check.sh` v1/v2，均已移到 `unreviewed/`）都被证明是形状匹配器：
       条件反转和计数槽互换都不能翻动它们的判决，因为两个扰动改的是门控读取的 CFG 形状，不是语义。
       还要顺手补三个上一轮抓到的缺陷：`br` 族分支在 `build_cfg()` 里没处理（今天在目标函数里 0 次出现，
@@ -17101,3 +17101,27 @@ F121/F130/F49（均已连续 3-4 次同根因 PARTIAL，挂起理由是"需要�
 
 **判断**：F138 保持 `open`（卡片本身未声称完成，本轮不适用证伪闸门）。
 本轮到此结束——按契约"每轮只做一件事"，不在同一轮里连做下一步。
+
+---
+
+心跳 2026-09-29T（新会话，claude-sonnet-5，调度器角色）：读契约，先清了一笔过期账——
+`.loop/RESCUED` 指向 `fhp-research` 的 `loop-rescue 2026-09-28T09:50:26 round-18264`，
+但该 stash 在当前 `git stash list` 里已不存在，`fhp-research` 提交历史已推进到
+`14d3db52`（含多轮 F138 工作）⇒ 那笔改动早被后续轮次接住并提交，标记只是没被清掉。
+删除该文件（不涉及任何代码/卡片改动）。
+
+跳过 F121/F130/F49（挂起池，未到 5 轮重试窗口，不碰）。选定处理上一条心跳末尾提到的
+"更便宜的下一步"：**F84/F111 状态字段矫正**。核实 `fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`：
+两张卡列 2 均为 `open`，但笔记分别以 `FIXED 2026-09-24`（commits `0c3ec65`+`0e4283e`）与
+`DELIVERED`（commit `c9c7c2ee`，git log 核实存在）收尾，且此前从未有针对这两个修补丁的
+证伪 pass——按契约"built≠closed"的定义，这两张应是 `built` 不是 `open`。已改：
+① `cards.tsv` 第 2 列 `open→built`（fhp-research `6fc10622`）；② `memo.md` 对应两行的括注
+同步改成 `built` 并注明修复提交。`cards_check.sh` 复跑：`ok: open set agrees (47 cards)`、
+`ok: closed agrees (68 cards)`（矫正未破坏既有一致性）；`rc=1` 来自另外两类既存失败
+（`F136(no-commit)`/`F143(ae8d23d4)` 的 commits-not-in-tree，以及一长串 `commits-not-sha`
+格式问题），**均未提及 F84/F111**，与本次改动无关，本轮不动它们。
+
+F84/F111 现已进入"built 待证伪"名单，下一轮可选派一个新鲜子代理对其一跑
+`tools/loop/prompts/falsify.md`（判据/负控制见 `cards.tsv` 两卡笔记末尾）。
+`F69` 的挂起池文字/cards.tsv 矛盾仍留待后续核对，本轮未动。
+本轮到此结束——按契约"每轮只做一件事"。
