@@ -17065,3 +17065,39 @@ main 分支同为此设计，不是我们落后）。
 按契约证伪只针对完成态卡片。`structural` 分类若要真正关闭这一格，仍需未来一次独立
 证伪 pass 核验"四个 HANDLER 构造判 structural 而非 gap"这个判断本身（等长编码是否真的
 不可能、以及 SAFEPOINT_CAS 的偏移是否真的核实不了）。本轮到此结束。
+
+---
+
+心跳 2026-09-29T（新会话，claude-sonnet-5，调度器角色）：读契约，跳过挂起池里的
+F121/F130/F49（均已连续 3-4 次同根因 PARTIAL，挂起理由是"需要先解决设计问题"，
+未到 5 轮重试窗口，且契约明确写"不要在同一层继续打补丁"——本轮不碰）。
+按规则 0（SDK 本体优先）选定继续 F138：上一条心跳留了两处 STILL OPEN
+（5 个 Thread 偏移的字段名未核实、`structural` 分类未经独立复核）。
+派一个新鲜 opus 子代理，限定只改 `fhp-research` 树的
+`reports_20260929/F138_*` 与 `cards.tsv` 第 139 行（F138 本身），不许标 `built`/`closed`。
+
+**代理自报（`fhp-research` 提交 `14d3db52`，已完成，非本轮自证）**：
+- 5 个 Thread 偏移，**没有一个能对 Shorebird 自己的二进制核实**（对方仍是 strip 过的
+  release 构建，无 DWARF），全部只能从**我们自己**的 Thread 布局结构性推断：
+  `THR+0x8e0`→`dart_state_is_on_cpu_`（HIGH，从 thread.h 自带的"对方侧偏移"注释直接算出）、
+  `THR+0x8e8`→`simulator_csp_`（HIGH，同法算出，与卡片早前的"CSP"提法吻合）、
+  `THR+0x718`（SAFEPOINT_CAS 自旋位置）→候选 `safepoint_state_`（MEDIUM-HIGH，CAS 指令形状
+  匹配 `compare_exchange_strong`，但"我们自己偏移只差 4 个字"不构成证明）、
+  `THR+0x920`（SAFEPOINT_CAS 间接调用目标）→候选 `resume_on_cpu_entry_point_`
+  （MEDIUM，依赖一段未经验证的"字段顺序在已记录区间之后仍保持"的假设）、
+  `THR+0x688`（SIM_ENTER/SIM_JTF）→**未命名**，LOW，无锚点，仍然 open。
+- **负控制独立复现 PASS**：亲自重跑 `--drop SAFEPOINT_CAS`（残差精确 11w/44B）与
+  `--drop KIND_DISPATCH_COMPARE`（残差精确 8w/32B），三个 fixture（hello/base_dd/prog）
+  在 `out_pm` 上全部复现，与此前记录的数字一致。
+- **structural 分类：独立确认（CONFIRMED）**，不是复述上一轮的 WebFetch：重新拉取当前
+  `dart-lang/sdk` main 分支的 `stub_code_compiler_arm64.cc`，确认
+  `GenerateFfiCallbackTrampolineStub` 现在是一个 `cbnz` 两分支设计、把逐 kind 的逻辑全部
+  下放给 `DLRT_*` 运行期函数，不是 Shorebird 那种 4/5 路内联判断——**上一轮的判断被独立复现**。
+  ⚠️ **带一条未解决的限定**：这只证明"今天的 upstream main 是这样"，不能证明
+  "这个重构发生在 Shorebird fork 点之前"（他们的源码闭源，无法直接核对 fork 时间点）。
+- **仍未解决（原样带到下一轮）**：`THR+0x688` 字段身份未定；`THR+0x718`/`THR+0x920`
+  仅是候选，未确认；5 个偏移全部无法对 Shorebird 自己的二进制核实（永久性限制，非本轮缺陷）；
+  structural 分类的 fork 时间点限定未解决。
+
+**判断**：F138 保持 `open`（卡片本身未声称完成，本轮不适用证伪闸门）。
+本轮到此结束——按契约"每轮只做一件事"，不在同一轮里连做下一步。
