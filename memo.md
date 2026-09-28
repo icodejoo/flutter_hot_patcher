@@ -15341,3 +15341,65 @@ F87 证伪 pass，本轮只是把它正确落盘，不构成新判决）。改�
 F37 仍被 F108（PARTIAL，open）与 F121（挂起池）挡住；应按规则 0 挑一张无依赖 SDK 本体 open 卡
 （F82/F84/F88/F94/F104 之一，F87 本体已因 F144 拆出待办而暂告一段落）或处理 F108 的
 "给 reset_unknown 设计更强锚点"后续。本轮到此结束。
+
+## 心跳 2026-09-28（交互会话，claude-sonnet-4-6，调度器角色）：F69 第十次证伪 FALSIFIED — 三个实测缺陷
+
+契约已读。锁定 F69（open，UNREVIEWED_FIX 里有 new fix 15cb0cfc/99c10579/a2b0ffad）：派一个全新
+opus 子代理（general-purpose，14 次工具调用，独立无上下文，二进制 sha256 669423717d62... 现场核实）
+跑七问证伪 pass。**VERDICT: FALSIFIED**，三个实测缺陷，全部用命令可复现：
+
+**缺陷 1（cascade 截短）**：`trace_link()` 计算 `ok` 时不要求 4 级，`exit` 也不核查是否等于 SITE2
+（0x100196b98）。NOP 掉 level-2 的 subs（0x100196990→`d503201f`）→ rc=0、VERDICT A、cascade
+仅 1 级、exit 变成 0x100196990。类推：NOP level-3/level-4 同样 rc=0/A。
+
+**缺陷 2（协同双字攻击确认，STILL OPEN 实验验证）**：同时改 level-2 的 subs source 寄存器
+（0x100196990：`71000668`→`71000688`，`subs w8,w20,#1`）和 write-back 目标寄存器
+（0x1001969a0：`aa0803f3`→`aa0803f4`，`mov x20,x8`）→ rc=0、VERDICT A、四级全过
+（`[True,True,True,True]`，exit 0x100196b98）。这是真实语义破坏而非只是重命名：w19 不再被递减，
+x20 在 0x100196a14 的 `cmp x23,x20` 里有别的活跃定义。单独改一处 → rc=3/C；两处同时改 → rc=0/A。
+这正是脚本自身 ~872 行注释说的"coordinated two-word attack ... would still get through"，
+本轮首次实验确认。
+
+**缺陷 3（前驱缺口确认，STILL OPEN 实验验证）**：将 level-1 的 `b.lt` 跳转目标改为直接指向
+level-2 的分支（0x10019696c→`5400016b`），跳过 level-2 的 decrement →
+rc=0、VERDICT A。这正是 ~757 行注释所说"从不检查 incoming edges"的实例，本轮首次实验确认。
+
+**修法分析**：
+- 缺陷 1 有清晰修法：在 `trace_link()` 的 `ok` 判断里加 `len(cascade)==4 and exit==0x100196b98`。
+  这会让所有 cascade 截短攻击变成 VERDICT C，但不会影响真实二进制（四级全过，exit=0x100196b98）。
+- 缺陷 2/3 是本地模式匹配的结构性天花板：需要真实的跨块数据流/前驱分析才能关，
+  `f69_their_pool_skip_disasm.sh` 的设计本来就不做这些（已在注释里明说）。
+  本轮决定：修缺陷 1，把缺陷 2/3 记为已核实的结构性局限（不是新发现，是首次实验确认）。
+
+实现子代理（opus，17 次工具调用）已修缺陷 1：`CASCADE_LEVELS=4` 常量 + `n_levels_ok` /
+`exit_is_site2` 两个新条件加入 `L["ok"]` 判断；在 ~296、~771、~886 三处注释升格 defect 2/3
+为"CONFIRMED EXPERIMENTALLY 2026-09-28, NOT CLOSED IN THIS FIX"；新增诊断输出行。
+四项验证通过：真实二进制仍 rc=0/A；NOP level-2/3/4 → rc=3/C；NC1-NC6 全过。
+提交：`fhp-research b65b1854`（"F69: require exactly 4 cascade levels and exit==SITE2"）。
+已派新证伪 pass（见下一节）；F69 cards.tsv / UNREVIEWED_FIX 在判决到来后更新。
+
+第十一次证伪 pass（opus，28 次工具调用，独立）：**VERDICT: SURVIVES**。
+attack 1：NOP L2 → rc=3/C（`n_levels_ok=False`）✓；attack 2：真实二进制 rc=0/A，4 级，exit 正确 ✓；
+attack 3：临时改 SITE2 地址 → rc=3/C（`exit_is_site2=False` 独立 load-bearing）✓；
+attack 4：协同双字攻击仍 rc=0/A（defect 2，STILL OPEN，comment 标注准确）✓；
+attack 5：b65b1854 在 fhp-research HEAD，二进制 sha256 一致 ✓；
+attack 6：NC1-NC6 全过，NOP L2 的 rc=3 来自 fix 本身而非 NC ✓；
+attack 7：脚本认证的是**结构性** 4 级级联 + 正确 exit 地址，不是「语义上真正 gates pool sinks」，
+已在代码里诚实注明。
+STILL OPEN（verbatim）："A single-/two-word attack that fabricates or reroutes levels so the walk
+still counts exactly 4 and still exits at SITE2 — while the real gating is severed — would pass
+the fix and overturn SURVIVES for the semantic claim. Only flow-sensitive dataflow analysis would
+close this."
+COST OF BEING WRONG（verbatim）："F69 is prerequisite of F68; a wrongly-green VERDICT A would
+let the F68/F55 reasoning be cited as a settled structural fact when only level-count-and-exit-
+address shape is actually certified."
+
+按契约五之四（fresh pass SURVIVES → 可关卡）：**F69 关闭**。
+`cards.tsv`（fhp-research，第 71 行）`open→closed`，`||` 追加两次证伪全文。
+
+本轮 agents=3（证伪 1、实现 1、证伪 2，均 opus）。改动文件：`memo.md`（本节）、
+`fhp-research` 树的 `f69_their_pool_skip_disasm.sh`（b65b1854）与
+`spikes/shorebird_linkinfo_oracle/cards.tsv`（F69 行）。`flutter_hot_patcher` 与
+`~/dart-3122/sdk` 两棵树均无代码改动。
+
+- [x] **F69：`analyze_snapshot_arm64` 的四计数器级联脚本**（`closed`，SURVIVES 2026-09-28）
