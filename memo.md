@@ -15815,3 +15815,97 @@ fix 2 里一条 `NOTE:` echo 字符串的措辞（子代理 pass 2 的攻击 #1 
 
 改动文件：`fhp-research` 三个提交（见上）。其余两棵树（`flutter_hot_patcher`/`~/dart-3122/sdk`）
 均未改动。`cards.tsv` 未改。本轮到此结束。
+
+---
+
+### 2026-09-28 心跳：救援 stash 核验（确认冗余、已丢弃）+ 上条待办 1 意外解决 + 待办 2 保守搁置
+
+**开工前救援检查**：本轮开头收到的救援提示指向 `fhp-research` 的
+`loop-rescue 2026-09-28T09:50:26 round-18264`（`stash@{0}`）。逐项核对：
+`git show stash@{0}:.../cards.tsv` 与磁盘当前版本逐卡对比，仅 7 行不同
+（F69/F95/F108/F130/F135/F140/F144），且**磁盘版本对每一条都是 stash 版本的超集或更新状态**
+（F69 磁盘 `closed` vs stash `open`；F135 同理；F95/F108/F130/F140 磁盘文本更长、
+是同一条记录的后续续写；F144 内容逐字相同，只是 stash 版多一层 CSV 转义）。
+**结论：这份 stash 是被更晚的提交完全吸收的旧快照，没有独有内容** ⇒ 已
+`git -C fhp-research stash drop "stash@{0}"`，不是从零重做，是核实后确认无损丢弃。
+
+**上条待办 2（`print_field_table_link_info_to`/`_debug_info_to` FAIL 真因）意外已解决**：
+直接重跑 `./evidence_field_table_order.sh IterateObjects print_field_table_link_info_to`
+→ `LOCUS_OK ... UNEXPLAINED 0 rc=0`；再跑全量 `./structural_evidence_check.sh`
+→ **`13 row(s), 0 failure(s)`，rc=0**（含 `dump_object_pool`/`dump_object_pool_link_data` 两条
+上上条本已修好的分支名假阴性行）。回查 `git log --oneline -- evidence_field_table_order.sh`：
+`836139aa`（"3 siblings: drop over-strict branch-name" 那次修复）**同一提交也改了这个脚本**，
+只是上条心跳写"两行 FAIL 与①无关，需要独立一轮"时没有验证它是否已被同一个改动波及。
+⇒ **这条待办本身是一次假阴性**：闸门此刻真的是 13/0 全绿，`harness 全绿` 的既有限定条件
+（分支名假阴性）已经解除。CLAUDE.md 顶部关于"必须带前提读"的记录相应更新为：
+**2026-09-28 当前实测，`structural_evidence_check.sh` rc=0，13/0，不再需要这条限定**
+（`ReleaseARM64`/`ProductARM64` 落后步数那条限定不受影响，仍然成立）。
+
+**上条待办 3（"205/1380"→"118/1380"，`prog` "331"→"158" 的文档订正）本轮保守搁置，未做**：
+尝试直接核实每个 fixture 的确切数字时，`evidence_compute_dd_thread_offset.sh Thread+0x678`
+只跑出单一读数（`1009/1380 functions have different op_subgraph_hash`），与此前心跳引用的
+"self_hash_diff hello 118/base_dd 118/prog 158"不是同一个字段，且脚本没有暴露
+按 fixture 拆开的直接开关。**为避免重复本项目反复栽过的坑**（"断言保鲜期"规则：
+把一句未逐项核实的旧摘要原样抄进文档 ⇒ 产生新的过期断言），本轮不动这几处注释文字，
+留给下一轮专门写一个逐 fixture 拆分读数的验证步骤后再改。**机器判据不受影响**
+（`structural_evidence_check.sh` 的 `expect` 字符串不依赖这些数字，已由上上条心跳的
+子代理确认）。
+
+**built 卡与修补丁证伪积压**：F121/F130/F49 三张 `built` 卡已确认仍在挂起池
+（`cards.tsv` 状态未变，`built`，本轮不重派，按契约第六条与既有先例一致）。
+其余修补丁证伪积压（F37/F115-F118/F122/F140/F141/F95/F129/F113/F108/F134/F135/F69）
+本轮同样未碰——本轮工作是救援核验 + 意外发现的闸门状态更新，不在这份清单内。
+
+**本轮改动**：`fhp-research` 仅 `git stash drop`（无文件改动，无新提交）；`memo.md` 本节。
+三棵树代码均未改动，`cards.tsv` 未改。本轮 agents=0（全部为交互会话直接核验，
+均为只读命令 + 一次无害的 stash 清理，不涉及需要独立证伪 pass 的判断）。本轮到此结束。
+
+---
+
+心跳 2026-09-28 20:42：新一轮开始，契约与 F37/F108/F130/F140 现状已读。
+
+**任务锁定**：上条待办 2（`print_field_table_link_info_to`/`_debug_info_to` FAIL）已在上一心跳
+"意外已解决"，本轮重跑 `./evidence_field_table_order.sh IterateObjects print_field_table_link_info_to`
+（`LOCUS_OK`，rc=0）与 `./structural_evidence_check.sh`（`13 row(s), 0 failure(s)`，rc=0）二次确认，
+不是需要处理的项。改为处理上条待办 3："205/1380"→"118/1380"（`prog` "331"→"158"）的文字同步，
+此前两轮都保守搁置，理由是"未逐 fixture 核实"。本轮先核实再改，不是直接抄旧摘要。
+
+**核实**：`./evidence_compute_dd_table_residual.sh` 直接给出按 fixture 拆分的读数——
+`hello: self_hash_diff=118`、`base_dd: self_hash_diff=118`、`prog: self_hash_diff=158`
+（`EXAMINED 23752 UNEXPLAINED 0`）——与待办里引用的"118/118/158"逐位相符，不是未经验证的旧摘要。
+
+**改动**：6 个文件（`fhp-research` 树，纯注释/TSV 文字，无逻辑改动）把 "205/1380" 系列描述
+改为 "118/1380"，`structural_evidence.tsv` 里 compute_dd_table 行的 "(205/205/331 functions)"
+改为 "(118/118/158 functions)"：
+`evidence_shorebird_thread_offset.sh`、`evidence_dump_blobs_thread_offset.sh`、
+`evidence_thread_offset_pool.sh`（两处）、`evidence_compute_dd_thread_offset.sh`、
+`parity_matrix.sh`（仅第 902 行那处描述 self_hash 的；第 219 行是另一件事——F20 那批 pool cell
+的历史记录，与这个 1380 分母的 self_hash 计数无关，未动）、`structural_evidence.tsv`。
+
+**改后复核**：`structural_evidence_check.sh` 复跑仍 `13 row(s), 0 failure(s)`，rc=0，
+与改动前完全一致（早前心跳已确认这些数字不进任何 `expect` 字符串）。
+
+**提交**：`fhp-research 9ac5bca7`。
+
+**顺带发现、本轮未动**：改动时注意到同一行（`structural_evidence.tsv` compute_dd_table residual）
+里的 `op_subgraph_hash changes (1096/1096/2731)` 也可能过期——`evidence_compute_dd_table_residual.sh`
+现在实测读出 `op_hash_diff` 分别是 `1009/1009/2558`，与文字里的 1096/1096/2731 不一致。
+**这不在本轮已核实的范围内**（只核实了 self_hash 那组数字），按同样的谨慎原则不blind替换，
+留给下一轮单独核实再改。
+
+**并发说明**：`.loop/round.lock` 与 `rounds.log` 显示 ralph.sh 的自动轮次于 20:40:01 已经
+`round start`——按契约 2.5 节"你看到的那个 ralph.sh、run_round.sh、那把锁，就是你自己"，
+这就是本轮，不是别的写方；本轮全程只写了 `fhp-research` 一棵树，未触碰
+`~/dart-3122/sdk` 或 `verify_all.sh`，符合规则①②。
+
+改动文件：`fhp-research`（提交 `9ac5bca7`，6 个文件）+ `memo.md` 本节。三棵树代码另两棵
+（`flutter_hot_patcher` 除 memo.md 外、`~/dart-3122/sdk`）均未改动。`cards.tsv` 未改
+（本轮不涉及任何卡片的开/关）。本轮 agents=0（纯文档核实与更正，未派发子代理；
+按契约"至少写清判据"的字面要求，这类不影响任何机器判据的文字更正本身即是可独立复核的
+（改前改后各跑一次 `structural_evidence_check.sh`，输出已贴在上面），不需要走证伪 pass——
+它不是在关一张卡或证明一个新 CLAIM，是修正已被验证为过期的两个数字）。本轮到此结束。
+
+下一轮：`op_subgraph_hash 1096/1096/2731` vs 实测 `1009/1009/2558` 的核实与更正；
+建议的 `sdk_path.pin` alternates 伪造防御（需要自己的判据与负控制）；
+built 卡 F121/F49（挂起池，5 轮后再试）；F130/F140 对 `d98a324b` 的未修复 PARTIAL/FALSIFIED
+发现（留在修补丁队列，交给循环）；规则 0 下任一无依赖 SDK open 卡（F82/F84/F88/F94/F104）。
