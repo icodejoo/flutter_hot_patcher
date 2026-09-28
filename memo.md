@@ -15549,3 +15549,13 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
   `ninja -n -C xcodebuild/ProductSimIosARM64 clang_arm64/gen_snapshot clang_arm64/analyze_snapshot | grep -vc '^ninja: '` = **372**
   ReleaseARM64 为 377，ProductSimARM64 为 375（只算 gen_snapshot 与 analyze_snapshot 两个目标）
 - 🔴 **又一种仪器缺陷，刚踩到的**：`ninja -n -C xcodebuild/ProductSimIosARM64/clang_arm64 …` 读出 **0**。原因是那个目录下没有 `build.ninja`，报错行以 `ninja: ` 开头，被 `grep -v '^ninja: '` 过滤掉了。**「0 步陈旧」和「探针根本没跑起来」是同一个读数。** 用这个探针之前，先确认 `-C` 指向的目录里真有 `build.ninja`
+
+### F130 第三轮（2026-09-28）：对 `d98a324b` 的 pass 判 PARTIAL（agent a8aadb3e011dd03e4）
+
+- **(a) 承重的那条**：`d98a324b` 去掉 `- reviewed` 的理由是「同轮绿色 pass 没有绑定到新提交」。这个理由对首次入队同样成立，可 `enqueue_cids` 那里还在减 `reviewed`。同一份轮次证据，卡已在队列时得 `OWED 1`，不在队列时得 `OWED 0`，而且新 sha 从没被记下 ⇒ **两条路径至少有一条是错的**。这需要先决定「同轮红→修→绿」里那个绿算不算对修补丁的审查，再动代码
+- (b) `fix_shas()` 不做 `code_touch` 过滤，只改 memo/cards 的记账提交也会被记成 new fix
+- (c) 不含数字的真实 sha 会被数字过滤丢掉：本仓 3/8126（例如 `eefebeaf`），SDK 4/125047。再提到这种 sha 仍会重入队，并抹掉真的绿色标记
+- (d) 重入队时仍打印那行「candidate … 等操作者出队」，跟 `--render` 的结论矛盾
+- (e) O2（前缀只比一个方向）、O3（分段正则不忽略大小写）两个变异下 suite 仍 130/0；`if False` 那条 NEGCTL 实际让两个探针变红，不是一个
+
+**不在会话里修**：留在修补丁队列里交给循环，(a) 要先定语义。
