@@ -126,6 +126,16 @@ import tempfile
 # that "the snapshot was not taken" is distinguishable from "nothing was owed".
 SNAPSHOT_FAILED = "#SNAPSHOT-FAILED"
 
+
+def is_sentinel(raw):
+    """True when some whole line of `raw` (str or bytes) is the sentinel.
+
+    A substring test fires on a legitimate line that merely quotes the
+    sentinel (a ledger `why`, a queue reason) -- see known_ids()."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    return any(l.strip() == SNAPSHOT_FAILED for l in raw.splitlines())
+
 # F113, option (b), decided by the operator 2026-09-25: a round no longer drains
 # this queue. Six repairs of F82 and five more of green_ids() (F116-F120) each
 # closed one way for the round's own words to count as a subagent's verdict and
@@ -1798,7 +1808,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             "whether an entry disappeared, and the pre-round contents are "
             "unverifiable; the round is NOT settled")
 
-    if SNAPSHOT_FAILED in raw:
+    if is_sentinel(raw):
         return refuse(
             "snapshot missing at round start; queue state unverifiable",
             "fix-queue snapshot was not taken at round start -- cannot tell "
@@ -1950,7 +1960,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "quarantine floor could not be verified, so no operator "
                 "drain is excused this round"
                 % ("missing" if not quarantine_before_sha else "mismatch"))
-        elif raw_q is not None and SNAPSHOT_FAILED.encode("utf-8") in raw_q:
+        elif raw_q is not None and is_sentinel(raw_q):
             ledger_ok = False
             actions.append(
                 "RED quarantine snapshot was not taken at round start "
@@ -2009,7 +2019,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             actions.append("RED ledger snapshot checksum %s -- no operator "
                            "drain is excused this round"
                            % ("missing" if not ledger_before_sha else "mismatch"))
-        elif raw is not None and SNAPSHOT_FAILED.encode("utf-8") in raw:
+        elif raw is not None and is_sentinel(raw):
             # F140: a checksum match only proves the sentinel FILE was not
             # tampered with after being written -- it says nothing about
             # whether a real snapshot was ever taken. The queue path (this
@@ -2204,6 +2214,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             seen_ids.add(cid)
             settle(cid, seen, reason, False)
 
+    requeued = set()
     if allow_enqueue:
         requeue_cids = sorted((neg & fix) & {r[0] for r in kept} - reviewed)
         for cid in requeue_cids:
@@ -2228,11 +2239,19 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # to collide with it. Reason strings are only ever built by this
             # module (see the "fix commit(s) %s" and "; new fix %s" templates
             # above/below), so scope extraction to those two segments only.
+            # F130 pass 4: the segment must be the template's exact shape -- a
+            # `;`-delimited clause that is nothing but whitespace-separated hex
+            # tokens -- so prose that happens to say "new fix" is not a segment,
+            # and a token must hold a digit so an all-hex English word
+            # (`defaced`) cannot prefix-mask a new sha. Dropping a digit-free
+            # real sha only costs a spurious requeue, the cheap direction.
             old_shas = set()
-            for seg in re.findall(r"(?:fix commit\(s\)|new fix)\s*([^;]*)",
-                                   old_reason, re.IGNORECASE):
-                old_shas.update(s.lower() for s in
-                                 re.findall(r"[0-9a-f]{7,40}", seg, re.IGNORECASE))
+            for seg in re.findall(
+                    r"(?:^|;)\s*(?:fix commit\(s\)|new fix)\s+"
+                    r"([0-9a-f]{7,40}(?:\s+[0-9a-f]{7,40})*)\s*(?=;|$)",
+                    old_reason, re.IGNORECASE):
+                old_shas.update(t.lower() for t in seg.split()
+                                if re.search(r"[0-9]", t))
 
             def _new_sha(sha, old=old_shas):
                 sha = sha.lower()
@@ -2251,6 +2270,30 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 kept[row_i] = (cid, now, old_reason + "; new fix " + shas)
                 actions.append("requeue %s -- new fix %s after %s verdict"
                                % (cid, shas, verdict_str))
+                requeued.add(cid)
+
+    if requeued:
+        # F130 pass 4: a green pass read before the new fix is about the OLD
+        # fix. Hiding it by timestamp alone left a same-minute mark standing,
+        # so the requeued ids' lines are removed from the file itself.
+        cpath = queue_path + ".candidates"
+        try:
+            with io.open(cpath, encoding="utf-8") as fh:
+                clines = fh.read().splitlines()
+        except (IOError, OSError):
+            clines = None
+        if clines is not None:
+            keep = [l for l in clines
+                    if (l.split("\t") + [""])[1] not in requeued]
+            if len(keep) != len(clines):
+                try:
+                    with io.open(cpath, "w", encoding="utf-8") as fh:
+                        fh.write("".join(l + "\n" for l in keep))
+                except (IOError, OSError) as e:
+                    actions.append(
+                        "RED could not invalidate the green-pass mark for %s "
+                        "(%s) -- --render may still say not to re-dispatch"
+                        % (" ".join(sorted(requeued)), e))
 
     enqueue_cids = sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []
     for cid in enqueue_cids:
@@ -3783,6 +3826,51 @@ def self_test():
               and any(r[0] == "F77" and "fff9999" in r[2] for r in q))
         return ok, "rc=%s out=%r q=%r" % (rc, out, q)
 
+    @probe("F130 pass 4: a same-minute green mark is removed from the "
+           "candidates file on requeue, not just hidden by timestamp")
+    def _f130_cand_same_minute():
+        d = tempfile.mkdtemp(prefix="fq_f130cand.")
+        cp = os.path.join(d, "queue.candidates")
+        io.open(cp, "w", encoding="utf-8").write(
+            "2026-09-17 12:00\tF77\n2026-09-17 11:00\tF78\n")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) abc1234; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["fff0001 tree F77: second fix"],
+            agents=0, cards={"F77", "F78"})
+        q = read_queue(os.path.join(d, "queue"))
+        cand = candidates(os.path.join(d, "queue"))
+        rend = render(q, cand)
+        ok = ("requeue F77" in out and "F77" not in cand
+              and cand.get("F78") == "2026-09-17 11:00"
+              and "已有绿色 pass" not in rend)
+        return ok, "rc=%s out=%r cand=%r render=%r" % (rc, out, cand, rend)
+
+    @probe("F130 pass 4: an all-hex English word in the fix segment does not "
+           "prefix-mask a new sha")
+    def _f130_hexword_in_segment():
+        d = tempfile.mkdtemp(prefix="fq_f130word.")
+        old_row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; fix commit(s) defaced; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["defaced1234 tree F77: real new fix"],
+            agents=0, cards={"F77"})
+        return ("requeue F77 -- new fix defaced1234" in out), \
+               "rc=%s out=%r" % (rc, out)
+
+    @probe("F130 pass 4: prose saying 'new fix' is not a fix-commit segment")
+    def _f130_prose_new_fix():
+        d = tempfile.mkdtemp(prefix="fq_f130prose.")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after FALSIFIED verdict; operator wants a new fix "
+                   "abc9999; fix commit(s) 1112223; no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["abc99990 tree F77: real new fix"],
+            agents=0, cards={"F77"})
+        return ("requeue F77 -- new fix abc99990" in out), \
+               "rc=%s out=%r" % (rc, out)
+
     @probe("F140: a memo line with two per-id verdicts marks a RED verdict "
            "only for the id whose OWN block says so")
     def _f140_negline():
@@ -4188,6 +4276,17 @@ def self_test():
                  any("SNAPSHOT-FAILED" in a for a in acts)
                  and q == ["F46"] and live_after_sentinel == real_drain,
                  (acts, q, live_after_sentinel)))
+    # F140 pass 6: a real drain whose `why` merely quotes the sentinel is not
+    # a failed snapshot (the substring test quarantined it forever).
+    quoting = ("2026-09-09 16:50\tF46\tprior round was a %s round\tcruz\t"
+               "2026-09-09 16:40\n" % SNAPSHOT_FAILED)
+    heads, q, _, acts = settle_once(False, [row], [], ledger_b=quoting)
+    f113.append(("F140: a ledger line quoting the sentinel still drains",
+                 heads == ["operator-drained F46"] and q == [], (acts, q)))
+    f113.append(("F140: is_sentinel is a whole-line test on str and bytes",
+                 is_sentinel(b"#SNAPSHOT-FAILED\n") and is_sentinel(" #SNAPSHOT-FAILED ")
+                 and not is_sentinel("why: a #SNAPSHOT-FAILED round")
+                 and not is_sentinel(b""), None))
 
     # F140: a comment header with leading whitespace, a leading BOM, or the
     # '//' spelling must not be read as a malformed drain line. The first

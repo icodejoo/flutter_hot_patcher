@@ -793,6 +793,11 @@ if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
 fi
 FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
+# F140 pass 6: a ledger no operator has ever written is "no drains", not a
+# failed snapshot -- without this every round on a never-drained loop printed
+# the sentinel RED. Deleting an existing ledger only loses drain records, which
+# fails closed (nothing is excused), so no bootstrap marker is needed here.
+[ -e "$FIX_QUEUE.operator_drains" ] || : >"$FIX_QUEUE.operator_drains" 2>/dev/null
 if ! cp "$FIX_QUEUE.operator_drains" "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || true
 fi
