@@ -15559,3 +15559,18 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - (e) O2（前缀只比一个方向）、O3（分段正则不忽略大小写）两个变异下 suite 仍 130/0；`if False` 那条 NEGCTL 实际让两个探针变红，不是一个
 
 **不在会话里修**：留在修补丁队列里交给循环，(a) 要先定语义。
+
+### F140 第三轮（2026-09-28）：对 `d98a324b` 的 pass 判 **FALSIFIED**（agent a83e8f73abe0c6547）
+
+- **(b) 在生产 CLI 里不成立**：`\xff` 这一行是用 surrogateescape 读进来的，可 `main()` 往严格 UTF-8 的 stdout 打印 actions，于是在 `print(a)`（约 :5010）处抛 `UnicodeEncodeError`。RED 和 OWED 行都没打出来，这一轮读成 UNKNOWN（只有在 `LC_ALL=C` 下才正常）。`f140_gate` 这个模型从不经过 `main()`，所以测不到。
+  🔑 **判别法**：凡是只在 Python 模型里测、不走真实 CLI 输出的探针，都看不见 I/O 编码这一层。
+- 同类缺陷还有这几处没关：
+  - `.candidates` 那处严格读（约 :2298，`6a8d6b77` 引入）会在 `write_queue` 之前崩溃，被删的队列行就永久丢了
+  - `run_round.sh` 读 quarantine 用的是严格解码，而 fix_queue 现在会往 floor 里写 surrogate 字节 ⇒ 永久哨兵锁死
+  - 账本或快照路径上放一个 FIFO，闸门就挂住（没有超时）
+  - 删掉账本、再改一下它的快照 → 校验和 RED，但 restore 放在 `ledger_ok` 下面被跳过，下一轮又静默建出空账本
+- 早于本修补丁就存在的洞：restore 用 `splitlines()`，而读方按行迭代；把一条已隔离的伪造行改写成末尾带 `\f`，就能以 rc=0 把 F46 排掉
+- 变异 M5–M14 全部 130/0：9 处 surrogateescape 有 8 处没有探针，删除消息的 `RED` 前缀也没人检查
+- (a)，以及 (c) 的窄义部分，成立
+
+**不在会话里修**，留在修补丁队列交给循环。
