@@ -15489,3 +15489,21 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - STILL OPEN：Lines 38-41 和 ROWS header (line 87) 仍将 N7e 与外部行归为同组（"N7b-N7f probing the external-conditional-branch case"），而 line 52 已说 N7e 是本地分支；binary provenance 未验证（as_f135 未从源码重新构建）
 - **F135 → closed**（cards.tsv commit `8545088b`，fhp-research）
 
+
+### F130 / F140 证伪链（2026-09-28）—— 两张都 PARTIAL，合并修补丁 `6a8d6b77`
+
+**F130 pass（agent adeb7cca3f6b93777）PARTIAL**：
+- (c) 候选标记只是按时间戳遮住、没有真正作废：同一分钟重新入队时「不要再派」标记还在（A1_cand_same_minute）
+- (d) old-sha 提取的正则会命中含 "new fix" 的散文和全十六进制英文词（`defaced`），把真正的新 sha 吞掉（B1/C1）
+- NEGCTL 指向的是不存在的代码（原先没有任何「重新入队时写 candidates 文件」的步骤）
+
+**F140 pass 6（agent aa1aff368c8e2181f）PARTIAL**：(A)(B)(C) 三条安全性质都成立（每个变异都能变红，118/0），但有两处缺陷（都是 fail-closed 方向）：
+- (i) 从来没被操作者出队过的 loop 上，账本 `cp` 必然失败 → 写哨兵 → 每轮都 RED。`rounds.log` 里自 09-26 起约 80 次 round-end 中这条出现了 70 次，等于成了墙纸
+- (ii) 三处哨兵检查用的是子串匹配：一条校验和有效、`why` 字段里引用了 `#SNAPSHOT-FAILED` 的真实出队记录会被永久隔离（p/why.py）
+
+**修补丁 `6a8d6b77`**（flutter_hot_patcher）：
+- F130：重新入队时从 `.candidates` 里删掉该卡的所有行；old-sha 只读以 `;` 锚定、且内容全是十六进制 token 的模板段，每个 token 至少要含一个数字
+- F140：新增 `is_sentinel()` 整行判定，替换三处子串检查；`run_round.sh` 在 `cp` 之前，账本不存在就先建一个空文件（目录占位时仍写哨兵，已在 scratch 实测）
+- self-test **123/0**；四个变异各自只让对应的新探针变红：不作废 → `_f130_cand_same_minute`；去掉数字要求 → `_f130_hexword_in_segment`；去掉锚点 → `_f130_prose_new_fix`（第一版探针的散文在这个变异下不红，已改）；子串哨兵 → 2 条 F140 新 case
+
+下一步：两张卡各派一次 fresh Opus pass（2026-09-28 已派）。
