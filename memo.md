@@ -16571,3 +16571,58 @@ fail-closed 判定）；其余同上一条清单未变：`reports_20260925/R4_ro
 `sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，仍在等第 5 轮）；
 F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
 （F82/F84/F88/F101 依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。
+
+---
+
+心跳 2026-09-29 03:5x（本轮，交互会话，claude-sonnet-5，调度器角色）：读契约全文，确认 round.lock（PID 74302）就是本轮自己（`CLAUDE_CODE_CHILD_SESSION=1`，`pgrep -laf claude` 命中的 `-p` 提示词与本会话系统提示词逐字相符），不因看见锁而停手（契约二.5）。三棵树 `git status --porcelain` 均干净（除已知 `.serena/`、`test_work/` 等未跟踪杂项）。F121/F130/F49 已被上一轮按契约第六节"连续失败 3 次→挂起池"移出本轮候选（历史记录：F121 已连续 6 次 PARTIAL 同一根因 #38，不是本轮该碰的任务）。锁定任务 = 上一条心跳明确指定的下一项：F145(c)，给 `dd_pass_check.sh` 接上 unclassified 桶的读取与 fail-closed 判定。1.5 拆卡检查：判据不含"干净重建/全量重跑/逐个提交二分"字样，改动面是脚本级（读一个 awk 输出字段、加一条断言），装得进一轮，不拆。派发一个新鲜子代理去实现，随后派第二个新鲜子代理跑 falsify.md 证伪 pass，本轮结束前把两者结论写回本文件。
+
+### 2026-09-29 04:0x（同轮续）：F145(c) 实现完成，独立证伪 pass 判 SURVIVES，F145 卡片本体保持 open
+
+**实现**（general-purpose/opus，15 次调用，`fhp-research` 提交 `f3e0e3b2`，仅改 `dd_pass_check.sh`）：
+给 `dd_pass_check.sh` 接上 `count_dd_sites.awk` verbose 模式的 unclassified 桶读取，任一构建
+unclassified > 0 时 rc=1（此前静默 rc=0）。四个已知会落进 unclassified 桶的变体
+（`movz w16`、`asr` 前插无关指令、非 `x27` 基址、非 `x16` 目标寄存器）分别在 `/tmp` 用真实
+`gen_snapshot` 包装器注入验证：改动前 rc=0（未察觉）、改动后 rc=1；四个真实 fixture
+（`no_map`/`theirs_no_map`/`voters`/`theirs_voters`）不变仍 unclassified=0、rc=0；撤掉
+`check_unclassified` 调用的负控制副本上同一变体又回到 rc=0（证明接线确实承重）。
+
+**证伪 pass**（新鲜 general-purpose/opus，15 次调用，独立于实现代理）—— 未复用实现代理的
+临时脚本，自建 `/tmp` 注入器重新构造四个变体，独立确认 rc 0→1/1→0（撤线复现）；核实
+`f3e0e3b2` 与 `3eaeb619` 均为 HEAD 祖先；确认 `verify_all.sh:595` 对 `dd_pass_check.sh` 的调用
+接线未变：
+
+```
+F145 VERDICT: SURVIVES -- 四个列出的变体（自建注入，非沿用实现代理的脚本）在修复后
+从 rc=0 静默变为 rc=1，撤线后回到 rc=0；四个真实 fixture 仍 unclassified=0/rc=0；
+f3e0e3b2 与 3eaeb619 均确认为 HEAD 祖先。
+```
+
+**STILL OPEN（原文照抄）**："(a) Rebuild ReleaseARM64 (224 ninja steps behind) and rerun
+./dd_pass_check.sh -- unclassified=0 on \"ours\" is only established on a stale binary,
+not on real emission with real sites unclassified. (b) Run full verify_all.sh with the
+mutant wrapper as OURS and confirm dd_pass_check shows FAILED -- not run, verify_all
+blocks on the same staleness guard. (c) Sites where the x16 producer is in a register
+other than x16, or a nop sits right after ldr (e.g. an x17-sourced site or a
+nop-after-asr mutant) are not counted in the bucket at all and still pass rc=0."
+
+判决是 SURVIVES 不是 PARTIAL/FALSIFIED，按契约可以把这条子判据标为完成，但**卡片
+F145 整体不关闭**：(a)(b) 两条子判据本轮完全未动；且证伪 pass 自己给出的 STILL OPEN
+第三条指出，本次修复堵住的是「unclassified 桶已存在但没人读」这一层，还有一层更细的
+遗漏（x16 以外寄存器来源、`asr` 后紧跟 nop）连 unclassified 桶都不会进——同一类假阴性
+只被部分堵住，不是全部。这条已原样写回 `cards.tsv` F145 行（`141d1026`），不额外拆新卡，
+因为它与 (a)(b) 共享同一个"scan/classify 覆盖面不完整"的根因，留给下一次实现 (a)(b)
+时一并处理更合理，不是本轮该独立立卡的规模。
+
+改动：`fhp-research` 两次提交（`f3e0e3b2` 实现、`141d1026` 记录证伪结论到 `cards.tsv`）。
+`cards_check.sh` 本轮跑过一次，`open 48 / closed 67`，四条检查全部 `ok`（该脚本本身较慢，
+约 4+ 分钟，原因是对三棵源码树逐个跑 `git cat-file` 核验已关闭卡片引用的提交是否存在，
+不是本次改动引入的性能问题）。三棵源码树（sdk / research 除 cards.tsv 外 / 状态树）本轮
+未改源码、未跑构建。
+
+下一轮：F145(a)(b) 两条子判据仍待实现（判别器范围补形状 + 真实 DD 尾指令解码，规则 0
+SDK 本体工作，建议连同本轮新发现的「x16-以外寄存器来源 / asr 后 nop」一并纳入同一次
+实现的范围，避免第四次单独立卡）；其余同上一条清单未变：`reports_20260925/R4_rows.txt`
+过期数字清理；`sdk_path.pin` alternates 伪造防御；built 卡 F121/F130/F49（挂起池，仍在等
+第 5 轮，本轮未碰——契约第六节"连续失败 3 次"已在上一轮把它们移出候选）；F130/F140
+未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101
+依赖 F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。本轮到此结束。
