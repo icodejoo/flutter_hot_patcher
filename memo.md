@@ -16729,3 +16729,28 @@ mutant 分类器，各自证明 before-undetected/after-flagged；`count_dd_site
 
 派第二个新鲜子代理（不是实现代理）跑 falsify.md 证伪 pass，目标是这份自报——尤其是
 "三个尾字均非合法指令"与"控制形状确实之前测不出、之后测得出"这两条最容易被证伪的断言。
+
+**证伪 pass 已回来，判 SURVIVES，F145 已按契约关闭**：详细七项攻击结论与 STILL OPEN
+原文已记在 F145 卡片正文（本文件 13011 行起）与 `cards.tsv`（`fhp-research` 提交
+`0f981b6d`），此处不重复。本轮到此结束，`cards_check.sh` 已在末尾启动一次背景校验
+（跑约 4+ 分钟，本轮未等待其完成，下一轮开头先读一遍它的输出确认 rc=0 再继续，不要
+假定通过）。
+
+**`cards_check.sh` 已重跑并确认**：第一次背景运行（提交 F145 关闭到 `cards.tsv` 之后、
+尚未同步 `memo.md` 复选框之前）如预期报 `FAIL: memo.md and cards.tsv disagree ...
+open in memo.md only: F145 / closed in cards.tsv only: F145`——这是编辑顺序的瞬时
+不一致，不是真缺陷。刷新复选框后重跑：`ok: open set agrees (47 cards)` / `ok: closed
+set agrees (68 cards)` / `ok: no open/built card rests on an invalidated claim`，F145
+不再出现在任何 FAIL 里。⚠️ 重跑时误用 `grep -v "F69("` 过滤噪声，连带滤掉了一条无关的
+既有 FAIL（`closed cards citing commits that do not exist in any tree: F69(...)`，
+命中大量以 `F69(` 起头的 token，像是该检查把 F69 卡片 notes 正文里的散文错误切分成了
+一串伪造"commit 引用"）——这条 FAIL 在**第一次**背景运行（未过滤）里就已存在，与本轮
+改动无关，是 F69 卡片 notes 格式触发的既有解析噪声，留给下一轮判断是否需要修
+`cards_check.sh` 的引用提取逻辑或改写 F69 的 notes 格式，本轮不擅自处理。
+
+下一轮：① 判断上一条的 F69/`cards_check.sh` 引用提取噪声要不要单独立卡；② 其余同
+上一条清单未变：`reports_20260925/R4_rows.txt` 过期数字清理；`sdk_path.pin` alternates
+伪造防御；built 卡 F121/F130/F49（挂起池，仍在等第 5 轮，本轮未碰）；F130/F140 未修复
+发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡（F82/F84/F88/F101 依赖
+F88/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）；③ F145 自报里"编译器为何
+在这些 DD 站点发出非 blr 尾字"这一根因未定，值得下一轮判断是否要单独立卡追踪。
