@@ -13008,6 +13008,74 @@ F122 第 7 列早已是长段散文而非 SHA 列表），脚本注释里也把"
       exit 0（证明是接线本身、不是巧合产生的计数）；重新钉值后退回旧钉值，确认脚本重新变红
       （证明重钉不是空操作）；收紧畸形钉值处理后喂一行畸形钉值，确认 `rc=2` 且无 traceback。
 
+- [ ] **F145：`measure_dd_emission.sh`（F144 的修复）留下两处未消解的缺口，由 F144 的证伪 pass 发现**（`open`，2026-09-29，F144 证伪 pass 拆出，deps=-）
+      (a) 判别器范围负控制只测了三个具名参照实现（恒真式、pre-F144 的 nop-proxy、
+      过拟合的 exact-word-proxy），没有覆盖会捕获 `classify_site()` 本体被削弱的变异：
+      去掉 x27 基址寄存器检查（任意 `ldr x16,[xN,#off]` 都判 native）、去掉 asr 前一词的
+      rd==16 检查、去掉远池 `add` 那一词的 POOL_REG 基址检查，三个变异 2026-09-29 实测
+      在暂存副本上均以 rc=0 通过现有控制；(b) 扫描门 `ws[i+1] == BLR_X30` 让真实 DD 派发站点
+      在真正产出 DD 的构建上不可见——一次新建的 `gen_snapshot --dd_slot_mapping` iOS 构建有
+      3 个真实 DD 站点，`ldr x30,[x26,x16]` 之后那一词分别是 `0xd63f03d8`/`0xd63f03c7`/
+      `0xd63f02e4`，没有一个等于 `BLR_X30`（`0xd63f03c0`），于是 `classify_site()` 从未在
+      它们上运行，python 扫描器报 `dd_dispatch=0` 而 `count_dd_sites.awk` 读同一份 objdump
+      报 3。判据：①为 8-shape 控制补上非 x27 基址、非 16 目的寄存器、非 POOL_REG 远池基址
+      三种形状（答案都是 `unclassified`），确认上述变异各自至少踩中一个新形状而变红；
+      ②解码那三个真实 DD 构建里 `ldr x30,[x26,x16]` 之后的真实指令是什么，据此放宽/扩展
+      扫描门以认出真实 DD 派发尾指令，或者如果这个窄化是刻意的，把它明确写进脚本头注释
+      当作已接受范围（不许沉默）；③重跑全部既有测试（三个 fixture + 8-shape 控制 + 注入
+      控制 + 分区过滤控制），确认无回归。负控制：①的四个变异要能从 rc=0（未检出）翻到 rc=1
+      （检出），且现有 8/8 与三参照必错至少一项的检查仍要保持通过；②的修法要在同一份
+      产出真实 DD 站点的构建上，实测数出 `dd_dispatch`=3（或真实数字），与
+      `count_dd_sites.awk` 读同一批字节的 objdump 结果一致。
+
+**F144 证伪 pass 判决（2026-09-29，新鲜 general-purpose/opus 子代理，agentId 已回收）**：
+
+```
+F144 VERDICT: PARTIAL -- criteria (1)-(3) hold and all three required negative
+controls reproduce, but the 8-shape control never checks the "pool load via x27"
+condition it says it adds, and on a real DD-emitting build the script counts
+dd 0 where awk counts 3
+```
+
+七项攻击的要点：①在暂存副本 `/tmp/f144m` 构造 6 个判别器变异，4 个（去 x27 检查、去
+rd==16 检查、远池 add 任意基址、非池 ldr 判 dd）以 rc=0 通过现有控制，只有 2 个
+（`mov x16,x0` 判 dd、去掉 movk 循环）真的变红——旧的逐字匹配过拟合确已关闭，但新控制
+仍接受更宽松的规则；②`ninja -n` 报无待办工作，两侧 `.so` 同为 889032 字节、同一天写入，
+可比；③独立用 objdump 数出 92 处 `ldr x30,[x26,xN]`，全部同一形状，`dump_object_pool`
+交叉确认双侧各 92/92（我方 Smi 3928，对方 Smi 2312），但脚本自己不打印 EXAMINED/
+UNEXPLAINED 分母；④在一次新建的 iOS DD 构建（`--dd_slot_mapping=out_dd/voters.bin`）
+上，3 个真实 DD 站点（`mov x16,#0x1ee0;asr;ldr x30,[x26,x16]`）后面跟的不是 `blr x30`
+而是 `d63f03d8`/`d63f03c7`/`d63f02e4`，扫描门在 `classify_site()` 跑之前就把它们过滤掉了，
+python 报 dd 0、native 92、unclassified 0，而 `count_dd_sites.awk` 报 3——分类器的 dd
+分支从未被真实站点触发过；⑤引用的 SDK 提交 `63716223bde`/`b2e93350653`/`98c95873b72`
+均是当前 SDK HEAD `52a498586cc` 的祖先，`as.hello.ours.so` 的 sha256 与钉值日志一致，
+无过期引用；⑥三个负控制在暂存副本上逐一重跑复现：接线撤回后总检查数 47→46、
+仅 `measure_dd_emission.sh` 一项状态变化（`rc` 两侧都因另外 9 个既有红/阻塞项而非 0，
+基线还需要 `SKIP_STALENESS_GUARD=1` 因为 ReleaseARM64 落后 733 步）；旧钉值下 rc=1
+报 `moved 0 -> 92`；6 个畸形钉值输入全部 rc=2、无 traceback，`--self-test` 内建的 8 个
+畸形钉值同样全部拒绝，完整脚本 rc=0；⑦问题被换成了更容易的那个——"hello 上门绿"被当成
+"`classify_site()` 是真判别器"的证据，但站点门让真实 DD 派发对它不可见（攻击 4），
+`LoadWordFromPoolIndex` 的远池形式 `movz;movk;ldr x16,[x27,x16]` 落进 unclassified（一个
+FAIL），两条限制都没有写成已接受范围。
+
+**处置（本轮）**：按契约「PARTIAL/FALSIFIED 不许关卡」，F144 保持 `open`，不标 `[x]`。
+两处发现的修复本身需要新的判据与负控制（尤其②要求先解码真实 DD 站点的尾指令编码，
+不是一个可以当场机械打的补丁），已拆成新卡 **F145**（`open`，deps=-，已同步进
+`cards.tsv` 与本节，`cards_check.sh` 的 open-set 对齐已确认）。F144 的 criteria (1)-(3)
+（接线、重钉、fail-closed 钉值解析）已被这次 pass 独立复核为真，不需要再派。
+
+本轮改动：`fhp-research` 提交（`cards.tsv` 新增 F145 行）+ `memo.md` 本节。`cards.tsv`：
+F144 `open`（未变），F145 `open`（新增）。三棵源码树本轮未改源码（`measure_dd_emission.sh`
+本身未改）。本轮 agents=1（已回收的证伪 pass）。本轮到此结束。
+
+下一轮：F145（判别器范围补形状 + 真实 DD 尾指令解码，规则 0 下 SDK 本体工作）；
+F104 的 NO-CHEAP-PATH 天花板；`reports_20260925/R4_rows.txt` 过期数字清理；
+`sdk_path.pin` alternates 伪造防御；挂起池三张 built 卡 F121/F130/F49（第 5 轮后再试）；
+F130/F140 未修复发现（修补丁队列，操作者出队制）；规则 0 下其余无依赖 SDK 卡
+（F82/F84/F88/F101（依赖 F88）/F103）；`verify_all.sh` 既有红/阻塞项（操作者待拍板）。
+
+---
+
 本轮到此结束，已派第四个独立子代理对本轮修补丁（负控制脚本 `PRE_REF` 改法与 F141 拆分是否
 合理处置了 pass 3 的两处发现）跑证伪 pass，等待判决。若仍非 SURVIVES，按契约第六条评估
 是否已达三振出局。
@@ -16349,3 +16417,13 @@ F121/F49/F130 三张 built 卡均已在自身卡片文本里记录过连续 ≥3
 再派窄修补丁-复审循环，转做规则 0 下的独立任务：F144（open，未经任何实现尝试，判据具体、不需要干净
 重建，直接服务 SDK 验证 harness——把 F87 修好但从未接入 verify_all.sh 的 measure_dd_emission.sh 接线
 并重钉）。
+
+---
+
+心跳 2026-09-29 01:23（交互会话，claude-sonnet-5，调度器角色）：F144 的实现已在上一轮/本轮之前落地
+（`fhp-research 31700acc`：接线 verify_all.sh EXPECTED_CHECKS 46→47、`dd_emission.expected` 重钉
+`native_patched 0→92`、畸形钉值 fail-closed rc=2、`classify_site()` 判别器替换过拟合规则），但按契约
+「修补丁不继承被修对象的审查结论」这条，31700acc 自己从未被审过。三棵树 `git status` 均干净（仅有历史
+遗留的未跟踪文件，无异常残留）。本轮只做一件事：派一个**新鲜**子代理（Opus，独立、不知情于本次实现）
+对 31700acc 跑 `tools/loop/prompts/falsify.md` 的完整七项攻击证伪 pass，CLAIM/CRITERION/EVIDENCE
+取自 `cards.tsv` F144 行原文。派发后本轮结束，等待判决回收。
