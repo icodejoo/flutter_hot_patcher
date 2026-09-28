@@ -15483,5 +15483,9 @@ fhp-research 提交：`6a6f80b8`（pass 1 fix）、`843b7a03`（pass 2 fix）、
 - Fix `c9db0a75`：明确列出"flips N7, N7b, N7c, N7d, N7f ... N7e 是本地分支，stays SAME"
 
 两轮 PARTIAL 都是探针 docstring 文字缺陷，非逻辑/判据缺陷。
-下一步：对 `c9db0a75` 派 5th Opus pass。
+
+**Pass 5（agent a7a95821834f2ce74）SURVIVES**：
+- C1-C7 全部通过；44/44 SAME，rc=0；F143 revert 下 N7/N7b/N7c/N7d/N7f 翻 DIFF (unexpected=5, rc=1)，N7e stays SAME；F135+F143 重新应用后恢复 44/44/0
+- STILL OPEN：Lines 38-41 和 ROWS header (line 87) 仍将 N7e 与外部行归为同组（"N7b-N7f probing the external-conditional-branch case"），而 line 52 已说 N7e 是本地分支；binary provenance 未验证（as_f135 未从源码重新构建）
+- **F135 → closed**（cards.tsv commit `8545088b`，fhp-research）
 
