@@ -17350,3 +17350,65 @@ F69 `f69_their_pool_skip_disasm.sh` 完全同型：契约五之二 + 本文件�
 `cards.tsv` 未再改，F111 保持 `built`。本轮到此结束——按契约"每轮只做一件事"，
 本轮已完成"做一件事 + 四轮独立审查"的完整闭环，多出的三轮审查是契约
 五之四强制的连锁反应，不是额外任务。
+
+---
+
+心跳 2026-09-29 07:59 PST（新会话，claude-sonnet-5，调度器角色）：读契约全文与本文件
+（末尾几条心跳 + 挂起池），跳过挂起池里的 F121/F130/F49/F140/F95/F69/F111（均未到 5 轮
+重试窗口）。检查 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`
+的 `built` 集合：`awk -F'\t' '$2=="built"'` → 仅 `F49 F84 F111 F121 F130` 五张，其中四张
+在挂起池。**只剩 F84 是唯一可动的 `built` 卡**（它是循环机械/仪器类，不是 SDK 本体，
+但规则 0 的"优先 SDK"只在有 SDK 选项时才适用于选择顺序，眼下没有别的可动 `built` 卡）。
+核实 F84 现状：卡片第 6 列记录着 FIXED 2026-09-24（commits `0c3ec65` + `0e4283e`），
+修复本身此前从未被独立证伪 pass 审过——与 F111 此前的情况完全同型。
+派了一个新鲜 Opus 子代理（agentId 内部，未告知用户；任务：对 F84 的修复跑
+`tools/loop/prompts/falsify.md`），要求判决行为
+`F84 修补丁 VERDICT: [SURVIVES|FALSIFIED|PARTIAL] (fix) -- <一句>`。
+子代理在后台运行，结果尚未回收。本轮到此结束（按契约"每轮只做一件事"，
+派发完成后待下一轮/下次通知回收结论并写回本文件）。
+
+---
+
+心跳 2026-09-29（同一交互会话，回收上一节派发的 F84 修补丁证伪 pass）：
+
+**`F84 修补丁 VERDICT: PARTIAL (fix)`**（Opus，`fhp-research` 树，commits `0c3ec65`+`0e4283e`，
+第一次针对该修复本身的独立审查）。七项攻击结果：①检测到的两处原始缺陷
+（unmeasurable 印成 ok、空声明借口）确认已修好，且在真实语料上可复现修好状态
+（`rc=0 '3 cell(s) re-derived, 0 failure(s)'`；`nc_f84_empty_declaration_alibi.sh` 10/0）；
+②两侧产物确系不同文件（698830 vs 698828 字节），非同一文件误判；
+③`EXAMINED`/`UNEXPLAINED` 由 `gap_residual.sh` 对 `diff_units.sh` 独立算出，非自证；
+④C.0 的 basename grep 有理论弱点（拼接构造的名字会漏），但当前非实际风险；
+⑤两个提交都是 HEAD 祖先，产物新鲜，声称的读数原样复现；⑥负控制真实（脚本对新旧版本
+各跑一遍）；⑦**关键发现**：新增的"独立"筛选 D 原样照搬了 `gap_residual.sh` 自己的跳过
+逻辑（multiplicity-only 跳过、只配对双侧都存在的函数），**因此 D 并不独立于
+`gap_residual.sh` 能看见什么——是同一个检验跑了两遍**。
+
+**FLAW（在真实语料副本上复现，残差用桩返回"open"，与当前三格的真实 `gap_residual.sh`
+读数一致）**：(a) 从 `prog` 的 40 个 ours 侧函数里删掉 `callees` 字段 → 仍然
+`rc=0 '3 cell(s) re-derived, 0 failure(s)'`，绿；(b) 从 `prog` 的 ours 侧整个删掉 50 个
+函数 → 同样绿。两者都是真实的采集缺口（我们这边确实漏收了对方有的数据），
+且都不在修复自报的六条局限里——(a) 直接违背 D 自己声称的判据（"对方某个列表字段
+持有我们完全没有的值"）。
+
+**STILL OPEN**：(a)/(b) 需要在真的 `gap_residual.sh`（非桩）下重跑，确认这个盲区在
+撞上 `diff_units.sh` 真实分母后是否仍然存活；"丢函数/丢字段算不算 gap" 这件事本身
+在本项目里还没有定义。**COST**：矩阵三格 `shorebird` 的 `gap=0` 读数，以及 F55/F62
+想把它们改判 `gap` 的路径，都靠这道闸——若我们自己的采集悄悄丢数据，它会永远读成
+`unknown`/`gap=0`，不会读成 `gap`。
+
+按契约五之四：PARTIAL 不许关卡，`F84` 保持 `built`。本次不当场修——真正的修法
+（让 D 真正独立于 `gap_residual.sh` 的跳过条件，或在两者之上加一道采集完整性检查）
+够得上"需要自己的判据与负控制"的门槛，已拆成新卡 **F146**（`open`，criterion 见
+`cards.tsv`：两条负控制，删字段/删函数后必须在真实 `gap_residual.sh` 下报红）。
+`fhp-research` 提交：`cards.tsv` 第 84 行（F84 追加 PARTIAL 判决与拆卡说明）+ 新增
+第 147 行（F146）。`cards_check.sh` 复跑（拆卡后、加下面这行 `- [ ]` 之前）：
+`FAIL: memo.md cards.tsv disagree on open` 仅点名 `F146`；
+另外两类失败（`commits-not-in-tree: F136/F143`、`commits-not-sha: F49 F69 F81 F87 F108
+F122 F124 F130 F132 F135 F138 F140 F144 F145`）均为既存问题、与本轮无关（未点名
+F84/F146）。本轮到此结束——按契约"每轮只做一件事"，本轮已完成
+"回收上一轮派发结果 + PARTIAL 处理（不许关卡）+ 拆出新卡"的完整闭环。
+
+- [ ] **F146：F84 修复新增的独立筛选 D 照搬了 `gap_residual.sh` 自己的跳过逻辑，对
+  ours 侧真实丢函数/丢字段这类采集缺口是盲的**（`open`，2026-09-29，F84 修补丁
+  证伪 PARTIAL 拆出，deps=-）判据与负控制见 `cards.tsv`（两条负控制：删列表字段/
+  删整个函数后必须在真实 `gap_residual.sh` 下报红，非桩）。
