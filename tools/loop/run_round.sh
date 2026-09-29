@@ -201,6 +201,17 @@ export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0
 
 PROMPT='先读 docs/LOOP_CONTRACT.md 的契约正文并完整遵守，再按它执行 memo.md 中的下一项未完成任务'
 
+# 2026-09-29: the §2.5 note "the lock you see is yours" was not enough -- two
+# rounds in a row read .loop/round.lock (held by this very process) as a second
+# writer, asked the operator three options, and ended with no trace, exactly as
+# on 2026-09-16. So the identity goes first, in the prompt itself, with the PID.
+PROMPT="【你就是本轮，先读这一段】你是 ralph.sh 启动的这一轮，本轮 run_round.sh 的 PID 是 $$。
+.loop/round.lock 里记的 PID 就是 $$，也就是你自己；你看到的 ralph.sh、wip_snapshot.sh 进程是你所在的这个循环本身。
+它们永远不是和你竞争的写方。不许因为看见锁、看见循环在跑、看见最近的提交或 live.log 在动而停手、观望或向操作员提问——
+这是 headless 运行，没有人会回答。循环运行期间操作员的交互会话不往这三棵树里提交。
+
+$PROMPT"
+
 # F117. The F116 per-id contract-line rule lived only in
 # tools/loop/prompts/falsify.md, AFTER the fenced ```...``` "Report in exactly
 # this format" block that "## Prompt block (copy from here)" visibly marks as
