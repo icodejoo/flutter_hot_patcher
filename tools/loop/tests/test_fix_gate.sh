@@ -171,12 +171,14 @@ case $out in
      printf '%s\n' "$out" | sed 's/^/       /' ;;
 esac
 
-# 2. Negative control for 1: the same round, having reviewed its own fix.
+# 2. The same round, having reviewed its own fix. F130/F131 (operator decision
+# 2026-09-29): a same-round green pass is not an independent review of a fix
+# committed in that round, so the fix is still queued.
 rm -f "$WORK/queue"
 out=$(TEST_REPLY_JSON=$(reply_green F77) run_round_gate '+📋 **F77 pass 1 → PARTIAL**
 +🟢 F77 修补丁 VERDICT: SURVIVES (fix) -- 负控制 threshold 2 -> exit 1' 2 \
         'F77: fix falsification PARTIAL -- rewrite the residual script')
-expect "reviewed fix is not queued" "" "$out"
+expect "same-round self-review does not exempt the fix" "F77" "$out"
 
 # 3. The queue outlives the round that filled it, and an idle round does not
 #    clear it. The closure marker used to erase its own demand this way.
