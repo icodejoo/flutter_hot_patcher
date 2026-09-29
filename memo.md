@@ -17622,3 +17622,32 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 - 🔴 **`sb_vm_snapshot*.out` 没有入库**：里面有逐条解码的他们的指令。脚本已入库，输出可以随时重新生成。
 
 ⇒ **disassemble 和 shorebird 两格的全部剩余，现在都指向同一个 FFI 共享体（F138 正在做）。**
+
+### 2026-09-29 下午：F138 FFI 拆完（disassemble 可到 0）；F150 堆图流解码（R1/R2 可到只剩版本哈希）；开 F151
+
+**F138 v2**（研究树 `800a163d`）：FfiCallbackTrampoline 逐字拆解，`FFI UNEXPLAINED 0`。
+- 他们的 135 个字 = 上游 `4679c040c63`（2026-02-05）113 个字 + 7 个有名字的 Shorebird 附加构造 22 个字。
+  - 判别依据：`da0ba8eb5c2` 把返回时保存的寄存器从 q0 扩成了 q0–q3，而他们只保存 q0。
+  - 我们的 58 个字 = 未改动的上游 HEAD。
+- 模型是从 `git show` 出来的源码生成的。自检：它算出的 `kNativeCallbackSharedStubSize` 在 4679c 上是 480、在 HEAD 上是 232，与源码常量完全一致。
+- TRAMP_SLOT：他们私有的 stub 尺寸常量落在 [553,560]。
+- **假设口径下 disassemble ×3 = EXAMINED 1808 UNEXPLAINED 0**（FFI 只有在 checker 读 0 时才算作已解释；残差脚本本身的策略没改）。
+- 分类：除 Thread 偏移立即数外全部是 gap。
+- 我核过：
+  - 干净拷贝上复现。
+  - 自己挑的负控制：在那 22 个**从二进制推断出来的**附加字里改两个（word[123] `mov x12,x10→x11`，word[49] `cmp x26→x27`，`cmp` 确认文件已改），两次都是 `FFI UNEXPLAINED 2`。
+  - ⚠️ 第一次跑这两个负控制时，zsh 的 `set --` 没有拆开参数，**扰动根本没发生，读数照旧是 0**；是 `cmp` rc=0 暴露了这件事。这是「负控制跑在一份没被改动的输入上」的又一例。
+- 🔴 他们的反汇编输出（`dump.*`/`align.*`/`corroborate.out`/`negctl.out`/`theirs_native/`）已加进 `.gitignore`，**没有入库**。
+
+**F150**（研究树 `ac9d248d`）：snap 流解码器重实现了 Deserializer 的分帧，12 条流全部 round-trip。
+- **R1/R2 snap 块 EXAMINED 353680 UNEXPLAINED 165，165 个全是快照版本哈希**；不算版本哈希就是 0。
+- 那约 26.5 万个 unit **几乎全是位移，不是内容**。
+- 有名字的原因：
+  - 我们那个 50 字节的特性串 token：R1 的 −50 就是它。
+  - 他们独有的一个 2 字节 Class alloc 字段：R2 −48 = −50 + 2 → **F151**。
+  - Thread 偏移 Smi。
+  - stub 顺序导致的引用差（→ F148）。
+- 我核过：干净拷贝上复现；自己的负控制在 R2 流中段翻 10 个位移字节（`cmp` 10 处）→ 精确报出 `UNEXPLAINED.content 10`，定位在 `Function(cid7).fill`。
+- dump_blobs 全格的严格残差估计从 593192 降到约 239859。剩下的主要是 R3，等 F149（agy 正在做）。
+
+- [ ] **F151：他们的 Class cluster 在 alloc 段多写一个 2 字节字段（值 = `num_cids−1`），我们的序列化器不写**（`open`，2026-09-29，F150 发现）。这是可以关的序列化缺口，解释 R2 长度差里的那 +2 字节。
