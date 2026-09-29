@@ -18553,6 +18553,43 @@ pools/selectors 每个字段都与他们逐条相同（子代理跳出脚本直�
 
 本轮涉及树：`~/dart-3122/sdk`（子代理只读 revert+abort+重建，未提交，HEAD/status 前后一致，
 分支名异常已如实记录）；`fhp-research`（子代理只读）；本仓 `memo.md`（写，本节）。
-`.loop/`、`cards.tsv` 均未动。本轮 agents=2（均已回收）。本轮到此结束，
-下一轮请派一个新鲜子代理独立复测/证伪上面这条 CLAIM，SURVIVES 才可以动 F95 的 `cards.tsv`
-状态；不要直接引用本轮数字就关卡。
+`.loop/`、`cards.tsv` 均未动。本轮 agents=2（均已回收）。
+
+### 心跳 2026-09-30 03:xx（round PID 84644，续，第三个子代理：新鲜证伪 pass 回来了）
+
+**F95 VERDICT: PARTIAL** —— 派了第三个子代理（agent id 内部，不外泄），
+独立重跑（自己的 scratch `/tmp/f95_fals.KK2m/`，没碰 `out_pm` 或前两个子代理留的
+`/tmp/f95_*`），结论拆成两半：
+
+1. **「HEAD 读 0」这一半是真的**：prog 3216/3216 全等（含 `self_hash`/`subgraph_hash`/
+   `op_subgraph_hash`/`offset`/`size`），并且**不依赖任何一侧 analyze_snapshot**——
+   直接对 isolate-instructions 原始字节区间 `[0, 0xB2CA0)` 做 `cmp`，只有 6 字节不同
+   且全在 image header（+0x50..0x61，第一个函数偏移 128 之前），3216 个函数体本身
+   逐字节相同。负控制做了：在 `neg.so` 翻一个真实操作码字节（iso-instr+75076+64，
+   函数 #389 `Uri.parseIPv6Address`），复算后精确报出该函数 `self_hash` 变红、
+   99 个调用者的 subgraph/op_subgraph hash 跟着变红——检测装置本身能变红，
+   不是恒真式。
+2. **但不能拿这个关 F95**，因为卡片自己认定的判据脚本 `f95_self_hash_residual.py`
+   在这份语料上 **rc=1，`EXAMINED 0 of 0`**——分母是 0，不是「非空分母 + 0 差异」；
+   同时它的负控制行报 `NEG CTL 156 words, broke 145`（`thread_map.json` 是在
+   mac 目标上生成的，对现在的 iOS 语料已经过期，套用会把 145 个本来相等的函数
+   搞成误报）。**「158 消失去哪了」没有归因**：F148 revert 实验只排除了它一个
+   commit，F147/F151/F152 都还没被单独测过。
+3. **范围盲区（子代理新指出，此前没人提过）**：`--shorebird` 的 `functions` 数组
+   不覆盖 VM snapshot instructions 本身——我们的 VM instructions 是 78592 字节，
+   他们的是 79936，**相差 −1344 字节**，这也是 iso base 要整体偏移的原因。
+   这一段差异对这条 CLAIM 不可见，也没被任何现有格子量过。
+
+⇒ **F95 保持 `open`，`cards.tsv` 不动。** 按契约：PARTIAL 不关卡，发现写进本节即可。
+
+**STILL OPEN（子代理给出的具体下一步，不是含糊的"待跟进"）**：
+- 单独 revert F147（Thread 布局）重建 `ProductSimIosARM64`，看 prog 是否回到
+  ~158/65-stub；回去了才算把「158 消失」归因到 F147，回不去说明还有第三个未点名的成因。
+- 在 iOS 目标上重新生成 `thread_map.json`（`out_f88` 那份是 mac 目标产物），
+  让 `f95_self_hash_residual.py` 的 NEG CTL 从「broke 145」变成正常读数。
+- VM instructions 的 −1344 字节差异需要新开一张卡（不在 F95 范围内，`functions`
+  数组看不见它），下一轮或操作者决定要不要开。
+
+本轮 agents=3（均已回收，含本次证伪 pass）。`.loop/`、`cards.tsv` 均未动。
+本轮到此结束。下一轮如果要继续 F95，先做上面第一条（单独 revert F147）
+再决定要不要动卡片状态；不要复用前两轮任何 `/tmp/f95_*` 产物。
