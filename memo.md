@@ -17448,3 +17448,41 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 结束——按契约"每轮只做一件事"，本轮完成的是"回收未审的实现提交 +
 证伪 + PARTIAL 记账"，不新开工作、不动队列文件、不执行
 `fix_queue.py --operator-drain`。
+
+### 🔴 「Thread 只能追加」这条前提被推翻：对齐他们的 Thread 布局是 **FEASIBLE**（2026-09-29，Opus 可行性调查，只读）
+
+**为什么重要**：dump_object_pool 的 10664/10700、shorebird 的大部分哈希差、disassemble 的偏移差，都押在「Thread 布局差异是 structural（永不可关）」这条前提上。**它不成立 ⇒ 这些是可关的真缺口（gap），而且是全项目杠杆最大的一处。** 在前提被证伪之前，这几格一律不许按 structural 改判。
+
+**布局**（两侧 DWARF 逐成员比对）：
+- 共有成员 323 个，其中 307 个相对顺序相同；另外 16 个是我们的 Shorebird 块，被挪了位置
+- 只在他们那边有的成员：**1 个**，`exit_safepoint_ignore_unwind_in_progress_entry_point_`，在 0x930，uword。只在我们这边有的：0 个
+- 没有填充差异，也没有哪个字段尺寸不同。类大小 0xf70 对 0xf78，差的 8 字节就是那 1 个成员
+- 台阶表**完全**由他们的 4 个插入块构成：
+  - `resume_interpreter_adjusted_entry_point_` 之后插 2 个（+0x10）
+  - `saved_shadow_call_stack_` 之后插 2 个（+0x20）
+  - `random_` 之后插 12 个（+0x80）
+  - `thread_locals_` 之后插 1 个（+0x88）
+
+**旧文档说「中间插入在构建期就被 CheckOffsets 打死」，原因其实是：**
+- CheckOffsets 是**运行时**检查，在 `runtime/vm/dart.cc:178-270`，FATAL 在 `:256`
+- 之所以在构建期看到它，是因为有 47 个构建步骤会**执行**刚编出来的 gen_snapshot 或 dartvm
+- 解药是重新生成 `runtime_offsets_extracted.h`，而这是**上游的标准流程**：2025 年以来有 38 个提交改过这张表，其中 14 个同时改了 thread.h。例如 `6b72a9c0bcf`（2025-12-03）改了 thread.h 12 行，同时表改了 6770 行
+- 我们用到的 4 个配置只对应表里 32 节中的 4 节（arm64、无压缩指针）。只要在 ReleaseARM64 和 ProductARM64 下各编一次 `offsets_extractor` 和 `offsets_extractor_aotruntime`，不到 100 MB
+- 🔴 **「16 个配置、本机磁盘装不下」对我们实际要用的配置不成立**
+
+**代价**：一旦动了 thread.h，四个配置都要全量重建，估算 40–60 分钟墙钟（没有实测）。另开构建目录大约要 20 GB，现在可用 77 GiB。
+
+**要做的改动**：
+- 把我们的块拆成 4 段，挪到他们的插入点
+- 按他们的顺序重排
+- 补一个占位 uword。它对应的运行时入口上游在 `8085a97a637`（2025-04-07）已经删除；这个提交是我们 HEAD 的祖先，已核
+- 生成代码对这些字段的访问都走 `Thread::*_offset()`，挪位置对它们透明；写死偏移字面量的只有测试
+- 我们的特性串 `shorebird-native-entry-thr-offsets=…` 是**我们自己发明的**，他们没有，本身就是一处差异。对齐之后可以删掉
+
+**我核过的**：
+- 在它的产物上重跑 `run_all.sh`，结果与原输出一致，只有 `df` 那一行不同
+- 0xf70/0xf78、唯一的 0x930 成员、`dart.cc:256`、两个上游提交（祖先关系与 stat）都亲手复核过
+
+**最弱的一点**：「只替换 4 节就等价于上游全量重生成」没有实测。能定案的实验是：在另开的 out 目录里编一个 `offsets_extractor`（不碰 thread.h、不碰钉住的构建），把输出和表里对应那一节逐项 diff，应当为 0。几分钟就能做完。
+
+产物在 `$TMPDIR/thread_layout_feasibility/`（`/var/folders/.../T/`），**尚未入库**。
