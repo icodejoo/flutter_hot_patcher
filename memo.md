@@ -18099,4 +18099,60 @@ pass 11 SURVIVES 已经存在、已经写进本文件、已经被后续轮次引
 「上一轮关卡未经证伪」范围内）。本轮涉及树：仅 `flutter_hot_patcher`（本文件 + `.loop/`
 状态文件），未动 `fhp-research`、未动 SDK 树、未动引擎树。本轮 agents=0（纯核对与记账，
 无新 CLAIM 需要证伪，同 F81/72842 先例）。
+本轮到此结束。2026-09-30 01:13:35 heartbeat round PID 69003 -- starting
+
+
+## 心跳 2026-09-30（round PID 69003，ralph.sh 无人值守）：F148 判据②仪器缺陷已修（第 45 种缺陷），修补丁自身未审
+
+确认 `.loop/round.lock` PID 就是本轮自己（69003），读完 `docs/LOOP_CONTRACT.md` 全文。心跳已写。
+检查「built 卡欠证伪 pass」三张（F111 F121 F49）：核对最近数轮心跳（17802/17995/18008 行）
+均已确认它们处于操作者拍板/挂起池状态，本轮不重派。`.loop/UNREVIEWED_FIX.candidates` 与
+`.operator_drains` 均为空——F113 之后队列出队权在操作者手上，本轮未碰队列文件。
+
+规则 0 SDK 本体优先 ⇒ 承接上一轮（PID 96314，18029-18059 行）F148 的明确后续步骤①：
+`evidence_disassemble_residual.sh:1152-1153` 无条件覆盖 `offset_verdict[o]`，导致判据②
+（boundary-object 计数）在 theirs 真实顺序回归时也报不了红——这是第 45 种仪器缺陷。
+`fhp-research` 树核对干净（仅已知未跟踪的 `.serena/`、`test_work/`），派一个新鲜 Opus
+子代理（`general-purpose`，agent `a288cfdb10722f0f7`）实现修复并自行跑负控制，结论：
+
+**修复已落地，提交 `54b56443`**（`~/Documents/fhp-research`，仅改
+`evidence_disassemble_residual.sh`）。选择方案 (a)：不再无条件用 loose-walk-only 的
+`vm_layout[o]` 覆盖掉早先算出的、更有意义的 `offset_verdict[o]`——当早先的链式判据已经是
+`predecessor_not_adjacent_ours`（theirs 与 ours 的前驱不一致，即真实顺序断裂的直接信号）时
+跳过覆盖。
+
+⚠️ **子代理修正了我在派发提示词里给的负控制配方**：我写的「只交换 fixture 里两个相邻
+stub 的名字」在旧代码上就已经报红（rc=3），因为名字换了但 size 没跟着换，会被别的检查
+（size 不匹配）挡住，根本没走到判据②这条路径——不是判据②被验证了，是另一条判据先报警。
+子代理自己找到了真正命中的配方：**名字和 offset 一起换**（保持各自 size 不变），此时：
+- **修复前**：`offset_breaks={'layout_pending': 187}`，`attribution=ok`，rc=1（与真实数据
+  同一个 rc，判据②没有对这处人为构造的顺序错乱做出任何反应——负控制坐实）。
+- **修复后**：`offset_breaks={'layout_pending': 184, 'predecessor_not_adjacent_ours': 3}`，
+  `attribution=BROKEN`，多印一行 `FAIL: ATTRIBUTION BROKEN ... unexplained_offset_diff: 6`，
+  rc=3——判据②现在真的会因为顺序回归而报红。另一处交换（region 最前两个 stub）同样触发
+  `predecessor_not_adjacent_ours: 2`，rc=3。
+- **真实 3 个 fixture 回归检查**：`cmp` 逐字节相同，`hello`/`base_dd`/`prog` 三者修复前后
+  均是 `offset_breaks={'layout_pending': 187}`、`order_dependent_stubs 0`、`attribution=ok`、
+  `UNEXPLAINED 1128`、rc=1，未变。
+
+`verify_all.sh --self-test`：不带守卫是 `rc=2 BLOCKED`（`ReleaseARM64` 落后源码树 775 步，
+与本文件已记录的结构性陈旧一致）；`SKIP_STALENESS_GUARD=1` 下 41 ran / 13 failed / 1 skipped /
+5 blocked，`evidence_disassemble_residual.sh` 是那 13 个失败之一，但**修复前后同样失败、
+同样输出**——子代理未跑修复前的完整 `verify_all.sh` 基线，故不能断言另外 12 个失败与
+blocked 集合是否本来就存在；子代理明确声明这一限制，未夸大。
+
+**已知残留缺口（子代理如实列出，未修）**：
+① 若某 stub 的 offset 差恰好为 0，仍判 `zero`，不计入 boundary object；
+② region 第一个 stub 的 `no_predecessor` 仍会被覆盖（reorder 只能通过下一个 stub 间接体现）；
+③ `check_order.py`（真正 order-aware 的独立检查）仍未接入 `verify_all.sh`（memo 里 F148
+后续步骤②，未做）；
+④ 循环未暂停（无 `.loop/PAUSE`）即直接提交；子代理在 `/tmp` 下留了三份验证用的临时副本，
+被安全 hook 拦下未能清理，不影响任何受版本控制路径。
+
+⚠️ **本修补丁自己尚未过独立证伪 pass**——按契约五之四「修补丁不继承被修对象的审查结论」，
+`54b56443` 是新的未审工作，不标记 F148 状态变化（`cards.tsv` 未动，仍是 `built`）。
+
+本轮涉及树：`fhp-research`（写，1 次提交 `54b56443`）；本仓 `memo.md`（写，本节）；
+未动 SDK 树、未动引擎树。本轮 agents=1（一次新鲜 Opus 派发，做修复，非证伪 pass——
+按契约五之四步骤 1，修复本身是本轮产出，证伪留给下一轮新鲜子代理）。
 本轮到此结束。
