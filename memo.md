@@ -17651,3 +17651,15 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 - dump_blobs 全格的严格残差估计从 593192 降到约 239859。剩下的主要是 R3，等 F149（agy 正在做）。
 
 - [ ] **F151：他们的 Class cluster 在 alloc 段多写一个 2 字节字段（值 = `num_cids−1`），我们的序列化器不写**（`open`，2026-09-29，F150 发现）。这是可以关的序列化缺口，解释 R2 长度差里的那 +2 字节。
+
+### 闸门修补落地（研究树 `ba01a07d`，2026-09-29）：`grep -F` 子串匹配让 3 条真实证据行一直是假绿
+
+- 🔴 **structural 闸门的 locus 检查是子串匹配**（`structural_evidence_check.sh:109,116`）。真实的 `structural_evidence.tsv` 里，disassemble、dump_blobs、compute_dd 三个 thread-offset 脚本打印的是 `LOCUS_OK Thread+0x678+0x678`，**只是靠子串匹配才过关**；四个 offset 脚本对 `Thread+0x999` 也照样回 `LOCUS_OK`。
+  - 现在的规则：`verify_cmd` 里不许有 shell 元字符（包括 `#`），只能跑本目录下的脚本，locus 必须是命令里完整的一个词，`LOCUS_OK <key>` 必须是整 token；四个 offset 脚本只接受实测出来的那个 `Thread+0x<hex>`。
+  - 真实表的结果改前改后都是 13 ok / 0，逐字节相同。**读数一样，但以前那个绿是不承重的**：这是第 45 种仪器缺陷，判据是在结论不成立时仍然给绿。
+- **F146**：screen D 的盲点确认存在，已修，10/0。原来的 `f146_check.sh` 根本红不了（永远 4 passed）。
+- **F65a、F65d 复现不出来**：早在 09-16、09-17 就修好了，卡片是拆出来时就已经过期。
+- 顺带挡掉的环境变量类攻击：导出的 shell 函数覆盖 `[`/`exit`/`printf`，`PYTHONPATH`/`PYTHONHOME`，以及 `BASH_ENV`（这个在脚本内部只能部分挡住）。
+  **还开着的**：PATH 里放一个假的 `python3`，能让一条下毒的行变绿。这要由调用方钉死 PATH 才能挡；`cards_check.sh` 也有同样可被覆盖的守卫。
+- 我核过：干净拷贝上 13/0、3/0、10/0；我自己的 fixture 里，正确的 locus 通过，非成员前缀和藏在注释里的 locus 都被拒。
+- ⏸️ **待操作者拍板**：F146 卡的「我们的集合更小就判红」，和 nc_f84 case8 钉住的「只是去重不算 gap」互相矛盾。目前的处理是：纯去重造成的缺失只打印提示，不判红。
