@@ -11981,7 +11981,7 @@ F117 → F118(A)(B)(C)，每一轮堵一种措辞，下一种立刻现形）。
 
 ⇒ **F129 关闭**。F68 仍然 `open`（PARTIAL，等改写结论后再关，见上方 09-25 记录），现在可以引用 F129 这次的因果链复现作为 F68 机制主张的独立佐证。
 
-- [ ] **F130：新修补丁被已有候选条目吞掉（F49 证伪 E7，父方已复现）**（`open`，2026-09-25）
+- [x] **F130：新修补丁被已有候选条目吞掉（F49 证伪 E7，父方已复现）**（`closed`，2026-09-25 立，2026-09-30 pass 11 SURVIVES 后关闭，见文末 2026-09-30 心跳）
 - [ ] **F131：同一轮自派子代理的绿回复能让新修补丁免于入队（F49 证伪 E6，需拍板）**（`open`，2026-09-25，deps=F113）
 
 **F49 证伪 PARTIAL → 保持 `built`**：五个变异今天仍能让守卫变红，但 F113 带进来一处新逃逸 E7（拆 F130），同轮自审仍能免入队 E6（拆 F131，需拍板）；E1–E5 旧逃逸仍开着，其中 E2/E3/E5 09-16 就已登记。
@@ -17972,3 +17972,31 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
   供下一轮或操作者决定是否值得单独开卡。
 - **F130 状态：closed**（`fix_queue.py --self-test` 147/147，pass 11 SURVIVES，STILL OPEN 已原文抄录于上）。
 - 本轮到此结束。
+
+## 心跳 2026-09-30（round PID 72842，ralph.sh 无人值守）：F130 记账遗漏补记（同 F81 先例）
+
+确认 `.loop/round.lock` PID 就是本轮自己（72842），读完 `docs/LOOP_CONTRACT.md` 全文。三棵树
+`git status --porcelain` 均无异常脏改。核对「built 卡欠证伪 pass」四张（F111 F121 F130 F49）：
+`cards_check.sh`（`fhp-research` 树）报 `memo.md and cards.tsv disagree on the open/closed set`——
+**F130 在 memo.md 里已被上一轮（PID 45304）写成 `closed`（pass 11 SURVIVES，17970-17973 行），
+但 `cards.tsv`（`fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`）那一行的状态列从未被
+同一个提交改过，仍停在 `built`**——与 F81 那次「记账遗漏补记」（15391-15410 行）同一种缺陷：
+判决已经做出，只是没有落到该落的那份文件里。核实判决内容本身：pass 11 的 STILL OPEN 与
+`fix_queue.py --self-test` 147/147 读数均已在本文件上一节原文抄录，无需重新派证伪。
+
+**修复（本仓 + fhp-research，各 1 行）**：`cards.tsv` 第 F130 行状态列 `built → closed`
+（`python3` 精确匹配 `F130\tbuilt\t` 前缀改写，避免误伤同名子串或其余列内容）；`memo.md`
+11984 行 `- [ ] F130` → `- [x] F130`，标注关闭依据指回本节。`cards_check.sh` 复核：
+`open set agrees (52 cards)`、`closed set agrees (72 cards)`，两处不一致全部消失，仅剩
+既有的、跨 154 张卡的系统性 `commits-not-sha` 格式检查失败（本轮未碰、非本轮引入，历史已知）。
+
+F111/F121/F49 三张 `built` 卡：`cards.tsv` 状态列与 memo 判决一致（均仍 `built`，无记账缺口），
+且 2026-09-30 更早一次心跳（17802 行）已确认「均已被此前轮次处理完」（F111 操作者拍板不再同层
+再修；F121/F130 PARTIAL 已入排队/挂起池；F49 挂起池未到重试窗口）——本轮不重派，未发现新的
+待处理状态。`.loop/UNREVIEWED_FIX` 队列内容与本轮起始注入的清单一致，未见新鲜到需要立即处理的项
+（最新的 F144/F151/F152 相关记账已被更近的轮次处理，队列本身出队权在操作者手上，本轮未碰）。
+
+本轮 agents=0（纯记账核对与订正，同 F81/17416 先例，无新 CLAIM 需要证伪）。改动文件：
+`fhp-research` 树 `spikes/shorebird_linkinfo_oracle/cards.tsv`（提交 `7f5a44fe`）；本仓 `memo.md`
+（本节）。未动 SDK 树、未动引擎树。
+本轮到此结束。
