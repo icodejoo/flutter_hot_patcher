@@ -17863,7 +17863,7 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
 本轮 agents=2（两次新鲜 Opus 派发）。契约五之四四步已完整走完：做完→证伪 PARTIAL→当场修→重跑 SURVIVES。
 本轮到此结束。
 
-### F130（fix_queue.py 同轮自审）：pass 8 PARTIAL → 修复 `6e59f649` → pass 9 已派发（round PID 81367）
+### F130（fix_queue.py 同轮自审）：pass 8 PARTIAL → 修复 `6e59f649` → pass 9 PARTIAL → 修复 `5ab1805b` → pass 10 待派（round PID 81367）
 
 - **2026-09-30 FALSIFICATION PASS（Opus，general-purpose，19 次调用）VERDICT: PARTIAL**——针对已在队列里的行（earlier-round row）：
   `requeue_cids` 只在 `neg & fix`（本轮既有红又有新修补丁）时触发；本轮若**只有绿判决、完全没有红行**，且这一轮又落了一个新的修补丁提交，
@@ -17884,3 +17884,31 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
 - 本轮 agents=2（两次新鲜 Opus 派发：pass 8 找破绽、pass 9 审修补丁）。
 - 契约五之四四步：做完（读卡+定位）→证伪（pass 8 PARTIAL）→当场修（`6e59f649`）→重跑证伪（pass 9，已派发、结果未到）。
   第四步尚未完成，本轮到此结束，等待 pass 9 的通知。
+
+- **pass 9 通知回收（Opus，general-purpose）VERDICT: PARTIAL**——`6e59f649` 本身独立复现成立
+  （`effective_pos` 的 `cid not in fix` 守卫、`unsupported()` 的准确文案、143 个探针里恰好 1 个受负控制影响，均实测复核通过），
+  但指出它只是**把逃逸推迟了一轮**：`6e59f649` 只改了判定（把绿判决挡在 held 而非 candidate），
+  从未把新落地的修补丁 sha 写回队列行的 `reason` 字段——只有 `requeue_cids`（本轮同时有红行）才会把 `"; new fix <sha>"`
+  追加进 `reason`；本轮只有绿、没有红时走的是 `elif cid in claimed:` 分支（"RED ... held"），只在 `actions` 日志里报一次，
+  磁盘上的 `reason` 原样不变。于是**下一轮**（这一轮没有新提交、只有同一句绿色回复重复一遍）：`cid not in fix`
+  （因为 `fix` 只统计"这一轮"的提交），`effective_pos` 变回 `True`，行被判定为候选——而 `reason` 里仍然只写着旧的 `abc1234`，
+  从未提到真正需要被复核的 `fff0001`。复核证据：两轮 CLI 回放（round 1：新提交 `fff0001` + 纯绿回复 → held、`reason` 不变；
+  round 2：无新提交 + 同一句绿回复 → candidate、`--render` 仍只提 `abc1234`）。
+  STILL OPEN（原文抄录）：无——修复本身的逻辑站得住，缺口是"held 分支从不落盘"这一个具体动作，范围明确。
+- **修复 `5ab1805b`**（同轮，本仓）：把 `requeue_cids` 循环里内联的 sha 差分逻辑（`old_pref`/`old_exact`/`_new_sha`）
+  抽成可复用函数 `unrecorded_fix_shas(old_reason, cid)`；在 `requeue_cids` 循环里改调这个函数（行为不变）；
+  新增一段"record-only"循环，对 `(fix - neg) & before_ids - requeued` 里的行（本轮有新修补丁提交、
+  但没有红判决、且不是本轮新入队的行），同样把 `unrecorded_fix_shas()` 算出的新 sha 追加进 `reason`
+  （`"; new fix %s"`，与 requeue 路径同一模板），只是不改变 verdict 措辞（因为没有红判决可引用）。
+  新增自测探针 `_f130_record_only_two_rounds`：两轮回放，round 1 断言 `reason` 含 `fff0001` 且不是 candidate；
+  round 2（无新提交、同一句绿回复）断言**是** candidate（这是对的——`fff0001` 已经跨过一个轮次边界，
+  绿色回复现在审的是历史提交，不是同轮提交），且 `reason` 仍然含 `fff0001`（这是 pass 9 要补的那个缺口）。
+  调试过程中发现探针最初误踩了一个已知的自测环境坑：`FHP_FQ_SELFTEST_AUTO_DRAIN` 会被本文件别处的
+  F113 自动清仓探针留在 `os.environ` 里、被 `run_cli` 的子进程继承，导致 round 2 的 `effective_pos=True`
+  命中自动清仓而不是候选标记；照抄 `_f130_green_same_round` 已有的 pop/restore 惯用法后探针稳定通过。
+  自测 144/0；负控制：整段撤回后 144 个用例里**恰好** `_f130_record_only_two_rounds` 一个变红，其余 143 个不受影响；
+  `test_fix_gate.sh` 0 failures。
+- 修补丁本身按契约五之四**还没被审过**：本轮到此结束，下一轮需派第三个新鲜子代理专门审 `5ab1805b`（不是审卡片原文，
+  也不是审 `6e59f649`）。F130 继续保持 `built`，不标 `[x]`。
+- 本轮涉及树：flutter_hot_patcher（写，1 次提交 `5ab1805b`）；fhp-research（未动）；未动 SDK 树、未动引擎树。
+- 契约五之四四步：pass 9 判 PARTIAL→当场修（`5ab1805b`）→尚需再派一轮新鲜证伪（pass 10）。第四步未完成，本轮到此结束。
