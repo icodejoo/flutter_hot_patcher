@@ -17576,3 +17576,27 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
   **严格读数**（R3 全部、尾部、C5 都算未解释）：hello/base_dd 已解释 447062、未解释 **168239**；prog 已解释 1071909、未解释 **256714**；合计 **EXAMINED 2559225 UNEXPLAINED 593192**。
 - **不落地**。R3 要改成真算：按 `--disassemble` 的 stub 表逐个 stub 对齐，再逐字节比对。这可以复用 disassemble 那格刚落地的 VM stub 布局推演。尾部和 C5 要么给出机械的检查，要么如实算作未解释。
 - 🔑 **判别法**：凡是残差脚本里出现一个跟 `diff_units` 分母同量级的**字面量**，先怀疑它是抄来的读数、不是算出来的。F61 那次是 `units=6408`，这次是 `58627`。
+
+### 开卡 F148 / F149 / F150（2026-09-29）：把剩下的 unknown 拆成有判据的 open 卡
+
+矩阵格子的分类不动，每格剩下、叫得出名字的缺口各开一张卡：
+
+| 格子 | 剩余缺口 | 卡 |
+|---|---|---|
+| dump_object_pool | Thread 布局 10664 | F147（已开）；另有 36 个 unit 是真正的 per-process，不开卡 |
+| shorebird | Thread 布局 19092；snapshot_data 24 | F147；snapshot_data 等 subagent 回来再定 |
+| disassemble | 1128，全部来自 FFI 共享体；stub 顺序 | F138（已开，已补记它是唯一阻塞点）；F148 |
+| dump_blobs | R3 是字面量；R1/R2 堆图约 26.5 万 | F149；F150 |
+
+- [ ] **F148：SDK 的 VM stub 顺序跟他们不一致**（`open`，2026-09-29）
+  - 他们把 14 个模拟器 stub 放在列表末尾；另外 `724093dd006` 把 `GetCStackPointer` 放到了 `JumpToFrame` 之后（`stub_code_list.h:32-33`）。这是**可以关的 gap**。
+  - 09-28 在 SDK 工作树里发现过一份**未提交**的尝试，做的正是这件事，已存成 `~/dart-3122/stub_code_list_reorder_20260928.patch`，先审它再动手。
+  - 要和 F147 放在**同一次**重建里做。
+- [ ] **F149：dump_blobs 的 R3 残差要按 stub 逐个真算**（`open`，2026-09-29，从 F103 拆出）
+  - agy 那份脚本里，R3 的已解释量是字面量（`blobs_residual.py:227-229`）；我的负控制改了 200 个字节，一个都没被抓到。
+  - 严格读数是 UNEXPLAINED 593192。
+  - 做法：复用 `93d6664d` 里的 VM stub 布局推演。
+- [ ] **F150：dump_blobs R1/R2 的 snap 堆图块，要找一种由格式本身给出的对齐方式**（`open`，2026-09-29，从 F103 拆出，依赖 F149）
+  - 约 26.5 万个 unit；禁止用滑动窗口。
+  - 要么按 Deserializer 的 cluster 分帧解码，按 cluster 归因；要么给出一份实测、注明日期的「为什么对不齐」。
+  - R1/R2 我们短的那 50 B 和 48 B，两条路都必须说清楚原因。
