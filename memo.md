@@ -18352,3 +18352,95 @@ F37 卡片状态不变（保持 `open`，本轮未编辑 `cards.tsv`，留给下
 携带版本号"需要先侦察再动手，值得独立成为下一轮的一件事，不要在本轮压缩着猜）。
 下一轮请挑一个独立任务（规则 0：SDK 本体优先），若继续 F37 先读这一节而不是重复
 跑同一条已经证明不够的修复命令。
+
+### 心跳 2026-09-30 03:47（round PID 9475，ralph.sh 无人值守）：续 F37，定位 gen_kernel_aot.dart.snapshot 的真实构建目标
+
+本轮确认自己是 round.lock 持有者（PID 9475）。核对三张欠证伪 pass 的 built 卡（F111 F121 F49）：
+均已在挂起池（F111 上上轮 SS6 移入，F121/F49 更早判定不重派），本轮无卡可派证伪 pass。
+沿上一心跳（round PID 83588）的结论继续 F37：`copy_gen_kernel_snapshot` 已证明不够，
+真正携带版本号的产物尚未定位。派发侦察型子代理，只读+单一 ninja 目标重建，不动被钉住产物。
+
+**派发**（general-purpose 子代理，opus，agentId `ab8b07f682347499c`，异步，尚未回收）：
+自包含指令：① 记录 `~/dart-3122/sdk` HEAD 与 clean 状态、禁止一切 git 写操作；
+② 记录被钉住产物（`gen_snapshot`/`dartaotruntime`）sha256 前后对照；
+③ 用 `ninja -t query` 定位 `gen/gen_kernel_aot.dart.snapshot` 与 `gen/vm_platform.dill`
+真正的生产目标（而不是猜测 `copy_gen_kernel_snapshot` 之外的另一个名字）；
+④ 先用 `ninja -n` 探步数，几百步以内才真正跑，几千步就停手汇报、不展开
+（按契约 1.5 的"先侦察再动手"精神，不是假设装不进）；⑤ 重跑
+`dd_runtime_check.sh`，报 rc 与版本串；⑥ 不碰 `.loop/`、`cards.tsv`、不跑
+`verify_all.sh`、不改源码。严格返回格式（≤80 行）。
+
+结果尚未回收——本轮先记录派发依据后结束。按契约五之四，即便这一步成功，
+也只是"做完一件事"，还差一次新鲜子代理的证伪 pass 才能动 F37/F108/F121 的卡片状态；
+本节不预判结果。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理只读构建，未提交）；`fhp-research`（子代理只读跑脚本，
+未提交）；本仓 `memo.md`（写，本节+上一心跳）；未动 `.loop/` 队列文件。
+本轮 agents=1（尚未回收）。本轮到此结束，下一轮请先看这次派发是否已回收，
+再决定是续写结论还是挑新任务（规则 0：SDK 本体优先）。
+
+### 心跳 2026-09-30 续（round PID 9475）：F37 派发回收——版本不匹配的病灶反了，是被钉住的 `dartaotruntime` 落后，不是快照
+
+子代理 `ab8b07f682347499c`（opus，7 次调用）回收，**STATUS: blocked**（诚实负结果，非失败）。
+
+**结论与此前两轮的假设相反**：不是 `gen_kernel_aot.dart.snapshot` 落后于新鲜的 `dartaotruntime`，
+而是**被别的卡钉住的 `dartaotruntime`/`gen_snapshot` 本身已经落后于当前源码树**：
+- `gen/runtime/version.cc`（当前源码，mtime 09-30 02:37）与 `gen_snapshot_product`
+  （mtime 09-30 02:38）均携带版本串 `7a10cfaa...`——这正是 `dd_runtime_check.sh` 报的
+  "found" 那一串，说明**快照是新的、对的**。
+- 被钉住的 `dartaotruntime`（mtime 09-29 15:35）与 `gen_snapshot`（同一 mtime）携带
+  `dbebe6fb...`——正是脚本报的 "expected" 那一串，且 `ninja -n dartaotruntime`
+  报 **162 步待办**，`ninja -n gen_snapshot` 报 **235 步待办**。
+- `ninja -d explain` 指认原因：`libdart_aotruntime.version.o` 早于
+  `gen/runtime/version.cc`（09-30 02:37 才改），多个目标还早于 `runtime/vm/isolate.h`
+  （mtime 09-29 21:59，对应提交 `1b72da8510a`，F152"把 `Isolate::simulator_` 挪到
+  `+0x20`"，09-29 22:07 落地——**晚于两个被钉住二进制的构建时间**）。
+- ⇒ **`copy_gen_kernel_snapshot` 此前两轮"没修好"是因为它本来就不需要修**：
+  快照从未过期，过期的是拿它做对照的运行时本身。
+
+**为什么本轮没有直接去跑 `ninja -C $BUILD dartaotruntime`**：子代理按派发指令的边界停手——
+那两个 sha256（`ad9df05e…`/`8e4c0e9c…`）是**别的卡钉住的产物**，重建会让它们变成
+`de660deeae5`（当前 HEAD，含 F152）状态下的新哈希，**任何引用旧哈希做"未被扰动"证据的
+卡片会立即读到不一致**。这是一个需要操作者拍板的范围问题，不是这次派发能单方面决定的——
+沿用本项目一贯做法（F126/F127/F128/F131 同类"需要操作者决定钉值口径"的先例）。
+
+**留给操作者的问题**：是否重钉 `dartaotruntime`/`gen_snapshot` 到 `de660deeae5`
+（含 F152 的 `Isolate::simulator_` 偏移改动）？若是，162+235 步都在契约 1.5 的
+"几百步以内可直接跑"范围内，且会顺带让 F121/F111 之前提到的 `dd_runtime_check.sh
+BLOCKED` 状态解除。
+
+F37 卡片状态本轮不变（未编辑 `cards.tsv`，这是侦察结果不是卡片判定）。
+本轮涉及树：`~/dart-3122/sdk`（子代理只读，未提交，git status 前后均干净）；
+`fhp-research`（子代理只读跑脚本，未提交）；本仓 `memo.md`（写，本节）；
+未动 `.loop/` 队列文件、未动 `cards.tsv`。本轮 agents=1（已回收）。
+本轮到此结束，下一轮请挑一个独立任务（规则 0：SDK 本体优先）；若要继续 F37，
+先等操作者对"是否重钉 dartaotruntime/gen_snapshot"表态，不要自行决定重钉。
+
+### 心跳 2026-09-30 02:53（round PID 34296）：跳过 F37（等操作者表态）与三张 built 卡（均已在挂起池/同型 whack-a-mole，未到第 5 轮重试点），转 F95
+
+本轮确认自己是 round.lock 持有者（PID 34296，与 ralph.sh 同一循环，非竞争写方）。
+核对 memo.md 第一项未完成任务 F37：上一轮已诊断出病灶（被钉住的 `dartaotruntime`/`gen_snapshot`
+落后于含 F152 的当前源码树），但明确留给操作者拍板是否重钉，本轮不自行决定。
+三张欠证伪 pass 的 built 卡（F111/F121/F49）逐一核对 cards.tsv：三张均已被此前轮次记录为
+连续同型 whack-a-mole（F111/F49 已正式移入挂起池「第 5 轮后再重试」；F121 2026-09-29 的
+triage pass 记为「stays built, in pool ... not warrant rebuild-and-repass cycle round」），
+本轮不是第 5 轮，不重派。改选 F95（`open`，SDK 本体，F55 拆出的 self_hash 824-unit 桶 locus，
+规则 0 优先级最高的可执行开放卡）：card 尾部 2026-09-29 TRIAGE 记「RESOLVED F147」且称
+同源循环论证已被 source-side relayout 移除，但未见一次干净的新鲜证伪 pass 确认可关卡。
+派发一个新鲜子代理核实 F95 当前是否满足关卡判据（契约五之三：UNEXPLAINED 数字 + 负控制），
+若满足则跑 tools/loop/prompts/falsify.md 证伪 pass 并按其判决决定是否可标 [x]；
+若不满足，如实记录到卡片，不猜测、不关卡。
+
+**回收（round PID 34296）**：新鲜子代理（opus，30 次调用，agentId `a8060f61b2d6400b3`）跑证伪 pass，
+**`F95 VERDICT: PARTIAL`**——2026-09-29 TRIAGE 的数值主张（394→0 differing functions）独立复现成立
+（1380/1380/3216 函数，self_hash/size/subgraph_hash 三项差异均为 0，1170 个不同 self_hash 值，非退化常量），
+但「由 Thread 重排解释」这一归因**没有任何证据行支撑**：`f95_self_hash_residual.py` 在空桶上现在
+`rc=1`（`EXAMINED 0 of 0`，脚本自己打印"the rule has no power on this corpus"）；`--perturb noop`
+与未扰动输出逐字节相同（没有负控制）；且 F147（Thread 布局）/F148（VM stub 重排）/F151 落在同一次
+重建窗口里，pre-fix 的 158 个 prog 差异函数中 65 个是 `[Stub]`，没有任何测量把 Thread 重排的贡献
+和 F148 的 stub 重排分开。已提交到 `fhp-research` 树：`8079aed0`（cards.tsv F95 行追加此发现）。
+F95 保持 `open`，不关卡。本轮涉及树：`fhp-research`（写，`8079aed0`）；`~/dart-3122/sdk`（子代理只读，
+未提交）；本仓 `memo.md`（写，本节）。未动 `.loop/` 队列文件、未动本仓 `cards.tsv`。本轮 agents=1（已回收）。
+本轮到此结束，下一轮请挑一个独立任务（规则 0：SDK 本体优先）；F95 若要继续，下一步是
+Thread-only revert+rebuild 把 F147 与 F148/F151 的贡献分开，或对 pre-fix 158/118/118 集合做
+逐函数 DWARF 偏移归因，并换一版能在这个空桶上仍能报红的 `f95_self_hash_residual.py`。
