@@ -17737,3 +17737,7 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
   - field_table ×6 由 structural 改判 unknown：算法缺口，F128。
   - dump_object_pool ×3 由 unknown 改判 structural：证据已补齐，F101。
 - 🔄 **循环已按操作者指令重开（18:3x）**：开之前清出约 8G 磁盘（30→38G，门槛 25G），PAUSE 已备份到 scratchpad。
+
+- 2026-09-29T18:47(round PID 75304)心跳：锁定 built 卡 F130 的修补丁 d26cac5b（enqueue_cids 移除同轮绿色豁免）欠独立敌意证伪 pass；已派新鲜 Opus 子代理执行 tools/loop/prompts/falsify.md 七项攻击（agent a7e16fcbef50f360b），等待结果。
+- 2026-09-29T（round PID 75304）**F130 修补丁 VERDICT: PARTIAL (fix)**（Opus，39 次调用，研究树 `b23ebeb2`）——代码本身独立复现为对：在 `/tmp` 副本上把 `enqueue_cids`/`requeue_cids` 的 `- reviewed` 减法加回去，`--self-test` 从 141/0 变 141/4，且四个红全是同轮自审的目标探针，`tools/loop/tests/test_fix_gate.sh`（独立、从 `run_round.sh` 原文抽取的接线测试）在同一变异上同样命中；把本卡真实的混杂中英文判决原文喂给 `scan()`，同轮绿色 pass 仍被正确判定入队，不是只对干净合成夹具有效。**唯一破绽**：`d26cac5b` commit message 里引用的「M1 mutation reddens exactly p8」是**张冠李戴**——`p8` 实际是同一提交里捆绑的 **F140**（stdio UnicodeEncodeError 修复）的探针，不是 F130/F131 的证据；已在 `cards.tsv` F130 行订正并追加 `d26cac5b` 到 fix_shas，commit `b23ebeb2`。**F130 仍是 `built`，未关闭**——判据是 PARTIAL 不是 SURVIVES；本轮末尾无第二次派发，不满足两档豁免的任一档，`d26cac5b` 仍需要一次干净的 SURVIVES 才能出队。
+  - 本轮结束：一件事（派 pass）+ 它的审查结论（PARTIAL，已修正证据引用）。未做代码改动（唯一"缺陷"是文档级引用错误，非功能缺陷）。
