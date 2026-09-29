@@ -2536,6 +2536,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     before_ids = {r[0] for r in before_rows}
 
     requeued = set()
+    recorded = set()
     if allow_enqueue:
         # F130 pass 5: a same-round green pass does not exempt a NEW fix
         # sha -- nothing binds the pass to that commit, so the requeue (and
@@ -2618,8 +2619,20 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 actions.append(
                     "note %s -- new fix %s recorded (no red verdict this "
                     "round; row held, not requeued)" % (cid, shas))
+                recorded.add(cid)
 
-    if requeued:
+    # F130 pass 10 (falsification on 5ab1805b, VERDICT: PARTIAL): the
+    # record-only step above writes the new sha into `reason`, but a stale
+    # `.candidates` mark from an EARLIER round's green pass on the OLD fix
+    # survived untouched -- only `requeued` ids were ever swept from that
+    # file. So --render kept telling the operator "already green at <ts>,
+    # drain it, don't re-dispatch" on the very same line that now also read
+    # "; new fix <sha>", and `candidates()` kept returning the row as
+    # already-reviewed. A same-round fix with no red verdict invalidates the
+    # old mark exactly like a requeue does -- the mark was never about this
+    # commit either way.
+    stale_candidate_marks = requeued | recorded
+    if stale_candidate_marks:
         # F130 third pass (d): settle() printed "candidate X ... it stays
         # queued until the operator drains it" before the requeue was
         # decided, so rounds.log told the operator to drain the very row
@@ -2627,10 +2640,10 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # pass was about the OLD fix; for a requeued id the hint is withdrawn.
         actions[:] = [a for a in actions
                       if not any(a.startswith("candidate %s " % c)
-                                 for c in requeued)]
+                                 for c in stale_candidate_marks)]
         # F130 pass 4: a green pass read before the new fix is about the OLD
         # fix. Hiding it by timestamp alone left a same-minute mark standing,
-        # so the requeued ids' lines are removed from the file itself.
+        # so the stale ids' lines are removed from the file itself.
         cpath = queue_path + ".candidates"
         # F140 fourth pass, flaw 2: this was a strict UTF-8 read, and a
         # UnicodeDecodeError is not an OSError -- one stray byte in the
@@ -2645,7 +2658,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             clines = None
         if clines is not None:
             keep = [l for l in clines
-                    if (l.split("\t") + [""])[1] not in requeued]
+                    if (l.split("\t") + [""])[1] not in stale_candidate_marks]
             if len(keep) != len(clines):
                 try:
                     with open_regular(cpath, "w", encoding="utf-8",
@@ -2655,7 +2668,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                     actions.append(
                         "RED could not invalidate the green-pass mark for %s "
                         "(%s) -- --render may still say not to re-dispatch"
-                        % (" ".join(sorted(requeued)), e))
+                        % (" ".join(sorted(stale_candidate_marks)), e))
 
     # F130/F131, operator decision 2026-09-29: a green pass in the SAME round
     # is not review of a fix committed in that round, on either path. The
@@ -4403,6 +4416,52 @@ def self_test():
                      "round2(rc=%s ok=%s row=%r cand=%r)"
                      % (rc1, round1_ok, row1, cand1,
                         rc2, round2_ok, row2, cand2))
+
+    @probe("F130 pass 10 (falsification on 5ab1805b, VERDICT: PARTIAL): a "
+           "STALE .candidates mark left by an EARLIER round's green pass on "
+           "the OLD fix must be invalidated by a record-only round the same "
+           "way a requeue already invalidates it -- otherwise --render still "
+           "tells the operator to drain a row whose reason just grew an "
+           "unreviewed sha")
+    def _f130_record_only_clears_stale_mark():
+        # Round 0: a green pass on the OLD fix writes a genuine candidate
+        # mark (the .candidates file), exactly as F113 intends.
+        d = tempfile.mkdtemp(prefix="fq_f130staleclear.")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after FALSIFIED verdict; fix commit(s) abc1234; "
+                   "no pass on the fix")
+        # Production semantics (F113): rounds never auto-drain -- see the
+        # same pop/restore idiom in _f130_record_only_two_rounds above.
+        saved0 = os.environ.pop("FHP_FQ_SELFTEST_AUTO_DRAIN", None)
+        try:
+            rc0, out0, _ = run_cli(
+                d, [old_row], memo=["F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+                subjects=[], agents=1, cards={"F77"},
+                replies=[("t0", "VERDICT: SURVIVES for F77 (fix)")])
+        finally:
+            if saved0 is not None:
+                os.environ["FHP_FQ_SELFTEST_AUTO_DRAIN"] = saved0
+        cand0 = candidates(os.path.join(d, "queue"))
+        q0 = read_queue(os.path.join(d, "queue"))
+
+        # Round 1: fff0001 lands, no red verdict at all -- the record-only
+        # path (not requeue, since there is no red line). Before pass 10 the
+        # stale round-0 mark for F77 survived this untouched.
+        rc1, out1, _ = run_cli(
+            d, q0, memo=["F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+            subjects=["fff0001 tree F77: follow-up fix"],
+            agents=1, cards={"F77"},
+            replies=[("t1", "VERDICT: SURVIVES for F77 (fix)")])
+        cand1 = candidates(os.path.join(d, "queue"))
+        q1 = read_queue(os.path.join(d, "queue"))
+        row1 = next((r for r in q1 if r[0] == "F77"), None)
+
+        ok = ("F77" in cand0
+              and row1 is not None and "fff0001" in row1[2]
+              and "F77" not in cand1
+              and "candidate F77" not in out1)
+        return ok, ("round0(rc=%s cand0=%r) round1(rc=%s row1=%r cand1=%r "
+                     "out1=%r)" % (rc0, cand0, rc1, row1, cand1, out1))
 
     @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
            "re-mentioning the second one neither requeues nor drops the mark")
