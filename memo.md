@@ -18206,3 +18206,114 @@ F111 卡片状态不变（仍 `built`）。下一轮若要继续这张卡，先�
 （写，本节）；未动 SDK 树、未动引擎树、未动 `.loop/` 队列文件。本轮 agents=2（一次证伪
 派发 + 一次同轮修复派发，按契约五之四步骤 1-3；证伪留给下一轮新鲜子代理，按步骤 4）。
 本轮到此结束。
+
+### 2026-09-30（round PID 90274，ralph.sh 无人值守）：F111 修补丁 5b80c16e 证伪 PARTIAL——check_landing 对 64/宽位写回形式仍是盲的
+
+派一个**新鲜** Opus 子代理（`general-purpose`，agent `a62ee5b945dbd5e0d`，仅写 `~/Documents/fhp-research`，
+29 次调用）按 `tools/loop/prompts/falsify.md` 七问审 F111 上一轮的修补丁 `5b80c16e`
+（修 `check_landing` 认写回形式，BUG A/BUG B 均按声称修好：BUG A 复现 `rc=32`、
+output DIFFERS 3/3（698828→672794/698828→672794/2306802→2110092）；BUG B 复现 `rc=0`、
+output IDENTICAL 3/3；负控制套件 99 OK / 0 MISMATCH，无回归；`5b80c16e` 确认是
+`~/Documents/fhp-research` HEAD 的祖先，两个文件里改动确实活着）。
+
+**F111 修补丁 VERDICT: PARTIAL** —— 攻击 3（"具名成因是否解释了全部差异"）抓到新缺陷：
+子代理自己造了 4 个新变异，命中两类未被 `5b80c16e` 覆盖的等价写回/等价无操作形式：
+- **假阴性**（真变化被漏放行）：`slot_clobber`/`dec_ldst_uimm32` 只认 32 位 `str` 无符号偏移形式，
+  对 `stp`（M5：`str w8,[sp,#0x64]` 后接 `stp wzr,w24,[sp,#0x60]`）与 64 位 `str x`（M4：
+  `str xzr,[sp,#0x60]`）**视而不见**——两者都在真的破坏计数器，
+  三个 fixture 分析器输出全部不同（同 BUG A 的尺寸：672794/672794/2110092），
+  而 `check_landing` 报 `rc=0`（绿）。复现命令：
+  `python3 f110_harness/patch.py $B /tmp/m5 0x1001969cc 0xb90067e8 0x1001969d0 0x290c63ff 0x1001969d4 0x17ffffd6`
+  接 `python3 f69_check_v3.py /tmp/m5 --allow-modified` → `rc=0`。
+- **假阳性**（无害重写被错杀）：`mov w24,w8`（32 位版本的已认识写回）与
+  `stur`（无符号立即数变体）两种**值等价**改写被判 `rc=31`（红），
+  而三个 fixture 输出与原始完全相同。
+
+**FLAW 的下游代价**：F111/F69/F110 那条「四个独立计数器级联」的结论**建立在这个检查器上**，
+它目前仍会放行真实的门控破坏（只要用 `stp`/64位 `str` 而非 32 位 `str`），
+F69 系列关于「门控无法被绕过」的结论因此仍不完整。
+
+**未标 `(fix)` —— 契约五之四要求当场修、重跑，重跑仍为 SURVIVES 才可关卡。**
+`F111` 保持 `built`；`.loop/UNREVIEWED_FIX` 该行更新为携带本次 PARTIAL 结论。
+子代理产物在 `/tmp/f111x`（`res.txt`）与 `/tmp/f111fals_negctl.log`，均未落盘到受版本控制路径。
+本轮涉及树：`fhp-research`（未写，只读）；本仓 `memo.md`（写，本节）；
+未动 SDK 树、未动引擎树。本轮 agents=1（一次证伪派发；修复留给下一轮，
+因为需要扩展 `check_landing` 的指令解码覆盖面——寄存器宽度与 `stp`/`stur` 寻址模式——
+这本身有独立判据与负控制，按契约 1.5 的精神值得成为下一轮的完整一件事，而不是压缩进本轮）。
+本轮到此结束。
+
+### 2026-09-30（round PID 90274 续）：F111 第二轮修补丁 `da44ffdc` 再次 PARTIAL——按 SS6 移入挂起池，不再原地修
+
+上条记录之后，本轮没有把「修复留给下一轮」，而是当场按契约五之四继续修（同一上下文知道得最多）：
+
+**派发 2（新鲜 Opus，`general-purpose`，agent `a32be069b9c7e13e7`，44 次调用，仅写 `fhp-research`）**：
+修 `check_landing`/`dec_mem` 对 BUG A（`slot_clobber`/`dec_ldst_uimm32` 只认 32 位 `str`
+无符号偏移，漏放行 `stp`/64 位 `str`）与 BUG B（`mov w24,w8`、`stur` 两种值等价改写误判红）。
+改用整族解码而非逐实例打补丁，覆盖无符号偏移/`stur`/`ldur`/前后变址/`stp`/`ldp` 等，
+两个寄存器宽度，与 capstone 交叉核对约 34 万个随机编码（范围外的仅寄存器偏移形式除外）。
+新增 negctl 用例 6 个（`m5stp`/`m6strx`/`movw`/`sturR`/`ldur`兄弟/`stur`兄弟），
+oracle 独立来自真实 `--shorebird` 分析器输出而非检查器自己的判断；负控制（把检查器文件换回
+`5b80c16e` 版本）复现 111 OK/18 MISMATCH（全部在新增区块），恢复后回到 129/0。
+提交 `da44ffdc`（`~/Documents/fhp-research`），自述已知未修缺口（重复写同值仍误判红、
+`strh` 部分覆盖仍误判红、`stp`/64位 `str` 形式的写回本身被保守拒绝、gate-1 路径上的
+clobber 因无法用单字补丁构造而未测、寄存器偏移与原子指令未解码）。
+
+**派发 3（新鲜 Opus，`general-purpose`，agent `a14a6a7cf693214f1`，独立于派发 1/2，22 次调用）**：
+对 `da44ffdc` 再跑一遍 `falsify.md` 七问。**F111 修补丁 VERDICT: PARTIAL** —— 六个新
+negctl 用例与负控制全部独立复核为真（自己重跑真实分析器逐字节 `cmp`，不采信检查器自报），
+但找到**第三个**未覆盖的指令族：`dec_mem()` 完全没有 store-release 无符号偏移族
+（`stlur`/`stlurb`/`stlurh`，编码 bit 29:24 = 011001）的分支。
+`stlur xzr,[sp,#0x60]`（`0xD90603FF`）与 `stlur wzr,[sp,#0x64]`（`0x990643FF`）
+均真实改变了分析器在三个 fixture 上的输出（与已抓到的 `m6strx` 内容同构），
+而检查器因为 `dec_mem()` 对这个操作码族返回 `None` 而报 `rc=0`（绿）——
+`python3 -c "m.dec_mem(0xd90603ff)"` 确认返回 `None`。此前的 capstone 交叉核对
+**不可能抓到这个**，因为它只在已被认领的编码范围内采样。
+
+**判定：按契约 SS6 移入挂起池，本轮不再对 `dec_mem()` 做第三次同型局部修补**——
+三次连续 PARTIAL，每次都是「窄修复堵住已点名的反例，独立复核换一个未覆盖的 ARM64
+访存指令族再次穿透」，与 F121（同款 whack-a-mole：`stp`/64位`str` → `stur` →
+现在的 `stlur`）形状完全相同。`cards.tsv`（`fhp-research`，提交 `4db8ca2c`）已记录
+本轮两次证伪 pass 的完整结论、SS6 判入挂起池的决定、以及「已排除」与「未排除」清单
+（已排除：`0164d8d1`/`5b80c16e` 各自点名的反例，均确认未回归；未排除：要么把 ARM64
+立即数寻址访存指令族对 capstone 做一次穷尽而非抽样的覆盖核对，要么改用真正的反汇编库
+直接判「这条指令的内存操作数是否落在已知槽地址区间」这种结构性判据，不再逐形式白名单）。
+
+`F111` 保持 `built`，进入挂起池，与 `F121`/`F130` 一样，按 SS6 每 5 轮回访一次最早的挂起项。
+
+本轮涉及树：`fhp-research`（写，2 次提交 `da44ffdc` 与 `4db8ca2c`）；本仓 `memo.md`
+（写，本节）；未动 SDK 树、未动引擎树、未动 `.loop/` 队列文件（队列由轮末闸门自动维护，
+本轮未手动编辑）。本轮 agents=3（本节两次 + 上一节一次：证伪 → 修复 → 再证伪，完整走完
+契约五之四步骤 1-4，第 4 步判定为「仍非 SURVIVES」，遂按 SS6 终止循环转入挂起池而非
+派第 4 次）。本轮到此结束，下一轮请挑一个独立任务（规则 0：SDK 本体优先）。
+
+## 心跳 2026-09-30（round PID 83588，ralph.sh 无人值守）：F37 gen_kernel 快照过期，派重建 + dd_runtime_check
+
+确认 `.loop/round.lock` PID 就是本轮自己（83588）。核对「built 卡欠证伪 pass」三张
+（F111 F121 F49）：三张此刻**全部**已在挂起池里（F111 刚在上一轮由 SS6 移入；F121/F49
+更早的轮次已判定"不该本轮重派"），本轮无卡可派证伪 pass。「修补丁尚未经证伪」清单里
+逐一核对 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`
+真身后：F125/F133/F134/F135 已经 `closed`（清单是过期快照，不要再引用它们）；
+F104/F108/F101 仍 `open` 但深陷 F148/F138 等更深的依赖链，本轮不适合展开。
+
+选定任务（规则 0，SDK 本体）：F37 卡片 2026-09-29 的 TRIAGE 记录明确写了下一步——
+`dd_runtime_check.sh` 因为 `ProductARM64` 下的 `gen_kernel_aot.dart.snapshot`
+快照版本过期（记录为 `8b59e404` vs 当前 VM `dbebe6fb`）而无法运行，脚本自己在缺失/
+过期时会打印修复命令 `ninja -C $BUILD gen_snapshot dartaotruntime copy_gen_kernel_snapshot`。
+这是该卡当前最具体、边界清楚的下一步，且是一次增量 ninja 目标（不是全量重建），
+按 F80 的模型应该在数分钟内完成，装得进本轮（契约 1.5）。
+
+**派发（general-purpose 子代理，agentId `aabba6c5c0f6cb293`，异步，尚未回收）**：
+自包含指令，仅要求：① 确认 `~/dart-3122/sdk` 干净且记录 HEAD；② 记录
+`gen_snapshot`/`dartaotruntime` 重建前 sha256（这两个是别的卡的钉住产物，必须证明
+本次操作没有动它们）；③ 跑 `ninja -C xcodebuild/ProductARM64 copy_gen_kernel_snapshot`；
+④ 重新量 sha256 确认两个二进制未变；⑤ 跑 `dd_runtime_check.sh` 记录 rc 与输出；
+⑥ 全程禁止 `git add/commit/checkout/reset/clean`，只是跑构建目标，不改源码，
+不跑 `verify_all.sh`。严格返回格式（≤100 行）。
+
+结果尚未回收——本轮先记录心跳与派发依据，等异步通知回来后在同一轮或下一轮续写结论。
+按契约五之四，即便这一步 rc=0，也只是"做完一件事"，还差一次新鲜子代理的证伪 pass
+才能动 F37/F108/F121 的卡片状态；本节不预判结果。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理只读构建，未提交）；`fhp-research`
+（子代理只读跑脚本，未提交）；本仓 `memo.md`（写，本节）；未动 `.loop/` 队列文件。
+本轮 agents=1（尚未回收）。
