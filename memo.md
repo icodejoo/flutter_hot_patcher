@@ -17412,3 +17412,39 @@ F84/F146）。本轮到此结束——按契约"每轮只做一件事"，本轮�
   ours 侧真实丢函数/丢字段这类采集缺口是盲的**（`open`，2026-09-29，F84 修补丁
   证伪 PARTIAL 拆出，deps=-）判据与负控制见 `cards.tsv`（两条负控制：删列表字段/
   删整个函数后必须在真实 `gap_residual.sh` 下报红，非桩）。
+
+心跳 2026-09-29（交互会话，claude-sonnet-5，调度器角色）：本轮任务是回收
+`fhp-research` 里一个已落地但尚未经证伪的实现提交——`ee50429dad7fab6`
+（"F146: fix screen D's blind spot for total field/function collection
+failures"，改 `gap_evidence_check.sh` + 新增 `f146_check.sh`）。按契约
+5-4（修补丁不继承被修对象的审查结论），派发一个全新独立 opus 子代理执行
+`tools/loop/prompts/falsify.md` 的七攻击模板，对该提交本身发起敌意证伪
+（子代理未参与实现、无既得立场）。
+
+**结果：VERDICT PARTIAL。** F146 卡面原写的两个机制——(a) ours 侧某键完全
+不是 list 形状而 theirs 侧非空、(b) ours 侧整个函数未采集——**均已实证关闭**，
+独立复跑负控制通过：`callees=[]`（ours 侧空列表而非缺键）正确落入旧的
+multiset 分支报红（88 个缺口/40 函数配对）；`f146_check.sh` 4/4 rc=0；
+`nc_f84_empty_declaration_alibi.sh` 10/10 rc=0 无回归。
+
+**但子代理另找到一个新的、相关但未被本次修复覆盖的盲点**：
+`gap_evidence_check.sh:473` 的 `if a == b or (a - b): continue` ——只要
+ours 侧多出哪怕一个无关/垃圾元素，这条判据就会把整个字段跳过，
+不管 theirs 侧缺了多少。实测复现：把上述同一批 40 个 prog 函数的
+ours 侧 `callees` 设成 `["JUNK"]`（非空但内容不对，而非空列表）而非
+`[]`，隐藏了 theirs 侧全部 88 个 slot，screen D 报 "0 failure(s)"
+（rc=2 fixture BLOCKED，0 found）。子代理指出这并非假设性场景——任何
+名称渲染差异（参见 F4）都会让 ours 侧每个元素相对 theirs 侧登记为
+"extra"，从而掩盖真实丢失。次要缺陷（不阻塞）：`:542` 的
+`grep '^CAND'` 同时命中 `^CANDF` 行，把函数计数误标成 slot 计数并
+在 `cB` fixture 上重复计数失败项。**真实语料上目前该新盲点尚未证明
+影响生产数据**（矩阵三个可测格子上 `CAND`/`CANDF` 均为 0 行，rc=0）
+——但检查器本身不健全这一结论成立，不因"暂未触发"而消解。
+
+按契约 5-4：**PARTIAL 不许关卡，F146 保持 `open`**。子代理逐字给出的
+STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
+`05083007`），含具体修法建议（`:473` 应独立测试 `b - a` 非空，不能
+只看 `a - b` 是否为空；`:542` 的 grep 需与 `^CANDF` 区分）。本轮到此
+结束——按契约"每轮只做一件事"，本轮完成的是"回收未审的实现提交 +
+证伪 + PARTIAL 记账"，不新开工作、不动队列文件、不执行
+`fix_queue.py --operator-drain`。
