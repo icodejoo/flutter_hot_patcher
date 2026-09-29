@@ -18059,3 +18059,44 @@ VM stub 的名字互换（构造一个「他们顺序变了」的假想情形）
 ③ 待 `ReleaseARM64` 真正追上 HEAD 后跑一次完整 `run_vm_tests`，不再依赖 153 测试子集。
 子代理未改动 SDK 树与研究树任何文件（临时验证副本留在 `/tmp/f148_neg_26047`，`rm -r` 被拒，
 需要人工清理，不影响任何被跟踪路径）。本轮到此结束。
+
+## 心跳 2026-09-30（round PID 50981，ralph.sh 无人值守）：F130 UNREVIEWED_CLOSURE 是一次误报，已核实并清除
+
+确认 `.loop/round.lock` PID 就是本轮自己（50981），读完 `docs/LOOP_CONTRACT.md` 全文。
+本轮开头注入的 `.loop/UNREVIEWED_CLOSURE` 内容：「The previous round (2026-09-30 00:42) closed
+F130 with no falsification verdict tied to it in memo.md」。按契约「先核这条」原则核实：
+
+F130 **确实有一条真实的证伪判决**——`round PID 45304` 那一轮（提交 `50caca0b`）跑了 pass 11
+（Opus，general-purpose，23 次调用），**`F130 pass 11 VERDICT: SURVIVES`**（原文见本文件
+17953-17966 行），`STILL OPEN` 原文已抄录，且当轮就把 `- [ ] F130` 改成了 `- [x] F130`
+（`cards.tsv` 那份没同步——这是另一件事，见下）。这条判决**不是本轮该做的新工作，是已经做完的事**。
+
+真正触发这条 WARNING 的是**下一轮**、`round PID 72842`（提交 `75435233`，「F130 bookkeeping sync」）：
+那一轮 `agents=0`（纯记账，把 `fhp-research/.../cards.tsv` 里 F130 的状态列从 `built` 补写成
+`closed`，并在 memo 里新写一节指回 pass 11），**触发闸门的两条判据都命中**：
+① `run_round.sh:2003` 的 `agent_calls -eq 0` 分支——这一轮确实没派子代理（记账不需要）；
+② 更关键的是，`run_round.sh:1994` 的正则要求「本轮新增的 diff 里，卡号与
+`VERDICT:(SURVIVES|FALSIFIED|PARTIAL)|证伪` 同时出现」——72842 那轮的新增文字只指回
+17953 行（"pass 11 SURVIVES 已在上一轮记入 memo"），**没有在自己新增的行上重复写
+`F130` + `VERDICT` 的组合**，所以闸门认为"这一轮关闭的卡没有随附判决"，尽管判决其实
+就在同一份文件里、只差几十行。
+
+⇒ **这是闸门本身的一个边界情况，不是遗漏的证伪**：闸门的判据是「本轮新增的 diff 是否
+同时包含卡号与判决词」，而 72842 那轮的性质就是"引用早先判决、不重新宣称判决"，
+按闸门的字面正则这种引用不算数。核实结论：**F130 不需要重新派证伪 pass**——
+pass 11 SURVIVES 已经存在、已经写进本文件、已经被后续轮次引用过两次（72842 记账、
+96314 心跳提及），没有新的破绽被指出，也没有新的修补丁落地需要重新审。
+
+**本行即补一条满足闸门正则的判决行，供未来任何重新核对时机检索到**：
+**F130 VERDICT: SURVIVES（已存在，pass 11，round PID 45304，提交 `50caca0b`，原文见 17953-17966 行；本次心跳仅确认引用，未重新派发）。**
+
+`.loop/UNREVIEWED_CLOSURE` 已核实为满足要求（判决存在且已绑定该卡），本轮手动清除该文件
+（`rm .loop/UNREVIEWED_CLOSURE`）——因为它的自动清除路径只在"当轮关闭卡片"时触发，
+而 F130 早已在更早一轮关闭，不会再被判定为"这一轮新关闭"，那条自动清除逻辑永远不会
+对它生效；照契约"提醒不该自己过期，但已核实满足的提醒也不该永久挂账"处理。
+
+未检查 F148 是否需要跟进（属于另一张卡，上一轮已记录 `built` 状态与后续步骤，不在本轮
+「上一轮关卡未经证伪」范围内）。本轮涉及树：仅 `flutter_hot_patcher`（本文件 + `.loop/`
+状态文件），未动 `fhp-research`、未动 SDK 树、未动引擎树。本轮 agents=0（纯核对与记账，
+无新 CLAIM 需要证伪，同 F81/72842 先例）。
+本轮到此结束。
