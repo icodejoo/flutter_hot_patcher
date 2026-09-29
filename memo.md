@@ -17685,3 +17685,13 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 5. **F128**：field_table ×6 **暂不改钉 structural**，先补一个预测他们组内顺序的脚本，带控制。
 6. **F111**：接受「形状匹配」的能力天花板，X/XL 记为已知局限，不再在同一层派「再修一次」。F69/F111 是循环的仪器，不是 SDK 的对拍工作。
 7. **F147**：推进。先做第 0 步（`offsets_extractor` 对 diff，不改 thread.h）；0 差异的话，**F147 + F148 + F151 合成一次四配置重建**，循环必须处于 PAUSE，预测值在重建之前写下来。
+
+### F147 第 0 步完成：**前提成立**（2026-09-29）
+
+- 另开了三个 out 目录（`xcodebuild/F147probe_{ReleaseARM64,ProductARM64,ProductSimARM64}`，`args.gn` 与钉住的那几个逐字节相同），编出 `offsets_extractor` 和 `offsets_extractor_aotruntime`。它们的输出**逐项复现**了 `runtime_offsets_extracted.h` 里我们用到的 4 节：**0 处差异，顺序也相同**（455/450/452/447 项）。
+- 依赖日志显示抽取器 include 了 `thread.h`，**没有** include 那张表 ⇒ 输出不是把表读回来再吐出去。
+- 已知为好的读数：`isolate_` 0x678、`top_exit_frame_info_` 0x698，与我们 iOS gen_snapshot 的 DWARF 一致。
+- 我核过：在活的头文件上重跑，0 差异；自选控制：把 AOT 节里的 `isolate` 改成 0x680 → 精确报出 1 处。
+- SDK 工作树 0 改动；钉住的构建目录 ninja 待办步数前后不变。
+- ⚠️ 仪器插曲：agent 报 ProductSimIosARM64「636 步待办」，查下来是因为它用的是**裸的 `gen_snapshot` 目标**——那是从没编过的 iOS 设备目标。harness 实际用的 `clang_arm64/gen_snapshot` 读数是 0。🔑 **陈旧探针必须指明目标名**，同一个目录里不同目标的读数可以相差 636。
+- ⇒ **thread.h 一改，在两个新目录里跑两个抽取器（大约 5 秒），把输出拼进这 4 节，就能得到匹配的表。** F147 的主体改动可以做了。**要等 6 个证伪 pass 全部回来再动**：它们正在读 SDK 的二进制和 dSYM。
