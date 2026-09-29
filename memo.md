@@ -18474,3 +18474,37 @@ Thread 布局对齐）与 F148（`d4923373846`，VM stub 重排）各自对 pre-
 （子代理跑脚本，未提交）；本仓 `memo.md`（写，本节）。未动 `.loop/` 队列文件、未动
 `cards.tsv`。本轮 agents=1（尚未回收）。本轮到此结束，下一轮请先看这次派发是否已回收，
 再决定是续写结论还是挑新任务（规则 0：SDK 本体优先）。
+
+### 心跳 2026-09-30 03:12（round PID 84644，续）：第一次派发在动手前抓到一个前提错误，未做任何改动
+
+子代理（agentId `a612fb0a6259be7b1`）回收，**STATUS: blocked**（诚实止步，不是失败）。
+它在 revert 之前就停手，理由成立：**我给的派发指令假设 fixture 由 `ProductSimARM64` 产生，
+实际早在 F132（2026-09-25）就切换成了 `ProductSimIosARM64/clang_arm64`**
+（`parity_matrix.sh:30` `PRODUCT=...ProductSimIosARM64/clang_arm64`，`sdk_path.pin` 同）。
+按我的原指令重建 `ProductSimARM64` 会是无效操作——`out_pm` 根本不读那棵树。
+子代理**没有执行 revert**，`~/dart-3122/sdk` 全程干净、HEAD 未变、两个被钉住的
+`ProductARM64` 产物 sha256 只读未动。
+
+**顺带查出（只读 `ninja -n`，未构建）**：`ProductSimIosARM64/clang_arm64` 落后 HEAD 9 步
+（`gen_snapshot`+`analyze_snapshot`，止于 09-29 22:06，早于 F151 `de660deeae5` 22:58）；
+`ProductSimARM64` 落后 400 步（止于 09-29 15:31，早于 F147/F148/F151/F152 全部）。
+**这意味着 F95 上一轮（round PID 34296）的 PARTIAL 判决所依据的 `out_pm` 读数
+可能没吃到 F151 的效果**——需要下一次实测确认，本轮不预判。
+
+**修正后重新派发**（general-purpose 子代理，opus，同一个实验，路径改为
+`ProductSimIosARM64/clang_arm64`）：
+① revert `d4923373846`（仅此一个提交，`--no-commit`）；
+② `ninja -C ~/dart-3122/sdk/xcodebuild/ProductSimIosARM64 clang_arm64/gen_snapshot clang_arm64/analyze_snapshot`；
+③ 重新生成 ours 侧 `.so`（不能只重跑 JSON，理由同子代理指出的第二点：stub 顺序在
+`gen_snapshot` 写快照时确定，复用旧 `.so` 会让实验失去意义）+ `--shorebird` JSON；
+④ 跑 `f95_self_hash_residual.py`，报差异函数总数与 `[Stub]` 计数，对照基线 158/65；
+⑤ `git checkout -- .` 还原源码、重建 `ProductSimIosARM64` 回到 HEAD 状态（子代理已指出
+这会让该树赶上 F151，与实验前"落后 9 步"的状态不同——**这是可接受的**，
+只要求 HEAD 与 git status 干净，不要求二进制哈希复原到实验前）；
+`ProductSimARM64`（落后 400 步）**不要动，不要重建**（超出本卡范围，留给其他卡）；
+⑥ 同样全程禁止 git 写操作、不碰 `cards.tsv`/`memo.md`/`.loop/`、不跑 `verify_all.sh`。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理只读，未提交，HEAD/status 前后一致）；`fhp-research`
+（子代理只读）；本仓 `memo.md`（写，本节）。本轮 agents=2（第一个已回收/blocked，
+第二个已派发/尚未回收）。本轮到此结束，下一轮请看第二次派发是否回收，
+再决定续写 F95 结论还是挑新任务（规则 0：SDK 本体优先）。
