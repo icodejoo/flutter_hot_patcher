@@ -3003,7 +3003,7 @@ hello/base_dd **4328 个差异叶子里解释 2 个**（prog 12655 里 2 个）�
       (b) 头部期望 `theirs 92 ours 0` 只打印、从不比较,而今天实测 `theirs 92 ours 92`,无人报。
       (c) 潜在、今日暴露为零:python 扫描器**没有节区过滤**(注在文件偏移 `0x1000` 的位点被计入,
       而 `.text` 从 `0x4c000` 起),awk 版只看 objdump 反汇编出的部分,**两个定义域从没被比较过**。
-- [ ] **F84：被审计的生成器自己挑选「审计哪些格」**（`built`，2026-09-16 由 F65 第三次证伪 pass 拆出；2026-09-24 FIXED，commits `0c3ec65`+`0e4283e`，未过证伪 pass——2026-09-29 状态字段订正，此前列 2 误留 `open`）
+- [x] **F84：被审计的生成器自己挑选「审计哪些格」**（`closed`，2026-09-16 由 F65 第三次证伪 pass 拆出；2026-09-24 FIXED，commits `0c3ec65`+`0e4283e`；2026-09-29 22:xx 新鲜 opus 子代理证伪 pass（本轮，flutter_hot_patcher round PID 15889）判 `F84 VERDICT: SURVIVES`——在 HEAD `876ea7ce` 重跑：缺一格与多一格伪造均变红并点名该格；真实 `out_pm` 语料 `rc=0`「3 cell(s) re-derived, 0 failure(s)」；`nc_f84_empty_declaration_alibi.sh --old-rev 0c3ec65^` 重跑「10 passed, 0 failed」；`0c3ec65`/`0e4283e` 经 `git merge-base --is-ancestor` 确认是 HEAD 祖先；此前 PARTIAL pass 点名的 Screen-D 独立性缺陷已独立复现为在 HEAD 上已修（删 40 个函数的 callees 或删 50 个整函数，Screen D 正确变红），确认它现在完全归属 F146、不再挂在 F84 上。**STILL OPEN（原文抄录）**：PATH 劫持的 python3 可能伪造 Screen D 变绿（属 F146/F65，本次未测）；`gap_evidence_check.sh` 从未在完整 `verify_all.sh` 里跑过（被 staleness guard 挡住）；本次 pass 运行时循环仍在跑（无 `PAUSE`），22:24 之后产物可能已变）
       `parity_matrix.sh:937-938` 是 `: > $GAP_EVIDENCE; ./gap_evidence.sh > $GAP_EVIDENCE`，
       而它同时写 `parity_matrix.tsv` 的第 5 列 ⇒ **direction B 审的那组格子，由被审的生成器决定**。
       与第十种仪器缺陷同科（分子分母同源），但高一层：**这里自选的是「格子集合」而不是计数**。
