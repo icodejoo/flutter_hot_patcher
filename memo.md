@@ -17719,3 +17719,7 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 - **shorebird ×3：19122 / 12**；**dump_object_pool ×3：10700 / 0**（10664 个 unit 是 Thread 布局，属于 gap）。
 
 ⇒ **四格剩下的东西几乎全部压在 F147（Thread 布局）+ F148（stub 顺序）+ F138/F151（stub 内容、Class 字段）上。下一步就是 F147 的合并重建。**
+
+### 开卡 F152（2026-09-29）
+
+- [ ] **F152：Isolate::simulator_ 偏移（我们 +0xa0，他们 +0x20）和 Enter/ExitSafepoint 调用寄存器（x0 对 x5）——F147 之后剩下的 6 个同尺寸 VM stub 就差这 8 个字**（`open`，2026-09-29，从 F147 之后的 VM stub 归因拆出；设计已派 agy）
