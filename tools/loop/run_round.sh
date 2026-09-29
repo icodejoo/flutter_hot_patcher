@@ -883,9 +883,13 @@ def rel(p):
 
 
 def lines_of(raw):
-    # Same reading as fix_queue.py load_quarantine(): utf-8-sig, universal
-    # newlines, blank and comment lines skipped.
-    fh = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig")
+    # Same reading as fix_queue.py load_quarantine() / ledger_lines():
+    # utf-8-sig, surrogateescape, universal newlines, blank and comment lines
+    # skipped. surrogateescape because fix_queue.py quarantines ledger lines
+    # byte-for-byte, a stray \xff included; a strict decode here made every
+    # later snapshot the sentinel, i.e. a permanent lock (F140 fourth pass).
+    fh = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig",
+                          errors="surrogateescape")
     for line in fh:
         line = line.rstrip("\n")
         if line and not line.lstrip().startswith(("#", "//")):
@@ -933,7 +937,7 @@ try:
                 out.append(line)
 except UnicodeDecodeError as e:
     die("quarantine data is not valid UTF-8 (%s)" % e)
-data = "".join(l + "\n" for l in out).encode("utf-8")
+data = "".join(l + "\n" for l in out).encode("utf-8", "surrogateescape")
 try:
     tmp = floor + ".tmp.%d" % os.getpid()
     with io.open(tmp, "wb") as fh:

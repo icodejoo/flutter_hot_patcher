@@ -30,7 +30,10 @@ Rules (ids are only ids if cards.tsv lists them; see --cards):
                 replied about X, AND at least one of those replies is green
   pos_drain(X)  claim(X) AND reply_pos(X)
 
-  enqueue  neg & fix & !(pos_same | pos_drain)
+  enqueue  neg & fix     (2026-09-29, operator decision on F130/F131: a green
+                          pass in the SAME round -- pos_same or pos_drain -- is
+                          not review of a fix committed in that round, so it no
+                          longer prevents the enqueue; the requeue path agrees)
   drain    queued & pos_drain
   hold     queued & !pos_drain     re-reported every round, never expires by itself
 
@@ -73,6 +76,12 @@ verdict about the card. Enqueue-prevention does not need it -- a second
 SURVIVES inside the round already says the repair was re-attacked -- but it
 does need two dispatches, since one cannot be both the pass that found the flaw
 and the pass that re-attacked the repair.
+
+(Superseded 2026-09-29, operator decision on F130/F131: enqueue-prevention by
+a same-round pass is gone. Nothing binds that pass to the commit it would have
+had to read, and keeping it made the answer depend on whether the card was
+already queued -- the requeue path had already dropped it. pos_same is still
+computed by scan(); it no longer changes what is owed.)
 
 The asymmetry that sets these bars: a false enqueue costs one dispatch, a false
 drain costs an unreviewed fix nobody looks at again.
@@ -119,12 +128,102 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 
 # Written into the before-round snapshot by run_round.sh when the copy fails, so
 # that "the snapshot was not taken" is distinguishable from "nothing was owed".
 SNAPSHOT_FAILED = "#SNAPSHOT-FAILED"
+
+
+class NotRegular(OSError):
+    """A path this gate must read or write is not a plain regular file."""
+
+
+def path_problem(path):
+    """None if `path` is absent or a plain regular file; else why it is not.
+
+    F140, fourth falsification pass (2026-09-28): a FIFO put at the ledger or
+    ledger-snapshot path made `io.open(...).read()` block forever, and
+    run_round.sh runs this gate with no timeout -- so one `mkfifo` by a round
+    stalled the loop with no RED and no OWED line. lstat, not stat: a symlink
+    is refused too, because what it points at can change between this check
+    and the open."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        return "cannot be examined (%s)" % e
+    if stat.S_ISLNK(st.st_mode):
+        return "is a symlink"
+    if not stat.S_ISREG(st.st_mode):
+        return "is not a regular file (mode %o, e.g. a FIFO or a directory)" \
+            % stat.S_IFMT(st.st_mode)
+    return None
+
+
+_OPEN_FLAGS = {"r": os.O_RDONLY, "rb": os.O_RDONLY,
+               "a": os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+               "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC}
+
+
+def open_regular(path, mode="r", **kw):
+    """io.open() that refuses anything but a regular file and never blocks.
+
+    The check-then-open in path_problem() alone would leave a window, so the
+    open itself is O_NONBLOCK (a FIFO opens at once instead of waiting for a
+    writer) and O_NOFOLLOW (a symlink fails), and the opened descriptor is
+    fstat'ed before a single byte is read or written. Raises NotRegular or
+    OSError; callers already treat OSError as "could not be read"."""
+    flags = (_OPEN_FLAGS[mode] | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    fd = os.open(path, flags, 0o644)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotRegular("%s is not a regular file" % path)
+        fh = io.open(fd, mode, **kw)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fh
+
+
+def read_regular(path):
+    """The bytes of `path`; NotRegular/OSError exactly as open_regular()."""
+    with open_regular(path, "rb") as fh:
+        return fh.read()
+
+
+def ledger_lines(raw):
+    """The ONE line-splitting rule for the ledger and the quarantine files.
+
+    F140, fourth falsification pass: the restore block split the ledger with
+    str.splitlines(), which also breaks on \\f \\v \\x1c-\\x1e \\x85 \\u2028
+    \\u2029, while operator_drained() and load_quarantine() iterate the file,
+    which breaks only on \\n \\r \\r\\n. So a quarantined forged line rewritten
+    with a trailing \\f was "the same line" to the restore block (not added,
+    left in place) and "a different line" to the quarantine match (not
+    quarantined) -- and the next round's honest snapshot drained a row with it
+    at rc=0. Every reader that compares ledger or quarantine lines now goes
+    through this function: utf-8-sig (a leading BOM is not data),
+    surrogateescape (a stray byte is data, not a crash), universal newlines.
+    run_round.sh's quarantine snapshot (lines_of) uses the same rule."""
+    fh = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig",
+                          errors="surrogateescape", newline=None)
+    return [l.rstrip("\n") for l in fh]
+
+
+def is_comment(line):
+    return line.lstrip().startswith(("#", "//"))
+
+
+# F140 fourth pass, flaw 4: recorded in the quarantine files (live AND floor,
+# so it gets the floor's protection against deletion) when a round removed
+# the live ledger and left no trusted snapshot to restore it from. While any
+# such line stands, no operator drain is excused -- see update().
+LEDGER_LOST = "LEDGER-LOST"
 
 
 def is_sentinel(raw):
@@ -203,18 +302,22 @@ def load_quarantine(path):
     included so operators can annotate why without those bytes ever being
     compared as data.
     """
-    out = set()
-    if not path or not os.path.exists(path):
-        return out
+    if not path or not os.path.lexists(path):
+        return set()
     try:
-        with io.open(path, encoding="utf-8-sig", errors="surrogateescape") as fh:
-            for line in fh:
-                line = line.rstrip("\n")
-                if not line or line.lstrip().startswith(("#", "//")):
-                    continue
-                out.add(line)
+        raw = read_regular(path)
     except (IOError, OSError):
-        pass
+        return set()
+    return quarantine_lines(raw)
+
+
+def quarantine_lines(raw):
+    """load_quarantine() on bytes already in hand (and checksummed)."""
+    out = set()
+    for line in ledger_lines(raw):
+        if not line or is_comment(line):
+            continue
+        out.add(line)
     return out
 
 
@@ -232,53 +335,59 @@ def quarantine_read_ok(path):
     the same as a forged or missing ledger snapshot -- refuse to trust
     anything this round -- rather than reading it as "quarantine is empty".
     """
-    if not path or not os.path.exists(path):
+    if not path or not os.path.lexists(path):
         return True
-    return os.path.isfile(path)
+    return path_problem(path) is None
 
 
-def operator_drained(ledger_path, actions=None, quarantine=None):
+def operator_drained(ledger_path, actions=None, quarantine=None, raw=None):
+    """{card: (drain_ts, seen, drain_ts_raw)} from a ledger.
+
+    `raw`, when given, is the ledger's bytes as already read (and
+    checksummed) by the caller, so the file is not opened a second time --
+    a second open is a second chance for it to have been swapped."""
     import datetime
     out = {}
     if not ledger_path:
         return out
-    if os.path.exists(ledger_path) and os.path.isfile(ledger_path):
+    if raw is not None or (os.path.lexists(ledger_path)
+                           and path_problem(ledger_path) is None):
         try:
-            with io.open(ledger_path, encoding="utf-8-sig", errors="surrogateescape") as fh:
-                for line in fh:
-                    # Comment lines (a header, or the #SNAPSHOT-FAILED sentinel)
-                    # are not drains and must not be parsed as malformed ones.
-                    #
-                    # F140: `line.startswith("#")` missed a comment that carries
-                    # leading whitespace (' #header'), a UTF-8 BOM ahead of the
-                    # '#' (only the FIRST line of a file can have one, but that
-                    # is exactly where a header comment lives), or the '//'
-                    # spelling -- each of those fell through to the data-line
-                    # parser and printed a false "RED malformed ledger line".
-                    # `utf-8-sig` above strips a leading BOM from the file
-                    # (io mode, not per-line); stripping leading whitespace here
-                    # handles the rest without touching how a real data line
-                    # (never whitespace-prefixed) is read.
-                    if line.lstrip().startswith(("#", "//")):
-                        continue
-                    stripped = line.rstrip("\n")
-                    # F140 (second pass): a quarantined line is excluded here
-                    # rather than at the call site so BOTH callers (the
-                    # round-start baseline and the live ledger) are filtered
-                    # the same way -- a quarantined entry must never grant
-                    # credit no matter which snapshot is asked about it.
-                    if quarantine and stripped in quarantine:
-                        continue
-                    parts = stripped.split("\t")
-                    if len(parts) >= 5 and parts[1]:
-                        try:
-                            ts = datetime.datetime.strptime(parts[0], "%Y-%m-%d %H:%M")
-                            existing = out.get(parts[1])
-                            if not existing or existing[0] < ts:
-                                out[parts[1]] = (ts, parts[4], parts[0])
-                        except ValueError:
-                            if actions is not None:
-                                actions.append("RED malformed ledger line")
+            for line in ledger_lines(raw if raw is not None
+                                     else read_regular(ledger_path)):
+                # Comment lines (a header, or the #SNAPSHOT-FAILED sentinel)
+                # are not drains and must not be parsed as malformed ones.
+                #
+                # F140: `line.startswith("#")` missed a comment that carries
+                # leading whitespace (' #header'), a UTF-8 BOM ahead of the
+                # '#' (only the FIRST line of a file can have one, but that
+                # is exactly where a header comment lives), or the '//'
+                # spelling -- each of those fell through to the data-line
+                # parser and printed a false "RED malformed ledger line".
+                # `utf-8-sig` above strips a leading BOM from the file
+                # (io mode, not per-line); stripping leading whitespace here
+                # handles the rest without touching how a real data line
+                # (never whitespace-prefixed) is read.
+                if line.lstrip().startswith(("#", "//")):
+                    continue
+                stripped = line.rstrip("\n")
+                # F140 (second pass): a quarantined line is excluded here
+                # rather than at the call site so BOTH callers (the
+                # round-start baseline and the live ledger) are filtered
+                # the same way -- a quarantined entry must never grant
+                # credit no matter which snapshot is asked about it.
+                if quarantine and stripped in quarantine:
+                    continue
+                parts = stripped.split("\t")
+                if len(parts) >= 5 and parts[1]:
+                    try:
+                        ts = datetime.datetime.strptime(parts[0], "%Y-%m-%d %H:%M")
+                        existing = out.get(parts[1])
+                        if not existing or existing[0] < ts:
+                            out[parts[1]] = (ts, parts[4], parts[0])
+                    except ValueError:
+                        if actions is not None:
+                            actions.append("RED malformed ledger line")
         except (IOError, OSError):
             if actions is not None:
                 actions.append("RED ledger snapshot unreadable")
@@ -1503,8 +1612,11 @@ def read_queue(path):
         return rows
     if not os.path.isfile(path):
         raise QueueUnreadable("%s is not a regular file" % path)
+    # open_regular, not io.open: isfile() above follows symlinks and is a
+    # separate syscall from the open, so a FIFO swapped in between (or a
+    # symlink to one) would still block here (F140 fourth pass).
     try:
-        fh = io.open(path, encoding="utf-8", errors="replace")
+        fh = open_regular(path, "r", encoding="utf-8", errors="replace")
     except OSError as e:
         raise QueueUnreadable(str(e))
     with fh:
@@ -1780,8 +1892,10 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             "without it a vanished entry cannot be told from an entry that was "
             "never there; the round is NOT settled")
 
+    # F140 fourth pass: a FIFO swapped in for the snapshot hung this read.
     try:
-        raw = io.open(before_path, encoding="utf-8", errors="replace").read()
+        before_bytes = read_regular(before_path)
+        raw = before_bytes.decode("utf-8", "replace")
     except OSError as e:
         return refuse(
             "snapshot unreadable (%s); pre-round contents unrecoverable" % e,
@@ -1799,8 +1913,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             "fix-queue snapshot checksum missing -- tamper detection is off, so "
             "the pre-round contents cannot be trusted; the round is NOT settled")
 
-    with io.open(before_path, "rb") as fh:
-        actual_sha = hashlib.sha256(fh.read()).hexdigest()
+    actual_sha = hashlib.sha256(before_bytes).hexdigest()
     if actual_sha != before_sha:
         return refuse(
             "snapshot tampered mid-round; queue state unverifiable",
@@ -1841,13 +1954,19 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         bodies, card_neg)
 
     def fix_shas(cid):
-        """Commits this round linked to cid as its fix (F49 E1/E3/E4)."""
-        by_sha = commit_ids(subjects, bodies, known)
+        """Commits this round linked to cid as its fix (F49 E1/E3/E4).
+
+        F130 third pass (b): the mention half was built without code_touch,
+        so a memo.md/cards.tsv-only bookkeeping commit naming the card was
+        recorded as a "new fix" -- the very commits F89a keeps out of `fix`.
+        Both halves now apply the same filter scan() does."""
+        by_sha = commit_ids(subjects, bodies, known, code_touch)
         live = commit_owned(subjects, bodies, known, code_touch)
         return {s for s, ids in by_sha.items() if cid in ids} | \
                {s for s, ids in live.items() if not ids and cid in neg}
     pos = pos_drain          # what drains a standing entry
-    reviewed = pos_same | pos_drain   # what prevents a new one
+    # `pos_same` no longer prevents an enqueue (operator decision 2026-09-29,
+    # see enqueue_cids below); scan() still computes it for the tabular cases.
 
     # F112 (ii), the half the shrink check cannot reach. If the table was
     # ALREADY the stashed revision when the round started -- the finisher
@@ -1918,6 +2037,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # caller took at round start; otherwise nothing is excused (fail closed).
     ledger_ok = True
     qpath = quarantine_path(queue_path)
+    live_path = operator_ledger(queue_path)
     # F140, third falsification pass (2026-09-26): the quarantine file above
     # was itself a plain file sitting where the round can freely rewrite it --
     # a round could `rm` it (load_quarantine() then sees nothing quarantined)
@@ -1947,13 +2067,21 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     if quarantine_before:
         raw_q = None
         got_q = None
+        q_irregular = False
         try:
-            with io.open(quarantine_before, "rb") as fh:
-                raw_q = fh.read()
+            raw_q = read_regular(quarantine_before)
             got_q = hashlib.sha256(raw_q).hexdigest()
+        except NotRegular:
+            q_irregular = True
         except (IOError, OSError):
             pass
-        if not quarantine_before_sha or got_q != quarantine_before_sha:
+        if q_irregular:
+            ledger_ok = False
+            actions.append(
+                "RED quarantine snapshot %s is not a regular file (e.g. a "
+                "FIFO swapped in) -- refused unread, so no operator drain "
+                "is excused this round" % quarantine_before)
+        elif not quarantine_before_sha or got_q != quarantine_before_sha:
             ledger_ok = False
             actions.append(
                 "RED quarantine snapshot checksum %s -- the round-start "
@@ -1967,7 +2095,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "(#SNAPSHOT-FAILED sentinel) -- no operator drain is "
                 "excused this round")
         else:
-            trusted_quarantine = load_quarantine(quarantine_before)
+            # The checksummed bytes themselves, not a second read of the path.
+            trusted_quarantine = quarantine_lines(raw_q)
     # F140 round 5 (pass 5's flaw (1)): the content anchor -- see
     # quarantine_floor_path(). Read on every call, whether or not a
     # round-start snapshot was passed, so a truncated/rewritten live file is
@@ -1984,6 +2113,23 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     trusted_quarantine = trusted_quarantine | floor_quarantine
     missing_from_live = trusted_quarantine - live_quarantine
     quarantine = live_quarantine | trusted_quarantine
+
+    def append_quarantine(header, lines_):
+        """Appends to the LIVE quarantine file; the floor is caught up below
+        from `quarantine`. Refuses a non-regular file rather than blocking on
+        it (a FIFO opened for append waits for a reader)."""
+        if not quarantine_read_ok(qpath):
+            return False
+        try:
+            with open_regular(qpath, "a", encoding="utf-8",
+                              errors="surrogateescape") as fh:
+                fh.write("# %s\n" % header)
+                for l in lines_:
+                    fh.write(l + "\n")
+        except (IOError, OSError):
+            return False
+        return True
+
     if missing_from_live:
         # A line the round-start snapshot proves was already quarantined is
         # gone from the live file -- deleted, truncated, or the file
@@ -1992,34 +2138,62 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # quarantine floor disappear could just as easily have forged a
         # ledger line the same round.
         ledger_ok = False
-        if quarantine_read_ok(qpath):
-            try:
-                with io.open(qpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
-                    fh.write("# %s re-quarantined -- missing from the live "
-                             "quarantine file at round start\n" % now)
-                    for l in sorted(missing_from_live):
-                        fh.write(l + "\n")
-            except (IOError, OSError):
-                pass
+        append_quarantine("%s re-quarantined -- missing from the live "
+                          "quarantine file at round start" % now,
+                          sorted(missing_from_live))
         actions.append(
             "RED %d previously-quarantined ledger line(s) missing from the "
             "live quarantine file -- restored, and no operator drain is "
             "excused this round either" % len(missing_from_live))
+    # F140 fourth pass, flaw 4 (the half that makes the record binding): a
+    # LEDGER-LOST line an earlier round recorded (see below) keeps every
+    # later round from excusing a drain until an operator releases it. Read
+    # from the union, so deleting it from the live quarantine file alone
+    # only restores it (missing_from_live above).
+    lost = sorted(l for l in quarantine
+                  if l.split("\t", 1)[0] == LEDGER_LOST)
+    if lost:
+        ledger_ok = False
+        actions.append(
+            "RED %d %s record(s) stand (latest: %s) -- an earlier round "
+            "removed the live ledger when no trusted snapshot existed to "
+            "restore it from, so which drains it held is unknown; no "
+            "operator drain is excused until an operator reviews it and "
+            "deletes the line from both %s and %s"
+            % (len(lost), LEDGER_LOST, lost[-1][:160], qpath, fpath))
+    # F113 fix pass 2: the round could rewrite the ledger snapshot as easily
+    # as the ledger itself. Only trust it when its checksum matches the one
+    # the caller took at round start; otherwise nothing is excused.
+    # `snap_raw` is the checksummed bytes; nothing below re-reads the path.
+    ledger_snap_ok = False
+    ledger_snap_why = "no round-start ledger snapshot was supplied"
+    snap_raw = None
     if ledger_before:
-        raw = None
         got = None
+        irregular = False
         try:
-            with io.open(ledger_before, "rb") as fh:
-                raw = fh.read()
-            got = hashlib.sha256(raw).hexdigest()
+            snap_raw = read_regular(ledger_before)
+            got = hashlib.sha256(snap_raw).hexdigest()
+        except NotRegular:
+            irregular = True
         except (IOError, OSError):
             pass
-        if not ledger_before_sha or got != ledger_before_sha:
+        if irregular:
+            # F140 fourth pass: a FIFO here used to block the read forever.
             ledger_ok = False
+            ledger_snap_why = "it is not a regular file"
+            actions.append("RED ledger snapshot %s is not a regular file "
+                           "(e.g. a FIFO swapped in) -- refused unread, so "
+                           "no operator drain is excused this round"
+                           % ledger_before)
+        elif not ledger_before_sha or got != ledger_before_sha:
+            ledger_ok = False
+            ledger_snap_why = "checksum %s" % (
+                "missing" if not ledger_before_sha else "mismatch")
             actions.append("RED ledger snapshot checksum %s -- no operator "
                            "drain is excused this round"
                            % ("missing" if not ledger_before_sha else "mismatch"))
-        elif raw is not None and is_sentinel(raw):
+        elif is_sentinel(snap_raw):
             # F140: a checksum match only proves the sentinel FILE was not
             # tampered with after being written -- it says nothing about
             # whether a real snapshot was ever taken. The queue path (this
@@ -2035,10 +2209,91 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # live ledger is left untouched (see the restore block's own
             # `if ledger_before and ledger_ok` guard).
             ledger_ok = False
+            ledger_snap_why = "it is the #SNAPSHOT-FAILED sentinel"
             actions.append("RED ledger snapshot was not taken at round start "
                            "(#SNAPSHOT-FAILED sentinel) -- no operator drain "
                            "is excused this round, and the live ledger is "
                            "left untouched")
+        else:
+            ledger_snap_ok = True
+    snap_lines = ledger_lines(snap_raw) if ledger_snap_ok else []
+    snap_data = [x for x in snap_lines if x and x != SNAPSHOT_FAILED]
+
+    def write_ledger(lines_):
+        try:
+            with open_regular(live_path, "w", encoding="utf-8",
+                              errors="surrogateescape") as fh:
+                fh.write("".join(x + "\n" for x in lines_))
+        except (IOError, OSError) as e:
+            actions.append("RED could not restore the ledger (%s)" % e)
+            return False
+        return True
+
+    # F140 fourth pass: the live ledger itself replaced by something that is
+    # not a regular file. A FIFO there hung every read below, and would hang
+    # the next round's `cp` in run_round.sh too, so it is moved aside (kept,
+    # as evidence) and from here on treated exactly like a deleted ledger.
+    live_problem = path_problem(live_path)
+    if live_problem:
+        ledger_ok = False
+        aside = "%s.not-regular.%s" % (live_path,
+                                       re.sub(r"[^0-9A-Za-z]", "", now))
+        try:
+            os.rename(live_path, aside)
+        except OSError as e:
+            aside = None
+            moved = "could not be moved aside (%s)" % e
+        else:
+            moved = "moved aside to %s" % aside
+        actions.append(
+            "RED the live ledger %s %s -- refused unread, %s; no operator "
+            "drain is excused this round" % (live_path, live_problem, moved))
+    live_gone = not os.path.lexists(live_path)
+    if ledger_before and live_gone:
+        if ledger_snap_ok:
+            # F140 pass 7: a ledger deleted mid-round was silently left
+            # gone, and the next round bootstraps it empty. Restored from
+            # the trusted snapshot BEFORE the untrusted-round quarantine
+            # below, so that, if this round is untrusted for another
+            # reason, the restored lines are quarantined like any others.
+            if snap_data and not live_problem:
+                actions.append(
+                    "RED the live ledger was deleted or made unreadable "
+                    "during the round (%d drain record(s) at round start) -- "
+                    "restoring it from the round-start snapshot"
+                    % len(snap_data))
+            write_ledger(snap_data)
+        else:
+            # F140 fourth pass, flaw 4: deleted AND no trusted snapshot. The
+            # old code sat this whole case under `ledger_ok`, printed only
+            # the checksum RED, and the next round's `[ -e ] || : >`
+            # bootstrapped an empty ledger in silence. There is nothing to
+            # restore from, so the loss is RECORDED where a round cannot
+            # quietly undo it: a LEDGER-LOST line in the quarantine, which
+            # the floor anchors (append-only, unioned with git history by
+            # run_round.sh) and which the check above turns into
+            # "no drain excused" on every later round until an operator
+            # releases it. Fail closed: the cost of a false record is
+            # drains that must be re-done by hand; the cost of a missed one
+            # is a drain history nobody knows is gone.
+            ledger_ok = False
+            why = re.sub(r"[\t\r\n]", " ", "live ledger removed during the "
+                         "round; snapshot untrusted: %s" % ledger_snap_why)
+            rec = "%s\t%s\t%s" % (LEDGER_LOST, now, why)
+            quarantine.add(rec)
+            live_ok = append_quarantine(
+                "%s ledger lost -- see the %s line below" % (now, LEDGER_LOST),
+                [rec])
+            actions.append(
+                "RED the live ledger %s was removed during the round and its "
+                "round-start snapshot cannot be trusted (%s) -- there is no "
+                "trusted copy to restore it from, so its drain history is "
+                "lost. Recorded as a %s line in %s%s; no operator drain is "
+                "excused in this or any later round until an operator "
+                "reviews it and deletes that line from both files"
+                % (live_path, ledger_snap_why, LEDGER_LOST,
+                   fpath, (" and " + qpath) if live_ok else
+                   " (the live quarantine file could not be written)"))
     if not ledger_ok:
         # F140, second falsification pass (2026-09-26): leaving the live
         # ledger untouched (above) stopped a bad snapshot from erasing a
@@ -2058,24 +2313,15 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # reviews `qpath` and deletes the line by hand. This fails closed: a
         # genuine drain recorded before the bad snapshot is held again (one
         # more dispatch) rather than a forged one being trusted later.
-        live_now_path = operator_ledger(queue_path)
         try:
-            with io.open(live_now_path, encoding="utf-8-sig", errors="surrogateescape") as fh:
-                live_now_lines = [l.rstrip("\n") for l in fh
-                                  if l.strip()
-                                  and not l.lstrip().startswith(("#", "//"))]
+            live_now_lines = [l for l in ledger_lines(read_regular(live_path))
+                              if l.strip() and not is_comment(l)]
         except (IOError, OSError):
             live_now_lines = []
         newly = [l for l in live_now_lines if l not in quarantine]
         if newly:
-            try:
-                with io.open(qpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
-                    fh.write("# %s quarantined -- ledger snapshot could not "
-                             "be trusted this round\n" % now)
-                    for l in newly:
-                        fh.write(l + "\n")
-            except (IOError, OSError):
-                pass
+            append_quarantine("%s quarantined -- ledger snapshot could not "
+                              "be trusted this round" % now, newly)
             quarantine |= set(newly)
             actions.append(
                 "RED %d ledger line(s) quarantined (no trusted snapshot to "
@@ -2089,7 +2335,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     floor_add = sorted(quarantine - floor_quarantine)
     if floor_add and quarantine_read_ok(fpath):
         try:
-            with io.open(fpath, "a", encoding="utf-8", errors="surrogateescape") as fh:
+            with open_regular(fpath, "a", encoding="utf-8",
+                              errors="surrogateescape") as fh:
                 for l in floor_add:
                     fh.write(l + "\n")
         except (IOError, OSError):
@@ -2098,38 +2345,30 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "RED quarantine floor %s could not be appended to -- no "
                 "operator drain is excused this round" % fpath)
     drained_before = (operator_drained(ledger_before, actions=actions,
-                                        quarantine=quarantine)
-                      if ledger_ok else {})
+                                        quarantine=quarantine, raw=snap_raw)
+                      if ledger_ok and ledger_snap_ok else {})
     # F113 fix pass 3: a line written into the live ledger during the round is
     # never the operator's (the operator drains between rounds), even when no
     # queue row vanishes this round -- otherwise it is snapshotted next round
     # with an honest checksum and cashed in then. Every such line is reported
     # and removed, restoring the ledger to its round-start snapshot.
-    if ledger_before and ledger_ok:
-        live_path = operator_ledger(queue_path)
+    #
+    # F140 fourth pass, flaw 5: both sides are split by ledger_lines(), the
+    # rule every other reader uses. With splitlines() here, a quarantined
+    # forged line rewritten as "<line>\f" still split to "<line>" and read as
+    # unchanged, while the drain reader saw "<line>\f", which no quarantine
+    # entry matches.
+    if ledger_before and ledger_ok and ledger_snap_ok:
         try:
-            with io.open(ledger_before, encoding="utf-8", errors="surrogateescape") as fh:
-                snap_lines = fh.read().splitlines()
-        except (IOError, OSError):
-            snap_lines = []
-        try:
-            with io.open(live_path, encoding="utf-8", errors="surrogateescape") as fh:
-                live_lines = fh.read().splitlines()
+            live_lines = ledger_lines(read_regular(live_path))
         except (IOError, OSError):
             live_lines = None
-        snap_data = [x for x in snap_lines if x and x != SNAPSHOT_FAILED]
         if live_lines is None and snap_data:
-            # F140 pass 7: a ledger deleted (or made unreadable) mid-round was
-            # silently left gone, and the next round bootstraps it empty.
             actions.append(
                 "RED the live ledger was deleted or made unreadable during "
                 "the round (%d drain record(s) at round start) -- restoring "
                 "it from the round-start snapshot" % len(snap_data))
-            try:
-                with io.open(live_path, "w", encoding="utf-8", errors="surrogateescape") as fh:
-                    fh.write("".join(x + "\n" for x in snap_data))
-            except (IOError, OSError) as e:
-                actions.append("RED could not restore the ledger (%s)" % e)
+            write_ledger(snap_data)
         if live_lines is not None:
             snap_set = set(snap_lines)
             added = [x for x in live_lines if x and x not in snap_set]
@@ -2139,14 +2378,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                     "ledger restored to its round-start snapshot (%s)"
                     % (len(added), "; ".join(x.split("\t")[1] if "\t" in x
                                              else x[:20] for x in added)))
-                try:
-                    with io.open(live_path, "w", encoding="utf-8", errors="surrogateescape") as fh:
-                        fh.write("".join(x + "\n" for x in snap_lines
-                                         if x and x != SNAPSHOT_FAILED))
-                except (IOError, OSError) as e:
-                    actions.append("RED could not restore the ledger (%s)" % e)
-    drained_now = operator_drained(operator_ledger(queue_path),
-                                    quarantine=quarantine)
+                write_ledger(snap_data)
+    drained_now = operator_drained(live_path, quarantine=quarantine)
 
     def settle(cid, seen, reason, vanished):
         if cid in pos and AUTO_DRAIN:
@@ -2176,8 +2409,9 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # Remembered so --render can tell the next round the pass exists and
             # must not be re-dispatched; the operator reads the same file.
             try:
-                with io.open(queue_path + ".candidates", "a",
-                             encoding="utf-8") as fh:
+                with open_regular(queue_path + ".candidates", "a",
+                                  encoding="utf-8",
+                                  errors="surrogateescape") as fh:
                     fh.write("%s\t%s\n" % (now, cid))
             except (IOError, OSError):
                 pass
@@ -2259,20 +2493,39 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # `;`-delimited clause that is nothing but whitespace-separated hex
             # tokens -- so prose that happens to say "new fix" is not a segment,
             # and a token must hold a digit so an all-hex English word
-            # (`defaced`) cannot prefix-mask a new sha. Dropping a digit-free
-            # real sha only costs a spurious requeue, the cheap direction.
-            old_shas = set()
+            # (`defaced`) cannot prefix-mask a new sha.
+            #
+            # F130 third pass (c): "dropping a digit-free real sha only costs
+            # a spurious requeue" was not the whole cost -- the requeue also
+            # erases a TRUE green mark, and real shas with no digit exist
+            # (`eefebeaf`; 3 of 8126 in this repo, 4 of 125047 in the SDK).
+            # The rule is now split by what each kind of token can do:
+            #   - a token holding a digit is matched by prefix, either way
+            #     (abbreviation lengths differ between mentions);
+            #   - a digit-free token is matched only by EXACT equality.
+            # So `eefebeaf` mentioned again as `eefebeaf` -- git's %h for the
+            # same repo, which is what run_round.sh feeds in -- is recognised,
+            # while the English word `defaced` still cannot mask
+            # `defaced1234`. Residue, stated: a digit-free real sha re-mentioned
+            # at a DIFFERENT abbreviation length still reads as new (spurious
+            # requeue, the cheap direction), and a digit-free word equal to a
+            # new sha's whole abbreviation would mask it (needs a chosen
+            # 7+-hex-char collision).
+            old_pref, old_exact = set(), set()
             for seg in re.findall(
                     r"(?:^|;)\s*(?:fix commit\(s\)|new fix)\s+"
                     r"([0-9a-f]{7,40}(?:\s+[0-9a-f]{7,40})*)\s*(?=;|$)",
                     old_reason, re.IGNORECASE):
-                old_shas.update(t.lower() for t in seg.split()
-                                if re.search(r"[0-9]", t))
+                for t in seg.split():
+                    (old_pref if re.search(r"[0-9]", t)
+                     else old_exact).add(t.lower())
 
-            def _new_sha(sha, old=old_shas):
+            def _new_sha(sha, pref=old_pref, exact=old_exact):
                 sha = sha.lower()
+                if sha in exact:
+                    return False
                 return not any(sha.startswith(o) or o.startswith(sha)
-                               for o in old)
+                               for o in pref)
 
             shas = " ".join(sorted(
                 s for s in fix_shas(cid) if _new_sha(s)))
@@ -2289,13 +2542,27 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 requeued.add(cid)
 
     if requeued:
+        # F130 third pass (d): settle() printed "candidate X ... it stays
+        # queued until the operator drains it" before the requeue was
+        # decided, so rounds.log told the operator to drain the very row
+        # --render (below: mark removed) says still needs a pass. The green
+        # pass was about the OLD fix; for a requeued id the hint is withdrawn.
+        actions[:] = [a for a in actions
+                      if not any(a.startswith("candidate %s " % c)
+                                 for c in requeued)]
         # F130 pass 4: a green pass read before the new fix is about the OLD
         # fix. Hiding it by timestamp alone left a same-minute mark standing,
         # so the requeued ids' lines are removed from the file itself.
         cpath = queue_path + ".candidates"
+        # F140 fourth pass, flaw 2: this was a strict UTF-8 read, and a
+        # UnicodeDecodeError is not an OSError -- one stray byte in the
+        # file raised straight out of update() BEFORE write_queue(), so a
+        # queue row the round had deleted (and settle() had just restored in
+        # `kept`) was never written back and was gone for good. Read and
+        # written the way the ledger is: surrogateescape, one line rule,
+        # regular files only.
         try:
-            with io.open(cpath, encoding="utf-8") as fh:
-                clines = fh.read().splitlines()
+            clines = ledger_lines(read_regular(cpath))
         except (IOError, OSError):
             clines = None
         if clines is not None:
@@ -2303,7 +2570,8 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                     if (l.split("\t") + [""])[1] not in requeued]
             if len(keep) != len(clines):
                 try:
-                    with io.open(cpath, "w", encoding="utf-8") as fh:
+                    with open_regular(cpath, "w", encoding="utf-8",
+                                      errors="surrogateescape") as fh:
                         fh.write("".join(l + "\n" for l in keep))
                 except (IOError, OSError) as e:
                     actions.append(
@@ -2311,7 +2579,14 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                         "(%s) -- --render may still say not to re-dispatch"
                         % (" ".join(sorted(requeued)), e))
 
-    enqueue_cids = sorted((neg & fix) - reviewed - {r[0] for r in kept}) if allow_enqueue else []
+    # F130/F131, operator decision 2026-09-29: a green pass in the SAME round
+    # is not review of a fix committed in that round, on either path. The
+    # requeue path already stopped subtracting `reviewed` (F130 pass 5); this
+    # one had not, so identical round evidence gave OWED 1 when the card was
+    # already queued and OWED 0 -- with no sha recorded -- when it was not.
+    # Nothing binds a same-round pass to the commit it would have to have
+    # read, so both paths now record the sha and owe the row.
+    enqueue_cids = sorted((neg & fix) - {r[0] for r in kept}) if allow_enqueue else []
     for cid in enqueue_cids:
         shas = " ".join(sorted(fix_shas(cid)))
         reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
@@ -2339,13 +2614,13 @@ def candidates(queue_path):
     """{id: latest time a round's subagent reply read green for it}."""
     out = {}
     try:
-        with io.open(queue_path + ".candidates", encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) >= 2 and parts[1]:
-                    out[parts[1]] = max(out.get(parts[1], ""), parts[0])
+        clines = ledger_lines(read_regular(queue_path + ".candidates"))
     except (IOError, OSError):
-        pass
+        return out
+    for line in clines:
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1]:
+            out[parts[1]] = max(out.get(parts[1], ""), parts[0])
     return out
 
 
@@ -2436,9 +2711,12 @@ def self_test():
         ["F46"],
         code_touch={"e4f5a6b": True},
     )
-    # 2. Negative control for 1: the same round, with a pass on the fix.
+    # 2. The same round, with a pass on the fix. Until 2026-09-29 this was
+    #    "no enqueue"; the operator then decided (F130/F131) that a green pass
+    #    in the SAME round is not review of a fix committed in that round --
+    #    nothing binds the pass to the commit -- so the fix is owed a pass.
     case(
-        "no enqueue: fix pass recorded in the same round",
+        "enqueue: a same-round fix pass does not review the fix (2026-09-29)",
         [],
         [
             "📋 **F39 pass 1 → PARTIAL**",
@@ -2446,8 +2724,8 @@ def self_test():
         ],
         ["09847f2 fhp-research F39: fix falsification PARTIAL"],
         2,
-        [],
-        [],
+        ["enqueue F39"],
+        ["F39"],
         # Two dispatches replied about F39 and the second came back green. The
         # bar used to be the bare count `agents >= 2`, which the round satisfied
         # by writing two prompts.
@@ -2548,14 +2826,15 @@ def self_test():
     #     flaw, fixes it, re-attacks it, and says so in the words rounds have
     #     actually used for months. Two dispatches, so the second SURVIVES
     #     cannot be the first pass wearing a different hat.
+    #     (2026-09-29: flipped to "enqueue" with case 2 -- see there.)
     case(
-        "no enqueue: same-round re-pass in the wording rounds really use",
+        "enqueue: same-round re-pass in the wording rounds really use (2026-09-29)",
         [],
         ["🔴 **证伪 pass 1：FALSIFIED**", "🟢 **F38 证伪 pass 2：SURVIVES**"],
         ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
         2,
-        [],
-        [],
+        ["enqueue F38"],
+        ["F38"],
         replies=[("t1", red("F38")), ("t2", green("F38"))],
     )
     # 11. Negative control for 10: the same text, but only ONE dispatch replied
@@ -2604,43 +2883,22 @@ def self_test():
         replies=[("t1", red("F49")), ("t2", green("F49"))],
     )
     case(
-        "no enqueue: \"FALSIFIED then SURVIVES\" is a green summary",
+        "enqueue: a \"FALSIFIED then SURVIVES\" summary no longer exempts the fix (2026-09-29)",
         [],
         ["🟢 F38 证伪 pass 2：SURVIVES"],
         ["1f2daaa fhp F38: close card after two-pass falsification (FALSIFIED then SURVIVES)"],
         2,
-        [],
-        [],
+        ["enqueue F38"],
+        ["F38"],
         {"F38"},
         replies=[("t1", red("F38")), ("t2", green("F38"))],
     )
-    # 13d. The two real lines pass 4 found: the verdict is at column 62 and a
-    #      mention of the token list sits hundreds of columns later. Shortened
-    #      here, structure preserved.
-    case(
-        "no enqueue: a mention of the token list is not a verdict",
-        [],
-        ["📋 **F42 pass 5 → VERDICT: SURVIVES（haiku）**：七个攻击全部通过；"
-         "判决格式要求写成 `SURVIVES/FALSIFIED/PARTIAL`"],
-        ["c48f07b fhp F42: close — pass 5 SURVIVES"],
-        2,
-        [],
-        [],
-        {"F42"},
-        replies=[("t1", red("F42")), ("t2", green("F42"))],
-    )
-    case(
-        "no enqueue: criteria prose naming PARTIAL/FALSIFIED is not a red verdict",
-        [],
-        ["📋 **F49 pass 3 → VERDICT: SURVIVES（haiku）**：入队判据 agents≥2 + "
-         "PARTIAL/FALSIFIED + fix 提交含卡号"],
-        ["9d01b4d research cards: F49 row"],
-        2,
-        [],
-        [],
-        {"F49"},
-        replies=[("t1", red("F49")), ("t2", green("F49"))],
-    )
+    # 13d. (The two token-list lines pass 4 found -- a verdict at column 62
+    #      and a mention of `SURVIVES/FALSIFIED/PARTIAL` hundreds of columns
+    #      later -- were "no enqueue" cases, observable only through pos_same
+    #      suppressing the enqueue. pos_same no longer does (2026-09-29), so
+    #      they are now the probe "13d: a token-list mention does not decide
+    #      the green reading", which asks the polarity question directly.)
     # 13e. Pass 5's escape: a verdict written as a slash-joined pair. Stripping
     #      it for both questions erased the red verdict itself, and the fix
     #      behind it left the queue. The template asks for one token, so this
@@ -3948,6 +4206,359 @@ def self_test():
               and cand.get("F77") == "2026-09-17 11:00")
         return ok, "outs=%r cand=%r" % (outs, cand)
 
+    # ------------------------------------------------ F140 / F130, 2026-09-29
+    # The fourth F140 pass and the third F130 pass (2026-09-28). Every probe
+    # below goes through the REAL main() in a subprocess, with production
+    # semantics (the auto-drain switch removed from the child's environment)
+    # and a UTF-8 locale -- the f140_gate model further down never calls
+    # main(), and that is exactly why the stdout-encoding crash got past it.
+    def gate_cli(d, before_rows, live_rows, ledger_snap=b"", ledger_live=b"",
+                 ledger_tamper=None, quar=None, memo=(), subjects=(),
+                 replies=(), agents=0, cards=("F46", "F77"), code_touch=None,
+                 cand=None, fifo=(), now="2026-09-17 12:00", timeout=10):
+        """One round's gate through argv. Returns (rc, stdout, stderr); rc is
+        None when the child had to be killed at `timeout` seconds.
+
+        ledger_live=None deletes the live ledger; ledger_tamper is appended to
+        the ledger snapshot AFTER its checksum is taken; quar=(snapshot_bytes,
+        live_bytes, floor_bytes) sets up the quarantine files; `fifo` names
+        paths (keys: before, ledger_before, ledger_live, quar_before,
+        quar_live, cand) replaced by a FIFO after their checksums are taken
+        -- what a round that swaps a file for `mkfifo` leaves behind."""
+        qp = os.path.join(d, "q")
+        bp = os.path.join(d, "q.before")
+        lb = bp + ".operator_drains"
+        qb = lb + ".quarantine"
+        write_queue(qp, list(live_rows))
+        write_queue(bp, list(before_rows))
+        io.open(lb, "wb").write(ledger_snap)
+        led = operator_ledger(qp)
+        if ledger_live is None:
+            if os.path.lexists(led):
+                os.remove(led)
+        else:
+            io.open(led, "wb").write(ledger_live)
+        h = lambda p: hashlib.sha256(io.open(p, "rb").read()).hexdigest()
+        cmd = [sys.executable, os.path.abspath(__file__), "--queue", qp,
+               "--before", bp, "--before-sha", h(bp),
+               "--ledger-before", lb, "--ledger-before-sha", h(lb),
+               "--agents", str(agents), "--now", now]
+        if ledger_tamper is not None:
+            io.open(lb, "ab").write(ledger_tamper)
+        if quar is not None:
+            io.open(qb, "wb").write(quar[0])
+            cmd += ["--quarantine-before", qb, "--quarantine-before-sha", h(qb)]
+            if quar[1] is not None:
+                io.open(quarantine_path(qp), "wb").write(quar[1])
+            if quar[2] is not None:
+                io.open(quarantine_floor_path(qp), "wb").write(quar[2])
+        for name, data in (("memo", memo), ("commits", subjects)):
+            p = os.path.join(d, name)
+            io.open(p, "w", encoding="utf-8").write(
+                "".join(x + "\n" for x in data))
+            cmd += ["--memo-added" if name == "memo" else "--commits", p]
+        rp = os.path.join(d, "replies")
+        io.open(rp, "w", encoding="utf-8").write("".join(
+            json.dumps({"id": i, "text": t}) + "\n" for i, t in replies))
+        cmd += ["--replies", rp]
+        cf, cbf = os.path.join(d, "cards"), os.path.join(d, "cards.before")
+        for p in (cf, cbf):
+            io.open(p, "w", encoding="utf-8").write(
+                "".join("%s\topen\n" % c for c in cards))
+        cmd += ["--cards", cf, "--cards-before", cbf]
+        if code_touch is not None:
+            ct = os.path.join(d, "code_touch")
+            io.open(ct, "w", encoding="utf-8").write(code_touch)
+            cmd += ["--code-touch", ct]
+        if cand is not None:
+            io.open(qp + ".candidates", "wb").write(cand)
+        where = {"before": bp, "ledger_before": lb, "ledger_live": led,
+                 "quar_before": qb, "quar_live": quarantine_path(qp),
+                 "cand": qp + ".candidates"}
+        for k in fifo:
+            if os.path.lexists(where[k]):
+                os.remove(where[k])
+            os.mkfifo(where[k])
+        env = dict(os.environ, LC_ALL="en_US.UTF-8", LANG="en_US.UTF-8")
+        for k in ("PYTHONIOENCODING", "PYTHONUTF8",
+                  "FHP_FQ_SELFTEST_AUTO_DRAIN"):
+            env.pop(k, None)
+        try:
+            r = subprocess.run(cmd, capture_output=True, env=env,
+                               timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None, "", "TIMEOUT after %ss" % timeout
+        return (r.returncode, r.stdout.decode("utf-8", "replace"),
+                r.stderr.decode("utf-8", "replace"))
+
+    def owed_line(out):
+        ls = [l for l in out.splitlines() if l.startswith("OWED ")]
+        return ls[-1] if ls else None
+
+    R46 = ("F46", "2026-09-09 16:40", "fixed after PARTIAL verdict")
+    R77 = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; "
+           "fix commit(s) abc1234; no pass on the fix")
+
+    @probe("F140 p8 (stdout): a \\xff ledger byte reaches the real CLI's "
+           "stdout as RED + OWED under LC_ALL=en_US.UTF-8, and --render "
+           "survives one in .candidates -- no UnicodeEncodeError")
+    def _f140p8_stdout():
+        d = tempfile.mkdtemp(prefix="fq_p8out.")
+        rc, out, err = gate_cli(d, [R46], [R46],
+                                ledger_live=b"\xff forged\n")
+        ok1 = (rc == 1 and "Traceback" not in err
+               and "RED 1 ledger line(s) added during the round" in out
+               and owed_line(out) == "OWED 1")
+        qp = os.path.join(d, "q")
+        io.open(qp + ".candidates", "wb").write(b"2026-09-17 12:00\xff\tF46\n")
+        env = dict(os.environ, LC_ALL="en_US.UTF-8", LANG="en_US.UTF-8")
+        for k in ("PYTHONIOENCODING", "PYTHONUTF8"):
+            env.pop(k, None)
+        r = subprocess.run([sys.executable, os.path.abspath(__file__),
+                            "--queue", qp, "--render"],
+                           capture_output=True, env=env, timeout=10)
+        ok2 = r.returncode == 0 and b"F46" in r.stdout and not r.stderr
+        return ok1 and ok2, "gate rc=%s out=%r err=%r | render rc=%s %r %r" % (
+            rc, out, err[-300:], r.returncode, r.stdout, r.stderr[-300:])
+
+    @probe("F140 p8 (.candidates): a \\xff byte in .candidates does not "
+           "crash the gate before write_queue -- a row deleted mid-round is "
+           "still restored")
+    def _f140p8_candidates():
+        d = tempfile.mkdtemp(prefix="fq_p8cand.")
+        rc, out, err = gate_cli(
+            d, [R46, R77], [R77],
+            memo=["F77 pass 3 VERDICT: FALSIFIED"],
+            subjects=["fff0001 tree F77: second fix"],
+            cand=b"2026-09-17 11:00\tF77\n\xff\tjunk\n")
+        q = [r[0] for r in read_queue(os.path.join(d, "q"))]
+        ok = (sorted(q) == ["F46", "F77"] and "Traceback" not in err
+              and "requeue F77 -- new fix fff0001" in out
+              and any(a.startswith("RED F46") for a in out.splitlines())
+              and owed_line(out) == "OWED 2"
+              and "F77" not in candidates(os.path.join(d, "q")))
+        return ok, "rc=%s q=%r out=%r err=%r" % (rc, q, out, err[-400:])
+
+    @probe("F140 p9: a FIFO at the queue snapshot, the ledger snapshot, the "
+           "live ledger, either quarantine path or .candidates is refused "
+           "as RED within the timeout -- never a hang")
+    def _f140p9_fifo():
+        bad = []
+        for k in ("ledger_before", "ledger_live", "before", "quar_before",
+                  "quar_live", "cand"):
+            d = tempfile.mkdtemp(prefix="fq_p9_%s." % k)
+            kw = {}
+            if k in ("quar_before", "quar_live"):
+                kw["quar"] = (b"", b"", b"")
+            if k == "cand":
+                kw.update(memo=["F77 pass 3 VERDICT: FALSIFIED"],
+                          subjects=["fff0001 tree F77: second fix"],
+                          cand=b"")
+            rc, out, err = gate_cli(
+                d, [R77] if k == "cand" else [R46],
+                [R77] if k == "cand" else [R46],
+                ledger_snap=b"2026-09-09 16:50\tF47\tok\tcruz\t2026-09-09 16:40\n",
+                ledger_live=b"2026-09-09 16:50\tF47\tok\tcruz\t2026-09-09 16:40\n",
+                fifo=(k,), **kw)
+            ok = (rc is not None and owed_line(out) is not None
+                  and "Traceback" not in err
+                  and (k == "cand" or "RED " in out))
+            if k == "ledger_live":
+                led = operator_ledger(os.path.join(d, "q"))
+                # moved aside, and the trusted snapshot restored in its place
+                ok = ok and path_problem(led) is None and os.path.isfile(led) \
+                    and any(".not-regular." in f for f in os.listdir(d))
+            if not ok:
+                bad.append((k, rc, out, err[-200:]))
+        return not bad, "failed: %r" % (bad,)
+
+    @probe("F140 p10: live ledger deleted AND its snapshot tampered -- a "
+           "distinct RED and a LEDGER-LOST record the NEXT round honours "
+           "(no drain excused), not a silent empty bootstrap")
+    def _f140p10_ledger_lost():
+        d = tempfile.mkdtemp(prefix="fq_p10.")
+        drain46 = b"2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n"
+        rc1, out1, err1 = gate_cli(d, [R46], [R46], ledger_snap=drain46,
+                                   ledger_live=None, ledger_tamper=b"#x\n")
+        qp = os.path.join(d, "q")
+        floor = load_quarantine(quarantine_floor_path(qp))
+        rec = any(l.startswith(LEDGER_LOST + "\t") for l in floor)
+        ok1 = ("no trusted copy to restore it from" in out1 and rec
+               and owed_line(out1) == "OWED 1")
+        # Round N+1 as run_round.sh sets it up: `[ -e ] || : >` bootstraps
+        # the ledger empty; a well-formed drain for F46 now sits in both the
+        # live ledger and its (honestly checksummed) snapshot; F46 vanishes.
+        rc2, out2, err2 = gate_cli(
+            d, [R46], [], ledger_snap=drain46, ledger_live=drain46,
+            now="2026-09-17 13:00")
+        ok2 = ("%s record(s) stand" % LEDGER_LOST in out2
+               and not any(a.startswith("operator-drained F46")
+                           for a in out2.splitlines())
+               and [r[0] for r in read_queue(qp)] == ["F46"]
+               and owed_line(out2) == "OWED 1" and rc2 == 1)
+        return ok1 and ok2, "N: rc=%s rec=%s out=%r | N+1: rc=%s out=%r" % (
+            rc1, rec, out1, rc2, out2)
+
+    @probe("F140 p11: a quarantined forged line rewritten with a trailing \\f "
+           "is caught as added in round N and cannot drain in round N+1")
+    def _f140p11_formfeed():
+        d = tempfile.mkdtemp(prefix="fq_p11.")
+        X = b"2026-09-09 16:50\tF46\tforged\tcruz\t2026-09-09 16:40\tx"
+        qd = X + b"\n"
+        # round N: X is quarantined (live, floor, snapshot) and sits in the
+        # trusted ledger snapshot; the round rewrites the live copy as X\f.
+        rc1, out1, _ = gate_cli(d, [R46], [R46], ledger_snap=qd,
+                                ledger_live=X + b"\f\n", quar=(qd, qd, qd))
+        qp = os.path.join(d, "q")
+        live_after = io.open(operator_ledger(qp), "rb").read()
+        qlive = io.open(quarantine_path(qp), "rb").read()
+        # round N+1: the snapshot is an honest copy of whatever N left live,
+        # and the row vanishes.
+        rc2, out2, _ = gate_cli(d, [R46], [], ledger_snap=live_after,
+                                ledger_live=live_after,
+                                quar=(qlive, None, None),
+                                now="2026-09-17 13:00")
+        ok = (not any(a.startswith("operator-drained F46")
+                      for a in out2.splitlines())
+              and [r[0] for r in read_queue(qp)] == ["F46"]
+              and rc2 == 1 and b"\f" not in live_after)
+        return ok, "N: rc=%s out=%r live=%r | N+1: rc=%s out=%r" % (
+            rc1, out1, live_after, rc2, out2)
+
+    @probe("F130 (a): red -> fix -> green in ONE round owes the fix whether "
+           "or not the card was already queued (sha recorded both ways)")
+    def _f130a_same_round_both_paths():
+        memo = ["F77 pass 3 VERDICT: FALSIFIED",
+                "\U0001f7e2 F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"]
+        reps = [("t1", "VERDICT: FALSIFIED for F77"),
+                ("t2", "VERDICT: SURVIVES for F77 (fix)")]
+        subj = ["fff0001 tree F77: second fix"]
+        d1 = tempfile.mkdtemp(prefix="fq_f130a_new.")
+        rc1, out1, _ = gate_cli(d1, [], [], memo=memo, subjects=subj,
+                                replies=reps, agents=2)
+        q1 = read_queue(os.path.join(d1, "q"))
+        d2 = tempfile.mkdtemp(prefix="fq_f130a_old.")
+        rc2, out2, _ = gate_cli(d2, [R77], [R77], memo=memo, subjects=subj,
+                                replies=reps, agents=2)
+        q2 = read_queue(os.path.join(d2, "q"))
+        ok = (owed_line(out1) == "OWED 1" == owed_line(out2)
+              and any(r[0] == "F77" and "fff0001" in r[2] for r in q1)
+              and any(r[0] == "F77" and "fff0001" in r[2] for r in q2))
+        return ok, "unqueued: %r %r | queued: %r %r" % (out1, q1, out2, q2)
+
+    @probe("F130 (b): a memo/cards-only bookkeeping commit naming the card "
+           "is not recorded as its fix (enqueue and requeue)")
+    def _f130b_fix_shas_code_touch():
+        subj = ["aaa1111 tree F77: memo bookkeeping",
+                "bbb2222 tree F77: code fix"]
+        ct = "aaa1111 0\nbbb2222 1\n"
+        memo = ["F77 pass 3 VERDICT: FALSIFIED"]
+        d1 = tempfile.mkdtemp(prefix="fq_f130b_new.")
+        _, out1, _ = gate_cli(d1, [], [], memo=memo, subjects=subj,
+                              code_touch=ct)
+        d2 = tempfile.mkdtemp(prefix="fq_f130b_old.")
+        _, out2, _ = gate_cli(d2, [R77], [R77], memo=memo, subjects=subj,
+                              code_touch=ct)
+        ok = ("fix commit(s) bbb2222;" in out1
+              and "requeue F77 -- new fix bbb2222 after" in out2
+              and "aaa1111" not in out1 + out2)
+        return ok, "enqueue: %r | requeue: %r" % (out1, out2)
+
+    @probe("F130 (c): a recorded digit-free sha (eefebeaf) mentioned again "
+           "does not requeue or erase the green mark")
+    def _f130c_digitfree_sha():
+        d = tempfile.mkdtemp(prefix="fq_f130c.")
+        row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; "
+               "fix commit(s) eefebeaf; no pass on the fix")
+        _, out, _ = gate_cli(d, [row], [row],
+                             memo=["F77 pass 3 VERDICT: FALSIFIED"],
+                             subjects=["eefebeaf tree F77: mentioned again"],
+                             cand=b"2026-09-17 11:00\tF77\n")
+        cand = candidates(os.path.join(d, "q"))
+        ok = "requeue F77" not in out and cand.get("F77") == "2026-09-17 11:00"
+        return ok, "out=%r cand=%r" % (out, cand)
+
+    @probe("F130 (d): a requeued id prints no 'candidate ... drain' hint")
+    def _f130d_no_candidate_hint():
+        d = tempfile.mkdtemp(prefix="fq_f130d.")
+        _, out, _ = gate_cli(
+            d, [R77], [R77],
+            memo=["F77 pass 3 VERDICT: FALSIFIED",
+                  "\U0001f7e2 F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+            subjects=["fff0001 tree F77: second fix"], agents=1,
+            replies=[("t1", "VERDICT: SURVIVES for F77 (fix)")])
+        ok = ("requeue F77 -- new fix fff0001" in out
+              and not any(a.startswith("candidate F77")
+                          for a in out.splitlines()))
+        return ok, "out=%r" % (out,)
+
+    @probe("F130 O2: a SHORTER abbreviation of the recorded sha does not "
+           "requeue (prefix match both ways)")
+    def _f130_o2_shorter():
+        d = tempfile.mkdtemp(prefix="fq_f130o2.")
+        row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; "
+               "fix commit(s) abc12345678; no pass on the fix")
+        _, out, _ = gate_cli(d, [row], [row],
+                             memo=["F77 pass 3 VERDICT: FALSIFIED"],
+                             subjects=["abc1234 tree F77: same commit, shorter"])
+        return "requeue F77" not in out, "out=%r" % (out,)
+
+    @probe("F130 O3: a recorded segment written in upper case "
+           "('Fix commit(s) ABC1234') is still read")
+    def _f130_o3_case():
+        d = tempfile.mkdtemp(prefix="fq_f130o3.")
+        row = ("F77", "2026-09-17 10:00", "fixed after FALSIFIED verdict; "
+               "Fix commit(s) ABC1234; no pass on the fix")
+        _, out, _ = gate_cli(d, [row], [row],
+                             memo=["F77 pass 3 VERDICT: FALSIFIED"],
+                             subjects=["abc1234 tree F77: same commit"])
+        return "requeue F77" not in out, "out=%r" % (out,)
+
+    @probe("13d: a token-list mention does not decide the green reading "
+           "(was two 'no enqueue' cases, observable only via pos_same)")
+    def _p13d_token_list():
+        bad = []
+        for cid, line, subj in (
+                ("F42", "📋 **F42 pass 5 → VERDICT: SURVIVES（haiku）**："
+                        "七个攻击全部通过；判决格式要求写成 "
+                        "`SURVIVES/FALSIFIED/PARTIAL`",
+                 "c48f07b fhp F42: close — pass 5 SURVIVES"),
+                ("F49", "📋 **F49 pass 3 → VERDICT: SURVIVES（haiku）**："
+                        "入队判据 agents≥2 + PARTIAL/FALSIFIED + fix 提交含卡号",
+                 "9d01b4d research cards: F49 row")):
+            _, _, pos_same, _, _ = scan(
+                [line], [subj], 2, {cid}, [("t1", red(cid)),
+                                           ("t2", green(cid))])
+            if pos_same != {cid}:
+                bad.append((cid, pos_same))
+        return not bad, "pos_same wrong for %r" % (bad,)
+
+    @probe("F140 p12: run_round.sh's quarantine snapshot keeps a \\xff line "
+           "the gate quarantined -- no strict-decode sentinel lock")
+    def _f140p12_snippet_bytes():
+        rr = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "run_round.sh")
+        blk = io.open(rr, encoding="utf-8").read()
+        sn = blk[blk.index("# BEGIN quarantine-snapshot"):
+                 blk.index("# END quarantine-snapshot")]
+        d = tempfile.mkdtemp(prefix="fq_p12.")
+        st = os.path.join(d, ".loop")
+        os.mkdir(st)
+        fq = os.path.join(st, "UNREVIEWED_FIX")
+        subprocess.run(["git", "-C", d, "init", "-q"], capture_output=True)
+        line = b"2026-09-09 16:50\tF46\t\xff forged\tcruz\t2026-09-09 16:40\n"
+        io.open(quarantine_path(fq), "wb").write(line)
+        io.open(quarantine_floor_path(fq), "wb").write(line)
+        io.open(os.path.join(st, "QUARANTINE_BOOTSTRAPPED"), "w").close()
+        env = dict(os.environ, REPO=d, STATE=st, FIX_QUEUE=fq,
+                   FIX_QUEUE_BEFORE=fq + ".before")
+        r = subprocess.run(["bash", "-c", sn], env=env, capture_output=True,
+                           timeout=30)
+        snap = fq + ".before.operator_drains.quarantine"
+        got = io.open(snap, "rb").read() if os.path.exists(snap) else b""
+        return got == line, "rc=%s snap=%r err=%r" % (r.returncode, got,
+                                                      r.stderr[-300:])
+
     @probe("F140: a memo line with two per-id verdicts marks a RED verdict "
            "only for the id whose OWN block says so")
     def _f140_negline():
@@ -4844,7 +5455,26 @@ def self_test():
     return 1 if failed else 0
 
 
+def safe_stdio():
+    """Every byte this program prints must be printable, whatever the locale.
+
+    F140, fourth falsification pass (2026-09-28): the ledger and quarantine
+    are read with surrogateescape, so a stray \\xff in a ledger line becomes
+    '\\udcff' inside an action string -- and under LC_ALL=en_US.UTF-8
+    Python's stdout is strict UTF-8, so `print(a)` raised UnicodeEncodeError
+    in the middle of the action list. No RED and no OWED line reached
+    run_round.sh, and the round read as UNKNOWN (only LC_ALL=C worked, where
+    Python picks surrogateescape for stdout by itself). backslashreplace
+    prints the offending byte as a visible escape and cannot raise."""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main():
+    safe_stdio()
     ap = argparse.ArgumentParser(add_help=True, allow_abbrev=False)
     ap.add_argument("--queue")
     ap.add_argument("--before", default="",
