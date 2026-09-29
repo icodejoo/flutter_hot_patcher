@@ -17532,3 +17532,22 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
   - subgraph_hash 在改写后成立这一条，还欠一次独立证伪。
 - **分类**：C3 是 gap（Thread 对齐 FEASIBLE）。
 - 对比同一天 disassemble 那张单（agy 另起的进程 54109，已作废）：这次 agy 没有碰 `out_pm`，负控制给了具体数字，模型也独立。**差别主要在派单**：这张单给了现成的模型，禁止事项也写死了。
+
+### 开卡 F147（2026-09-29）
+
+- [ ] **F147：把 `dart::Thread` 的布局对齐到他们的偏移，让压着 unknown 格子的那一大类 Thread 偏移差异真正关掉**（`open`，2026-09-29 开，依据是可行性调查 `28267633`）
+  - **为什么是它**：同一处原因同时解释了三格。dump_object_pool 的 10664/10700（C1 724 + C3 9940），shorebird 的 19092/19122，disassemble 的 thread_metadata 12 个 unit。**改完以后，这些数就是检验标准**：真掉到预测值，这几格才第一次有实测过的 gap 证据；掉不到，就说明可行性调查错了。
+  - **第 0 步（先做，不改 thread.h，不碰钉住的构建）**：在一个单独的 out 目录里编 `offsets_extractor` 和 `offsets_extractor_aotruntime`，把输出跟 `runtime_offsets_extracted.h` 里对应的那几节逐项 diff，必须 0 差异。否则「只替换 4 节」这个方案本身就不成立。
+  - **判据**：
+    1. 改 thread.h/.cc：挪到他们的 4 个插入点，补上占位字段；重生成 4 节偏移表；4 个配置全量重建，估计 40–60 分钟。这一步会让所有钉住的构建失效，要跟 F76/F80/F108 协调，而且循环必须处于 PAUSE。
+    2. 我们 gen_snapshot 的 DWARF Thread 与他们逐成员相等，324/324。
+    3. `run_vm_tests` 不比改动前差，不触发 CheckOffsets FATAL。
+    4. 重生成 `out_pm` 后，实测降幅要对上**改动前写下的预测**：
+       - dump_object_pool 10700 → **36**（只剩 C2 per-process）
+       - shorebird 19122 → **≤30**
+       - disassemble thread_metadata 的 12 个 unit 消失
+    5. `wrapper_stub_test.cc:114,255` 里写死的 0x8d8 直接对得上；我们自己发明的特性串 token 要么删掉，要么说明为什么留。
+  - 实测降幅小于预测，是发现，不是要藏起来的失败，**要逐格报出来**。
+  - **负控制**：
+    - 落地前：故意放错一处（交换两个相邻的插入字段），判据 2 必须精确报出错位的成员，dump_object_pool 仍要 >36。
+    - 落地后：在新 `out_pm` 上跑 `dop_residual.py --ctl-no-rewrite`，C3 应当约为 0（已经不需要改写），而旧 `out_pm` 副本仍读 10700。这证明降幅来自布局改动，而不是 harness 的改动。
