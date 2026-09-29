@@ -17741,3 +17741,13 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 - 2026-09-29T18:47(round PID 75304)心跳：锁定 built 卡 F130 的修补丁 d26cac5b（enqueue_cids 移除同轮绿色豁免）欠独立敌意证伪 pass；已派新鲜 Opus 子代理执行 tools/loop/prompts/falsify.md 七项攻击（agent a7e16fcbef50f360b），等待结果。
 - 2026-09-29T（round PID 75304）**F130 修补丁 VERDICT: PARTIAL (fix)**（Opus，39 次调用，研究树 `b23ebeb2`）——代码本身独立复现为对：在 `/tmp` 副本上把 `enqueue_cids`/`requeue_cids` 的 `- reviewed` 减法加回去，`--self-test` 从 141/0 变 141/4，且四个红全是同轮自审的目标探针，`tools/loop/tests/test_fix_gate.sh`（独立、从 `run_round.sh` 原文抽取的接线测试）在同一变异上同样命中；把本卡真实的混杂中英文判决原文喂给 `scan()`，同轮绿色 pass 仍被正确判定入队，不是只对干净合成夹具有效。**唯一破绽**：`d26cac5b` commit message 里引用的「M1 mutation reddens exactly p8」是**张冠李戴**——`p8` 实际是同一提交里捆绑的 **F140**（stdio UnicodeEncodeError 修复）的探针，不是 F130/F131 的证据；已在 `cards.tsv` F130 行订正并追加 `d26cac5b` 到 fix_shas，commit `b23ebeb2`。**F130 仍是 `built`，未关闭**——判据是 PARTIAL 不是 SURVIVES；本轮末尾无第二次派发，不满足两档豁免的任一档，`d26cac5b` 仍需要一次干净的 SURVIVES 才能出队。
   - 本轮结束：一件事（派 pass）+ 它的审查结论（PARTIAL，已修正证据引用）。未做代码改动（唯一"缺陷"是文档级引用错误，非功能缺陷）。
+
+- 2026-09-29T（round PID 2346）心跳：锁定 built 卡 F130 的修补丁 `d26cac5b`，本轮第二次派新鲜 Opus 子代理执行 `falsify.md` 七项攻击（agent `a0e823df2ab68dc29`）。
+- 2026-09-29T（round PID 2346）**F130 VERDICT: PARTIAL**（Opus）——原文：「enqueue_cids/requeue_cids 真的丢了同轮减法，测试也抓到了这个回归，但一个轮次仍能靠自己先把队列行写进去、在闸门跑之前，把自己本轮的绿色判成『已审查过、不必再派』」。**真实缺口**：`settle()` 的候选标记分支（写 `.candidates`、告诉下一轮"已有绿色 pass 不必再派"的那条路径）仍然对一个**不在 `--before` 快照里、本轮才被写进队列**的行采信 `pos`——是 2026-09-29 操作者决定关掉的同一种"同轮自审"形状，换了一条代码路径重新长出来。
+  - **同轮修复**：给 `settle()` 加 `new_this_round` 参数，只要该行不在 `before_rows` 里就永不采信 `pos`（不论 `pos` 怎么说）；同步第二个调用循环（枚举 `rows` 中不在 `seen_ids` 里的新行时传 `new_this_round=True`）。
+  - **顺带修的回归**：这个改动让既有探针 `_p7`（"CLI: a legacy F-- row migrates to an id that can drain"）变红——诊断为测试工具本身的缺陷：它第二阶段 `run_cli(d, None, ...)` 隐式产生一个**空** `--before` 快照，即使磁盘上的队列其实已经有第一阶段写入的行；在新逻辑下这看起来和"本轮新增"一模一样。修法：显式把该行传成 `queue_rows`，让 `--before` 反映真实的轮次起点状态。
+  - **新增负控制探针** `_f130_same_round_enqueue_and_review`：复现 pass 报告的确切场景（空 `--before`、队列里已有一行 `F77`、memo/reply 给出绿色判决），断言该行**不会**被标成 `.candidates`、仍留在队列里、输出不含 `"candidate F77"`。
+  - **自测结果**：`--self-test` 142/0（新增 1 条）。手工把这次的两处逻辑改动改回原样（回归测试），确认**恰好且仅有**新探针变红（141/0 → 1 failed），其余 141 条不受影响——负控制通过。`tools/loop/tests/test_fix_gate.sh`（独立接线测试）0 failed，未受影响。
+  - **提交**：`1040973f`（`tools/loop/fix_queue.py`，+74/−8）。
+  - **F130 仍是 `built`，未关闭**：这是本轮对 `1040973f` 自身的修复，判据仍是 PARTIAL 不是 SURVIVES；`1040973f` 本身又是一个新的同轮修补丁，同样欠一次独立敌意证伪 pass 才能出队/关闭。本轮末尾只派发了这一次（连同上一条心跳的那次，共两次），按两档豁免规则核对：两次派发都满足，但结论都是 PARTIAL 不是 SURVIVES 措辞，不满足"已有绿色 pass"那一档；也没有出现同轮第二次派发+含 `VERDICT`/`证伪`/`falsif` 的判断句去豁免排队——所以 `1040973f` 按规矩排队等下一轮独立 pass，不擅自标记为已审查。
+  - 本轮结束：一件事（对 F130 修补丁的第二次证伪 pass）+ 发现的真实结构性缺口 + 同轮修复 + 自制负控制验证 + 独立接线测试确认无回归。未越权跑 `--operator-drain`，未编辑队列文件。
