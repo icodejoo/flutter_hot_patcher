@@ -17486,3 +17486,21 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 **最弱的一点**：「只替换 4 节就等价于上游全量重生成」没有实测。能定案的实验是：在另开的 out 目录里编一个 `offsets_extractor`（不碰 thread.h、不碰钉住的构建），把输出和表里对应那一节逐项 diff，应当为 0。几分钟就能做完。
 
 产物在 `$TMPDIR/thread_layout_feasibility/`（`/var/folders/.../T/`），**尚未入库**。
+
+### 2026-09-29 上午：dump_object_pool 证伪 PARTIAL（归因成立）；F65b/F65e 复现不出来；F144 已接线（研究树 `30f1b061`）
+
+- **dump_object_pool ×3**（agent ada912a334b508dee）：**`EXAMINED 10700 UNEXPLAINED 0` 这条归因站住了**
+  - 它自选了 11 种扰动，全部变红，包括改一个本来就不同的 op_subgraph_hash
+  - 独立的逐字比对：改写后仍与 theirs 不同的字 0 个；没被改写、却与 theirs 不同的字 0 个；被改写的函数数恰好等于 self_hash 不同的函数数（118/118/158）
+  - 🔴 **找到一个跨格子的闸门缺陷**：`structural_evidence_check.sh:109,116` 用 `grep -F` 子串匹配检查 locus。于是 `Thread+0xef`、`Thread+0xf5` 这种根本不存在的成员名，会搭着真成员的名字过关；藏在 `verify_cmd` 注释里的 locus 也能过关。**所有格子的 structural 行都经过这道闸门。** 已转给正在做 F65a 的 subagent，同一个文件一起修
+  - 小问题：
+    - C2 只检查 `mod 0x4000`，`0x4f4` 这种不可能的地址也会被解释掉
+    - C2 那一行的 WHY 声称我们一侧每次运行也会变，但 `verify_cmd` 里没加 `--ours-det`
+    - 提交的 `.out` 是在旧 `out_pm` 上跑的（已在新 `out_pm` 上重生成）
+    - `dop_negctl.sh` 依赖作者 `$TMPDIR` 里一个没入库的目录
+  - **不改判 structural**：Thread 布局可以对齐（见上一节），所以 10664 units 是 gap，只有 36 units 是真正的 per-process
+- **F65b、F65e 复现不出来**：
+  - F65b：三个脚本对 `--fixture=` 和 `--fixture ""` 两种写法一律 rc=2 拒绝
+  - F65e：0 张 closed 卡的 fixture 下，没有出现 `expression expected`
+  - 两张都是关卡候选，按契约要先过一次证伪 pass
+- **F144**：判据 (1) 已满足，`verify_all.sh:895` 里有它，`:217` 计数，当前 rc=0。判据 (3)(4) 没重核；修补丁 `3eaeb619`/`703090b7` 还欠一次 pass
