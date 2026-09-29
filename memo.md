@@ -18444,3 +18444,33 @@ F95 保持 `open`，不关卡。本轮涉及树：`fhp-research`（写，`8079ae
 本轮到此结束，下一轮请挑一个独立任务（规则 0：SDK 本体优先）；F95 若要继续，下一步是
 Thread-only revert+rebuild 把 F147 与 F148/F151 的贡献分开，或对 pre-fix 158/118/118 集合做
 逐函数 DWARF 偏移归因，并换一版能在这个空桶上仍能报红的 `f95_self_hash_residual.py`。
+
+### 心跳 2026-09-30 03:09（round PID 84644）：续 F95，拆分 F147/F148 对 158 差异函数的贡献
+
+本轮确认自己是 round.lock 持有者（PID 84644），与 ralph.sh 是同一循环，非竞争写方。
+核对三张欠证伪 pass 的 built 卡（F111/F121/F49）：均已在挂起池，均不是第 5 轮重试点，本轮不重派。
+F37 等操作者对"是否重钉 dartaotruntime/gen_snapshot"表态，本轮不碰。
+沿上一轮（round PID 34296）结论续 F95（规则 0 SDK 本体，最高优先级可执行开放卡）：
+按其建议做 Thread-only revert+rebuild，拆分 F147（`513ba5e545a`/`9b63a7b52b3`/`1bf8a935dde`，
+Thread 布局对齐）与 F148（`d4923373846`，VM stub 重排）各自对 pre-fix 158/118/118 差异函数集合的贡献
+（pre-fix 158 个 prog 差异函数中 65 个是 `[Stub]`——F148 的嫌疑对象；其余 93 个非 stub，是 F147 的嫌疑对象）。
+
+**派发**（general-purpose 子代理，opus，仅 F148 一个提交单独 revert，SDK 树只做
+`git revert --no-commit`+重建+测量+`git checkout --`还原，不提交）：
+自包含指令：① 记录 `~/dart-3122/sdk` HEAD（`de660deeae5`）与 clean 状态；
+② 记录被别的卡钉住的 `gen_snapshot`/`dartaotruntime`（`ProductARM64`）sha256 前后对照
+（本卡不碰这两个钉住产物，只在 `ProductSimARM64` 上实验）；
+③ `git revert --no-commit d4923373846`（只回退 F148 的 stub 重排，保留 F147/F151/F152）；
+④ 重建 `ProductSimARM64` 的 `gen_snapshot`/`analyze_snapshot`；⑤ 重新生成 fixture 并跑
+`f95_self_hash_residual.py`（或等价的逐函数 self_hash 差异测量），记录差异函数总数与其中
+`[Stub]` 计数，与 pre-fix 的 158/65 对照；⑥ `git checkout -- .` 完整还原，确认
+`git status --porcelain` 空、`gen_snapshot`/`dartaotruntime`（ProductARM64 钉住产物）sha256
+未变；⑦ 全程禁止 `git add/commit/reset/clean`，不跑 `verify_all.sh`。严格返回格式（≤100 行）。
+
+结果尚未回收——本轮先记录派发依据后结束。按契约五之四，即便这一步 rc=0，也只是
+"做完一件事"，还差一次新鲜子代理的证伪 pass 才能动 F95 的卡片状态；本节不预判结果。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理 revert+重建+还原，未提交）；`fhp-research`
+（子代理跑脚本，未提交）；本仓 `memo.md`（写，本节）。未动 `.loop/` 队列文件、未动
+`cards.tsv`。本轮 agents=1（尚未回收）。本轮到此结束，下一轮请先看这次派发是否已回收，
+再决定是续写结论还是挑新任务（规则 0：SDK 本体优先）。
