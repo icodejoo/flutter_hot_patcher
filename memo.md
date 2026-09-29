@@ -17812,3 +17812,53 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 **F151 修补丁 VERDICT: SURVIVES**（Opus，`falsify.md`，另一个新鲜子代理，73 次调用，475 秒，独立复核）：①②字段位置/类型核实站得住——`WriteAlloc` 的新 `WriteUnsigned` 确认是该方法第一条语句（1180 行，先于 `count = predefined_.length()`），`ReadAlloc` 的新块同样是该方法第一条；`intptr_t`↔`ReadUnsigned()` 默认 `T=intptr_t` 类型一致。**提交谱系核实**：`de660deeae5` 在 `shorebird-3.12.2` 分支点之后是第 7 个线性提交（F145→F147×3→F148→F152→F151），非孤立分支。**负控制的保留被证实成立，并给出了一个摆脱它的新负控制**：`Version::SnapshotString()` 对 `VM_SNAPSHOT_FILES`（含 `app_snapshot.cc` 本身）整文件做 MD5，**任何一行改动**（哪怕只加注释）都会连锁改变版本哈希触发 `Wrong full snapshot version`，独立复现（纯调试打印改动就已导致输出 `.so` 十万+字节不同）——原负控制确实测不出"字节流错位"本身。子代理改用**源码无关**的负控制：在已生成的 `hello.so` 里用 `bytes_written()` 定位到新字段的确切偏移（`0xbc7f`，字节 `6a 84` 解码为 618），直接十六进制改这份**已构建**的产物（不碰源码，版本哈希不受影响）——(a) 只改值（618→1，字节数不变）：程序仍正确运行（说明该值只影响预分配容量，`AllocateIndex` 的 `Utils::Maximum` 增长会自愈，非正确性关键）；(b) 改错编码使 varint 读指针过量消费：产生真实的下游崩溃 `app_snapshot.cc:9622: error: No cluster defined for cid 0`——**这是不依赖版本哈希、由内容直接证明该字段对字节流对齐确实承重的证据**。**判据③**：未碰共享 `out_pm`；改为直接测量流内增量——`bytes_written()` 改动前后精确 `12095→12097`，与声称的 +2 字节吻合。**STILL OPEN（原文）**：Shorebird 真实 R2 残差是否恰好因此少 2 字节，未对着真实 oracle 核实——整文件字节对比被证明**不可靠**（改动前/改动后全量重建对比出 175,513 处不同字节，且总大小恰好相等，几乎全是版本哈希连锁效应，不是这 2 字节本身的信号），这是本次 pass 额外发现的方法论问题。**判据④**未做（未碰 `ReleaseARM64`）。**⑦ `AllocateIndex` 幂等性**核实：`class_table.h`/`.cc` 显示它是单调增长（`SetNumCids(Utils::Maximum(num_cids_, index+1))`），早调用大 `max_cid` 后续每类再调用小索引不会重复计数或缩小，安全。**STILL OPEN（理论，未构造出真实复现）**：`NumCids()==0` 时 `NumCids()-1` 会无符号下溢成巨大值，代码里没找到守卫，但 `gen_snapshot` 总在 bootstrap 后跑、已有数百个预定义 class，未能构造出真实触发路径。round-trip 额外测了 8 个 fixture（`hello`/`b_shift`/`c_body`/`d_sig`/`e_minimal`/`f_heavy`/`g_insert`/`base_dd`/`prog`）全部通过。commit 卫生：只改了 `app_snapshot.cc`，`~/dart-3122/sdk` 树核实回收后干净（HEAD 仍在 `de660deeae5`）。
 
 按契约：**SURVIVES ⇒ F151 关闭**（已在上方把 `- [ ]` 改为 `- [x]`，`cards.tsv` F151 行状态改 `closed` 并追加完整判决记录待提交）。`cards_check.sh` 待复跑核对 open/closed 集合。**本轮结束：两件事（F151 实现派发+回收；F151 独立证伪派发+回收），一张 SDK 本体卡片按契约正确关闭**（规则 0 正面工作）。未触碰 `.loop/UNREVIEWED_FIX`（本卡不在该队列里，是全新工作非修补丁），未越权重建共享树，未 `git add -A`，未推送。
+
+### 心跳 2026-09-29 23:14 PST（round PID 43430）
+
+契约已读。`.loop/UNREVIEWED_FIX` 里最新一批修补丁均为「no pass on the fix」——本轮锁定
+F108 的最新子修补（fhp-research `6a6f80b8`+`843b7a03`，`op_dump_probe.py` 的
+ACCURACY BOUND 注释订正 + page_all/zero-slide 自测 + 用户空间范围守卫）。
+memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）」记录，
+但措辞不是 `fix_queue.py` 的 `POS_VERDICT` 能匹配的规范格式（全角括号非冒号），
+所以队列仍标「no pass」——本轮派一个新鲜 Opus 子代理按 `falsify.md` 重新独立复核，
+把判决写成 `F108 修补丁 VERDICT: ...` 规范格式。三棵树 `git status --porcelain` 待核。
+
+**pass 3（新鲜 Opus general-purpose，规范格式）判 PARTIAL**：七项攻击全跑，(A)(B)(C)(E) 全复现，
+(b) 之前 pass 2 留的「仅测 8 次」已闭合（本次独立跑 50 次，两侧地址各不相同、各自单值），
+但两处真缺陷：
+(c) ACCURACY BOUND 注释仍写 `reset_unknown` 地址来自 `__TEXT` 段——lldb（ASLR 关，slide 0）
+实测 `analyze_snapshot` 的 `__TEXT` 为 `0x100000000..0x1002bc000`，槽值 `0x104f80524` 在其外，
+`image lookup -a` 查无所属，实为另一段独立映射（很可能是加载的快照自身的可执行段）；
+且注释写「布局变化必然 RED，绝不 GREEN」过头——attack 7 证实恰为 `0x4000` 整数倍的布局变化
+**会** GREEN（这正是文档化的精度上限本身，不是另一种机制）。
+(a) 更严重：`page_all` 自测的 no-op 扰动守卫用的是裸 `assert`，`python3 -O` 与
+`PYTHONOPTIMIZE=1 python3` 下都会静默消失（实测：`PYTHONOPTIMIZE=1 python3 op_dump_probe.py --self-test`
+在扰动被消掉后仍 `rc=0` 打印 "all checks passed"）——production 调用方 `op_dump_check.sh:40`
+目前跑的是裸 `python3`（已实测确认），所以暂不可被触发，但守卫本身是假的。
+
+`F108 修补丁 VERDICT: PARTIAL -- 两处准确性缺陷：ACCURACY BOUND 注释对地址归属和"绝不 GREEN"两处描述有误；page_all 的 no-op 守卫在 PYTHONOPTIMIZE=1 下静默失效。`
+
+**当场修（同轮，fhp-research `e461595f`）**：
+1. 改写 ACCURACY BOUND 与 reset_unknown 行注释——不再声称 `__TEXT`，改为「落在 `__TEXT` 之外的
+   另一段映射（很可能是加载快照自身的可执行段）」；不再写「绝不 GREEN」，改为准确描述
+   「非 `0x4000` 倍数位移 → RED（re-pin）；`0x4000` 倍数位移 → GREEN（即 (a) 条已文档化的精度上限，
+   真实回归若恰为该倍数会被静默接受，未修，只是被明确记录）」。
+2. 把 no-op 守卫的 `assert` 换成 `check()`（与文件里其余检查同路径，汇入 `failures`，不受 `-O` 影响）。
+   实测：clean tree `--self-test` 仍 `rc=0`；手造 no-op 扰动（`+0x4000`→`+0`）副本下，
+   plain python3 与 `PYTHONOPTIMIZE=1 python3` 均正确 `rc=1`（修前 `PYTHONOPTIMIZE=1` 下静默 `rc=0`）。
+
+**pass 4（新鲜 Opus general-purpose，独立复核 `e461595f`）判 SURVIVES (fix)**：
+七项攻击见上，关键点：手造的 no-op 突变副本在 plain/`-O`/`PYTHONOPTIMIZE=1` 三种调用下
+均正确 `rc=1`（对照修前 `e461595f^` 同一突变，`PYTHONOPTIMIZE=1` 下仍是 `rc=0` "all checks passed"，
+证明修复确实改变了行为而非巧合）；`grep -niE 'never green|__TEXT'` 只剩两处且均描述「在 `__TEXT` 之外」；
+`git log`/`rev-parse` 确认跑在 HEAD (`e461595fe537...`)、树干净。
+
+`F108 修补丁 VERDICT: SURVIVES (fix) -- e461595f is HEAD; 手造的 no-op 突变在 plain/-O/PYTHONOPTIMIZE=1 下均正确 rc=1（修前 PYTHONOPTIMIZE=1 下静默 rc=0）；注释不再声称 __TEXT 或"绝不 GREEN"。`
+
+**STILL OPEN（verbatim）**：`Nobody has checked whether line 549 really covers line 562 under -O. Test: in a scratch copy, change one shape-A slot in the fixture to a non-Smi value, then run PYTHONOPTIMIZE=1 python3 op_dump_probe.py --self-test and confirm rc!=0. I also did not re-check the lldb region attribution myself.`
+（第 562 行另有一个裸 `assert` 未动，pass 4 判断它"应该"不承重但没有实跑证实；留给以后一并处理，不新开卡，属于同一处遗留。）
+
+`.loop/UNREVIEWED_FIX` 里 F108 这一行仍留给操作者按 `--operator-drain` 处理（F113 规则：轮次不出队）。
+本轮涉及树：fhp-research（写，1 次提交 `e461595f`）；flutter_hot_patcher（本文件）；未动 SDK 树。
+本轮 agents=2（两次新鲜 Opus 派发）。契约五之四四步已完整走完：做完→证伪 PARTIAL→当场修→重跑 SURVIVES。
+本轮到此结束。
