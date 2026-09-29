@@ -2501,6 +2501,40 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             seen_ids.add(cid)
             settle(cid, seen, reason, False, new_this_round=True)
 
+    def unrecorded_fix_shas(old_reason, cid):
+        """New fix commits for `cid` this round not already named in
+        `old_reason`.
+
+        Factored out of the requeue loop below (F130 pass 9) so the
+        record-only path -- a same-round fix commit with no red verdict at
+        all, held rather than requeued by settle()'s effective_pos guard --
+        can also write the sha into the row's reason on disk. Without this,
+        pass 8's fix only delayed the same-round-self-review escape by one
+        round: the sha was reported in that round's actions log but never
+        persisted, so a LATER round with no new commits and a repeated green
+        reply saw `cid not in fix` and fell straight through to
+        effective_pos, marking the still-unreviewed commit a candidate.
+        """
+        old_pref, old_exact = set(), set()
+        for seg in re.findall(
+                r"(?:^|;)\s*(?:fix commit\(s\)|new fix)\s+"
+                r"([0-9a-f]{7,40}(?:\s+[0-9a-f]{7,40})*)\s*(?=;|$)",
+                old_reason, re.IGNORECASE):
+            for t in seg.split():
+                (old_pref if re.search(r"[0-9]", t)
+                 else old_exact).add(t.lower())
+
+        def _new_sha(sha):
+            sha = sha.lower()
+            if sha in old_exact:
+                return False
+            return not any(sha.startswith(o) or o.startswith(sha)
+                           for o in old_pref)
+
+        return " ".join(sorted(s for s in fix_shas(cid) if _new_sha(s)))
+
+    before_ids = {r[0] for r in before_rows}
+
     requeued = set()
     if allow_enqueue:
         # F130 pass 5: a same-round green pass does not exempt a NEW fix
@@ -2551,24 +2585,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             # requeue, the cheap direction), and a digit-free word equal to a
             # new sha's whole abbreviation would mask it (needs a chosen
             # 7+-hex-char collision).
-            old_pref, old_exact = set(), set()
-            for seg in re.findall(
-                    r"(?:^|;)\s*(?:fix commit\(s\)|new fix)\s+"
-                    r"([0-9a-f]{7,40}(?:\s+[0-9a-f]{7,40})*)\s*(?=;|$)",
-                    old_reason, re.IGNORECASE):
-                for t in seg.split():
-                    (old_pref if re.search(r"[0-9]", t)
-                     else old_exact).add(t.lower())
-
-            def _new_sha(sha, pref=old_pref, exact=old_exact):
-                sha = sha.lower()
-                if sha in exact:
-                    return False
-                return not any(sha.startswith(o) or o.startswith(sha)
-                               for o in pref)
-
-            shas = " ".join(sorted(
-                s for s in fix_shas(cid) if _new_sha(s)))
+            shas = unrecorded_fix_shas(old_reason, cid)
             if shas:
                 # The verdict word comes from lines that name THIS card, not
                 # from any red line in the round.
@@ -2580,6 +2597,27 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 actions.append("requeue %s -- new fix %s after %s verdict"
                                % (cid, shas, verdict_str))
                 requeued.add(cid)
+
+        # F130 pass 9 (falsification on 6e59f649, VERDICT: PARTIAL): pass 8
+        # correctly held a row instead of draining it when a same-round fix
+        # commit arrived with no red verdict at all, but held is silent on
+        # disk -- the reason string never changed, so a round with no new
+        # commits and just a repeated green reply saw `cid not in fix` and
+        # fell straight through to effective_pos, draining the row one
+        # round later than pass 8 intended. Recording the sha here removes
+        # that asymmetry: a same-round fix lands in the reason whether or
+        # not it happens to be accompanied by a red line this round.
+        record_cids = sorted((fix - neg) & before_ids - requeued
+                              & {r[0] for r in kept})
+        for cid in record_cids:
+            row_i = next(i for i in range(len(kept)) if kept[i][0] == cid)
+            old_reason = kept[row_i][2]
+            shas = unrecorded_fix_shas(old_reason, cid)
+            if shas:
+                kept[row_i] = (cid, now, old_reason + "; new fix " + shas)
+                actions.append(
+                    "note %s -- new fix %s recorded (no red verdict this "
+                    "round; row held, not requeued)" % (cid, shas))
 
     if requeued:
         # F130 third pass (d): settle() printed "candidate X ... it stays
@@ -4308,6 +4346,63 @@ def self_test():
               and "RED F77" in out
               and "landed THIS round" in out)
         return ok, "rc=%s out=%r q=%r cand=%r" % (rc, out, q, cand)
+
+    @probe("F130 pass 9: a same-round fix commit with no red verdict is held "
+           "(not requeued) but the sha is still recorded in the reason on "
+           "disk, so a LATER round reviewing it (no new commits, the same "
+           "green reply) is reviewing a commit the reason actually names")
+    def _f130_record_only_two_rounds():
+        # Round 1 reproduces pass 8's scenario exactly (fff0001 lands this
+        # round, bare green reply, no red line) and additionally checks the
+        # new sha is durably written into the row's reason -- not just
+        # reported in that round's actions log.
+        d = tempfile.mkdtemp(prefix="fq_f130record.")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after FALSIFIED verdict; fix commit(s) abc1234; "
+                   "no pass on the fix")
+        rc1, out1, _ = run_cli(
+            d, [old_row], memo=["F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+            subjects=["fff0001 tree F77: follow-up fix"],
+            agents=1, cards={"F77"},
+            replies=[("t1", "VERDICT: SURVIVES for F77 (fix)")])
+        q1 = read_queue(os.path.join(d, "queue"))
+        cand1 = candidates(os.path.join(d, "queue"))
+        row1 = next((r for r in q1 if r[0] == "F77"), None)
+        round1_ok = (row1 is not None and "fff0001" in row1[2]
+                     and "F77" not in cand1 and "candidate F77" not in out1)
+
+        # Round 2: no new commits (fix_shas empty), the SAME green reply
+        # again. This crosses a round boundary from fff0001's own landing,
+        # so a candidate mark here is correct -- what pass 9 fixes is that
+        # the reason naming the reviewed commit must survive to see it.
+        # Production semantics (F113): rounds never auto-drain, a green pass
+        # only writes a candidate mark. FHP_FQ_SELFTEST_AUTO_DRAIN is left
+        # set in this process's environment by the F113 auto-drain probes
+        # elsewhere in this suite and inherited by run_cli's subprocess, so
+        # it is popped here the same way _f130_green_same_round already
+        # does -- without this, round 2's effective_pos=True (no new fix
+        # commit this round) hits AUTO_DRAIN and the row is drained instead
+        # of marked a candidate, which is not what production does.
+        saved = os.environ.pop("FHP_FQ_SELFTEST_AUTO_DRAIN", None)
+        try:
+            rc2, out2, _ = run_cli(
+                d, q1, memo=["F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+                subjects=[], agents=1, cards={"F77"},
+                replies=[("t2", "VERDICT: SURVIVES for F77 (fix)")])
+        finally:
+            if saved is not None:
+                os.environ["FHP_FQ_SELFTEST_AUTO_DRAIN"] = saved
+        q2 = read_queue(os.path.join(d, "queue"))
+        cand2 = candidates(os.path.join(d, "queue"))
+        row2 = next((r for r in q2 if r[0] == "F77"), None)
+        round2_ok = (row2 is not None and "fff0001" in row2[2]
+                     and "F77" in cand2 and "candidate F77" in out2)
+
+        ok = round1_ok and round2_ok
+        return ok, ("round1(rc=%s ok=%s row=%r cand=%r) "
+                     "round2(rc=%s ok=%s row=%r cand=%r)"
+                     % (rc1, round1_ok, row1, cand1,
+                        rc2, round2_ok, row2, cand2))
 
     @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
            "re-mentioning the second one neither requeues nor drops the mark")
