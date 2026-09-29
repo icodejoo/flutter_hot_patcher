@@ -2026,6 +2026,18 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         """
         if replies_gap:
             return "no subagent reply could be read this round (%s)" % replies_gap
+        if cid in fix:
+            # F130 pass 8 (falsification on d26cac5b): a fix commit for this
+            # id landed IN THIS ROUND. A green verdict written in the same
+            # round has no round boundary between the commit and the review,
+            # so it cannot be evidence about that commit -- this is the exact
+            # same-round-self-review shape the 2026-09-29 operator decision
+            # forbade for enqueue_cids/requeue_cids, reached through a row
+            # that was already queued instead of a fresh one.
+            return ("a fix commit for this id landed THIS round -- a "
+                    "same-round green verdict cannot review a commit made in "
+                    "the same round it is reported in; re-run the pass next "
+                    "round, after the commit is history")
         return ("no reply from this round's dispatches names it with a green "
                 "verdict; re-run the pass, or reconcile the queue by hand "
                 "between rounds")
@@ -2392,7 +2404,22 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # reached through settle()'s candidate-marking path instead. So a
         # same-round-new row is never eligible for the `pos` credit, no
         # matter what `pos` says.
-        effective_pos = cid in pos and not new_this_round
+        # F130 pass 8 (falsification on d26cac5b, general-purpose/opus,
+        # PARTIAL): the new_this_round guard above only covers a row CREATED
+        # this round. A row already queued from an earlier round, with a
+        # NEW fix commit landing this same round, hit the identical
+        # same-round-self-review shape through effective_pos instead --
+        # nothing here asked whether `fix` (this round's own commits) had
+        # touched cid, so a green verdict on the OLD queued fix silently
+        # certified an UNREVIEWED new commit as "already has a green pass".
+        # Repro (pre-fix): row queued for F77 with fix commit(s) abc1234;
+        # this round lands fff0001 (a new fix, no red line at all) and a
+        # reply says "VERDICT: SURVIVES for F77 (fix)" -- effective_pos was
+        # True, F77 was marked a reviewed candidate, fff0001 was never
+        # recorded anywhere. `cid not in fix` closes it: a same-round fix
+        # commit routes cid to the `elif cid in claimed` branch below instead,
+        # which holds it RED with unsupported()'s new fix-in-`fix` message.
+        effective_pos = cid in pos and not new_this_round and cid not in fix
         if effective_pos and AUTO_DRAIN:
             actions.append("drain %s (fix pass recorded by a subagent reply, "
                            "%d dispatch(es))" % (cid, agents))
@@ -4250,6 +4277,37 @@ def self_test():
               and any(r2[0] == "F77" for r2 in q)
               and "candidate F77" not in out)
         return ok, "rc=%s out=%r q=%r cand=%r" % (r.returncode, out, q, cand)
+
+    @probe("F130 pass 8: an ALREADY-QUEUED row with a NEW fix commit and a "
+           "bare green verdict this round -- no FALSIFIED/PARTIAL line at "
+           "all -- must not be marked a reviewed candidate; the new commit "
+           "has no round boundary between it and the verdict")
+    def _f130_green_same_round_no_red():
+        # Reproduces the escape found by the 2026-09-29 falsification pass on
+        # d26cac5b (Opus, general-purpose, VERDICT: PARTIAL): requeue_cids
+        # only fires on (neg & fix), so a round with a brand-new fix commit
+        # and ONLY a green line -- no red line anywhere -- skipped that path
+        # entirely, and settle()'s effective_pos (before this fix) did not
+        # look at `fix` for a row that was already queued from an earlier
+        # round, so the new, unreviewed commit rode in on the old commit's
+        # standing candidate mark.
+        d = tempfile.mkdtemp(prefix="fq_f130nored.")
+        old_row = ("F77", "2026-09-17 10:00",
+                   "fixed after FALSIFIED verdict; fix commit(s) abc1234; "
+                   "no pass on the fix")
+        rc, out, _ = run_cli(
+            d, [old_row], memo=["F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch"],
+            subjects=["fff0001 tree F77: follow-up fix"],
+            agents=1, cards={"F77"},
+            replies=[("t1", "VERDICT: SURVIVES for F77 (fix)")])
+        cand = candidates(os.path.join(d, "queue"))
+        q = read_queue(os.path.join(d, "queue"))
+        ok = ("F77" not in cand
+              and any(r2[0] == "F77" for r2 in q)
+              and "candidate F77" not in out
+              and "RED F77" in out
+              and "landed THIS round" in out)
+        return ok, "rc=%s out=%r q=%r cand=%r" % (rc, out, q, cand)
 
     @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
            "re-mentioning the second one neither requeues nor drops the mark")
