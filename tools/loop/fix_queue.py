@@ -2533,8 +2533,6 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
 
         return " ".join(sorted(s for s in fix_shas(cid) if _new_sha(s)))
 
-    before_ids = {r[0] for r in before_rows}
-
     requeued = set()
     recorded = set()
     if allow_enqueue:
@@ -2608,8 +2606,18 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # round later than pass 8 intended. Recording the sha here removes
         # that asymmetry: a same-round fix lands in the reason whether or
         # not it happens to be accompanied by a red line this round.
-        record_cids = sorted((fix - neg) & before_ids - requeued
-                              & {r[0] for r in kept})
+        #
+        # F130 pass 11 (falsification on 91bcd77f, VERDICT: PARTIAL, case B):
+        # restricting this to `before_ids` left a row CREATED this round
+        # (new_this_round=True in settle(), so effective_pos is already False
+        # for it) with the identical asymmetry -- it falls through
+        # requeue_cids too (that needs a red verdict in `neg`), so a
+        # same-round fix on a brand-new row was never recorded and never
+        # swept from `.candidates` either. settle() already denies such a
+        # row the `pos` credit outright (pass 7), so there is no
+        # same-round-self-review risk in also letting it be recorded here;
+        # the `before_ids` restriction was never load-bearing, only untested.
+        record_cids = sorted((fix - neg) - requeued & {r[0] for r in kept})
         for cid in record_cids:
             row_i = next(i for i in range(len(kept)) if kept[i][0] == cid)
             old_reason = kept[row_i][2]
@@ -2621,6 +2629,23 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                     "round; row held, not requeued)" % (cid, shas))
                 recorded.add(cid)
 
+    # F130/F131, operator decision 2026-09-29: a green pass in the SAME round
+    # is not review of a fix committed in that round, on either path. The
+    # requeue path already stopped subtracting `reviewed` (F130 pass 5); this
+    # one had not, so identical round evidence gave OWED 1 when the card was
+    # already queued and OWED 0 -- with no sha recorded -- when it was not.
+    # Nothing binds a same-round pass to the commit it would have to have
+    # read, so both paths now record the sha and owe the row.
+    enqueue_cids = sorted((neg & fix) - {r[0] for r in kept}) if allow_enqueue else []
+    for cid in enqueue_cids:
+        shas = " ".join(sorted(fix_shas(cid)))
+        reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
+            "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED",
+            shas or "(none recorded)",
+        )
+        kept.append((cid, now, reason))
+        actions.append("enqueue %s -- %s" % (cid, reason))
+
     # F130 pass 10 (falsification on 5ab1805b, VERDICT: PARTIAL): the
     # record-only step above writes the new sha into `reason`, but a stale
     # `.candidates` mark from an EARLIER round's green pass on the OLD fix
@@ -2631,7 +2656,21 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # already-reviewed. A same-round fix with no red verdict invalidates the
     # old mark exactly like a requeue does -- the mark was never about this
     # commit either way.
-    stale_candidate_marks = requeued | recorded
+    #
+    # F130 pass 11 (falsification on 91bcd77f, VERDICT: PARTIAL, case C): a
+    # cid can carry a stale `.candidates` mark from a round BEFORE it was
+    # last operator-drained and later re-enqueued here with a brand-new
+    # FALSIFIED verdict -- `--operator-drain` clears the ledger, never this
+    # file, so the old mark from the id's earlier life on the queue survives
+    # the drain and reappears the moment `enqueue_cids` puts the row back.
+    # This block was moved below the enqueue_cids loop (was above it) so
+    # `enqueue_cids` can join the sweep on the same footing as `requeued`
+    # and `recorded`: all three are "a fix commit landed on cid this round",
+    # and none of the three can ever coincide with a fresh `pos` credit for
+    # the same cid in the same round (effective_pos requires `cid not in
+    # fix`, and enqueue_cids/requeue_cids/record_cids all draw from `fix`),
+    # so folding them together cannot mask a genuinely-fresh candidate mark.
+    stale_candidate_marks = requeued | recorded | set(enqueue_cids)
     if stale_candidate_marks:
         # F130 third pass (d): settle() printed "candidate X ... it stays
         # queued until the operator drains it" before the requeue was
@@ -2669,23 +2708,6 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                         "RED could not invalidate the green-pass mark for %s "
                         "(%s) -- --render may still say not to re-dispatch"
                         % (" ".join(sorted(stale_candidate_marks)), e))
-
-    # F130/F131, operator decision 2026-09-29: a green pass in the SAME round
-    # is not review of a fix committed in that round, on either path. The
-    # requeue path already stopped subtracting `reviewed` (F130 pass 5); this
-    # one had not, so identical round evidence gave OWED 1 when the card was
-    # already queued and OWED 0 -- with no sha recorded -- when it was not.
-    # Nothing binds a same-round pass to the commit it would have to have
-    # read, so both paths now record the sha and owe the row.
-    enqueue_cids = sorted((neg & fix) - {r[0] for r in kept}) if allow_enqueue else []
-    for cid in enqueue_cids:
-        shas = " ".join(sorted(fix_shas(cid)))
-        reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
-            "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED",
-            shas or "(none recorded)",
-        )
-        kept.append((cid, now, reason))
-        actions.append("enqueue %s -- %s" % (cid, reason))
 
     try:
         write_queue(queue_path, kept)
@@ -4462,6 +4484,70 @@ def self_test():
               and "candidate F77" not in out1)
         return ok, ("round0(rc=%s cand0=%r) round1(rc=%s row1=%r cand1=%r "
                      "out1=%r)" % (rc0, cand0, rc1, row1, cand1, out1))
+
+    @probe("F130 pass 11 (falsification on 91bcd77f, VERDICT: PARTIAL, case "
+           "B): a row CREATED this round (absent from --before, present in "
+           "the live queue -- settle()'s new_this_round=True) with a "
+           "same-round fix commit and no red verdict must get the sha "
+           "recorded, and a pre-existing stale .candidates mark for it must "
+           "be cleared -- record_cids restricted to `before_ids` skipped "
+           "such a row on both counts")
+    def _f130_new_this_round_records_and_clears_stale_mark():
+        d = tempfile.mkdtemp(prefix="fq_f130newrndrecord.")
+        # A mark from an earlier life of this id on the queue -- stale no
+        # matter what happens this round, since the row in front of us was
+        # only just created.
+        io.open(os.path.join(d, "queue.candidates"), "w",
+                encoding="utf-8").write("2026-09-17 09:00\tF77\n")
+        io.open(os.path.join(d, "before"), "w", encoding="utf-8").write("")
+        with io.open(os.path.join(d, "before"), "rb") as fh:
+            before_sha = hashlib.sha256(fh.read()).hexdigest()
+        live_row = ("F77", "2026-09-17 11:30",
+                    "fixed after FALSIFIED verdict; fix commit(s) abc1234; "
+                    "no pass on the fix")
+        write_queue(os.path.join(d, "queue"), [live_row])
+        mp = os.path.join(d, "memo")
+        cp = os.path.join(d, "commits")
+        io.open(mp, "w", encoding="utf-8").write("")
+        io.open(cp, "w", encoding="utf-8").write(
+            "fff0002 tree F77: follow-up fix\n")
+        cards_f = os.path.join(d, "cards.tsv")
+        io.open(cards_f, "w", encoding="utf-8").write("F77\topen\n")
+        cmd = [sys.executable, os.path.abspath(__file__),
+               "--queue", os.path.join(d, "queue"),
+               "--memo-added", mp, "--commits", cp,
+               "--agents", "0", "--now", "2026-09-17 12:00",
+               "--before", os.path.join(d, "before"),
+               "--before-sha", before_sha,
+               "--cards", cards_f, "--cards-before", cards_f]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = r.stdout
+        q = read_queue(os.path.join(d, "queue"))
+        cand = candidates(os.path.join(d, "queue"))
+        row = next((r2 for r2 in q if r2[0] == "F77"), None)
+        ok = (row is not None and "fff0002" in row[2] and "F77" not in cand)
+        return ok, "rc=%s out=%r q=%r cand=%r" % (r.returncode, out, q, cand)
+
+    @probe("F130 pass 11 (falsification on 91bcd77f, VERDICT: PARTIAL, case "
+           "C): a card re-enqueued this round via enqueue_cids must clear a "
+           "stale .candidates mark left over from BEFORE it was last "
+           "operator-drained -- --operator-drain clears the ledger, never "
+           "this file, so the old mark survived the drain and reappeared "
+           "the moment the card was re-enqueued")
+    def _f130_enqueue_clears_stale_mark():
+        d = tempfile.mkdtemp(prefix="fq_f130enqstale.")
+        io.open(os.path.join(d, "queue.candidates"), "w",
+                encoding="utf-8").write("2026-09-17 08:00\tF99\n")
+        NEG99_LOCAL = "\U0001f4cb **F99 pass 1 → PARTIAL（haiku-4-5）**"
+        SUBJ99_LOCAL = ["a1b2c3d fhp-research F99: fix the falsification PARTIAL"]
+        rc, out, _ = run_cli(d, [], memo=[NEG99_LOCAL], subjects=SUBJ99_LOCAL,
+                              agents=0, cards=["F99"])
+        q = read_queue(os.path.join(d, "queue"))
+        cand = candidates(os.path.join(d, "queue"))
+        row = next((r for r in q if r[0] == "F99"), None)
+        ok = (row is not None and "a1b2c3d" in row[2] and "F99" not in cand
+              and "enqueue F99" in out)
+        return ok, "rc=%s out=%r q=%r cand=%r" % (rc, out, q, cand)
 
     @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
            "re-mentioning the second one neither requeues nor drops the mark")
