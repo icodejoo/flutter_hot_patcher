@@ -18000,3 +18000,62 @@ F111/F121/F49 三张 `built` 卡：`cards.tsv` 状态列与 memo 判决一致（
 `fhp-research` 树 `spikes/shorebird_linkinfo_oracle/cards.tsv`（提交 `7f5a44fe`）；本仓 `memo.md`
 （本节）。未动 SDK 树、未动引擎树。
 本轮到此结束。
+
+## 心跳 2026-09-30（round PID 96314，ralph.sh 无人值守）：F148 实现已落地但从未过独立证伪，锁定它
+
+确认 `.loop/round.lock` PID 就是本轮自己（96314），读完 `docs/LOOP_CONTRACT.md` 全文。
+检查「built 卡欠证伪 pass」三张（F111 F121 F49）：均已被此前轮次处理完（F111 操作者拍板不再同层
+再修；F121 连续 PARTIAL 已入排队/挂起池；F49 挂起池未到重试窗口），本轮不重派。
+`.loop/UNREVIEWED_FIX` 队列核对：与本轮起始注入的清单基本一致（F130 一行仍显示 PARTIAL，
+但那是 pass 10 的旧读数——pass 11 SURVIVES 已在上一轮记入 memo 并把 `cards.tsv`/memo 的
+状态列同步为 `closed`，该队列文件本身不由轮次清空，是过期快照，不重派）。
+
+规则 0 SDK 本体优先 ⇒ 检查 F147/F148/F149/F150/F151/F152 这条链：SDK 分支 `agent/f147-thread-align`
+`git log` 显示 `d4923373846 Shorebird: VM stub reorder (matches Shorebird's order) (F148)` 已经
+落地在 F147 之后、F152/F151 之前的线性提交里；但 `memo.md`（本文件早前 `- [ ] F148`）与
+`cards.tsv` 的 F148 行仍是 `open`，且从未有一条独立证伪 pass 的判决记录——与 F81/F130 那次
+「记账遗漏」同一种缺陷：实现已完成，只是没人审过、也没人把结论写回该落的地方。
+`cards.tsv` F148 行本体已经记录了实现细节（`VM_STUB_CODE_LIST 188/188`、3 个 fixture 逆序 0 处不同、
+17 个 boundary object 归零）和判据①②③，符合派发一次独立敌意证伪的条件。
+
+派一个新鲜 Opus 子代理（`general-purpose`）按 `tools/loop/prompts/falsify.md` 跑七项攻击，
+CLAIM/CRITERION/EVIDENCE 按 `cards.tsv` F148 行原文填入，WHERE TO LOOK 指向
+`~/dart-3122/sdk`（commit `d4923373846`，分支 `agent/f147-thread-align`）与
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/`（`evidence_disassemble_residual.sh`、
+`reports_20260929/F148/`）。子代理已派发（后台运行，结果尚未回收）。本轮到此结束——按契约
+「每轮只做一件事」，派发完成即结束，下一轮/下次通知回收结论并写回本文件。未触碰
+`.loop/UNREVIEWED_FIX`，未越权重建共享树，未 `git add -A`，未推送。
+
+## F148 独立证伪 pass 回收（round PID 96314，Opus 5.5，51 次工具调用，588774ms）
+
+**F148 VERDICT: PARTIAL** —— SDK 提交 `d4923373846` 的 stub 顺序改动本身是对的（判据①
+`--disassemble` 逐名对拍 3/3 fixture ORDER EQUAL，且独立用 `nm -n` 读 ELF `stub *` 符号表
+交叉验证，与判据①走不同代码路径，同样 3/3 一致），**但判据②（boundary-object 计数归零）
+这个可以报红的检查被自己的另一段代码盖住了、报不了红**。
+
+**第四十五种仪器缺陷（本轮新增）**：`evidence_disassemble_residual.sh:1152-1153` 的
+`vm_layout` 判定对每一个 VM stub 都会用「宽松走位法」的结果覆盖掉
+`predecessor_not_adjacent_ours`/`no_predecessor` 这两个本该报错的字段——而宽松走位法
+**只用我们自己的 `VM_STUB_CODE_LIST` 预测我们自己的顺序**，只要二进制和 list 对得上就会
+「复现成功」，与 theirs 的真实顺序无关。子代理实测：把 `theirs.disassemble` 里两个相邻
+VM stub 的名字互换（构造一个「他们顺序变了」的假想情形），`check_order.py`（能报红的
+那个独立检查）正确报 `MISMATCH`，但 `evidence_disassemble_residual.sh` 的
+`offset_breaks` 仍然打印 `{'layout_pending': 187}`、边界对象数仍是 0——**判据②的检查
+在真实的顺序回归下也不会变红**。旧的「17 个边界对象」之所以非零，只是因为旧二进制下
+宽松走位法本身失败（`ours_not_reproduced=187`），不是因为它真的在比较顺序。
+`check_order.py`（唯一能报红的顺序检查）**没有接入 `verify_all.sh`**（grep 命中 0 处），
+所以没有任何自动闸门会在未来某次改动悄悄带回顺序缺口时报警。
+判据③（`run_vm_tests` 不劣化）只验证了 153 个测试的子集（`ReleaseARM64` 落后 HEAD 608 步
+未重建），未跑全量套件。
+
+⇒ **F148 不关闭，转 `built`（保持实现已落地、判据未完全过关的状态），不进挂起池**
+（不是「反复 PARTIAL 换层次打地鼠」，是判据本身有洞，一次修好即可，不属于挂起池收编范围）。
+
+下一步（留给后续轮次，本轮预算已用于本次证伪 pass，按契约一事一轮不在本轮内展开修复）：
+① 修 `evidence_disassemble_residual.sh:1152-1153` 的覆盖缺陷，让判据②在顺序不一致时真的
+报红（子代理已给出可复现的负控制配方：交换 `theirs.disassemble` 里两个相邻 VM stub 名字，
+`WORK=<copy> bash evidence_disassemble_residual.sh` 应报非零边界对象/非 `layout_pending`）；
+② 把 `check_order.py`（或等价顺序检查）接入 `verify_all.sh`，避免未来回归无声穿过；
+③ 待 `ReleaseARM64` 真正追上 HEAD 后跑一次完整 `run_vm_tests`，不再依赖 153 测试子集。
+子代理未改动 SDK 树与研究树任何文件（临时验证副本留在 `/tmp/f148_neg_26047`，`rm -r` 被拒，
+需要人工清理，不影响任何被跟踪路径）。本轮到此结束。
