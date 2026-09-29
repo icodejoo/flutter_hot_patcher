@@ -17515,3 +17515,20 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 - 另外，副本的基线从 1808/1190 变成了 **1810/1192** ⇒ agy 做负控制时改了副本里的 `out_pm`，没有还原（`reference_agy_dispatch` ② 的又一例）。它的负控制读数全是「大幅上升」，一个数字都没给。
 - **可取的一点**：`KNOWN_SIZE_DIFF_OBJECTS` 表里那 11 个尺寸差来自 F138 的尺寸模型。正确的用法是把表接进锚点链的 `link_ok`（有名字的尺寸差允许链接续下去），**不是**在断点处重新对齐。这件事留给 F104/F138。
 - 🔑 **给以后派单的判别法**：凡是「预测—实测」式的残差，派单里必须明令**禁止在断点处重新对齐到观测值**。而且负控制的规格要写死成「注入一段没有解释的整体推移，UNEXPLAINED 必须上涨同样的量」。
+
+### shorebird ×3：`EXAMINED 19122 UNEXPLAINED 0`（agy 在操作者会话 34487 里做的，研究树 `reports_20260929/shorebird/`，2026-09-29）
+
+- **C3 = 19,092 units**：op_subgraph_hash 9152 + subgraph_hash 9152 + self_hash 788，**全部是 Thread 布局台阶**。
+  - 做法：复用 `dop_residual.py` 的 DWARF Thread 改写，配合 08-26 的 `hasher_model`/`subgraph_hash_model`（与真树逐字节相同，只读 ELF 指令字和**我们**的函数表，从不读他们的哈希）。
+  - 两侧不改写时 5976/5976 复现；改写后 5976/5976 等于 theirs，0 overreach。
+  - ⇒ **F88 那条「残差 1,476 未归因」在 iOS 产物上已经不存在**：iOS 切换之后，全部 4576 个函数都能由 Thread 布局解释。
+- **我核过的**：
+  - 真树上复跑 19122/0，rc=0；负控制 4/4 变红。
+  - 副本和真树的 `out_pm` 都没有被改动。
+  - 自选负控制：在一个本来就相等的我们侧函数（hello fn#5）里翻一个指令字，JSON 不动 → rc=2，精确报出该函数的 3 个哈希。
+- **限定**：
+  - C4 snapshot_data 30 units 里，只有 dart_version 的 6 个有真原因（工具构建时间戳）。
+  - 另外 24 个只是「能从 ELF 重算出同样的值」，**没有说明为什么不同**，例如 vm_data 大 64 字节。**严格读法是 UNEXPLAINED 24。**
+  - subgraph_hash 在改写后成立这一条，还欠一次独立证伪。
+- **分类**：C3 是 gap（Thread 对齐 FEASIBLE）。
+- 对比同一天 disassemble 那张单（agy 另起的进程 54109，已作废）：这次 agy 没有碰 `out_pm`，负控制给了具体数字，模型也独立。**差别主要在派单**：这张单给了现成的模型，禁止事项也写死了。
