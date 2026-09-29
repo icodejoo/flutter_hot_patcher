@@ -18156,3 +18156,53 @@ blocked 集合是否本来就存在；子代理明确声明这一限制，未夸
 未动 SDK 树、未动引擎树。本轮 agents=1（一次新鲜 Opus 派发，做修复，非证伪 pass——
 按契约五之四步骤 1，修复本身是本轮产出，证伪留给下一轮新鲜子代理）。
 本轮到此结束。
+
+## 心跳 2026-09-30（round PID 29882，ralph.sh 无人值守）：F111 修补丁 `0164d8d1` 证伪 PARTIAL，当场修（`5b80c16e`），修补丁自身仍未审
+
+确认 `.loop/round.lock` PID 就是本轮自己（29882），读完 `docs/LOOP_CONTRACT.md` 全文。
+
+**「built 卡欠证伪 pass」三张（F111 F121 F49）核对**：真身 `cards.tsv` 在
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/cards.tsv`（本仓根目录的
+`cards.tsv`/`queue` 是 09-25 遗留的过期空文件，不是真源，不要引用）。F121 已被 SS6
+明确判定 "pending pool"（等 5 轮再回访，卡在同一处第 38 种"跨树陈旧 whack-a-mole"）；
+F49 最新一轮（2026-09-27，对 `cf1dbd60` 的 PARTIAL）末尾建议照 F121 同样处理，
+"recommend operator ... switch independent task"——两张都已被更早一轮实测判定不该本轮
+重派。剩 F111：其最新提交 `0164d8d1`（"derive R-landing validity per gate dataflow,
+not CLAIM_BACK alone"）commit message 自带 "owes pass; stays built"，此前没有独立于
+实现者的复核 ⇒ 本轮目标。
+
+**派发 1（新鲜 Opus，`general-purpose`，agent `ab3434104fca5f733`）**：对 `0164d8d1` 跑
+`tools/loop/prompts/falsify.md` 七问。**VERDICT: PARTIAL**——此前点名的 5 处变异
+（mB/mF/g2R/g3R/g4R）确认全部正确报 rc=32/31；但同一类"减量写回被丢弃"缺陷换一种载体
+仍能穿透：
+- **BUG A（假阴性）**：`0x1001969d0` 把 `mov x24,x8`（`aa0803f8`）改成
+  `str w8,[sp,#0x64]`（`b90067e8`），回边仍落 L，`0164d8d1` 报 rc=0；而分析器输出在
+  hello/base_dd/prog 三个 fixture 上确实都变了（`698828→672794`、`698828→672794`、
+  `2306802→2110092`）。
+- **BUG B（假阳性）**：同一处槽写回但回边落 R、值正确传播（输出与 pristine 三个 fixture
+  逐字节相同），`0164d8d1` 却报 rc=32。
+子代理独立复现了全部 5 个已知变异 + 上述两个新变异，且核实 `git status --porcelain`
+在 `~/Documents/fhp-research` 前后一致（实验只在临时 worktree/`/tmp` 做）。
+
+**派发 2（新鲜 Opus，`general-purpose`，agent `a3677ae5280580a4c`，同轮内按契约五之四
+当场修）**：把 `check_landing` 的写回识别从"只认寄存器 `mov`"泛化为"寄存器 `mov` 或直接
+槽写回二选一"，两种落地方式（L、R）都检查是否丢弃写回值。**提交 `5b80c16e`**（同一棵
+`fhp-research` 树，与派发 1 顺序执行，不违反"一棵树一个写方"）。自测：BUG A 复现
+rc=0→rc=32；BUG B 复现 rc=32→rc=0；回归套件从 90 例增至 99 例（新增 `g3slotL`、
+`g3slotR`），**99 OK / 0 MISMATCH**。`git status --porcelain` 干净（仅预先存在的
+未跟踪 `.serena/`、`test_work/`，不是本轮引入）。
+
+**cards.tsv 已更新并提交**（`fhp-research` 提交 `1cf0d86b`）：F111 行追加本轮记录，
+状态仍 `built`（未关卡——PARTIAL 不许关，契约五之四）。`cards_check.sh` 在编辑前后
+均为 `rc=1`（`commits-not-sha` 一项，对 pre-edit 版本同样失败，已用
+`git show HEAD:cards.tsv` 独立核实非本轮引入；`csv` 模块核对记录数/id 列表编辑前后
+完全一致，156 条不变）。
+
+⚠️ **本修补丁（`5b80c16e`）自身尚未过独立证伪 pass**——按契约五之四，它是新的未审工作，
+F111 卡片状态不变（仍 `built`）。下一轮若要继续这张卡，先派一个新鲜子代理审 `5b80c16e`，
+不要复用派发 1 或派发 2 的子代理。
+
+本轮涉及树：`fhp-research`（写，2 次提交 `5b80c16e` 与 `1cf0d86b`）；本仓 `memo.md`
+（写，本节）；未动 SDK 树、未动引擎树、未动 `.loop/` 队列文件。本轮 agents=2（一次证伪
+派发 + 一次同轮修复派发，按契约五之四步骤 1-3；证伪留给下一轮新鲜子代理，按步骤 4）。
+本轮到此结束。
