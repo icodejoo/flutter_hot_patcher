@@ -18508,3 +18508,51 @@ Thread 布局对齐）与 F148（`d4923373846`，VM stub 重排）各自对 pre-
 （子代理只读）；本仓 `memo.md`（写，本节）。本轮 agents=2（第一个已回收/blocked，
 第二个已派发/尚未回收）。本轮到此结束，下一轮请看第二次派发是否回收，
 再决定续写 F95 结论还是挑新任务（规则 0：SDK 本体优先）。
+
+### 心跳 2026-09-30 03:21（round PID 84644，续）：第二次派发回收——F148 对 158 无贡献，
+### 而且当前 HEAD 的 `out_pm` 语料本身已经读 0/0，158 基线本身已经过期
+
+子代理（agentId `a6a32ec7fea07dca4`）回收，**STATUS: success**。逐项属实：
+
+**revert `d4923373846`（仅 F148）后重测**：`prog` 差异函数 **0**（基线 158），`[Stub]` 差异 **0**
+（基线 65），`f95_self_hash_residual.py` 的 LEN/KIND-differs、RAW-only 全部 0；
+3216 个 `prog` 函数条目在 `self_hash`/`subgraph_hash`/`op_subgraph_hash`/`offset`/`size`/
+pools/selectors 每个字段都与他们逐条相同（子代理跳出脚本直接比对 JSON 独立确认）。
+**revert 唯一改变的是 `snapshot_data` 块**（`adjusted_vm_instructions_hash` 等），
+不影响任何逐函数字段 ⇒ **F148（stub 声明顺序）对 158/65 这两个数贡献为 0**。
+
+🔴 **更重要的发现：不需要 revert，当前 HEAD（含 F148）本身就已经读 0/0**。
+子代理独立生成了「不 revert、当前 HEAD」的对照（`/tmp/f95_outpm.out`），
+`adjusted_vm_instructions_hash` 与 `out_pm` 一致（2101106339），且同样 3216/3216 全等。
+⇒ **158/65 这个基线是在更早的二进制上量的，在今天的语料上无法复现**——
+不是"F148 解释了它"，是"它已经被本轮之前的某次提交（F151/F152，或两者叠加）关掉了"，
+本次实验（只 revert F148）无法进一步拆分是谁关掉的，因为**两侧读数都已是 0**，
+没有残差可供归因。
+
+**负控制/还原属实**：`ProductARM64` 两个钉住产物 sha256 前后逐字节相同；revert 用
+`git revert --no-commit` + `git revert --abort` 正确还原（子代理指出我原指令里的
+`git checkout -- .` 对暂存的 revert 无效，改用 `--abort` 更对，且不在禁止清单里）；
+还原后 `git status --porcelain` 空、HEAD 仍 `de660deeae5`；`ProductSimIosARM64` 重建
+后 372 步非空操作确认是真重建、随后 `ninja: no work to do`；还原后的二进制交叉验证
+`adjusted_vm_instructions_hash` 与 3216/3216 全等都对上 `out_pm`。
+
+⚠️ **一个未预期的异常（子代理自己指出，未处理）**：`~/dart-3122/sdk` 当前 checkout 的分支名是
+`agent/f147-thread-align`，不是 `shorebird-3.12.2`——HEAD sha 对得上（`de660deeae5`），
+子代理没有切分支，但这说明**这棵共享树目前处于一个功能分支上**，
+不是 memo 第 157 行记的"分支 `shorebird-3.12.2`"。下一轮如果要在这棵树上提交，
+先确认这一点，不要假设分支名。
+
+**F95 的下一步（规则 0，不预判，需要独立证伪）**：子代理已经拿出很强的证据
+（3216/3216 全等 + adjusted_vm_instructions_hash 匹配 + 独立 JSON 逐字段比对），
+但按契约五之四，这仍是**未经审的产出**，不能直接标 `cards.tsv` 里的 F95 `[x]`。
+需要一个**新鲜**子代理跑 `tools/loop/prompts/falsify.md`，CLAIM 写成
+「当前 HEAD（`de660deeae5`）的 `--shorebird` `prog` fixture 里，`self_hash` 差异函数数
+为 0（不是此前记的 158/412/824-unit 桶），即 F95 点名的残差桶已被后续提交
+（F151/F152 等）关闭」，CRITERION 是 rc=0 且独立重新生成 fixture（不复用 `out_pm`
+或本轮子代理留在 `/tmp/f95_f148rev.xzsj/`、`/tmp/f95_rev.out` 的产物）。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理只读 revert+abort+重建，未提交，HEAD/status 前后一致，
+分支名异常已如实记录）；`fhp-research`（子代理只读）；本仓 `memo.md`（写，本节）。
+`.loop/`、`cards.tsv` 均未动。本轮 agents=2（均已回收）。本轮到此结束，
+下一轮请派一个新鲜子代理独立复测/证伪上面这条 CLAIM，SURVIVES 才可以动 F95 的 `cards.tsv`
+状态；不要直接引用本轮数字就关卡。
