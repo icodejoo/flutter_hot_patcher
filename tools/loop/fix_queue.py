@@ -2381,12 +2381,23 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 write_ledger(snap_data)
     drained_now = operator_drained(live_path, quarantine=quarantine)
 
-    def settle(cid, seen, reason, vanished):
-        if cid in pos and AUTO_DRAIN:
+    def settle(cid, seen, reason, vanished, new_this_round=False):
+        # F130/F131 pass 7 (falsification on d26cac5b): a row that is not in
+        # `before_rows` -- i.e. it was written into the live queue during
+        # THIS round, by an earlier fix_queue.py invocation in the same
+        # round, or by hand -- has no round boundary between its own
+        # creation and any green verdict `pos` reports for it. Crediting
+        # `pos` here is the exact same-round-self-review shape the 2026-09-29
+        # operator decision closed for enqueue_cids/requeue_cids, just
+        # reached through settle()'s candidate-marking path instead. So a
+        # same-round-new row is never eligible for the `pos` credit, no
+        # matter what `pos` says.
+        effective_pos = cid in pos and not new_this_round
+        if effective_pos and AUTO_DRAIN:
             actions.append("drain %s (fix pass recorded by a subagent reply, "
                            "%d dispatch(es))" % (cid, agents))
             return
-        
+
         import datetime
         try:
             seen_dt = datetime.datetime.strptime(seen, "%Y-%m-%d %H:%M")
@@ -2394,7 +2405,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             seen_dt = None
             if vanished:
                 actions.append("RED malformed ledger line")
-        
+
         # F113: an operator drain is recorded in the ledger, not inferred. Only
         # a ledger line at or after the row's own timestamp excuses it, so an
         # old drain of the same id cannot cover a later re-enqueue.
@@ -2404,7 +2415,7 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 actions.append("operator-drained %s (ledger %s)"
                                % (cid, drain_ts_raw))
                 return
-        if cid in pos:
+        if effective_pos:
             kept.append((cid, seen, reason))
             # Remembered so --render can tell the next round the pass exists and
             # must not be re-dispatched; the operator reads the same file.
@@ -2455,11 +2466,13 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
         # disappeared from the queue file before round end.
         settle(cid, seen, reason, cid not in queued)
 
-    # Any entry in rows that was not in before_rows
+    # Any entry in rows that was not in before_rows -- i.e. it was enqueued
+    # sometime during THIS round (F130/F131 pass 7: see settle()'s
+    # new_this_round note above).
     for cid, seen, reason in rows:
         if cid not in seen_ids:
             seen_ids.add(cid)
-            settle(cid, seen, reason, False)
+            settle(cid, seen, reason, False, new_this_round=True)
 
     requeued = set()
     if allow_enqueue:
@@ -3368,8 +3381,12 @@ def self_test():
         if not ("migrate %s -> %s" % (LEGACY_PARK_ID, PARK_ID) in out
                 and ids == [PARK_ID]):
             return False, "stage 1: rc=%s ids=%s out=%r" % (rc, ids, out)
+        # F130/F131 pass 7: `before` must reflect the row as it already stood
+        # at this stage's round start (migrated, id == PARK_ID), not an empty
+        # snapshot -- otherwise this looks like a row enqueued THIS round,
+        # which settle() now (correctly) never credits with a same-round pos.
         rc2, out2, _ = run_cli(
-            d, None,
+            d, [(PARK_ID, "2026-09-16 20:00", "snapshot unverifiable")],
             memo=["%s 修补丁 VERDICT: SURVIVES (fix)" % PARK_ID],
             agents=1, cards=["F41", "F82"],
             replies=[("t1", reply_green(PARK_ID))])
@@ -4184,6 +4201,55 @@ def self_test():
               and any(r[0] == "F77" and "fff0001" in r[2] for r in q)
               and "F77" not in cand)
         return ok, "rc=%s out=%r q=%r cand=%r" % (rc, out, q, cand)
+
+    @probe("F130/F131 pass 7: a row enqueued THIS round (absent from --before, "
+           "present in the live queue) with a same-round green verdict is "
+           "held, not marked candidate -- settle()'s pos credit must not "
+           "reach a row the round created itself")
+    def _f130_same_round_enqueue_and_review():
+        # Reproduces the falsification pass on d26cac5b (2026-09-29): an
+        # earlier fix_queue.py invocation THIS round already wrote the F77
+        # row into the live queue (e.g. via enqueue_cids after a fix
+        # commit), so --before (the round-start snapshot) does not have it.
+        # A later invocation the same round sees a green reply for F77 and
+        # must not credit it -- crediting it here is the same same-round-
+        # self-review shape the 2026-09-29 operator decision closed for
+        # enqueue_cids/requeue_cids, reached through a different door.
+        d = tempfile.mkdtemp(prefix="fq_f130samernd.")
+        live_row = ("F77", "2026-09-17 11:30",
+                    "fixed after FALSIFIED verdict; fix commit(s) fff0001; "
+                    "no pass on the fix")
+        io.open(os.path.join(d, "before"), "w", encoding="utf-8").write("")
+        with io.open(os.path.join(d, "before"), "rb") as fh:
+            before_sha = hashlib.sha256(fh.read()).hexdigest()
+        write_queue(os.path.join(d, "queue"), [live_row])
+        mp = os.path.join(d, "memo")
+        cp = os.path.join(d, "commits")
+        io.open(mp, "w", encoding="utf-8").write(
+            "F77 修补丁 VERDICT: SURVIVES (fix) -- per dispatch\n")
+        io.open(cp, "w", encoding="utf-8").write("")
+        cards_f = os.path.join(d, "cards.tsv")
+        io.open(cards_f, "w", encoding="utf-8").write("F77\topen\n")
+        rp = os.path.join(d, "replies.jsonl")
+        io.open(rp, "w", encoding="utf-8").write(
+            json.dumps({"id": "t1", "text": "VERDICT: SURVIVES for F77 (fix)"},
+                       ensure_ascii=False) + "\n")
+        cmd = [sys.executable, os.path.abspath(__file__),
+               "--queue", os.path.join(d, "queue"),
+               "--memo-added", mp, "--commits", cp,
+               "--agents", "1", "--now", "2026-09-17 12:00",
+               "--before", os.path.join(d, "before"),
+               "--before-sha", before_sha,
+               "--cards", cards_f, "--cards-before", cards_f,
+               "--replies", rp]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        out = r.stdout
+        q = read_queue(os.path.join(d, "queue"))
+        cand = candidates(os.path.join(d, "queue"))
+        ok = ("F77" not in cand
+              and any(r2[0] == "F77" for r2 in q)
+              and "candidate F77" not in out)
+        return ok, "rc=%s out=%r q=%r cand=%r" % (r.returncode, out, q, cand)
 
     @probe("F130 pass 5: every sha of a multi-sha segment is recorded -- "
            "re-mentioning the second one neither requeues nor drops the mark")
