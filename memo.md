@@ -17600,3 +17600,25 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
   - 约 26.5 万个 unit；禁止用滑动窗口。
   - 要么按 Deserializer 的 cluster 分帧解码，按 cluster 归因；要么给出一份实测、注明日期的「为什么对不齐」。
   - R1/R2 我们短的那 50 B 和 48 B，两条路都必须说清楚原因。
+
+### 2026-09-29 中午：F137+F139 落地；shorebird ×3 证伪 SURVIVES，严格残差 19122 / **12**
+
+**F137+F139**（Opus subagent 在副本里做，研究树 `719ddbe0`，还欠一次证伪 pass）
+- iOS 切换后过期的 4 个检查已重钉，每个钉值都用各自解码器的 `--measure` 算出来。comparability 新增一项目标 OS 检查。
+- 我在 HEAD 的干净拷贝上核过：5 个检查都是 rc=0；`f137_negctl/run.sh` 让它们各自变红，还原后恢复。
+- subgraph_hash 在 iOS 上走进 COINCIDENT 分支：原来的 crude-predictor 控制在 iOS 上是恒真式，现在如实打印 NO POWER，不记分；主判据仍然能红。**不算假绿。**
+- 🔴 **新发现的仪器缺陷**：`verify_all.sh:858` 调 `parity_matrix.sh` 时**没带 `--reuse`**，注释却写着带了。⇒ 普通跑一次 `verify_all` 就会把整个 `out_pm` 重生成掉，而 `out_pm` 同时是好几张卡的输入。还没修。
+- `cards.tsv` 里 F132 那一行的 68 订正，因为冲突没带过来，要手工补。
+
+**shorebird ×3**（agent af1b45a239dca2750，研究树 `4e51cabb`）
+- **Part A SURVIVES，而且结论比原来更强**：Thread 改写之后，每个列出的函数逐字与他们相同（0/0/0 个不同字）。subgraph DFS 从不离开 5976 项的 isolate 表，F138 那 11 个尺寸不同的 VM stub 根本进不了任何闭包。它自己的扰动，预测值和实测值完全相等（1816 = 1816，42 = 42）。
+- **Part B：C4 严格归因**
+  - `vm_data_length`：**我们自己加的那个 50 字节特性串 token**。删掉它，字节级复现他们的 35264。
+  - `snapshot_version`：他们的值与我们、与上游 base 都不等（上游 base 的值已在官方 3.12.2 的 dartaotruntime 里确认）⇒ **他们的 fork 改动了那 15 个 VM_SNAPSHOT_FILES 中的至少一个，没有他们的源码就永远对不上。这是真正的 structural。**
+  - `dart_version`：SDK HEAD 的提交时间。agy 原报告说是「工具构建时间」，**写错了**，已在 REPORT.md 订正。
+  - `vm_data_hash` 和 `adjusted_vm_instructions_hash`：按有名字的规则重建，与他们逐字节相同，**只差 FfiCallbackTrampoline 的 27/28 个字**。
+- **严格残差 19122 / 12，这 12 个 unit 全部来自 F138 那个 FFI 共享体。**
+- 顺带修了一处：`sb_residual.py` 在产物缺失时会读出 `0/0 rc=0`，现在改为 rc=1。
+- 🔴 **`sb_vm_snapshot*.out` 没有入库**：里面有逐条解码的他们的指令。脚本已入库，输出可以随时重新生成。
+
+⇒ **disassemble 和 shorebird 两格的全部剩余，现在都指向同一个 FFI 共享体（F138 正在做）。**
