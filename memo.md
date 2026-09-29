@@ -17723,3 +17723,17 @@ STILL OPEN 句已原样写入 `cards.tsv` F146 行（`fhp-research` 提交
 ### 开卡 F152（2026-09-29）
 
 - [ ] **F152：Isolate::simulator_ 偏移（我们 +0xa0，他们 +0x20）和 Enter/ExitSafepoint 调用寄存器（x0 对 x5）——F147 之后剩下的 6 个同尺寸 VM stub 就差这 8 个字**（`open`，2026-09-29，从 F147 之后的 VM stub 归因拆出；设计已派 agy）
+
+- [ ] **F153：`parity_matrix.sh` 从不运行证据行，失败的证据行不会让格子降级**（`open`，2026-09-29，F101 控制 K1 发现）
+
+### 2026-09-29 晚：dump_object_pool ×3 → **structural**（研究树 `fdf50902`）；矩阵 **na 41 / structural 3 / unknown 15**
+
+- 新脚本 `dop_scm_residual.py`：一个 slot 要同时满足四条才算已解释——类型是从 `.so` 自身解码出来的；值是合理的映射地址（在 lldb 里实际读到 stub 的字节）；同一个 `.so` 重跑时恰好只有这几个条目在变；其余条目全部相同。读数 36/0。
+  - 旧的 C2 只检查 `mod 0x4000`，把地址改成 `0x4f4` 照样判 0，已退役。
+- 我在当前 HEAD 的干净拷贝上复跑过：残差 36/0，checker 2 行 0 失败；phase gate 重钉后 0 处不符。
+- 🔴 **F153**：矩阵只检查证据行在不在，从不运行它。所以一行证据失败了，只有 checker 会红，格子不会降级。
+- 今天一天的矩阵变化：35/12/12 → **41/3/15**。
+  - na +6：F147 让 6 格变成逐字节相同。
+  - field_table ×6 由 structural 改判 unknown：算法缺口，F128。
+  - dump_object_pool ×3 由 unknown 改判 structural：证据已补齐，F101。
+- 🔄 **循环已按操作者指令重开（18:3x）**：开之前清出约 8G 磁盘（30→38G，门槛 25G），PAUSE 已备份到 scratchpad。
