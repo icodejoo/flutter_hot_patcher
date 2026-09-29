@@ -17939,3 +17939,36 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
 - 本轮涉及树：flutter_hot_patcher（写，1 次提交 `91bcd77f`）；fhp-research（未动）；未动 SDK 树、未动引擎树。
 - 本轮 agents=3（三次新鲜 Opus 派发：pass 8、pass 9、pass 10）。
 - 契约五之四四步：pass 10 判 PARTIAL→当场修（`91bcd77f`）→尚需再派一轮新鲜证伪（pass 11）。第四步未完成，本轮到此结束。
+
+- **2026-09-30T00:2x（round PID 45304）心跳**：确认 `.loop/round.lock` PID 就是本轮自己（45304），读完契约全文。
+  本轮开头触发的「仪器损坏」条款：`python3 tools/loop/fix_queue.py --self-test` 报 `147 case(s), 1 failure(s)`，
+  失败用例正是本卡等待的 **pass 11**：`F130 pass 11 (falsification on 91bcd77f, VERDICT: PARTIAL, case C)`。
+  定位（`stale_candidate_marks = requeued | recorded` 那一行，`fix_queue.py:2673` 附近）：工作树里已有未提交改动
+  实现了 case B 的修法（`record_cids` 去掉 `before_ids` 限制），且 case B 与 case C 的自测探针都已写好，
+  但 case C 要求的代码改动本身**没有落地**——`stale_candidate_marks` 仍只并了 `requeued | recorded`，漏了
+  `enqueue_cids`（紧邻的代码注释原文写着「moved below the enqueue_cids loop so enqueue_cids can join the
+  sweep」，但实际赋值行没有把它加进去，注释与代码不一致）。
+- **修复**（本仓，1 行）：`stale_candidate_marks = requeued | recorded` → `stale_candidate_marks = requeued | recorded | set(enqueue_cids)`。
+  `--self-test` 从 147/1 变 147/0。
+- **pass 11（Opus，general-purpose，23 次调用）VERDICT: SURVIVES**——七项攻击逐条独立复核：①手动撤回该行、确认
+  确实变回 147/1 且失败用例名与修复前一致，读 `_f130_enqueue_clears_stale_mark` 确认它真的走 `enqueue_cids` 路径
+  （断言输出含 `"enqueue F99"` 而非 `requeue`）；`enqueue_cids=[]` 时 `set(enqueue_cids)` 平凡不贡献，逐行读代码确认非仅靠推断；
+  ②`ok`/`FAIL` 计数与声明的 147 完全一致，无静默跳过；③读周围逻辑确认 `requeue_cids`/`record_cids`/`enqueue_cids`
+  三者对 `fix` 成员分区完备，没找到会漏记的第四条路径（人工直接编辑队列文件不算受支持的生产路径）；④扫描点检查是整字段
+  set 成员判定，不会跨卡误清；⑤`91bcd77f`/`5ab1805b` 均在 `git log` 中存在，`git show 91bcd77f` 与 pass 10 记录的血统一致；
+  ⑥真实撤回再运行两个方向都做了（147/1 → diff 确认无残留 → 恢复 → 147/0）；⑦`grep run_round.sh` 确认 `--self-test` 门控
+  整个修补丁队列是否开放（第 418 行）、`update()`/`--render`（第 442 行）直接喂进操作者提示词，是真实生产路径而非测试专用死代码。
+  STILL OPEN（原文抄录）：the self-test proves the code path behaves correctly when synthetically triggered
+  (pre-seeded stale mark + fresh enqueue in one crafted round); no evidence was offered (nor did I find any)
+  that a real round in this repo's history actually hit the exact precondition — a card carrying a stale
+  `.candidates` mark from an earlier queue life, later re-enqueued fresh via `enqueue_cids`. Grepping
+  `rounds.log`/queue history for a real prior occurrence of this sequence is the test that could still surface
+  a difference between "fixed in the unit test" and "ever actually mattered in production."
+- 提交 `1efeb166`（本仓，`tools/loop/fix_queue.py`，1 行行为改动 + case B/C 相关的既存未提交改动一并落盘）。
+- 本轮涉及树：flutter_hot_patcher（写，1 次提交 `1efeb166`）；fhp-research（未动）；未动 SDK 树、未动引擎树。
+- 本轮 agents=1（一次新鲜 Opus 派发：pass 11）。
+- 契约五之四四步已完整走完：做完（定位+1行修复）→证伪（pass 11）→SURVIVES，无需再修→**F130 可以关闭**。
+  已知未修的次要缺口 S2（`new_this_round=True` 行叠加同轮无红修补丁时漏记 sha）留作独立小问题，不阻塞本卡关闭，
+  供下一轮或操作者决定是否值得单独开卡。
+- **F130 状态：closed**（`fix_queue.py --self-test` 147/147，pass 11 SURVIVES，STILL OPEN 已原文抄录于上）。
+- 本轮到此结束。
