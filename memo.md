@@ -17863,7 +17863,7 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
 本轮 agents=2（两次新鲜 Opus 派发）。契约五之四四步已完整走完：做完→证伪 PARTIAL→当场修→重跑 SURVIVES。
 本轮到此结束。
 
-### F130（fix_queue.py 同轮自审）：pass 8 PARTIAL → 修复 `6e59f649` → pass 9 PARTIAL → 修复 `5ab1805b` → pass 10 待派（round PID 81367）
+### F130（fix_queue.py 同轮自审）：pass 8 PARTIAL → 修复 `6e59f649` → pass 9 PARTIAL → 修复 `5ab1805b` → pass 10 PARTIAL → 修复 `91bcd77f` → pass 11 待派（round PID 81367）
 
 - **2026-09-30 FALSIFICATION PASS（Opus，general-purpose，19 次调用）VERDICT: PARTIAL**——针对已在队列里的行（earlier-round row）：
   `requeue_cids` 只在 `neg & fix`（本轮既有红又有新修补丁）时触发；本轮若**只有绿判决、完全没有红行**，且这一轮又落了一个新的修补丁提交，
@@ -17912,3 +17912,30 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
   也不是审 `6e59f649`）。F130 继续保持 `built`，不标 `[x]`。
 - 本轮涉及树：flutter_hot_patcher（写，1 次提交 `5ab1805b`）；fhp-research（未动）；未动 SDK 树、未动引擎树。
 - 契约五之四四步：pass 9 判 PARTIAL→当场修（`5ab1805b`）→尚需再派一轮新鲜证伪（pass 10）。第四步未完成，本轮到此结束。
+
+- **pass 10 通知回收（Opus，general-purpose，19 次调用）VERDICT: PARTIAL**——七项攻击逐条独立复核（含攻击 1 自己撤回
+  record-only 写入、攻击 6 自己撤回 pass 8 的 `and cid not in fix` 守卫，两次负控制都独立跑通、都还原干净），
+  确认 `5ab1805b` 本身的逻辑成立，但指出一个**它没碰到的旧账**：record-only 路径只把新 sha 写进 `reason`，
+  却从未清理**更早一轮**就已经写在 `.candidates` 文件里的绿色标记——那个标记只在 `requeued` 命中时才会被清（`if requeued:` 分支），
+  record-only 命中时完全不触碰这个文件。复现（reviewer 的 S1）：round 0 对旧修补丁的绿色回复写下 `.candidates` 标记（12:00）；
+  round 1（同一分钟）落地 `fff0001`、无红判决，record-only 把 `"; new fix fff0001"` 追加进 `reason`，但 `.candidates` 里
+  round 0 的标记原样不变 ⇒ `--render` 打印"已有绿色 pass（12:00），等操作者出队 —— 不要再派"，就挨着
+  刚追加的、从未被审过的 `fff0001`。次要发现（S2，reviewer 自评"影响低，因为本来就不欠审"）：`new_this_round=True`
+  的行（本轮内新入队、且不在 `before_ids` 里）叠加同轮无红修补丁时，同样漏记 sha——这次没有当场修，留作已知的小缺口，
+  不阻塞本轮判据（该分支上的行本来就不构成"欠审"）。
+  STILL OPEN：n/a（PARTIAL 有具体缺陷，不是 SURVIVES 的"举证空白"）。
+- **修复 `91bcd77f`**（同轮，本仓）：在 `requeued = set()` 旁新增 `recorded = set()`，record-only 循环里每次成功追加
+  sha 后 `recorded.add(cid)`；`.candidates` 失效清理段的判据从 `if requeued:` 改成
+  `stale_candidate_marks = requeued | recorded` / `if stale_candidate_marks:`，三处内部引用（actions 过滤、
+  文件行过滤、错误信息）全部从 `requeued` 换成 `stale_candidate_marks`。
+  新增自测探针 `_f130_record_only_clears_stale_mark`：round 0 对旧修补丁的绿色回复先写下真实的 `.candidates` 标记，
+  round 1 是纯 record-only（新 sha、无红判决），断言 round 1 之后该标记被清空、`--render` 不再提"已有绿色 pass"。
+  调试中第一次跑通前先撞到同一个 `FHP_FQ_SELFTEST_AUTO_DRAIN` 环境泄漏坑（round 0 本身被自动清仓，队列直接清空），
+  照抄 pop/restore 惯用法后稳定通过。自测 145/0；负控制：把 `stale_candidate_marks = requeued | recorded` 单独
+  撤回成 `= requeued`，145 个用例里**恰好** `_f130_record_only_clears_stale_mark` 一个变红，其余 144 个不受影响；
+  `test_fix_gate.sh` 0 failures。
+- 修补丁本身按契约五之四**还没被审过**：本轮到此结束，下一轮需派第四个新鲜子代理专门审 `91bcd77f`。
+  F130 继续保持 `built`，不标 `[x]`。已知未修的次要缺口（S2）留在这条记录里，供下一轮或操作者决定是否值得单独开卡。
+- 本轮涉及树：flutter_hot_patcher（写，1 次提交 `91bcd77f`）；fhp-research（未动）；未动 SDK 树、未动引擎树。
+- 本轮 agents=3（三次新鲜 Opus 派发：pass 8、pass 9、pass 10）。
+- 契约五之四四步：pass 10 判 PARTIAL→当场修（`91bcd77f`）→尚需再派一轮新鲜证伪（pass 11）。第四步未完成，本轮到此结束。
