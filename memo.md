@@ -17862,3 +17862,25 @@ memo.md 15599-15624 行已有一次「pass 2（`843b7a03`，Opus，SURVIVES）�
 本轮涉及树：fhp-research（写，1 次提交 `e461595f`）；flutter_hot_patcher（本文件）；未动 SDK 树。
 本轮 agents=2（两次新鲜 Opus 派发）。契约五之四四步已完整走完：做完→证伪 PARTIAL→当场修→重跑 SURVIVES。
 本轮到此结束。
+
+### F130（fix_queue.py 同轮自审）：pass 8 PARTIAL → 修复 `6e59f649` → pass 9 已派发（round PID 81367）
+
+- **2026-09-30 FALSIFICATION PASS（Opus，general-purpose，19 次调用）VERDICT: PARTIAL**——针对已在队列里的行（earlier-round row）：
+  `requeue_cids` 只在 `neg & fix`（本轮既有红又有新修补丁）时触发；本轮若**只有绿判决、完全没有红行**，且这一轮又落了一个新的修补丁提交，
+  该逃逸路径完全绕过 `requeue_cids`，转而经 `settle()` 的 `effective_pos`（旧代码只检查 `cid in pos and not new_this_round`，
+  从未检查 `fix`）被判定为"已复核候选"，静默把一个从未被审过的新提交标成绿。
+  实测复现：队列里 F77 行 `fix commit(s) abc1234`（旧修补丁），本轮新提交 `fff0001`，回复只写 `VERDICT: SURVIVES for F77 (fix)`（无红行）
+  ⇒ 修复前 `candidate F77` 落盘、`--render` 会告诉操作者"已有绿色 pass，别再派"，而 `fff0001` 从未被记录、从未被复核。
+  STILL OPEN（原文抄录）：无——本轮同时指出 `d26cac5b` 的证据引用有一处失实（"M1 mutation reddens exactly p8" 其实是 F140 的探针，不是 F130/F131 的），
+  以及 fix commit `1040973f`（pass 7，settle `new_this_round`）未被写进卡片证据列。
+- **修复 `6e59f649`**（同轮，本仓）：`effective_pos` 加上 `and cid not in fix`；`unsupported(cid)` 对 `cid in fix` 给出准确原因
+  （"a fix commit for this id landed THIS round..."），不再套用旧的"没有回复命名绿判决"这句失实文案。
+  新增自测探针 `_f130_green_same_round_no_red` 精确复现上面那个逃逸；负控制实测：把 `and cid not in fix` 单独撤回，
+  143 个用例里**恰好** `_f130_green_same_round_no_red` 一个变红，其余 142 个不受影响；`test_fix_gate.sh` 0 failures。
+  自测 143/0。
+- 修补丁本身按契约五之四**还没被审过**：已派第二个新鲜 Opus 子代理专门审这个修复本身（不是审卡片原文），
+  尚未返回。F130 保持 `built`，不标 `[x]`。
+- 本轮涉及树：flutter_hot_patcher（写，1 次提交 `6e59f649`）；fhp-research（仅读 cards.tsv，未改动）；未动 SDK 树、未动引擎树。
+- 本轮 agents=2（两次新鲜 Opus 派发：pass 8 找破绽、pass 9 审修补丁）。
+- 契约五之四四步：做完（读卡+定位）→证伪（pass 8 PARTIAL）→当场修（`6e59f649`）→重跑证伪（pass 9，已派发、结果未到）。
+  第四步尚未完成，本轮到此结束，等待 pass 9 的通知。
