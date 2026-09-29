@@ -18593,3 +18593,39 @@ pools/selectors 每个字段都与他们逐条相同（子代理跳出脚本直�
 本轮 agents=3（均已回收，含本次证伪 pass）。`.loop/`、`cards.tsv` 均未动。
 本轮到此结束。下一轮如果要继续 F95，先做上面第一条（单独 revert F147）
 再决定要不要动卡片状态；不要复用前两轮任何 `/tmp/f95_*` 产物。
+心跳 2026-09-30T03:32:05 round PID 44479
+
+### 心跳 2026-09-30 03:33（round PID 44479）：续 F95，派发 F147-only revert 实验（本轮到此结束）
+
+本轮确认自己是 round.lock 持有者（PID 44479），与 ralph.sh 同一循环，非竞争写方，读完契约全文。
+核对三张欠证伪 pass 的 built 卡（F111/F121/F49）：均已在挂起池/triage 记录为不到第 5 轮重试点
+（上两轮 round PID 34296/84644 已核实过），本轮不重派。F37 仍等操作者对"是否重钉
+dartaotruntime/gen_snapshot"表态，本轮不碰。
+
+沿上一轮（round PID 84644）结论续 F95（规则 0 SDK 本体）：上一轮已确认 F148 单独 revert
+对 158/65 基线贡献为 0，且发现当前 HEAD 本身已读 0/0（158/65 基线在更早的语料上量的，
+现在复现不出）。下一步是单独 revert F147 的 3 个提交（`513ba5e545a`/`9b63a7b52b3`/
+`1bf8a935dde`，非连续——F148 的 `d4923373846` 夹在中间不能一起 revert），看 158/65 是否
+在 F147 缺席时重新出现（若出现，证明是 F147 关掉了这个桶；若仍是 0/0，说明真因还没找到）。
+
+派发一个新鲜子代理（general-purpose，opus）：① 确认 `~/dart-3122/sdk` HEAD `de660deeae5`
+干净；② 先 dry-run 3 个提交的 revert（`--no-commit`），若冲突则中止并报告 BLOCKED
+（F152/F151 依赖 F147 布局的可能性已知，不做人工冲突解决）；
+③ 若干净应用，重建 `ProductSimIosARM64/clang_arm64` 的 `gen_snapshot`/`analyze_snapshot`
+（不是 `ProductSimARM64`——上上轮子代理已指出这一点，避免重复浪费一次派发）；
+④ 重新生成 ours 侧 `.so` 与 `--shorebird` JSON fixture（不能只重跑 JSON，stub 顺序在写
+快照时确定）；⑤ 跑 `f95_self_hash_residual.py` 或等价比对，报差异函数总数与 `[Stub]` 计数，
+对照 158/65（pre-fix）与 0/0（当前 HEAD，revert 前的基线）；⑥ 完整还原到 revert 前的
+HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原后再次对齐构建目录；
+全程禁止 `git add -A`/push/改配置/动 `cards.tsv`/`memo.md`/跑 `verify_all.sh`/碰
+`ProductARM64`（非 Sim）钉住产物。严格返回格式（≤100 行）。
+
+结果尚未回收——本轮先记录派发依据后结束。按契约五之四，即便这一步 rc=0，也只是
+"做完一件事"，还差一次新鲜子代理的证伪 pass 才能动 F95 的卡片状态；本节不预判结果。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理 revert-dry-run+可能重建+还原，未提交，将由子代理
+自行核实前后一致）；`fhp-research`（子代理跑脚本，未提交）；本仓 `memo.md`（写，本节）。
+未动 `.loop/` 队列文件、未动 `cards.tsv`。本轮 agents=1（尚未回收）。
+本轮到此结束，下一轮请先看这次派发是否已回收，再决定是续写 F95 结论还是挑新任务
+（规则 0：SDK 本体优先）。若回收结果是 BLOCKED（revert 冲突），F95 的"158 消失"归因
+应改路：对 pre-fix 158/65 集合做逐函数 DWARF 偏移归因，而不是继续尝试单变量 revert。
