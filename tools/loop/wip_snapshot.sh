@@ -123,6 +123,11 @@ prune_tree() {
   git -C "$tree" for-each-ref --format='%(refname) %(committerdate:unix)' refs/wip/ 2>/dev/null |
   while read -r ref when; do
     [ -n "${when:-}" ] || continue
+    # F140 (2026-09-29): run_round.sh's quarantine-floor anchor is not a WIP
+    # snapshot and must never age out -- its whole job is to outlive a
+    # deletion. (The reference-transaction hook refuses the delete as well;
+    # this does not rely on the hook being installed.)
+    case "$ref" in refs/wip/loop-*) continue ;; esac
     if [ "$when" -lt "$cutoff" ]; then
       git -C "$tree" update-ref -d "$ref" && say "$(basename "$tree"): pruned $ref (older than ${KEEP_DAYS}d)"
     fi

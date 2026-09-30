@@ -800,7 +800,24 @@ fi
 # as no snapshot at all -- measured 2026-09-16 during verification: with the
 # snapshot missing, a vanished entry and no verdict produced silence and exit 0.
 # The sentinel makes "the snapshot was not taken" a state fix_queue.py reddens on.
-if ! cp "$FIX_QUEUE" "$FIX_QUEUE_BEFORE" 2>/dev/null; then
+#
+# F140 (2026-09-29 triage): `cp` of a FIFO blocks until something writes to
+# it, so a FIFO planted at the live ledger between rounds hung the round here
+# (>5 s, measured) before the gate could even run -- and the same held for the
+# queue, and for a FIFO planted at a snapshot DESTINATION (cp opens it for
+# write and waits for a reader). snap_regular() copies only a regular,
+# non-symlink source, removes whatever sits at the destination first, and
+# otherwise fails -- which leaves the sentinel, exactly like any other failed
+# snapshot. Residue, stated: the test and the cp are two steps, so a FIFO
+# swapped in between them in that instant would still block.
+# fix_queue.py --self-test runs the block between the BEGIN/END lines
+# verbatim; keep it self-contained (FIX_QUEUE FIX_QUEUE_BEFORE).
+# BEGIN snapshot-copies
+snap_regular() {
+  rm -f "$2" 2>/dev/null
+  [ -f "$1" ] && [ ! -L "$1" ] && cp "$1" "$2" 2>/dev/null
+}
+if ! snap_regular "$FIX_QUEUE" "$FIX_QUEUE_BEFORE"; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE" 2>/dev/null || true
 fi
 FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE" 2>/dev/null || echo "")
@@ -808,10 +825,13 @@ FIX_QUEUE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib
 # failed snapshot -- without this every round on a never-drained loop printed
 # the sentinel RED. Deleting an existing ledger only loses drain records, which
 # fails closed (nothing is excused), so no bootstrap marker is needed here.
-[ -e "$FIX_QUEUE.operator_drains" ] || : >"$FIX_QUEUE.operator_drains" 2>/dev/null
-if ! cp "$FIX_QUEUE.operator_drains" "$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null; then
+# `-L` too: a dangling symlink is not `-e`, and `: >` would create its target.
+[ -e "$FIX_QUEUE.operator_drains" ] || [ -L "$FIX_QUEUE.operator_drains" ] \
+  || : >"$FIX_QUEUE.operator_drains" 2>/dev/null
+if ! snap_regular "$FIX_QUEUE.operator_drains" "$FIX_QUEUE_BEFORE.operator_drains"; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains" 2>/dev/null || true
 fi
+# END snapshot-copies
 # F113 fix pass 2: the ledger snapshot is a plain file the round can rewrite, so
 # its checksum lives here, in this process, where the round cannot reach it --
 # the same protection the queue snapshot already has.
@@ -862,27 +882,70 @@ LEDGER_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sh
 QUARANTINE_LIVE="$FIX_QUEUE.operator_drains.quarantine"
 QUARANTINE_MARKER="$STATE/QUARANTINE_BOOTSTRAPPED"
 QUARANTINE_FLOOR="$FIX_QUEUE.quarantine_floor"
-if ! python3 - "$REPO" "$QUARANTINE_LIVE" "$QUARANTINE_MARKER" "$QUARANTINE_FLOOR" \
-    "$FIX_QUEUE_BEFORE.operator_drains.quarantine" <<'QUARANTINE_PY'
-import io, os, subprocess, sys
-repo, live, marker, floor, snap = sys.argv[1:6]
+# F140 (2026-09-29 triage): WHERE THE FLOOR IS ANCHORED, AND WHO CAN WRITE IT.
+# The union below already read "every committed version of the floor in git
+# history" -- but nothing ever committed the floor (`git ls-files .loop` lists
+# only QUARANTINE_BOOTSTRAPPED), so the history was always empty and the floor
+# was exactly as durable as a file in .loop/: a LEDGER-LOST line deleted from
+# BOTH the live quarantine and the floor between rounds was gone, and the next
+# round drained at OWED 0 (triage repro). Now:
+#   - this process (never the round) appends every floor state it sees to a
+#     chain of commits on refs/wip/loop-quarantine-floor, built with plumbing
+#     (temporary index, commit-tree, update-ref) so no branch, index, working
+#     tree or HEAD moves -- the idle fingerprint and the round's own commit
+#     list are untouched. Once at round start (below) and once right after
+#     the gate (fix_queue_gate), which is when a LEDGER-LOST line is written.
+#   - the chain only grows: each new version is the previous version plus the
+#     floor's new lines, so a shrunken floor is never anchored.
+#   - who can rewrite it: refs/wip/* is in the reference-transaction hook's
+#     strict namespace (tools/loop/hooks/reference-transaction), which refuses
+#     deleting the ref or moving it to a non-descendant for ANY git invoker
+#     (bash, python subprocess, ...). A round can only fast-forward it, and a
+#     fast-forward cannot remove an old version from `git log --all`, which is
+#     what the union reads. wip_snapshot.sh's prune skips it.
+#   - a floor missing lines that the anchored history holds has been shrunk
+#     by someone other than this process: the lines are restored AND this
+#     round fails closed (sentinel snapshot, no drain excused).
+# Residue, stated: the hook's own disclosed gaps -- a raw write to the ref
+# file under .git, unsetting core.hooksPath or removing the hook -- bypass
+# this, and that is also the only way an operator can RELEASE an anchored
+# line (see fix_queue.py's LEDGER-LOST message). Between the gate's write and
+# the anchor right after it there is a window of one process start.
+# BEGIN quarantine-floor-py
+quarantine_floor_py() {
+python3 - "$@" <<'QUARANTINE_PY'
+import io, os, stat, subprocess, sys, tempfile
+mode = sys.argv[1]
+ANCHOR_REF = "refs/wip/loop-quarantine-floor"
 
 
-def die(why):
-    sys.stderr.write("run_round: quarantine floor: %s -- snapshot is the "
-                     "#SNAPSHOT-FAILED sentinel; the floor is NOT reset\n" % why)
+def die(why, tail="the floor is NOT reset"):
+    if mode == "anchor":
+        sys.stderr.write("run_round: quarantine floor: %s\n" % why)
+    else:
+        sys.stderr.write("run_round: quarantine floor: %s -- snapshot is the "
+                         "#SNAPSHOT-FAILED sentinel; %s\n" % (why, tail))
     sys.exit(1)
 
 
-def git(*a):
+class AnchorFail(Exception):
+    pass
+
+
+def git(*a, **kw):
     try:
-        r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True)
+        r = subprocess.run(["git", "-C", repo] + list(a), capture_output=True,
+                           input=kw.get("input"),
+                           env=dict(os.environ, **kw.get("env", {})))
     except OSError as e:
         die("git could not be run (%s), bootstrap state unconfirmed" % e)
     if r.returncode != 0:
-        die("`git %s` failed (rc=%d: %s), bootstrap state unconfirmed"
-            % (" ".join(a), r.returncode,
-               r.stderr.decode("utf-8", "replace").strip()))
+        why = ("`git %s` failed (rc=%d: %s)"
+               % (" ".join(a), r.returncode,
+                  r.stderr.decode("utf-8", "replace").strip()))
+        if kw.get("anchoring"):
+            raise AnchorFail(why)
+        die(why + ", bootstrap state unconfirmed")
     return r.stdout
 
 
@@ -908,17 +971,101 @@ def lines_of(raw):
 
 
 def read_plain(p):
-    if not os.path.exists(p):
+    # F140 (2026-09-29): opened O_NONBLOCK|O_NOFOLLOW and checked with fstat,
+    # so a FIFO cannot block the open and a symlink is refused, with no
+    # check-then-open gap (same rule as fix_queue.py open_regular()).
+    if not os.path.lexists(p):
         return None
-    if not os.path.isfile(p):
-        die("%s is not a plain file" % p)
     try:
-        with io.open(p, "rb") as fh:
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK
+                     | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        die("%s is not a plain file or unreadable (%s)" % (p, e))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            die("%s is not a plain file" % p)
+        with io.open(fd, "rb", closefd=False) as fh:
             return fh.read()
     except (IOError, OSError) as e:
         die("%s unreadable (%s)" % (p, e))
+    finally:
+        os.close(fd)
 
 
+def write_plain(p, data):
+    # Never through whatever sits at `p` (a FIFO would block the open, a
+    # symlink would redirect it): write a fresh file and rename it over.
+    tmp = p + ".tmp.%d" % os.getpid()
+    with io.open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, p)
+
+
+def unique(raws):
+    out, seen = [], set()
+    try:
+        for raw in raws:
+            for line in lines_of(raw):
+                if line not in seen:
+                    seen.add(line)
+                    out.append(line)
+    except UnicodeDecodeError as e:
+        die("quarantine data is not valid UTF-8 (%s)" % e)
+    return out
+
+
+def encode(lines):
+    return "".join(l + "\n" for l in lines).encode("utf-8", "surrogateescape")
+
+
+def anchor(frel, data):
+    """Append `data` (already a superset of the tip) to ANCHOR_REF.
+    Raises AnchorFail; never dies."""
+    g = lambda *a, **kw: git(*a, anchoring=True, **kw)
+    tip = g("for-each-ref", "--format=%(objectname)", ANCHOR_REF).strip().decode()
+    if tip and g("show", "%s:%s" % (tip, frel)) == data:
+        return
+    blob = g("hash-object", "-w", "--stdin", input=data).strip().decode()
+    idx = os.path.join(tempfile.mkdtemp(prefix="fhp_qanchor."), "index")
+    ienv = {"GIT_INDEX_FILE": idx}
+    g("update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, frel),
+      env=ienv)
+    tree = g("write-tree", env=ienv).strip().decode()
+    who = {"GIT_AUTHOR_NAME": "fhp-loop", "GIT_AUTHOR_EMAIL": "loop@localhost",
+           "GIT_COMMITTER_NAME": "fhp-loop",
+           "GIT_COMMITTER_EMAIL": "loop@localhost"}
+    commit = g("commit-tree", tree, *(["-p", tip] if tip else []),
+               "-m", "loop: quarantine floor anchor (%d line(s))"
+               % len(list(lines_of(data))), env=who).strip().decode()
+    g("update-ref", ANCHOR_REF, commit, tip)
+
+
+if mode == "anchor":
+    # After the gate: fold the tip back in (never anchor a shrink), restore
+    # the floor to that union, then append it to the chain.
+    repo, floor = sys.argv[2:4]
+    frel = rel(floor)
+    try:
+        tip = git("for-each-ref", "--format=%(objectname)", ANCHOR_REF,
+                  anchoring=True).strip().decode()
+        tip_raw = (git("show", "%s:%s" % (tip, frel), anchoring=True)
+                   if tip else b"")
+    except AnchorFail as e:
+        die("the anchor %s could not be read (%s)" % (ANCHOR_REF, e))
+    floor_raw = read_plain(floor) or b""
+    data = encode(unique([tip_raw, floor_raw]))
+    try:
+        if data != floor_raw:
+            write_plain(floor, data)
+    except (IOError, OSError) as e:
+        die("could not restore the floor (%s)" % e)
+    try:
+        anchor(frel, data)
+    except AnchorFail as e:
+        die("the floor could not be anchored on %s (%s)" % (ANCHOR_REF, e))
+    sys.exit(0)
+
+repo, live, marker, floor, snap = sys.argv[2:7]
 # Fail closed: "git could not answer" is NOT "never bootstrapped".
 booted = (os.path.exists(marker)
           or bool(git("log", "--all", "-1", "--format=%H", "--",
@@ -939,32 +1086,41 @@ else:
         io.open(live, "w").close()
         live_raw = b""
     io.open(marker, "w").close()
-out, seen = [], set()
+out = unique([floor_raw or b""] + history + [live_raw])
+seen = set(out)
+data = encode(out)
 try:
-    for raw in [floor_raw or b""] + history + [live_raw]:
-        for line in lines_of(raw):
-            if line not in seen:
-                seen.add(line)
-                out.append(line)
-except UnicodeDecodeError as e:
-    die("quarantine data is not valid UTF-8 (%s)" % e)
-data = "".join(l + "\n" for l in out).encode("utf-8", "surrogateescape")
-try:
-    tmp = floor + ".tmp.%d" % os.getpid()
-    with io.open(tmp, "wb") as fh:
-        fh.write(data)
-    os.replace(tmp, floor)
-    with io.open(snap, "wb") as fh:
-        fh.write(data)
+    write_plain(floor, data)
+    write_plain(snap, data)
 except (IOError, OSError) as e:
     die("could not write the floor or snapshot (%s)" % e)
+anchor_err = None
+try:
+    anchor(frel, data)
+except AnchorFail as e:
+    anchor_err = "the floor could not be anchored on %s (%s)" % (ANCHOR_REF, e)
+shrunk = set(unique(history)) - set(unique([floor_raw or b""]))
+if shrunk:
+    die("the floor %s is missing %d line(s) its anchored history holds "
+        "(e.g. %r) -- restored from history, but a floor that shrank was "
+        "edited by something other than this loop, so no drain is excused "
+        "this round" % (floor, len(shrunk), sorted(shrunk)[0][:120]),
+        tail="the floor now holds the restored lines")
+if anchor_err:
+    sys.stderr.write("run_round: quarantine floor: WARNING %s -- this "
+                     "round's snapshot is intact, but the floor is only as "
+                     "durable as the file until the next anchor\n" % anchor_err)
 if live_raw is not None and set(lines_of(live_raw)) != seen:
     sys.stderr.write("run_round: quarantine floor holds %d line(s) the live "
                      "file %s does not -- the gate will restore them and "
                      "excuse no drain\n" % (len(seen - set(lines_of(live_raw))),
                                            live))
 QUARANTINE_PY
-then
+}
+# END quarantine-floor-py
+if ! quarantine_floor_py snapshot "$REPO" "$QUARANTINE_LIVE" \
+    "$QUARANTINE_MARKER" "$QUARANTINE_FLOOR" \
+    "$FIX_QUEUE_BEFORE.operator_drains.quarantine"; then
   printf '#SNAPSHOT-FAILED\n' >"$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || true
 fi
 QUARANTINE_BEFORE_SHA=$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$FIX_QUEUE_BEFORE.operator_drains.quarantine" 2>/dev/null || echo "")
@@ -1256,6 +1412,46 @@ PY
 # those inputs itself rather than taking them as arguments, because the two call
 # sites reach it at different points and a "use them if they are set" argument
 # would be one more thing that can silently be the wrong value.
+# F114 F-2/F-3 (2026-09-29 triage). "Did this commit touch code" was decided by
+# PATH, and by exactly two basenames: memo.md and cards.tsv. So a record-keeping
+# commit under any other prose path (docs/LOOP_CONTRACT.md, unreviewed/README.md,
+# both measured live) read as a code fix and enqueued every card its subject
+# named; and one incidental byte elsewhere (a blank line added to a .py) did the
+# same for a memo commit. Now:
+#   - prose paths are memo.md, cards.tsv, README.md (any directory) and *.md
+#     under a docs/ directory. Other .md files are NOT prose here --
+#     tools/loop/prompts/*.md and CLAUDE.md steer the loop's behaviour;
+#   - a non-prose path counts only if its diff survives -w --ignore-blank-lines
+#     (a whitespace-only or blank-line-only change produces no patch at all;
+#     a mode change, a binary change, or a new/deleted file still does);
+#   - every git failure answers 1. A false 1 is one dispatch; a false 0 is a
+#     fix nobody reviews.
+# Prints 1 or 0. fix_queue.py --self-test runs this block verbatim.
+# BEGIN code-touch
+commit_code_touch() {
+  local ct_t=$1 ct_sha=$2 ct_f ct_names ct_out
+  local -a ct_code=()
+  ct_names=$(git -C "$ct_t" diff-tree --no-commit-id --name-only -r -m "$ct_sha" 2>/dev/null) \
+    || { echo 1; return 0; }
+  while IFS= read -r ct_f; do
+    [ -z "$ct_f" ] && continue
+    case "$ct_f" in
+      memo.md|*/memo.md|cards.tsv|*/cards.tsv) continue ;;
+      README.md|*/README.md|docs/*.md|*/docs/*.md) continue ;;
+    esac
+    ct_code+=("$ct_f")
+  done <<<"$ct_names"
+  if [ "${#ct_code[@]}" -eq 0 ]; then
+    echo 0
+    return 0
+  fi
+  ct_out=$(git --literal-pathspecs -C "$ct_t" diff-tree --no-commit-id -r -m -p \
+             -w --ignore-blank-lines "$ct_sha" -- "${ct_code[@]}" 2>/dev/null) \
+    || { echo 1; return 0; }
+  if [ -n "$ct_out" ]; then echo 1; else echo 0; fi
+}
+# END code-touch
+
 fix_queue_gate() {
   local g_agents g_memo g_subjects g_cards fq_memo fq_commits fq_out fq_rc
   local fq_reported fq_file_n fq_owed fq_why fq_commits_n _n _g fq_replies
@@ -1290,19 +1486,16 @@ fix_queue_gate() {
   # because prose is exactly what F89 was filed to stop trusting. A file with
   # no changed paths (e.g. an empty commit) is treated as prose-only: it did
   # not touch code, by the same logic that names memo.md/cards.tsv prose-only.
+  #
+  # F114 F-2/F-3 (2026-09-29): the per-commit decision now lives in
+  # commit_code_touch() (the code-touch block below), which asks about CONTENT
+  # rather than path: known prose paths are skipped and whitespace-only hunks
+  # do not count.
   g_code_touch=$(for pair in ${heads_before:-}; do
       t=${pair%%=*}; h=${pair#*=}
       [ "$h" = none ] && continue
       for sha in $(git -C "$t" log --format="%h" "$h..HEAD" 2>/dev/null); do
-        touched=0
-        while IFS= read -r f; do
-          [ -z "$f" ] && continue
-          fb=$(basename "$f")
-          if [ "$fb" != "memo.md" ] && [ "$fb" != "cards.tsv" ]; then
-            touched=1
-          fi
-        done < <(git -C "$t" diff-tree --no-commit-id --name-only -r -m "$sha" 2>/dev/null)
-        printf '%s %s\n' "$sha" "$touched"
+        printf '%s %s\n' "$sha" "$(commit_code_touch "$t" "$sha")"
       done
     done)
   # An id is only an id if the card table lists one. Unfiltered, the pattern
@@ -1362,6 +1555,15 @@ fix_queue_gate() {
   printf '%s\n' "$fq_out" | while IFS= read -r l; do
     [ -n "$l" ] && say "fix-queue: $l"
   done
+  # F140 (2026-09-29): anchor what the gate just wrote to the floor (a
+  # LEDGER-LOST line, newly quarantined lines) before the round's shell exits,
+  # so it cannot be erased between rounds. See quarantine-floor-py above.
+  # Defaults, not assumptions: this function is also reached on the
+  # quota-block path and is sourced on its own by tests/test_fix_gate.sh.
+  local fq_floor=${QUARANTINE_FLOOR:-$FIX_QUEUE.quarantine_floor} fq_anchor_err
+  if ! fq_anchor_err=$(quarantine_floor_py anchor "$REPO" "$fq_floor" 2>&1); then
+    say "WARNING: the quarantine floor could not be anchored after the gate (${fq_anchor_err:-no reason given}) -- a line the gate just quarantined is only as durable as $fq_floor until the next round's anchor"
+  fi
   rm -f "$fq_memo" "$fq_commits" "$fq_replies" "$fq_code_touch" "$fq_bodies" \
         "$FIX_QUEUE_BEFORE" "$FIX_QUEUE_BEFORE.operator_drains" \
         "$FIX_QUEUE_BEFORE.operator_drains.quarantine" "$CARDS_BEFORE"

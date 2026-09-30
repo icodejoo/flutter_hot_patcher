@@ -224,6 +224,8 @@ def is_comment(line):
 # the live ledger and left no trusted snapshot to restore it from. While any
 # such line stands, no operator drain is excused -- see update().
 LEDGER_LOST = "LEDGER-LOST"
+# Where run_round.sh anchors the quarantine floor (quarantine-floor-py block).
+FLOOR_ANCHOR_REF = "refs/wip/loop-quarantine-floor"
 
 
 def is_sentinel(raw):
@@ -483,11 +485,29 @@ POS = "SURVIVES"
 # "证伪" is NOT red: it names the review process ("证伪 pass"), so the Chinese
 # forms are anchored on a verdict word (判决/结论/裁决/判定/判为/VERDICT) or
 # are the passive/predicate forms that only a red outcome produces.
+#
+# F49 (e), 2026-09-29 triage: four more red forms that carried no verdict word
+# from the list above and were invisible -- "证伪 pass 2：部分成立" (the pass
+# name itself is the label), "证伪结果：部分成立" (结果 as the label),
+# "修补丁被推翻" (passive, like 被证伪) and "未通过证伪" (did not pass). The
+# label forms reuse the same red-outcome list; bare "证伪 pass" is still not
+# red because an outcome word must follow the colon.
+_ZH_RED_OUTCOME = r"(?:证伪|部分成立|部分通过|部分证伪|不成立|未通过|被推翻|推翻)"
+# 结果 is generic ("结果证伪 pass ..." is not a verdict), so unlike the words
+# above it only counts with a colon after it.
+_ZH_ID = r"(?:(?:\*{1,2}|_{1,2})?[A-Za-z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s*)?"
 NEG_ZH = (r"(?:判(?:决|定|为)?|结论|裁决|VERDICT)\s*为?\s*[:：]?\s*"
-          r"(?:(?:\*{1,2}|_{1,2})?[A-Za-z][0-9]+[a-z]?(?:\*{1,2}|_{1,2})?\s*)?"
-          r"(?:\*{1,2}|_{1,2})?"
-          r"(?:证伪|部分成立|部分通过|部分证伪|不成立|未通过|被推翻|推翻)"
-          r"|被证伪(?!\s*pass)|证伪成立")
+          + _ZH_ID + r"(?:\*{1,2}|_{1,2})?" + _ZH_RED_OUTCOME +
+          r"|结果\s*为?\s*[:：]\s*" + _ZH_ID + r"(?:\*{1,2}|_{1,2})?"
+          + _ZH_RED_OUTCOME +
+          r"|证伪(?:\s*pass)?\s*\d*\s*[:：]\s*" + _ZH_ID
+          + r"(?:\*{1,2}|_{1,2})?" + _ZH_RED_OUTCOME +
+          r"|被证伪(?!\s*pass)|证伪成立"
+          # "未被推翻" / "没有被推翻" is "NOT overturned" -- green, and reading
+          # it red flipped real SURVIVES lines ("结论 SURVIVES（未被推翻）")
+          # to red in polarity(). Measured on memo.md before adding these.
+          r"|(?<!未)(?<!没)(?<!没有)(?<!并未)(?<!不会)被推翻"
+          r"|(?:未|没有?|不能)通过\s*证伪")
 NEG_RE = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za-z])"
                     r"|" + NEG_ZH, re.IGNORECASE)
 FIX_MARKERS = ("(fix)", "（fix）", "修补丁")
@@ -1398,14 +1418,39 @@ FIX_CLAIM = re.compile(
     re.IGNORECASE)
 
 
+# F49 (a)/(b), 2026-09-29 triage. Two shapes still let a body mention cancel E3:
+#   (a) "Follow-up to F12, fixes gate." -- the comma joined "fixes" to F12's
+#       clause, so F12 read as claimed and red F49's fix went unlinked;
+#   (b) "This does not fix F12; ..." -- a NEGATED fix verb read as a claim.
+# So a claim is now decided per SUB-clause (a clause further split at commas
+# and enumeration marks), and a fix verb with a negation shortly before it in
+# its own sub-clause is not claim language. Both changes only ever turn a
+# "claimed" into "not claimed", i.e. they can only make E3 fire more often --
+# the cheap direction (a false link is one dispatch). They touch nothing but
+# this E3 decision: no id becomes red or green because of them.
+SUBCLAUSE = re.compile(r"[^,，、]+")
+NEGATION_BEFORE = re.compile(
+    r"(?:\b(?:not|never|no\s+longer|without|nor|cannot)\b|n't|"
+    r"未|没有?|不(?!仅|只|但))[^,，、]{0,12}$", re.IGNORECASE)
+
+
+def _claims_fix(seg):
+    """True iff `seg` carries an UN-negated fix verb (FIX_CLAIM)."""
+    for m in FIX_CLAIM.finditer(seg):
+        if not NEGATION_BEFORE.search(seg[:m.start()]):
+            return True
+    return False
+
+
 def claims_on_body_line(line, known=None):
-    """Ids a body line CLAIMS (see FIX_CLAIM), per clause, folded."""
+    """Ids a body line CLAIMS (see FIX_CLAIM), per sub-clause, folded."""
     out = set()
     for m in CLAUSE.finditer(line):
-        seg = m.group(0)
-        if (FIX_CLAIM.search(seg) or PASS_VOCAB.search(seg)
-                or NEG_RE.search(seg) or any(k in seg for k in FIX_MARKERS)):
-            out |= ids_on(seg, known, fold=True)
+        for s in SUBCLAUSE.finditer(m.group(0)):
+            seg = s.group(0)
+            if (_claims_fix(seg) or PASS_VOCAB.search(seg)
+                    or NEG_RE.search(seg) or any(k in seg for k in FIX_MARKERS)):
+                out |= ids_on(seg, known, fold=True)
     return out
 
 
@@ -1447,6 +1492,62 @@ VERDICT_CASE_NEG = re.compile(r"(?<![0-9A-Za-z])(?:FALSIFIED|PARTIAL)(?![0-9A-Za
 def idless_body_red(line):
     return bool(NEG_RE.search(line)
                 and (PASS_VOCAB.search(line) or VERDICT_CASE_NEG.search(line)))
+
+
+# F49 (d), 2026-09-29 triage: a verdict split over two lines --
+#     "Result of the falsification pass on the gate:"
+#     "partial -- two escapes remain."
+# Neither line is red on its own reading: the first has no red token, the
+# second has only a lowercase "partial" and no pass vocabulary, which
+# idless_body_red() deliberately refuses ("Partial rewrite of the helper.").
+# Read as a pair it is a verdict: the second line OPENS with a red token and
+# the line before it (same commit body, or the previous added memo line)
+# carries pass/verdict vocabulary or ends in a colon. "Opens with" is what
+# keeps "Partial rewrite" out: it has no such line before it.
+_LEAD = re.compile(r"[\s+*_>\-#`\"'(\[:：]*")
+
+
+def starts_red(text):
+    return bool(NEG_RE.match(text, _LEAD.match(text).end()))
+
+
+def continues_verdict(prev, text):
+    """`text` is the second half of a verdict split across two lines."""
+    if prev is None or not starts_red(text):
+        return False
+    return bool(PASS_VOCAB.search(prev)) or prev.rstrip().endswith((":", "："))
+
+
+def body_reds(bodies):
+    """[(index, sha, line, text)] for every body line that records an
+    id-less-style red verdict: idless_body_red() on its own, or the second
+    half of a split verdict (continues_verdict()) within the same commit's
+    body."""
+    out, prev = [], {}
+    for j, line in enumerate(bodies):
+        sha, _, text = line.partition(" ")
+        if idless_body_red(line) or continues_verdict(prev.get(sha), text):
+            out.append((j, sha, line, text))
+        prev[sha] = text
+    return out
+
+
+def unbound_body_reds(subjects, bodies, known=None):
+    """[(sha, text)]: body red verdicts that bind to NO card (F49 (c)).
+
+    E1b binds an id-less body red to the ids its commit claims, or failing
+    that to every id it mentions. A commit that names no card anywhere --
+    subject and body both id-less -- left that red bound to nothing, and it
+    was dropped in silence: "The falsification pass returned VERDICT:
+    PARTIAL." under "fix_queue: tighten detection" settled at OWED 0. The
+    gate cannot say which card it is about, so update() reports it (and,
+    when the round committed code, parks the debt) rather than dropping it.
+    """
+    owned = commit_owned(subjects, bodies, known)
+    named = commit_ids(subjects, bodies, known)
+    return [(sha, text) for _, sha, line, text in body_reds(bodies)
+            if not ids_on(line, known, fold=True)
+            and not (owned.get(sha) or named.get(sha))]
 
 
 def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
@@ -1505,12 +1606,25 @@ def scan(memo_lines, subjects, agents, known=None, replies=(), code_touch=None,
     # F49 E1 (second half): where an id-less red body line lands.
     sha_owned = commit_owned(subjects, bodies, known)
     sha_named = commit_ids(subjects, bodies, known)
+    # F49 (d): body lines that are red on their own OR as the second half of
+    # a verdict split over two lines, by position in `bodies`.
+    red_body = {j for j, _, _, _ in body_reds(bodies)}
+    body0 = len(memo_lines) + len(subjects)
     for i, (line, in_fence) in enumerate(zip(memo_lines + subjects + bodies,
                                              fenced)):
-        if (i in body_lines and idless_body_red(line)
+        if (i in body_lines and (i - body0) in red_body
                 and not ids_on(line, known, fold=True)):
             sha = line.split(" ", 1)[0]
             neg |= sha_owned.get(sha) or sha_named.get(sha) or set()
+            continue
+        # F49 (d), memo half: an id-less added memo line that opens with a
+        # red token right under a line with pass vocabulary is that line's
+        # verdict -- bound to the ids the line above names.
+        if (i < len(memo_lines) and i > 0 and not in_fence
+                and not fenced[i - 1]
+                and not ids_on(line, known, fold=True)
+                and continues_verdict(memo_lines[i - 1], line)):
+            neg |= ids_on(memo_lines[i - 1], known, fold=True)
             continue
         here = ids_on(line, known)
         # The legacy-id alias has to be computed BEFORE the early exit, not
@@ -2171,8 +2285,13 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
             "removed the live ledger when no trusted snapshot existed to "
             "restore it from, so which drains it held is unknown; no "
             "operator drain is excused until an operator reviews it and "
-            "deletes the line from both %s and %s"
-            % (len(lost), LEDGER_LOST, lost[-1][:160], qpath, fpath))
+            "releases it: delete the line from both %s and %s AND from %s "
+            "(run_round.sh anchors the floor there; the reference-transaction "
+            "hook refuses rewriting it, so this is a deliberate operator act "
+            "with the hook moved aside -- deleting it from the files alone "
+            "only gets it restored)"
+            % (len(lost), LEDGER_LOST, lost[-1][:160], qpath, fpath,
+               FLOOR_ANCHOR_REF))
     # F113 fix pass 2: the round could rewrite the ledger snapshot as easily
     # as the ledger itself. Only trust it when its checksum matches the one
     # the caller took at round start; otherwise nothing is excused.
@@ -2302,10 +2421,12 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                 "trusted copy to restore it from, so its drain history is "
                 "lost. Recorded as a %s line in %s%s; no operator drain is "
                 "excused in this or any later round until an operator "
-                "reviews it and deletes that line from both files"
+                "reviews it and releases it (see the LEDGER-LOST RED on the "
+                "next round for how; the floor is anchored on %s)"
                 % (live_path, ledger_snap_why, LEDGER_LOST,
                    fpath, (" and " + qpath) if live_ok else
-                   " (the live quarantine file could not be written)"))
+                   " (the live quarantine file could not be written)",
+                   FLOOR_ANCHOR_REF))
     if not ledger_ok:
         # F140, second falsification pass (2026-09-26): leaving the live
         # ledger untouched (above) stopped a bad snapshot from erasing a
@@ -2637,12 +2758,33 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
     # Nothing binds a same-round pass to the commit it would have to have
     # read, so both paths now record the sha and owe the row.
     enqueue_cids = sorted((neg & fix) - {r[0] for r in kept}) if allow_enqueue else []
+    # F114 F-1 (2026-09-29 triage): the link from a commit to a card is its
+    # subject/body MENTION, not the files it touched, so one commit that
+    # touches one script and names four cards (eef505e: f69_defuse_sp60.sh,
+    # subject F68 F69 F78 F82) is the fix link for all four. Binding ids to
+    # files is not something prose can support, so the four are still
+    # enqueued -- dropping any would be the expensive direction -- but no
+    # longer SILENTLY: every enqueue that rests on a commit shared by two or
+    # more cards says so in its own reason (which --render shows the next
+    # round), naming the commit and the cards, so the pass and the operator
+    # can tell which card that commit actually fixes.
+    linked = {}
+    for cid in enqueue_cids:
+        for s in fix_shas(cid):
+            linked.setdefault(s, set()).add(cid)
     for cid in enqueue_cids:
         shas = " ".join(sorted(fix_shas(cid)))
         reason = "fixed after %s verdict; fix commit(s) %s; no pass on the fix" % (
             "/".join(t for t in NEG if any(t in l for l in list(memo_lines) + list(subjects))) or "FALSIFIED",
             shas or "(none recorded)",
         )
+        shared = sorted(s for s in fix_shas(cid) if len(linked.get(s, ())) >= 2)
+        if shared:
+            reason += "; SHARED FIX: %s" % ", ".join(
+                "commit %s is the only link for %d cards (%s)"
+                % (s, len(linked[s]), " ".join(sorted(linked[s])))
+                for s in shared) + (
+                " -- it may fix only some of them; the pass must say which")
         kept.append((cid, now, reason))
         actions.append("enqueue %s -- %s" % (cid, reason))
 
@@ -2708,6 +2850,32 @@ def update(queue_path, memo_lines, subjects, agents, now, known=None,
                         "RED could not invalidate the green-pass mark for %s "
                         "(%s) -- --render may still say not to re-dispatch"
                         % (" ".join(sorted(stale_candidate_marks)), e))
+
+    # F49 (c): a red verdict in a commit body that binds to no card at all.
+    # Reported as its own RED line, and -- when this round committed code,
+    # i.e. some fix exists that the verdict may be about -- the debt is parked
+    # under PARK_ID so OWED cannot read 0 until a human binds it. A round that
+    # committed no code has nothing to hold (the contract's "report red and
+    # stop" ending), so it gets a note instead of a park.
+    unbound = unbound_body_reds(subjects, bodies, known) if allow_enqueue else []
+    if unbound:
+        code_this_round = any(
+            code_touch is None or code_touch.get(s.split(" ", 1)[0], True)
+            for s in subjects if s.strip())
+        what = "; ".join("%s: %s" % (s, t[:120]) for s, t in unbound)
+        if code_this_round:
+            actions.append(
+                "RED unbound-red %d red verdict(s) in a commit body name no "
+                "card, and this round committed code -- which fix they are "
+                "about is unknown, so the debt is parked as %s until a human "
+                "binds it (%s)" % (len(unbound), PARK_ID, what))
+            kept = parked(kept, now, "unbound red verdict in a commit body "
+                          "(%s); bind it to a card by hand" % what)
+        else:
+            actions.append(
+                "note-unbound-red %d red verdict(s) in a commit body name no "
+                "card; no commit this round touched code, so nothing is held "
+                "(%s)" % (len(unbound), what))
 
     try:
         write_queue(queue_path, kept)
@@ -5198,6 +5366,204 @@ def self_test():
                        ["F49", "F12"], ["abc1234 This fixes F12."])
         return q1 == [] and q2 == [], "subject=%r body=%r" % (q1, q2)
 
+    # F49 (a)-(f), 2026-09-29 triage at d26cac5b: six shapes that still
+    # reproduced with queue=[]. Each probe was run against d26cac5b's
+    # fix_queue.py first and failed there; each has a control that must stay
+    # as it was, so a fix that just holds everything cannot pass.
+    F49_RED = ["📋 **F49 pass 1 → PARTIAL**"]
+    F49_IDLESS = ["abc1234 tree fix_queue: tighten detection"]
+
+    @probe("F49 (a): a comma does not lend a body clause's fix verb to the id "
+           "before it (\"Follow-up to F12, fixes gate.\") -- E3 links red F49")
+    def _f49a_comma():
+        q, out = _f49_q("fq_f49a.", F49_RED, F49_IDLESS, ["F49", "F12"],
+                        ["abc1234 Follow-up to F12, fixes gate."])
+        # Control: the id and the verb in ONE sub-clause is still a claim.
+        q2, _ = _f49_q("fq_f49ac.", F49_RED, F49_IDLESS, ["F49", "F12"],
+                       ["abc1234 Fixes F12, and tightens the gate."])
+        return q == ["F49"] and q2 == [], "q=%r control=%r out=%r" % (q, q2, out)
+
+    @probe("F49 (b): a NEGATED fix verb (\"does not fix F12\") is not a claim "
+           "-- E3 links red F49; the negation makes nothing red or green")
+    def _f49b_negation():
+        q, out = _f49_q("fq_f49b.", F49_RED, F49_IDLESS, ["F49", "F12"],
+                        ["abc1234 This does not fix F12; it tightens the gate."])
+        # The negation must not become a verdict either way: F12 is not red,
+        # and a green (fix) verdict carrying a negated phrase still drains.
+        k = {"F12"}
+        neg_line = neg_ids_on_line("This does not fix F12; it tightens it.", k)
+        g_memo = ["🟢 F12 修补丁 VERDICT: SURVIVES (fix) -- it does not fix "
+                  "anything else"]
+        gneg, _, _, gdrain, _ = scan(g_memo, [], 1, k, [("t1", green("F12"))])
+        return (q == ["F49"] and neg_line == set() and gneg == set()
+                and gdrain == {"F12"},
+                "q=%r neg_line=%r green: neg=%r drain=%r out=%r"
+                % (q, neg_line, gneg, gdrain, out))
+
+    @probe("F49 (c): an id-less body red in a commit naming no card at all is "
+           "a RED unbound-red line and parks the debt (Q0)")
+    def _f49c_unbound():
+        body = ["abc1234 The falsification pass returned VERDICT: PARTIAL."]
+        d = tempfile.mkdtemp(prefix="fq_f49c.")
+        bf = _f49_file(d, "bodies", "".join(b + "\n" for b in body))
+        rc, out, _ = run_cli(d, [], memo=[], subjects=F49_IDLESS,
+                             cards=["F49", "F12"], extra=["--commit-bodies", bf])
+        q = [r[0] for r in read_queue(os.path.join(d, "queue"))]
+        # Control 1: the round committed no code -> reported, nothing held.
+        d2 = tempfile.mkdtemp(prefix="fq_f49cc.")
+        bf2 = _f49_file(d2, "bodies", "".join(b + "\n" for b in body))
+        ct2 = _f49_file(d2, "ct", "abc1234 0\n")
+        rc2, out2, _ = run_cli(d2, [], memo=[], subjects=F49_IDLESS,
+                               cards=["F49", "F12"],
+                               extra=["--commit-bodies", bf2, "--code-touch", ct2])
+        q2 = [r[0] for r in read_queue(os.path.join(d2, "queue"))]
+        # Control 2: prose "Partial" (no verdict case, no pass vocabulary).
+        q3, out3 = _f49_q("fq_f49cc2.", [], F49_IDLESS, ["F49"],
+                          ["abc1234 Partial rewrite of the helper."])
+        return (q == [PARK_ID] and rc == 1 and "RED unbound-red" in out
+                and q2 == [] and "note-unbound-red" in out2
+                and q3 == [] and "unbound" not in out3,
+                "q=%r rc=%r | control q=%r out=%r | prose q=%r out=%r"
+                % (q, rc, q2, out2[-200:], q3, out3[-200:]))
+
+    @probe("F49 (d): a verdict split over two lines (\"...falsification pass "
+           "on the gate:\" / \"partial -- ...\") holds the fix, body and memo")
+    def _f49d_split():
+        q, out = _f49_q("fq_f49d.", [], ["abc1234 tree F49: tighten detection"],
+                        ["F49"],
+                        ["abc1234 Result of the falsification pass on the gate:",
+                         "abc1234 partial -- two escapes remain."])
+        qm, _ = _f49_q("fq_f49dm.",
+                       ["+F49 的第二次 falsification pass 结果如下：",
+                        "+**PARTIAL** -- two escapes remain"],
+                       ["abc1234 tree F49: tighten detection"], ["F49"])
+        # Controls: the same second line under a line with no pass vocabulary
+        # and no colon is prose; and the split rule does not cross commits.
+        q2, _ = _f49_q("fq_f49dc.", [], ["abc1234 tree F49: tighten detection"],
+                       ["F49"], ["abc1234 Tidy the helper.",
+                                 "abc1234 partial rewrite of the rest."])
+        q3, _ = _f49_q("fq_f49dc2.", [],
+                       ["abc1234 tree F49: tighten detection",
+                        "def5678 tree F12: other"], ["F49", "F12"],
+                       ["abc1234 Result of the falsification pass:",
+                        "def5678 partial rewrite of the parser."])
+        return (q == ["F49"] and qm == ["F49"] and q2 == [] and q3 == [],
+                "body=%r memo=%r controls=%r %r out=%r" % (q, qm, q2, q3, out))
+
+    @probe("F49 (e): four Chinese red forms without FALSIFIED/PARTIAL hold the "
+           "fix; the negated \"未被推翻\" and a Chinese SURVIVES are not red")
+    def _f49e_chinese():
+        k = {"F49"}
+        forms = ["F49 证伪 pass 2：部分成立", "F49 证伪结果：部分成立",
+                 "F49 修补丁被推翻", "F49 未通过证伪"]
+        got = [neg_ids_on_line(f, k) for f in forms]
+        q, out = _f49_q("fq_f49e.", ["📋 " + forms[0]],
+                        ["abc1234 tree F49: fix"], ["F49"])
+        ctl = [neg_ids_on_line(c, k) for c in (
+            "F49 PASS 1 的因果链结论 SURVIVES（未被推翻）",
+            "🟢 F49 证伪 pass 2：SURVIVES", "F49 证伪 pass 3 正在跑",
+            "F49 查看结果证伪 pass 的输出")]
+        return (all(g == k for g in got) and q == ["F49"]
+                and all(c == set() for c in ctl),
+                "forms=%r q=%r controls=%r out=%r" % (got, q, ctl, out))
+
+    # F49 (f): the red side folds case (E4), the green side must NOT -- a
+    # lowercase id is prose there, and a looser id makes approval easier.
+    # Nothing tested that: folding either green reader (the memo SURVIVES
+    # line, or the reply's id positions) left --self-test at 141/0.
+    @probe("F49 (f): a lowercase id on the GREEN side neither marks a fix "
+           "verdict (memo) nor greenlights a reply -- no drain")
+    def _f49f_green_no_fold():
+        k = {"F41"}
+        up = "🟢 F41 修补丁 VERDICT: SURVIVES (fix) -- 独立代理复现"
+        lo = "🟢 f41 修补丁 VERDICT: SURVIVES (fix) -- 独立代理复现"
+        rep_up = [("t1", green("F41"))]
+        rep_lo = [("t1", "VERDICT: SURVIVES\nATTACK RESULTS:\n1. Re-ran the "
+                         "f41 fix under every shape; all rc=128.")]
+        ctl = scan([up], [], 1, k, rep_up)[3]            # control: drains
+        memo_lo = scan([lo], [], 1, k, rep_up)[3]
+        reply_lo = scan([up], [], 1, k, rep_lo)[3]
+        return (ctl == {"F41"} and memo_lo == set() and reply_lo == set(),
+                "control=%r memo_lower=%r reply_lower=%r"
+                % (ctl, memo_lo, reply_lo))
+
+    # F114 F-1 (2026-09-29 triage): one code commit naming four cards. Still
+    # enqueued (dropping any is the expensive direction), no longer silently.
+    @probe("F114 F-1: one commit that is the fix link for 4 cards (eef505e "
+           "shape) enqueues all 4 AND flags the shared commit in each reason")
+    def _f114_shared():
+        d = tempfile.mkdtemp(prefix="fq_f114.")
+        ct = _f49_file(d, "ct", "eef505e 1\nbbb2222 1\n")
+        memo = ["F68 VERDICT: PARTIAL", "F69 VERDICT: PARTIAL",
+                "F78 VERDICT: PARTIAL", "F82 VERDICT: FALSIFIED",
+                "F86 VERDICT: PARTIAL"]
+        rc, out, _ = run_cli(
+            d, [], memo=memo,
+            subjects=["eef505e tree F68 F69 F78 F82: f69_defuse_sp60.sh fix",
+                      "bbb2222 tree F86: its own fix"],
+            cards=["F68", "F69", "F78", "F82", "F86"],
+            extra=["--code-touch", ct])
+        rows = read_queue(os.path.join(d, "queue"))
+        why = {r[0]: r[2] for r in rows}
+        four = ["F68", "F69", "F78", "F82"]
+        ok = (sorted(why) == four + ["F86"]
+              and all("SHARED FIX: commit eef505e is the only link for 4 "
+                      "cards (F68 F69 F78 F82)" in why[c] for c in four)
+              # control: a commit linked to one card is not flagged
+              and "SHARED" not in why["F86"])
+        return ok, "rows=%r out=%r" % (rows, out[-300:])
+
+    # F114 F-2/F-3: run_round.sh's commit_code_touch(), extracted between its
+    # BEGIN/END markers and run against real commits in a scratch repo.
+    @probe("F114 F-2/F-3: run_round.sh code-touch reads CONTENT -- a "
+           "docs/*.md or README.md commit, and memo + a blank line in a .py, "
+           "are prose; real code, a loop prompt .md and a mode change are not")
+    def _f114_code_touch():
+        rr = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "run_round.sh")
+        blk = io.open(rr, encoding="utf-8").read()
+        sn = blk[blk.index("# BEGIN code-touch"):blk.index("# END code-touch")]
+        d = tempfile.mkdtemp(prefix="fq_f114ct.")
+        g = lambda *a: subprocess.run(
+            ["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t"]
+            + list(a), capture_output=True, text=True).stdout.strip()
+        g("init", "-q")
+        for sub in ("docs", "unreviewed", "prompts"):
+            os.mkdir(os.path.join(d, sub))
+
+        def put(p, t):
+            io.open(os.path.join(d, p), "w", encoding="utf-8").write(t)
+        for p, t in (("memo.md", "m\n"), ("x.py", "a = 1\nb = 2\n"),
+                     ("docs/LOOP_CONTRACT.md", "c\n"),
+                     ("unreviewed/README.md", "r\n"),
+                     ("prompts/falsify.md", "p\n")):
+            put(p, t)
+        g("add", "-A")
+        g("commit", "-qm", "init")
+        want, shas = [], []
+        for label, w, edits in (
+                ("docs", "0", [("docs/LOOP_CONTRACT.md", "c\nmore\n")]),
+                ("readme", "0", [("unreviewed/README.md", "r\nmore\n")]),
+                ("memo+blank", "0", [("memo.md", "m\nv\n"),
+                                     ("x.py", "a = 1\n\nb = 2  \n")]),
+                ("code", "1", [("x.py", "a = 1\n\nb = 3  \n")]),
+                ("prompt", "1", [("prompts/falsify.md", "p\nrule\n")]),
+                ("mode", "1", [])):
+            for p, t in edits:
+                put(p, t)
+            if label == "mode":
+                os.chmod(os.path.join(d, "x.py"), 0o755)
+            g("add", "-A")
+            g("commit", "-qm", label)
+            shas.append(g("rev-parse", "--short", "HEAD"))
+            want.append(w)
+        script = sn + "".join('\ncommit_code_touch "%s" %s' % (d, s)
+                              for s in shas) + "\n"
+        r = subprocess.run(["bash", "-c", "set -uo pipefail\n" + script],
+                           capture_output=True, text=True, timeout=60)
+        got = r.stdout.split()
+        return got == want, "want=%r got=%r err=%r" % (want, got, r.stderr[-200:])
+
     for name, fn in probes:
         try:
             ok, detail = fn()
@@ -5746,12 +6112,20 @@ def self_test():
                      "a round boundary does not reset the floor -- the "
                      "content anchor keeps the forged line quarantined "
                      "(run_round.sh snippet, 3 rounds)" % label, ok5, r5))
+    # 2026-09-29: a floor missing lines its committed history holds now also
+    # FAILS CLOSED (sentinel snapshot) instead of only being restored -- the
+    # floor is append-only, so a shrink is an edit nothing in the loop makes.
+    # The line must still come back into the floor, and F46 must still hold.
     r5 = _f140r5_rounds("history")
+    floor_back = forged_q in load_quarantine(
+        quarantine_floor_path(os.path.join(r5["st"], "UNREVIEWED_FIX")))
     ok5 = (r5["rA"] == 0 and r5["quarA"] and r5["held"]
-           and forged_q.encode("utf-8") in r5["snapC"])
+           and r5["snapC"].strip() == SNAPSHOT_FAILED.encode("utf-8")
+           and floor_back and "anchored history" in r5["errC"])
     f113.append(("F140 r5: truncating BOTH the live file and the floor "
                  "anchor's working copy is undone by the anchor's committed "
-                 "history (run_round.sh snippet, 3 rounds)", ok5, r5))
+                 "history, and fails closed (run_round.sh snippet, 3 rounds)",
+                 ok5, r5))
     r5 = _f140r5_rounds("gitfail")
     ok5 = (r5["rA"] == 0 and r5["quarA"] and r5["held"]
            and r5["snapC"].strip() == SNAPSHOT_FAILED.encode("utf-8")
@@ -5789,6 +6163,166 @@ def self_test():
     f113.append(("F140 r5: the gate enforces the floor anchor directly "
                  "(truncated live file, no round-start snapshot passed)",
                  ok6, acts6))
+
+    # F140 (1), 2026-09-29 triage: LEDGER-LOST erased from BOTH the live
+    # quarantine and the floor between rounds drained F46 at OWED 0, because
+    # the floor was never anchored anywhere. Two real rounds through
+    # run_round.sh's own blocks (quarantine-snapshot at round start, the
+    # quarantine-floor-py anchor fix_queue_gate runs after the gate) and the
+    # real CLI. Control: the same erasure WITHOUT the post-gate anchor still
+    # drains -- so what holds F46 is the anchor, not something else here.
+    def _f140_erased(with_anchor):
+        fn = blk[blk.index("# BEGIN quarantine-floor-py"):
+                 blk.index("# END quarantine-floor-py")]
+        d7 = tempfile.mkdtemp(prefix="fq_f140anchor.")
+        st7 = os.path.join(d7, ".loop")
+        os.mkdir(st7)
+        fq7 = os.path.join(st7, "UNREVIEWED_FIX")
+        fqb7 = fq7 + ".before"
+        env7 = dict(os.environ, REPO=d7, STATE=st7, FIX_QUEUE=fq7,
+                    FIX_QUEUE_BEFORE=fqb7)
+        g7 = lambda *a: subprocess.run(
+            ["git", "-C", d7, "-c", "user.name=t", "-c", "user.email=t@t"]
+            + list(a), capture_output=True, text=True)
+        g7("init", "-q")
+        io.open(os.path.join(st7, "QUARANTINE_BOOTSTRAPPED"), "w").close()
+        io.open(quarantine_path(fq7), "w").close()
+        g7("add", "-f", os.path.join(st7, "QUARANTINE_BOOTSTRAPPED"))
+        g7("commit", "-qm", "marker")
+        for n in ("memo", "commits", "replies"):
+            io.open(os.path.join(d7, n), "w").close()
+        cards7 = os.path.join(d7, "cards")
+        io.open(cards7, "w").write("F46\topen\n")
+        d46 = "2026-09-09 16:50\tF46\tread the pass\tcruz\t2026-09-09 16:40\n"
+        sha = lambda p: hashlib.sha256(io.open(p, "rb").read()).hexdigest()
+
+        def round_(now, tamper):
+            rs = subprocess.run(["bash", "-c", snippet + '\nprintf "%s" '
+                                 '"$QUARANTINE_BEFORE_SHA"\n'], env=env7,
+                                capture_output=True, text=True, timeout=60)
+            write_queue(fqb7, [row])
+            io.open(fqb7 + ".operator_drains", "w").write(d46)
+            lsha = sha(fqb7 + ".operator_drains")
+            if tamper:     # round deletes the live ledger; snapshot untrusted
+                os.remove(operator_ledger(fq7))
+                io.open(fqb7 + ".operator_drains", "a").write("#x\n")
+            else:          # the queue row vanishes
+                write_queue(fq7, [])
+            r = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), "--queue", fq7,
+                 "--before", fqb7, "--before-sha", sha(fqb7),
+                 "--ledger-before", fqb7 + ".operator_drains",
+                 "--ledger-before-sha", lsha,
+                 "--quarantine-before", fqb7 + ".operator_drains.quarantine",
+                 "--quarantine-before-sha", rs.stdout,
+                 "--memo-added", os.path.join(d7, "memo"),
+                 "--commits", os.path.join(d7, "commits"),
+                 "--replies", os.path.join(d7, "replies"),
+                 "--cards", cards7, "--cards-before", cards7, "--now", now],
+                capture_output=True, text=True, timeout=60)
+            return r
+        write_queue(fq7, [row])
+        io.open(operator_ledger(fq7), "w").write(d46)
+        r1 = round_("2026-09-29 12:00", True)
+        if with_anchor:
+            subprocess.run(["bash", "-c", fn + '\nquarantine_floor_py anchor '
+                            '"$REPO" "$FIX_QUEUE.quarantine_floor"\n'],
+                           env=env7, capture_output=True, timeout=60)
+        for p in (quarantine_path(fq7), quarantine_floor_path(fq7)):
+            keep = [l for l in io.open(p, "rb").read().split(b"\n")
+                    if LEDGER_LOST.encode() not in l and b"ledger lost" not in l]
+            io.open(p, "wb").write(b"\n".join(keep))
+        io.open(operator_ledger(fq7), "w").write(d46)
+        r2 = round_("2026-09-29 13:00", False)
+        return (LEDGER_LOST in r1.stdout,
+                [x[0] for x in read_queue(fq7)], r2.stdout[-400:])
+    lost1, q_a, out_a = _f140_erased(True)
+    _, q_c, out_c = _f140_erased(False)
+    # The anchor ref fix_queue.py names in its LEDGER-LOST message is the one
+    # run_round.sh writes (a drifted name would send the operator elsewhere).
+    same_ref = ('ANCHOR_REF = "%s"' % FLOOR_ANCHOR_REF) in blk
+    # And fix_queue_gate() really calls the anchor after the gate. A text
+    # check (the function above tests the anchor itself): outside comments,
+    # after the fix_queue.py invocation, inside the function body.
+    gate_fn = blk[blk.index("\nfix_queue_gate() {"):]
+    gate_fn = gate_fn[:gate_fn.index("\n}\n")]
+    code = "\n".join(l for l in gate_fn.splitlines()
+                     if not l.lstrip().startswith("#"))
+    calls = ('fix_queue.py" --queue' in code
+             and "quarantine_floor_py anchor" in code
+             and code.index("quarantine_floor_py anchor")
+             > code.index('fix_queue.py" --queue'))
+    f113.append(("F140 (1): LEDGER-LOST erased from BOTH the live quarantine "
+                 "and the floor between rounds no longer drains -- the floor "
+                 "is anchored on %s after the gate (control without the "
+                 "anchor drains)" % FLOOR_ANCHOR_REF,
+                 lost1 and q_a == ["F46"] and q_c == [] and same_ref and calls,
+                 (lost1, q_a, out_a, q_c, out_c, same_ref, calls)))
+
+    # F140 (2), 2026-09-29 triage: a FIFO at the live ledger hung
+    # run_round.sh's snapshot `cp` (>5 s). The snapshot-copies block and the
+    # quarantine block, run for real, with a FIFO / symlink at each source and
+    # a FIFO at a snapshot destination: each must finish in time and leave the
+    # sentinel, and a regular file must still be copied verbatim.
+    def _f140_fifo(where):
+        sc = blk[blk.index("# BEGIN snapshot-copies"):
+                 blk.index("# END snapshot-copies")]
+        d8 = tempfile.mkdtemp(prefix="fq_f140fifo.")
+        st8 = os.path.join(d8, ".loop")
+        os.mkdir(st8)
+        fq8 = os.path.join(st8, "UNREVIEWED_FIX")
+        env8 = dict(os.environ, REPO=d8, STATE=st8, FIX_QUEUE=fq8,
+                    FIX_QUEUE_BEFORE=fq8 + ".before")
+        subprocess.run(["git", "-C", d8, "init", "-q"], capture_output=True)
+        write_queue(fq8, [row])
+        led = operator_ledger(fq8)
+        io.open(led, "w").write("2026-09-09 16:50\tF46\tx\tcruz\t2026-09-09 16:40\n")
+        io.open(quarantine_path(fq8), "w").close()
+        io.open(os.path.join(st8, "QUARANTINE_BOOTSTRAPPED"), "w").close()
+        target = {"ledger": led, "queue": fq8,
+                  "dest": fq8 + ".before.operator_drains",
+                  "quarantine": quarantine_path(fq8)}.get(where)
+        if where == "symlink":
+            other = os.path.join(d8, "elsewhere")
+            os.rename(led, other)
+            os.symlink(other, led)
+        elif target:
+            os.remove(target) if os.path.lexists(target) else None
+            os.mkfifo(target)
+        script = (sc if where != "quarantine" else snippet) + "\n"
+        # Own process group, killed whole on timeout: a hung `cp` is a
+        # grandchild and would otherwise outlive the probe, blocked forever.
+        pr = subprocess.Popen(["bash", "-c", script], env=env8,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              start_new_session=True)
+        try:
+            pr.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(pr.pid, 9)
+            pr.communicate()
+            return "HANG"
+        out = {}
+        for k, p in (("queue", fq8 + ".before"),
+                     ("ledger", fq8 + ".before.operator_drains"),
+                     ("quarantine", fq8 + ".before.operator_drains.quarantine")):
+            out[k] = (io.open(p, "rb").read()
+                      if os.path.isfile(p) and not os.path.islink(p) else None)
+        return out
+    SF = (SNAPSHOT_FAILED + "\n").encode()
+    fr = {w: _f140_fifo(w) for w in
+          ("none", "ledger", "queue", "dest", "symlink", "quarantine")}
+    ok8 = (all(v != "HANG" for v in fr.values())
+           and fr["none"]["ledger"].startswith(b"2026-09-09 16:50\tF46")
+           and fr["none"]["queue"].startswith(b"F46\t")
+           and fr["ledger"]["ledger"] == SF and fr["queue"]["queue"] == SF
+           and fr["dest"]["ledger"].startswith(b"2026-09-09 16:50\tF46")
+           and fr["symlink"]["ledger"] == SF
+           and fr["quarantine"]["quarantine"] == SF)
+    f113.append(("F140 (2): a FIFO or symlink at the live ledger/queue, a "
+                 "FIFO at a snapshot destination, or a FIFO at the live "
+                 "quarantine no longer hangs the round-start snapshot -- "
+                 "sentinel within 5 s (run_round.sh blocks, real bash)",
+                 ok8, fr))
 
     # Through argv, without the switch in the environment: what run_round.sh runs.
     d = tempfile.mkdtemp(prefix="fix_queue_f113cli.")
