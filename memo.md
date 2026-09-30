@@ -18683,3 +18683,26 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 **下一步（仍在清单范围内，属于让清单结果能运行）**：补齐运行时的 on-CPU 状态维护，然后在模拟器构建上真跑 AOT 程序。
 
 - [ ] **F160：让尺寸对齐后的 stub 真能运行**（`open`，2026-09-30，deps=F155,F156,F157,F158,F159）运行时补 on-CPU 状态维护；先修好模拟器构建的测试环境（DebugSIMARM64 的 kernel isolate、ProductSimARM64 的 SDK hash），再在模拟器构建上真跑 AOT 程序。判据与负控制见 `cards.tsv`。
+
+## 2026-09-30 本轮（run_round.sh PID 62787）：派发 F155 的新鲜证伪 pass
+
+本轮确认自己是 round.lock 持有者（PID 62787），headless，`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`
+已生效。先重跑一次 `sdk_phase_checklist.py`（研究树），读数仍是 `3 of 3 criteria met -- COMPLETE`
+（C1/C2/C3 与 09-30 记录一致），确认清单没有回退。
+
+`F155`/`F156`/`F157`/`F158`/`F159` 五张 built 卡都欠一次新鲜证伪 pass；本轮只派一张——`F155`
+（FfiCallbackTrampoline，五张里构造最复杂、F138 已记过一次 PARTIAL 揭示 TRAMP_SLOT 是未核验的自由
+参数，最可能带出新破绽）。派发一个新鲜 opus 子代理（general-purpose，后台任务，agentId
+`a2b8dc09c0bfe87a7`），提示词按 `tools/loop/prompts/falsify.md` 模板七项攻击填好 CLAIM/CRITERION/
+EVIDENCE/WHERE TO LOOK，要求它独立跑 `--self-test`、核对构建新鲜度（`ninja -n` 零变更）、真做一次
+revert-rebuild-recheck 的负控制并在结束前把 `~/dart-3122/sdk` 复原到 `76a02f2df50` 且 `git status`
+干净、复原 `ProductSimIosARM64/clang_arm64` 构建。要求单卡 `F155 VERDICT: ...` 格式（F116/F117）。
+
+结果尚未回收——按契约，即便这一步 rc=0，也只是「派出去」，还差子代理真正跑完并给出判决才能动
+`F155` 的卡片状态。本轮到此结束，不预判结果。下一轮请先看这个 agentId 的通知是否已到，
+到了就把判决抄进 memo.md（SURVIVES 就关卡且抄 STILL OPEN 原文；PARTIAL/FALSIFIED 就照 F138 的
+先例原地修、修完再跑一次，不开新卡）；没到就先检查任务列表/通知，不要重复派发同一张卡。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理可能 revert/rebuild，要求跑完复原，未在本轮内验证复原）；
+`~/Documents/fhp-research`（子代理跑脚本，未提交）；本仓 `memo.md`（写，本节）。未动 `cards.tsv`、
+未动 `.loop/` 队列文件、未动 `ProductARM64`。本轮 agents=1（后台，尚未回收）。
