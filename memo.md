@@ -18649,7 +18649,7 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 - [x] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
 - [x] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见上方 09-30 结果节。
 - [x] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
-- [ ] **F158：JumpToFrame +84 B**（`built`，2026-09-30，deps=F138）
+- [x] **F158：JumpToFrame +84 B**（`closed`，2026-09-30，deps=F138）
 - [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`built`，2026-09-30，deps=F138）
 - 另：F138（这 11 个 stub 的总卡）、F128（field_table 定性，C3）。
 
@@ -19188,3 +19188,14 @@ link 100.00%，5,214,560 字节，md5 `d5b472386087b6fb77078fcd92e469c9`。推�
   已在 iPhone 13 上 `PATCHED_V2 ✅`；今天在新 SDK、新设备上再次成立。
 
 **第二阶段判据 D0–D4 全部满足。** D0：SDK 未动（`b468884fa7d`），第一阶段清单读数不受影响。
+
+## 2026-09-30 F158/F159 措辞修复的三轮证伪
+
+- **v1**（研究树 `ffff980f`）：两张卡都判 PARTIAL。我的全局字符串替换把 F158 自己那条证伪 pass 的**原文引语**也改了；
+  BUILT 行与追加注释对「11→7→2→0」的写法不一致；F158 仍写着「run_vm_tests identical … 158/5 + 3/10」（那组数取自 kernel isolate 坏掉的环境）。
+  同一 pass 还发现阶段清单 C1–C3 没有 ninja 过期检查（只有 C4 有）——已补，改一个源文件 → rc 2 STALE。
+- **v2**（`b9b02121`）：从 `ffff980f^` 的原文出发只做定点修改。**F158 VERDICT: SURVIVES**，STILL OPEN：none on wording
+  （附注：ReleaseARM64 153/0 + 13/0 是原作者的数、从未重跑，且 ReleaseARM64 不编译这项改动；「+180」指相对 de660deeae5 的增长）。F158 关卡。
+  F159 PARTIAL：BUILT 行的 run_vm_tests 句只在 F158 上改了；复制到 F159 的 v2 注释说「改写了本卡的引语」，对 F159 不成立；memo 没有这几轮的记录。
+- **v3**（本节同一轮）：F159 BUILT 行照 F158 改为 161/15 → 171/5（no worse, not identical）；注释改成只说 F159 真实发生的事；本节即记录。
+  F159 仍欠一次针对 v3 的证伪 pass。
