@@ -18892,3 +18892,33 @@ Shorebird's.
   **只退回这一处** → 4/4 rc 137。F156/F157 当初按声明顺序选了 Simulator 版本，是错的。
 - 落地后 `sdk_phase_checklist.py` 仍是 3 of 3（read against `f5b94e5b439`，0 uncommitted）。
 - **仍开着**：用本 SDK 编出的 AOT 程序还没在模拟器 product 构建上跑到底（上次停在 brk #0，用的是别的 SDK 编的 fixture）。
+
+## 2026-09-30 本轮（run_round.sh PID 47586）：派发 F157 的新鲜证伪 pass
+
+本轮确认自己是 round.lock 持有者（PID 47586），headless。核对状态：`cards.tsv`（研究树
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/`）读 `F155 closed / F156 closed /
+F157 built / F158 built / F159 built / F160 open / F128 open / F138 open`；SDK 树
+`~/dart-3122/sdk` HEAD 已推进到 `f5b94e5b439`（F160 落地），领先 F157 built 时的
+`f147b32f87f` 三个提交。按上一轮结尾指示（F156 收尾那段：「下一轮请派 F157」）派发。
+
+派发一个新鲜 opus 子代理（general-purpose，后台，agentId `aeb5fc9d8c662b972`），提示词按
+`tools/loop/prompts/falsify.md` 模板七项攻击填好 CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK
+（CallToRuntime +240B、CallNativeThroughSafepoint +228B，落地提交 `f147b32f87f`）。特别提醒：
+①沿用 F155/F156 pass 学到的陈旧性探针写法（`ninja -C xcodebuild/<target> -n <subpath>/<binary>`，
+不对 `clang_arm64` 子目录直接跑 `-n`）；②纠正卡片叙事里「11→7」步骤实际对应 F156 不是
+F157，要求子代理自行核实 F157 提交本身改了什么而不是照搬卡片散文；③SDK HEAD 已移动到
+`f5b94e5b439`（F160 运行时补丁），要求专门检查 F160 有没有动过这两个 stub 的字节形状，
+若 checklist 在两个提交点读数不同要如实报告，不许悄悄抹平（供攻击 5 用）；④要求真负控制
+（revert 到 `de660deeae5` 重建确认原 11 stub 列表含这两个、再复原）；⑤要求单卡
+`F157 VERDICT: ...` 格式（F116/F117），回复 ≤100 行、不许贴反汇编/日志/长 diff。
+
+结果尚未回收——按契约，即便这一步 rc=0，也只是「派出去」，还差子代理真正跑完并给出判决才能
+动 `F157` 的卡片状态。本轮到此结束，不预判结果。下一轮请先看这个 agentId 的通知是否已到，
+到了就把判决抄进 memo.md（SURVIVES 就关卡且抄 STILL OPEN 原文；PARTIAL/FALSIFIED 就照
+F138/PARTIAL 判据修复的先例原地修、修完再跑一次，不开新卡）；没到就先检查任务列表/通知，
+不要重复派发同一张卡。若已回收且是 SURVIVES，下一张待派是 `F158`。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理可能 revert/rebuild，要求跑完复原到当前 HEAD
+`f5b94e5b439` 且 `git status --porcelain` 干净，未在本轮内验证复原）；
+`~/Documents/fhp-research`（子代理可能跑脚本读 cards.tsv，未提交）；本仓 `memo.md`（写，本节）。
+未动 `cards.tsv`、未动 `.loop/` 队列文件、未动 `ProductARM64`。本轮 agents=1（后台，尚未回收）。
