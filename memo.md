@@ -18650,7 +18650,7 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 - [x] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见上方 09-30 结果节。
 - [x] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
 - [x] **F158：JumpToFrame +84 B**（`closed`，2026-09-30，deps=F138）
-- [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`built`，2026-09-30，deps=F138）
+- [x] **F159：Deopt 系列 4 个 stub 各 +24 B**（`closed`，2026-09-30，deps=F138）
 - 另：F138（这 11 个 stub 的总卡）、F128（field_table 定性，C3）。
 
 **冻结规则**：清单外的卡（含修补丁欠账队列里清单外的条目）本阶段不派、不做。
@@ -19193,9 +19193,15 @@ link 100.00%，5,214,560 字节，md5 `d5b472386087b6fb77078fcd92e469c9`。推�
 
 - **v1**（研究树 `ffff980f`）：两张卡都判 PARTIAL。我的全局字符串替换把 F158 自己那条证伪 pass 的**原文引语**也改了；
   BUILT 行与追加注释对「11→7→2→0」的写法不一致；F158 仍写着「run_vm_tests identical … 158/5 + 3/10」（那组数取自 kernel isolate 坏掉的环境）。
-  同一 pass 还发现阶段清单 C1–C3 没有 ninja 过期检查（只有 C4 有）——已补，改一个源文件 → rc 2 STALE。
+  同一 pass 还发现阶段清单 C1–C3 没有 ninja 过期检查（只有 C4 有）——在 v2（`b9b02121`）里补上，改一个源文件 → rc 2 STALE。
 - **v2**（`b9b02121`）：从 `ffff980f^` 的原文出发只做定点修改。**F158 VERDICT: SURVIVES**，STILL OPEN：none on wording
   （附注：ReleaseARM64 153/0 + 13/0 是原作者的数、从未重跑，且 ReleaseARM64 不编译这项改动；「+180」指相对 de660deeae5 的增长）。F158 关卡。
   F159 PARTIAL：BUILT 行的 run_vm_tests 句只在 F158 上改了；复制到 F159 的 v2 注释说「改写了本卡的引语」，对 F159 不成立；memo 没有这几轮的记录。
-- **v3**（本节同一轮）：F159 BUILT 行照 F158 改为 161/15 → 171/5（no worse, not identical）；注释改成只说 F159 真实发生的事；本节即记录。
+- **v3**（研究树 `b912d15e`）：F159 BUILT 行照 F158 改为 161/15 → 171/5（no worse, not identical）；注释改成只说 F159 真实发生的事；本节即记录。
   F159 仍欠一次针对 v3 的证伪 pass。
+- **v3 证伪 pass：F159 VERDICT: SURVIVES**，F159 关卡（研究树本节同一轮提交）。STILL OPEN 原文：
+  「none for F159's wording. Two findings outside it: (a) the F158 verdict that b912d15e appended is reworded, not copied from the pass reply;
+  (b) the ReleaseARM64 "before and after" figures were never rerun, and that build doesn't compile the change.」
+  已处理：(a) F158 卡上换成 v2 回复的**逐字原文**（同一类错误第二次出现：引号形状的判决写成了转述）；(b) 两张卡都加注：ReleaseARM64
+  不开模拟器、这项改动在那里整个编不进去，那组数不构成证据，「no worse」只由 DebugSIMARM64 重跑支撑。
+  **第一阶段收尾完成：F155–F159 全部 closed。**
