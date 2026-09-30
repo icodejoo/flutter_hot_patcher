@@ -1,6 +1,7 @@
 # 真机验证状态（主任务：复刻 Shorebird 的 dart-sdk）
 
-**最后实测：2026-09-03** · 设备 iPhone 13 / iOS 26.5.2 / UDID `00008110-000868212686601E`
+**最后实测：2026-09-30** · 设备 iPhone 14 / iOS 26.6 / UDID `00008110-000E583836F3601E`（QA-iPhone-YPVYHY2D90）
+（此前：2026-09-03 · iPhone 13 / iOS 26.5.2 / UDID `00008110-000868212686601E`）
 
 这份文档只记**在一台真手机上实际观测到的东西**，以及每条结论的可复核物证。
 它不记「构建成功」——构建成功不是真机通过，这个项目已经为混淆这两者付过六次代价。
@@ -9,6 +10,25 @@
 > 退出码 / app 自己的输出，要么标着「未测」。没有第三种。
 
 ---
+
+## 0. 2026-09-30：端到端补丁在真机上生效（第二阶段 D0–D4 全部满足）
+
+SDK `b468884fa7d`（分支 `agent/sdk-phase-c1`，干净；第一阶段清单 4 of 4），引擎 `ios_release`（`dart_force_simulator = true`）。
+
+| 判据 | 物证 |
+|---|---|
+| D1 装机的是我们的引擎 | 构建树 md5 `0c4dfec93ec155b4f7ba30316dd0b73b`；引擎 `LC_UUID` `4C4C4497-5555-3144-A1A2-EA238147ABC3` == 装机后 bundle 内的 |
+| D2 基础包能跑 | 设备控制台 `[B5_RESULT] PASS: PASS ✅` |
+| D3 补丁生效 | 我们的工具链造的补丁（link 100.00%，5,214,560 B，md5 `d5b472386087b6fb77078fcd92e469c9`）→ `[B5_RESULT] PASS: PATCHED_V2 ✅`，updater 读回 `{"kind":"Installed",…}`、`last_booted_patch` = 该补丁号；推两次（patch 1、4）都成立 |
+| D4 负控制 | ELF `e_type` ET_DYN→ET_EXEC 的补丁 → `PASS ✅`，updater 标 `{"kind":"Bad","reason":"BootCrash"}` 并清空指针 |
+
+复跑：`tools/b5_device_test/build_and_run_b5.sh`（D1/D2）→ `build_ab_vmcode.sh`（造补丁）→ `push_patch.sh <out.vmcode> <work>`（D3；
+布局与 schema 取自 updater 自己的 `third_party/updater/library/src/cache/lifecycle.rs`）。
+
+⚠️ **负控制不能改 ELF 魔数**：`elf_loader.cc` 的 `ReadHeader` 只检查字节序、`ET_DYN`、机器类型，**不检查 `\x7fELF`**，
+改魔数的补丁照样加载、照样 `PATCHED_V2`（09-30 实测）。要改加载器真正检查的字段。
+⚠️ 两个构建前提（09-30 修过）：`ios_release` 的 `args.gn` 要 `verify_sdk_hash = false`（钉住的 hash 在 SDK 一动就过期）；
+脚本从 VM 自己的 `version.cc` 读 hash。换设备时首次装机由自动签名登记设备，开发者模式需已开启。
 
 ## 1. 已验证
 
@@ -61,7 +81,7 @@ All BLR dispatches correct under GC pressure
 
 ## 2. 未验证
 
-### 2.1 补丁生效（A/B 两侧）— 🔴 未测
+### 2.1 补丁生效（A/B 两侧）— ✅ 已于 2026-09-30 验证，见 §0（以下为 09-03 上午的历史记录；同日稍晚 B8-second-round 已在 iPhone 13 上 `PATCHED_V2 ✅`，见 `memo_archive_20260904.md`）
 
 **宿主侧已通，设备侧未通。**
 
