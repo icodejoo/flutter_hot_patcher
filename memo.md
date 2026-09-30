@@ -18639,7 +18639,7 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 **完成判据**（`fhp-research` 研究树 `spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py`，rc=0 即本阶段结束）：
 - **C1 STUB_SIZE**：两侧 `--disassemble` 里全部 187 个 VM stub 尺寸一致（三个 fixture）。09-30 实测 11 个不一致。
 - **C2 STUB_ORDER**：VM stub 顺序一致。**09-30 已满足**（F148 已落地 SDK `d4923373846`），保留防回退。
-- **C3 FIELD_TABLE**：field_table ×6 格在 `parity_matrix.tsv` 里是 structural 或 gap，不再是 unknown。
+- **C3 FIELD_TABLE**：field_table ×6 格在 `parity_matrix.tsv` 里是 structural 或 gap，**或者**实测只差组内顺序（09-30 操作者选项 2 改判据，研究树 `934fac89`，原因：复现他们遍历顺序那条路两次被安全分类器拦下）。
 - 读数前核对产物由钉住的构建产出（`out_pm/.provenance.tsv`），陈旧则拒绝（rc=2）。
 - 自带 `--self-test`：9 项，三条判据各能红能绿、陈旧产物被拒；把 C1 改成永远看不见尺寸差 → 2 项变红。
 
@@ -18764,3 +18764,118 @@ stub）已追加进卡片本体。**不开新卡**（属于清单工作内发现
 
 本轮到此结束。下一轮请从 `F156`/`F157`/`F158`/`F159` 里挑一张继续派发证伪 pass
 （同样规则：不许自己下判决，必须新鲜子代理；沿用本轮学到的正确陈旧性探针写法）。
+
+## 2026-09-30 本轮（run_round.sh PID 32890）：派发 F156 的新鲜证伪 pass
+
+本轮确认自己是 round.lock 持有者（PID 32890），headless。核对两棵相关工作树干净：
+`fhp-research` HEAD `93942dcd`（F155 关闭那次提交，无未跟踪的相关改动）；`~/dart-3122/sdk`
+HEAD `76a02f2df50`（F155 分支尖，`git status --porcelain` 干净）。`phase_scope.txt` 范围不变
+（F128 F138 F155 F156 F157 F158 F159 F160）。
+
+`F156`/`F157`/`F158`/`F159` 四张 built 卡仍各欠一次新鲜证伪 pass；本轮按队列顺序派
+`F156`（CallAutoScopeNative/CallBootstrapNative/CallNoScopeNative 各 +244 B，落地提交
+`f147b32f87f`）。派发一个新鲜 opus 子代理（general-purpose，后台，agentId
+`a02a3a26becd9c250`），提示词按 `tools/loop/prompts/falsify.md` 模板七项攻击填好
+CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK，专门提醒攻击 3 要把 F156 与同提交里的 F157
+（CallToRuntime/CallNativeThroughSafepoint）区分开，攻击 6 要求它做真负控制（revert 到
+`de660deeae5` 重建、确认 C1 回到同样 11 个 stub，再还原到 `f147b32f87f` 且
+`git status --porcelain` 干净），并沿用上一轮（F155 pass）学到的正确陈旧性探针写法
+（`ninja -C xcodebuild/<target> -n <subpath>/<binary>`，不要对 `clang_arm64` 子目录直接跑
+`-n`）。要求单卡 `F156 VERDICT: ...` 格式（F116/F117），回复 ≤100 行、不许贴反汇编/日志/长
+diff。
+
+结果尚未回收——按契约，即便这一步 rc=0，也只是「派出去」，还差子代理真正跑完并给出判决才能
+动 `F156` 的卡片状态。本轮到此结束，不预判结果。下一轮请先看这个 agentId 的通知是否已到，
+到了就把判决抄进 memo.md（SURVIVES 就关卡且抄 STILL OPEN 原文；PARTIAL/FALSIFIED 就照
+F138/F155 的先例原地修、修完再跑一次，不开新卡）；没到就先检查任务列表/通知，不要重复派发
+同一张卡。若已回收，下一张待派是 `F157`。
+
+本轮涉及树：`~/dart-3122/sdk`（子代理可能 revert/rebuild，要求跑完复原到 `f147b32f87f`，
+未在本轮内验证复原）；`~/Documents/fhp-research`（子代理可能跑脚本读 cards.tsv，未提交）；
+本仓 `memo.md`（写，本节）。未动 `cards.tsv`、未动 `.loop/` 队列文件、未动 `ProductARM64`。
+本轮 agents=1（后台，尚未回收）。
+
+## 2026-09-30 F156 证伪 pass 结果：SURVIVES，卡片关闭
+
+同一轮（run_round.sh PID 32890 仍在）收到 agentId `a02a3a26becd9c250` 的完成通知，判决：
+
+```
+F156 VERDICT: SURVIVES -- all three stubs are word-for-word identical to Shorebird's on
+every fixture, not just the same size. The added bytes form one contiguous call-site
+construct that disappears when the change is reverted.
+```
+
+七项攻击逐条：① 读了 `sdk_phase_checklist.py:191-243`，尺寸来自各侧自己的 `.disassemble`，
+无硬编码；`--self-test` 0 failure，在 `de660`/`0c31` 处能变红；子代理自带的逐词比对工具也
+能红——在 ours .so 副本里翻 `CallAutoScopeNative` 内的一个 bit，只标出这一个 stub。
+② 两侧同为 `arm64 ios`（`ProductSimIosARM64/clang_arm64`）；ours 与 theirs `.so` sha 不同
+（`d638..` vs `d35d..`）；`out_pm/.provenance.tsv` 每次重建后都与钉住的 gen_snapshot 匹配，
+没有被判 STALE。③ **纠正了本轮派发简报的一处错误**：这次落地是 `7 -> 2`，不是
+`11 -> 7`（`11 -> 7` 是 F158/F159）。在 `0c3139c6749`（f147b 的父提交）逐字对比：
+每个 native stub 我们 35 词/他们 96 词，共享 18 词前缀 + 15 词后缀，中间我们的
+2 词 `ldr+blr`（经 THR）膨胀为他们的 63 词（`mov R7,THR` + 38 词 + 经 R7 的 `ldr+blr` + 22 词），
+差值 +61 词 = +244 B，三个 fixture 一致；唯一的源码改动是
+`GenerateCallNativeWithWrapperStub`（`stub_code_compiler_arm64.cc` ~1808 行），
+与 F157 共享 `CallOnClangStack` 但调用点各自独立。④ 新增代码只用汇编宏，0 原始字面量、
+0 filler nop；他们的 `gen_snapshot`（arm64 slice）里有 `CallOnClangStack(Assembler*,
+std::function)`、`CopyTopFrame`、`StoreRegistersToSim`、`LoadRegistersFromSim`、
+`ShorebirdEnterCFrame`、`RestoreClangRegisters`，构造与他们的接口形状吻合；`f147b` 与
+HEAD 上三个 stub 在 hello/base_dd/prog 上与他们逐词 0 差异。⑤ `stub_code_compiler_arm64.cc`
+路径存在；`76a02f2df50` 是 HEAD 祖先（rc 0）；简报里两处过期：分支尖是 `76a02f2df50`
+（F155）不是 `f147b`，`.provenance.tsv` 在 `out_pm/` 不在 spike 目录。⑥ **真做了负控制**：
+先用陈旧性探针（`ninja -n clang_arm64/gen_snapshot clang_arm64/analyze_snapshot`，checkout
+后 0→397 步，探针有效）；切到 `de660deeae5` 重建，`parity_matrix` rc 0，清单读 C1 NOT MET
+且是同样 11 个 stub/deltas；切到 `0c3139c6749`，列出 7 个（含三个 native stub，各 +244）；
+切到 `f147b32f87f`，列出 2 个（`FfiCallbackTrampoline`、`GetCStackPointer`），无新增，
+C2 MET；**复原**到 `agent/sdk-phase-c1`＝`76a02f2df50`，重建，探针 0，C1/C2/C3 全 MET
+（3/3），`git status --porcelain` 0 行。⑦ 卡片与提交都写明「RUNTIME NOT VERIFIED: F160」，
+未主张运行时正确性；简报里「这次是 11→7」的措辞是错的（已在④订正）。
+
+**FLAW（无破坏性，如实记录）**：`run_vm_tests no worse` 这部分论证薄弱——
+`UseShorebirdCpuRuntimeCallShape()` 需要 `FLAG_precompiled_mode`，JIT 测试的 stub 仍走
+upstream 形状，那些测试只覆盖了 `thread.cc` 的入口点初始化；子代理**没有**重新跑
+`run_vm_tests`，153/0 与 158/5 两个数字沿用的是原卡片作者的读数，不是本轮独立复核的。
+
+**STILL OPEN（原文抄录）**：an AOT execution test that runs a native call through
+CallAutoScopeNative / CallNoScopeNative / CallBootstrapNative on the simulator build (F160).
+Per the commit, that currently traps, and fixing the runtime could force the stub bytes to
+change. Also a run_vm_tests run at HEAD against de660 to confirm the "no worse" counts.
+
+**COST OF BEING WRONG（原文抄录）**：C1 "0 of 187 differ", and therefore the "SDK PHASE 3 of
+3" reading, rests partly on these three stubs. F160's runtime work assumes this shape is
+Shorebird's.
+
+**副作用**：子代理在 pass 中途把 ReleaseARM64/DebugSIMARM64 的 `run_vm_tests` 构建弄旧
+（607/612 步），结束前已重建回探针 0；`out_pm/` 已在分支尖 `76a02f2df50` 重新生成；
+未碰 `cards.tsv`（除本轮收尾这次写入外）、`memo.md`、`.loop/`、`ProductARM64`。
+
+**处置**：判决 SURVIVES ⇒ 关卡。`cards.tsv`（研究树，commit `7d8ad7ba`）F156 改为 `closed`，
+判决全文追加进卡片本体。**不开新卡**：`run_vm_tests` 未被本轮独立复核这一点已记入 FLAW，
+留给下一次涉及 run_vm_tests 判据的 pass 顺手补。本轮收尾复核：SDK 树 `git status --porcelain`
+干净、HEAD `76a02f2df50`；`sdk_phase_checklist.py` 重跑仍是 `3 of 3 criteria met -- COMPLETE`。
+
+`F157`/`F158`/`F159` 仍是 `built`，仍欠各自的新鲜证伪 pass。
+
+本轮到此结束。下一轮请派 `F157`（CallToRuntime +240 B、CallNativeThroughSafepoint +228 B，
+同落地提交 `f147b32f87f`；注意与本轮 F156 共享 `CallOnClangStack` 但调用点独立，负控制同样
+走 de660 revert-rebuild-restore 流程）。
+
+## 2026-09-30 判据证伪 pass：PARTIAL → 已修；读数在干净产物上重读仍为 3 of 3
+
+证伪 pass 判 PARTIAL：`sdk_phase_checklist.py` 只核 `as.*.ours.so` 的来历，而它实际读的 `.disassemble` 与 field_table 文件没有来历记录，
+拿他们的这些文件覆盖掉我们的，它照样报 COMPLETE；`parity_matrix.sh` 的生成失败路径还会给旧文件盖新来历，`|| true` 的工具不删旧输出；
+循环做还原对照时实际观测到 out_pm 里是新 `.so` 配旧 `.disassemble`。C3 的新判据也没写进 CLAUDE.md 与 memo（已补）。
+
+修法（研究树，本节同一提交）：
+- `parity_matrix.sh`：每个产物生成前先删旧输出；生成失败不记来历；`.disassemble` 等 analyze_snapshot 产物与 gs 的 field_table 文件都记来历
+  （`.disassemble` 记它读的那个 `.so` 的哈希）；运行期间写 `out_pm/.parity_matrix.running`。
+- `sdk_phase_checklist.py`：运行标记存在就拒读；逐文件核对来历行（按完整路径、查重、哈希、我们一侧的生产工具、`.disassemble` 的输入 `.so`）；
+  断言 187 个名字不重复的 VM stub；读数行打印 SDK HEAD、分支、未提交路径数和两个工具的哈希。
+- 自检 17 → 26 项；拿掉哈希核对 → 恰好 3 项变红。在真实数据上复现 X1 攻击 → rc=2 拒读，还原后 3 of 3。
+
+**重读**（全新 `parity_matrix.sh`，96 行来历，含 6 行 `.disassemble`、12 行 field_table）：
+`SDK PHASE: 3 of 3 criteria met -- COMPLETE`，`read against SDK 76a02f2df50 (agent/sdk-phase-c1), 0 uncommitted path(s)`。
+**仍然只是尺寸层面**：运行时见 F160。
+
+**同时：两个模拟器构建目录的 SDK hash 已修**（`verify_sdk_hash = true → false`，重跑 `gn gen`，重建）。
+两边 `git_short_hash_` 现在都是 `0000000000`，与其他能工作的目录一致；这两个目录的 `args.gn` 不在任何仓库里，原文件备份在本会话 scratchpad。

@@ -16,8 +16,8 @@
 **完成判据**：研究树 `spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py` 退出码 0。
 - **C1**：全部 187 个 VM stub 两侧 `--disassemble` 尺寸一致（三个 fixture）。09-30：11 个不一致。
 - **C2**：VM stub 顺序一致。09-30 已满足（F148，SDK `d4923373846`），保留防回退。
-- **C3**：field_table ×6 格是 structural 或 gap，不再是 unknown。09-30：6 格 unknown。
-- 产物不是钉住的构建产出的就拒绝读（rc=2），先跑 `./parity_matrix.sh`。`--self-test` 证明三条都能红能绿。
+- **C3**：field_table ×6 格是 structural 或 gap，**或者**由判据从两侧文件实测只差组内顺序（条目多重集、id 序列、max_field_id 全同，逐字节解完）。09-30 操作者选项 2 改的：照他们的遍历复现顺序那条路两次被安全分类器拦下，不再走。09-30：6/6 实测只差顺序。
+- 拒读（rc=2）的情形：`parity_matrix.sh` 正在跑；判据读的任一文件（`.so`、`.disassemble`、field_table）没有来历行、哈希对不上、我们一侧不是钉住的工具产出、或 `.disassemble` 不是从现在这个 `.so` 读出来的；VM stub 不是恰好 187 个且名字不重复。（09-30 证伪 pass PARTIAL：原来只核 `.so`，拿他们的 `.disassemble` 盖掉我们的照样报 COMPLETE。）`--self-test` 26 项。
 
 **范围**：只做 `tools/loop/phase_scope.txt` 里的卡（F128 F138 F155–F159）。**其余所有卡冻结**：不派、不做、不关；
 修补丁队列里清单外的条目留着，不派。清单工作中发现的循环机械问题只在 `memo.md` 记一行，
