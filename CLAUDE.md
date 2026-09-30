@@ -14,9 +14,11 @@
 所以本阶段的范围与完成判据**事先写死**，进度只按清单汇报。
 
 **完成判据**：研究树 `spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py` 退出码 0。
+**2026-09-30 读数**：`SDK PHASE: 4 of 4 criteria met -- COMPLETE`（SDK `b468884fa7d`，分支 `agent/sdk-phase-c1`，0 未提交）。判据达成；本阶段收尾还差 F157–F159 的证伪 pass（F158 为 PARTIAL，需修卡面措辞）。
 - **C1**：全部 187 个 VM stub 两侧 `--disassemble` 尺寸一致（三个 fixture）。09-30：11 个不一致。
 - **C2**：VM stub 顺序一致。09-30 已满足（F148，SDK `d4923373846`），保留防回退。
 - **C3**：field_table ×6 格是 structural 或 gap，**或者**由判据从两侧文件实测只差组内顺序（条目多重集、id 序列、max_field_id 全同，逐字节解完）。09-30 操作者选项 2 改的：照他们的遍历复现顺序那条路两次被安全分类器拦下，不再走。09-30：6/6 实测只差顺序。
+- **C4 能运行**（09-30 操作者决定加的：尺寸一样但跑不起来不算完成，当天两次出现）：判据**当场运行**，不读任何保存的日志——(a) `runtime_check/p1..p7.dart` 用钉住的模拟器 product 构建（`sim_product_build`）自己的 kernel 编译器、gen_snapshot、dartaotruntime 编译并运行，输出与 `runtime_check/expected.tsv` 一致（原版 Dart 3.13.2 独立复现 7/7）；(b) 上游 5 个 FFI callback 测试在钉住的原生构建（`native_build`）的 dartvm 上全部 rc 0。两个构建对所用工具有 ninja 待办就拒读。真 bug 负控制：把模拟器的 stub 替换退回并重建 → 7/7 FAIL `brk #0`。
 - 拒读（rc=2）的情形：`parity_matrix.sh` 正在跑；判据读的任一文件（`.so`、`.disassemble`、field_table）没有来历行、哈希对不上、我们一侧不是钉住的工具产出、或 `.disassemble` 不是从现在这个 `.so` 读出来的；VM stub 不是恰好 187 个且名字不重复。（09-30 证伪 pass PARTIAL：原来只核 `.so`，拿他们的 `.disassemble` 盖掉我们的照样报 COMPLETE。）`--self-test` 26 项。
 
 **范围**：只做 `tools/loop/phase_scope.txt` 里的卡（F128 F138 F155–F159）。**其余所有卡冻结**：不派、不做、不关；
@@ -24,7 +26,7 @@
 **不开新卡**，除非它挡住了清单上的某一项。`run_round.sh` 按范围文件过滤轮次看到的 built 卡与修补丁队列
 （`tools/loop/tests/test_phase_scope.sh`）。
 
-**汇报**：一律引用 `sdk_phase_checklist.py` 的读数（`SDK PHASE: N of 3 criteria met` 与未满足的具体项），
+**汇报**：一律引用 `sdk_phase_checklist.py` 的读数（`SDK PHASE: N of 4 criteria met` 与未满足的具体项），
 **不报卡片数**。判据的改动（加项、减项、换判据）要操作者同意并在 `memo.md` 写明原因。
 
 ### 🎯 当前阶段（2026-09-04 起）：系统性产物对拍

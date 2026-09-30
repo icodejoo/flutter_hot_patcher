@@ -19038,3 +19038,25 @@ a fresh pass」。**不能在本轮修的部分**：`run_vm_tests` 在 `0c3139c6
 `F158` 仍 `built`，欠下一次证伪 pass（要求：确认卡片文本已改实、且带 `run_vm_tests` 独立重跑）。
 `F159` 仍 `built`，仍欠首次证伪 pass。SDK 清单读数不变：C1/C2/C3 三条全满足，
 `sdk_phase_checklist.py` rc=0。本轮到此结束。
+
+## 2026-09-30 阶段判据加 C4（能运行）；读数 4 of 4 COMPLETE
+
+**决定**（操作者 09-30）：清单只证明尺寸对齐，当天两次证明「尺寸对了照样跑不起来」，所以加 **C4 RUNS**，判据当场运行、不读保存的日志：
+(a) `runtime_check/p1..p7.dart` 经钉住的模拟器 product 构建自己的 kernel 编译器 → gen_snapshot → dartaotruntime，输出对拍 `expected.tsv`
+（期望输出由原版 Dart 3.13.2 独立复现 7/7，与我们的代码无关）；(b) 上游 5 个 FFI callback 测试在钉住的原生构建上 rc 0。构建有 ninja 待办就拒读。
+
+**先修好再加判据**：用本 SDK 编出的 AOT 程序（含 kernel 编译器本身）一执行第一个 bootstrap native 调用就 `brk #0`
+（`CallBootstrapNative+0x9c`，`dart_state_is_on_cpu_ == 0`）：F156/F157 的 CPU 形状 stub 假设 Dart 跑在 CPU 上，而 dartaotruntime 默认在模拟器里跑 Dart。
+修法（SDK `b468884fa7d`，subagent 设计，只改 `simulator_arm64.{h,cc}`，stub 尺寸不变）：模拟执行跳到那 5 个 CPU 形状 stub 时改跳它们的 Simulator* 版本，
+并实现这些版本用的 hypercall。7/7 PASS；只退回三处跳转替换 → 7/7 在编译步骤 abort；恢复 → 7/7 PASS。run_vm_tests 不变。
+
+**消融**（逐个文件退回 `f5b94e5b439` 的改动、重建、重跑同一组测试）：
+- `thread.cc`（safepoint 入口改 EnterSafepoint）**承重**：退回 → 原生 FFI unwind 测试 rc 137。
+- `simulator_arm64.cc`（hypercall resume）**承重**：退回 → DebugSIMARM64 163/0 → 162/1、12/1 → 9/4。
+- `isolate.cc`、`dart_entry.cc`、`exceptions.cc`（agy 设计的 CPU 执行路径状态）**当前没有任何测试走到**：退回后读数完全不变。
+  它们只在 Dart 真跑在 CPU 上（`--no-use_simulator`）时生效，而那条路目前在地址 0 处 SEGV，没人跑过。**未验证、可能不需要**，留待决定是否撤掉。
+
+**读数**：`STATIC C1-C3 3 of 3 · C4 0 of 12 failed · SDK PHASE: 4 of 4 criteria met -- COMPLETE`，read against SDK `b468884fa7d`，0 uncommitted。
+C4 负控制：错误期望、编不过的程序、不存在的 FFI 测试 → NOT MET；缺失构建目录、过期的原生构建 → 拒读；**真 bug 控制**：退回模拟器 stub 替换、两个构建都重建 → C4 7/7 FAIL `Simulator hit brk #0x0`。自检 30/0。
+
+**本阶段收尾还差**：F157（本轮已在审）、F158（PARTIAL：卡面「11→7→2→0」漏写了 GetCStackPointer 在中间一步短暂出现，需修措辞）、F159 的证伪 pass。
