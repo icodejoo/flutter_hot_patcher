@@ -18629,3 +18629,30 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 本轮到此结束，下一轮请先看这次派发是否已回收，再决定是续写 F95 结论还是挑新任务
 （规则 0：SDK 本体优先）。若回收结果是 BLOCKED（revert 冲突），F95 的"158 消失"归因
 应改路：对 pre-fix 158/65 集合做逐函数 DWARF 偏移归因，而不是继续尝试单变量 revert。
+
+## 2026-09-30 操作者决定：本阶段只做 SDK 清单，完成判据事先写死
+
+**背景**：投资方问「到底还有多少没做」。卡片数 09-11 → 09-30 从 26 涨到 124（已关 13 → 71，开着 7 → 49），
+开着的卡按内容粗分约 30 张是循环机械、15 张是 SDK 本体、7 张是分析工具缺陷。
+卡片数反映审查流程有多严，不反映 SDK 还差多少。给投资方的一页材料见 claude.ai 文档「dart-sdk 复刻：还剩多少」。
+
+**完成判据**（`fhp-research` 研究树 `spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py`，rc=0 即本阶段结束）：
+- **C1 STUB_SIZE**：两侧 `--disassemble` 里全部 187 个 VM stub 尺寸一致（三个 fixture）。09-30 实测 11 个不一致。
+- **C2 STUB_ORDER**：VM stub 顺序一致。**09-30 已满足**（F148 已落地 SDK `d4923373846`），保留防回退。
+- **C3 FIELD_TABLE**：field_table ×6 格在 `parity_matrix.tsv` 里是 structural 或 gap，不再是 unknown。
+- 读数前核对产物由钉住的构建产出（`out_pm/.provenance.tsv`），陈旧则拒绝（rc=2）。
+- 自带 `--self-test`：9 项，三条判据各能红能绿、陈旧产物被拒；把 C1 改成永远看不见尺寸差 → 2 项变红。
+
+**09-30 读数**：`SDK PHASE: 1 of 3 criteria met -- NOT COMPLETE`（C1 11 个 stub、C3 6 格 unknown）。
+
+**本阶段在做的卡（其余全部冻结）**：
+- [ ] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`open`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。
+- [ ] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`open`，2026-09-30，deps=F138）
+- [ ] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`open`，2026-09-30，deps=F138）
+- [ ] **F158：JumpToFrame +84 B**（`open`，2026-09-30，deps=F138）
+- [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`open`，2026-09-30，deps=F138）
+- 另：F138（这 11 个 stub 的总卡）、F128（field_table 定性，C3）。
+
+**冻结规则**：清单外的卡（含修补丁欠账队列里清单外的条目）本阶段不派、不做。
+证伪 pass 在清单工作里发现的循环机械问题，只在本文件记一行，不开新卡，除非它挡住了清单上的某一项。
+范围文件：本仓 `tools/loop/phase_scope.txt`。**汇报进度一律引用 `sdk_phase_checklist.py` 的读数，不报卡片数。**

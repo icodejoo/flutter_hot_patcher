@@ -212,6 +212,40 @@ PROMPT="【你就是本轮，先读这一段】你是 ralph.sh 启动的这一�
 
 $PROMPT"
 
+# 2026-09-30 operator decision: the phase is the SDK checklist and nothing else.
+# Cards were growing faster than they closed (26 -> 124 in 19 days, most of the
+# open ones loop mechanics), so the scope is an allowlist in a tracked file and
+# the phase ends on a check fixed in advance, not on the card count. Everything
+# a round is shown below -- built cards, the fix-patch queue -- is filtered to
+# that list; an absent or empty file means no phase is set and nothing is
+# filtered (logged, so it cannot happen silently).
+# BEGIN phase-scope
+PHASE_SCOPE_FILE=${FHP_LOOP_PHASE_SCOPE:-$REPO/tools/loop/phase_scope.txt}
+PHASE_SCOPE=""
+if [ -r "$PHASE_SCOPE_FILE" ]; then
+  PHASE_SCOPE=$(grep -oE '^F[0-9]+[a-z]?' "$PHASE_SCOPE_FILE" | sort -u | tr '\n' ' ')
+fi
+in_phase_scope() {
+  [ -z "$PHASE_SCOPE" ] && return 0
+  case " $PHASE_SCOPE " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+if [ -n "$PHASE_SCOPE" ]; then
+  PROMPT="$PROMPT
+
+【本阶段范围，2026-09-30 操作者决定，优先于下面所有指令】
+本阶段只做 SDK 清单，完成判据事先写死：研究树 spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py 退出码 0
+（C1 全部 VM stub 两侧尺寸一致；C2 stub 顺序一致；C3 field_table ×6 格是 structural 或 gap）。
+开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。
+只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-09-30 操作者决定」一节）。
+其余所有卡冻结：不派、不做、不关。证伪 pass 在清单工作里发现的循环机械问题，只在 memo.md 记一行，
+不开新卡，除非它挡住了清单上的某一项。汇报进度引用 sdk_phase_checklist.py 的读数，不报卡片数。"
+else
+  # say() is defined further down; logged once it exists.
+  PHASE_SCOPE_NOTE="note: no phase scope ($PHASE_SCOPE_FILE absent or empty) -- rounds are shown every card"
+fi
+# END phase-scope
+
 # F117. The F116 per-id contract-line rule lived only in
 # tools/loop/prompts/falsify.md, AFTER the fenced ```...``` "Report in exactly
 # this format" block that "## Prompt block (copy from here)" visibly marks as
@@ -305,7 +339,8 @@ fi
 CARDS_TSV=${FHP_LOOP_CARDS:-$RESEARCH/spikes/shorebird_linkinfo_oracle/cards.tsv}
 built_cards() {
   [ -r "$CARDS_TSV" ] || return 0
-  awk -F'\t' '!/^#/ && NF>1 && $2=="built" {print $1}' "$CARDS_TSV" | sort | tr '\n' ' '
+  awk -F'\t' '!/^#/ && NF>1 && $2=="built" {print $1}' "$CARDS_TSV" | sort |
+    while read -r cid; do in_phase_scope "$cid" && printf '%s ' "$cid"; done
 }
 BUILT_OWED=$(built_cards)
 BUILT_N=$(printf '%s' "$BUILT_OWED" | wc -w | tr -d ' ')
@@ -340,6 +375,7 @@ mkdir -p "$STATE"
 LIVE=$STATE/live.log
 touch "$LIVE"
 say() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
+[ -n "${PHASE_SCOPE_NOTE:-}" ] && say "$PHASE_SCOPE_NOTE"
 
 # Same as say(), but collapses a repeat of the previous line -- unless that line
 # has gone stale, in which case it is written again to move the clock forward.
@@ -423,7 +459,21 @@ if ! FQ_SELFTEST_OUT=$(python3 "$REPO/tools/loop/fix_queue.py" --self-test 2>&1)
 【仪器损坏】tools/loop/fix_queue.py --self-test 不通过（${FQ_SELFTEST_SUMMARY:-没有打印汇总行}）⇒「修补丁待审队列」这道闸门现在是关的。
 在做别的事之前先修它，并跑通它自己的全部用例（0 failure(s) 为准；用例与负控制见 self_test()）。"
 fi
-if [ -s "$FIX_QUEUE" ]; then
+# Phase scope (above): only queue rows for in-scope cards are shown. The queue
+# itself is not touched -- frozen rows stay owed and come back when the scope
+# changes; the round is only told how many are waiting.
+# BEGIN phase-scope-queue
+FQ_RENDER_ALL=$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)
+FQ_RENDER=$(printf '%s\n' "$FQ_RENDER_ALL" | while IFS= read -r line; do
+  cid=$(printf '%s' "$line" | grep -oE '^- F[0-9]+[a-z]?' | cut -c3-)
+  { [ -z "$cid" ] || in_phase_scope "$cid"; } && printf '%s\n' "$line"
+done)
+FQ_FROZEN=$(( $(printf '%s\n' "$FQ_RENDER_ALL" | grep -cE '^- F[0-9]' || true) - $(printf '%s\n' "$FQ_RENDER" | grep -cE '^- F[0-9]' || true) ))
+if [ -s "$FIX_QUEUE" ] && [ "${FQ_FROZEN:-0}" -gt 0 ]; then
+  say "fix-queue: $FQ_FROZEN row(s) belong to frozen cards and are not shown this phase"
+fi
+# END phase-scope-queue
+if [ -s "$FIX_QUEUE" ] && [ -n "$(printf '%s\n' "$FQ_RENDER" | grep -E '^- F[0-9]')" ]; then
   PROMPT="$PROMPT
 
 【修补丁尚未经证伪】下面每一项都是：证伪 pass 报了 FALSIFIED/PARTIAL → 有人修了它 →
@@ -439,7 +489,7 @@ CLAIM 写成「<id> 的修补丁真的修掉了它自己被报出的那处破绽
 也**不再阻挡新任务** —— 派完没标的那几项之后，照常做 memo 里的下一项，SDK 本体优先（规则 0）。
 若一次派发要一个回复覆盖队列里不止一项，同样按下面这条逐项写一行，否则只有单一候选且被正例词判定命中的那一项能出队，其余一律留队重派。
 $FALSIFY_CONTRACT_REMINDER
-$(python3 "$REPO/tools/loop/fix_queue.py" --queue "$FIX_QUEUE" --render 2>/dev/null)"
+$FQ_RENDER"
 fi
 
 # ---- the binary actually exists --------------------------------------------
