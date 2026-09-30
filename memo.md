@@ -18646,7 +18646,7 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 **09-30 读数**：`SDK PHASE: 1 of 3 criteria met -- NOT COMPLETE`（C1 11 个 stub、C3 6 格 unknown）。
 
 **本阶段在做的卡（其余全部冻结）**：
-- [ ] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`built`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。
+- [x] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
 - [ ] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`built`，2026-09-30，deps=F138）
 - [ ] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`built`，2026-09-30，deps=F138）
 - [ ] **F158：JumpToFrame +84 B**（`built`，2026-09-30，deps=F138）
@@ -18706,3 +18706,61 @@ revert-rebuild-recheck 的负控制并在结束前把 `~/dart-3122/sdk` 复原�
 本轮涉及树：`~/dart-3122/sdk`（子代理可能 revert/rebuild，要求跑完复原，未在本轮内验证复原）；
 `~/Documents/fhp-research`（子代理跑脚本，未提交）；本仓 `memo.md`（写，本节）。未动 `cards.tsv`、
 未动 `.loop/` 队列文件、未动 `ProductARM64`。本轮 agents=1（后台，尚未回收）。
+
+## 2026-09-30 F155 证伪 pass 结果：SURVIVES，卡片关闭
+
+同一轮（run_round.sh PID 62787 仍在）收到 agentId `a2b8dc09c0bfe87a7` 的完成通知，判决：
+
+```
+F155 VERDICT: SURVIVES -- the claim as bounded (C1 sizes plus slot count) holds on fresh
+binaries; the 540 B body is 135/135 words byte-identical to theirs, and the revert control
+is real and reproducible
+```
+
+七项攻击逐条：① `--self-test` 0 failure，「+4 字节」负控制读 NOT MET。② 核对 provenance：theirs
+是 `~/.shorebird/.../ios-release/gen_snapshot_arm64`（sha 21c9452e），ours 是
+`ProductSimIosARM64/clang_arm64/gen_snapshot`（sha 85bd611e，与 provenance 行一致）；
+**发现一个仪器缺陷**：本轮派发提示词建议的陈旧性探针 `ninja -C .../clang_arm64 -n | grep -vc ...`
+**恒读 0**（那个目录没有 `build.ninja`，唯一输出行是 `ninja: error: loading 'build.ninja'`，被
+grep 过滤掉了）；正确探针是 `ninja -C xcodebuild/ProductSimIosARM64 -n clang_arm64/...`，读到
+"no work to do"。③ slot 数 1978 是从他们产物直接读出（每个 slot 都是 `adr x9`，body 135 词），
+不是猜的；唯一自由参数是常量 `kNativeCallbackSharedStubSize`（[553,560] 区间任意值字节相同），
+这只影响分类（gap vs structural），不影响 F155 的尺寸匹配主张。④ 逐词对比 135/135 完全相等，
+两侧 0 filler nop，Thread 立即数 `#0x718`/`#0x920` 吻合，源码只用汇编宏、无原始 emit。
+⑤ HEAD 确认在 `76a02f2df50`（分支尖），重跑测试与卡片读数一致；ReleaseARM64 Shorebird
+selector 153/0，DebugSIMARM64 158/5（同 5 个失败名）。⑥ **真做了负控制**：切到 `de660` 版本、
+重建 397 步，C1 NOT MET 且是同样的 11 个 stub/deltas；**额外发现**：单独隔离到 f147（F155 之前
+一个提交）时，C1 瞬时多列出 `GetCStackPointer`（不在原始 11 个里）——因为它是最后一个 VM stub，
+吸收了 FFI trampoline 还没缩小完的尺寸；卡片的「11→7→2→0」序列**没提到这个瞬时状态**。复原
+HEAD 后 `gen_snapshot`/`analyze_snapshot`/`run_vm_tests` 三个产物与原始逐字节相同。⑦ 卡片没有
+超出「尺寸+slot 数」的主张范围，如实写了「RUNTIME NOT VERIFIED: see F160」；但没强调一点：
+新 stub **没有 Shorebird 门控**——它替换了除 Fuchsia 外所有 arm64 构建（含 JIT 与 ReleaseARM64
+`dart`），改了 `kNativeCallbackTrampolineStackDelta` 4→2；本轮跑的测试都没有真正通过 trampoline
+调用一次 callback，所以"没变差"在运行时侧几乎不提供证据（DebugSIMARM64 的 FFI callback 测试
+在 `ffi_callback_metadata_test.cc:41` 库加载就失败，根本没走到 stub）。
+
+**STILL OPEN（原文抄录）**：rebuild ReleaseARM64 dart (built 2026-09-23, stale) and a simulator
+dart at 76a02f2df50, then run tests/ffi callback suites (function_callbacks*,
+async_void_function_callbacks, isolate_local/isolate_group_bound callbacks) — they exercise
+all four new dispatch paths, the THR-only stack delta, and
+DLRT_GetFfiCallbackMetadataForInlineDispatch. The same test would show F160's runtime work
+is needed before this stub can ship on JIT/Release.
+
+**COST OF BEING WRONG（原文抄录）**：the SDK phase checklist's 3/3 COMPLETE reading (C1) rests
+on this; and because the new stub has no Shorebird gate (replaces upstream on every arm64
+build except Fuchsia, including JIT and ReleaseARM64 dart, changes
+kNativeCallbackTrampolineStackDelta 4->2), a runtime bug would break FFI callbacks on every
+arm64 build, not only Shorebird snapshots.
+
+**处置**：判决 SURVIVES ⇒ 关卡。`cards.tsv`（研究树，commit `93942dcd`）F155 改为 `closed`，
+判决全文与三处侧发现（陈旧性探针恒 0、GetCStackPointer 瞬时列出、DebugSIM FFI 测试测不到
+stub）已追加进卡片本体。**不开新卡**（属于清单工作内发现的循环机械问题，只记这一行）：
+下次写陈旧性探针要用 `ninja -C xcodebuild/<target> -n <subpath>/<binary>...` 的形式，不要对
+`clang_arm64` 子目录直接跑 `-n`（它没有独立的 `build.ninja`）。
+
+**F155 关闭后清单状态未变**（关卡只是走完证伪义务，不影响 `sdk_phase_checklist.py` 的读数）：
+仍是 `3 of 3 criteria met -- COMPLETE`（尺寸层面），运行时仍未完成，见 F160。
+`F156`/`F157`/`F158`/`F159` 仍是 `built`，仍欠各自的新鲜证伪 pass。
+
+本轮到此结束。下一轮请从 `F156`/`F157`/`F158`/`F159` 里挑一张继续派发证伪 pass
+（同样规则：不许自己下判决，必须新鲜子代理；沿用本轮学到的正确陈旧性探针写法）。
