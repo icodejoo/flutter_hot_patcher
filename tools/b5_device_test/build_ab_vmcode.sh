@@ -22,8 +22,11 @@ WORK="${WORK:-$(mktemp -d /tmp/b5ab.XXXXXX)}"
 
 IOS_OUT="$ENGINE_SRC/out/ios_release"
 HOST_OUT="$ENGINE_SRC/out/host_release"
-SDK_HASH=$(sed -n 's/^dart_sdk_verification_hash = "\(.*\)"$/\1/p' "$IOS_OUT/args.gn")
-[ -n "$SDK_HASH" ] || { echo "FATAL: no dart_sdk_verification_hash in $IOS_OUT/args.gn"; exit 1; }
+# Same as build_and_run_b5.sh: the hash gen_snapshot checks is the VM's own
+# (version.cc git_short_hash_), not args.gn's, which is fixed at gn gen time.
+VM_VERSION_CC="$IOS_OUT/clang_arm64/gen/flutter/third_party/dart/runtime/version.cc"
+SDK_HASH=$(sed -n 's/.*git_short_hash_ = "\([0-9a-f]*\)".*/\1/p' "$VM_VERSION_CC" 2>/dev/null | head -1)
+[ -n "$SDK_HASH" ] || { echo "FATAL: no git_short_hash_ in $VM_VERSION_CC"; exit 1; }
 
 # Stale-artifact guard: this dill predates the engine by weeks if nobody rebuilt it.
 PATH="$HOME/depot_tools:$PATH" ninja -C "$IOS_OUT" flutter_patched_sdk/platform_strong.dill

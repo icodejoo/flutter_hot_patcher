@@ -19164,3 +19164,27 @@ QA-iPhone-YPVYHY2D90（iPhone 14，iOS 26.6，UDID `00008110-000E583836F3601E`�
 这个 `args.gn` 不在任何仓库里，原文件备份在本会话 scratchpad `phase2/ios_release.args.gn.bak`。
 
 **下一项 D3**：补丁生效。09-03 的已知失败是 `patch 1 failed to launch` → `BootCrash` → 回落。
+
+## 2026-09-30 第二阶段：D3、D4 达成（真机补丁生效 + 负控制）
+
+设备 iPhone 14 `00008110-000E583836F3601E`，SDK `b468884fa7d`（干净），引擎 LC_UUID `4C4C4497-5555-3144-A1A2-EA238147ABC3`。
+补丁由我们的工具链造（`build_ab_vmcode.sh`：我们的 CFE、platform dill、gen_snapshot、analyze_snapshot、`tools/linker.py`），
+link 100.00%，5,214,560 字节，md5 `d5b472386087b6fb77078fcd92e469c9`。推送用新写的 `tools/b5_device_test/push_patch.sh`
+（文件布局与 schema 取自 updater 自己的 `cache/lifecycle.rs`：`patches/N/state.json` = `Installed{signature,size}`，`pointers.json` = `ReleasePointers`）。
+
+| 推送 | 补丁 | 设备输出 | updater 状态（启动后读回） |
+|---|---|---|---|
+| patch 1 | 正常 | `PATCHED_V2 ✅` | `Installed`，`last_booted_patch: 1` |
+| patch 2 | ELF 魔数改坏 | `PATCHED_V2 ✅` ⚠️ | `Installed` |
+| pointers → base | — | `PASS ✅` | — |
+| patch 3 | ELF `e_type` ET_DYN→ET_EXEC | `PASS ✅` | **`Bad` / `BootCrash`**，指针清空 |
+| patch 4 | 正常（重推） | `PATCHED_V2 ✅` | `Installed`，`last_booted_patch: 4` |
+
+- **D3 MET**（patch 1、4）。**D4 MET**（patch 3）：加载器拒绝 → 看门狗标 `Bad` → 回落基础版本。
+- ⚠️ **第一次负控制是假的**（patch 2）：`elf_loader.cc` 的 `ReadHeader` 只检查字节序、`ET_DYN` 与机器类型，**从不检查 `\x7fELF` 魔数**，
+  所以改魔数根本没打中加载器，照样加载成功。这就是「判据不能变红」的陷阱，差点把 D4 记成通过。修正后的扰动改的是加载器真正检查的字段。
+  顺带：加载器不校验魔数本身是个小缺口（上游行为），不在本阶段范围。
+- **09-03 的 `BootCrash`**：`DEVICE_VERIFICATION.md` 2.1 写的「未解决」已过期——归档 `memo_archive_20260904.md` 记着同日稍晚（B8-second-round）
+  已在 iPhone 13 上 `PATCHED_V2 ✅`；今天在新 SDK、新设备上再次成立。
+
+**第二阶段判据 D0–D4 全部满足。** D0：SDK 未动（`b468884fa7d`），第一阶段清单读数不受影响。
