@@ -27,8 +27,19 @@ WORK="${WORK:-$(mktemp -d /tmp/b5swap.XXXXXX)}"
 
 IOS_OUT="$ENGINE_SRC/out/ios_release"
 HOST_OUT="$ENGINE_SRC/out/host_release"
-SDK_HASH=$(sed -n 's/^dart_sdk_verification_hash = "\(.*\)"$/\1/p' "$IOS_OUT/args.gn")
-[ -n "$SDK_HASH" ] || { echo "FATAL: no dart_sdk_verification_hash in $IOS_OUT/args.gn"; exit 1; }
+# The hash gen_snapshot checks a kernel against is the one baked into its own
+# version.cc (git_short_hash_, regenerated from git HEAD on every build), not
+# args.gn's dart_sdk_verification_hash: that one is fixed at `gn gen` time and
+# went stale when the SDK moved (2026-09-30: args.gn 11dcd2b4c9, VM
+# b468884fa7 -> "Can't load Kernel binary: Invalid SDK hash"). Read the VM's.
+VM_VERSION_CC="$IOS_OUT/clang_arm64/gen/flutter/third_party/dart/runtime/version.cc"
+SDK_HASH=$(sed -n 's/.*git_short_hash_ = "\([0-9a-f]*\)".*/\1/p' "$VM_VERSION_CC" 2>/dev/null | head -1)
+[ -n "$SDK_HASH" ] || { echo "FATAL: no git_short_hash_ in $VM_VERSION_CC"; exit 1; }
+# 0000000000 = verify_sdk_hash off (2026-09-30, like every other working build
+# dir): the VM then accepts any kernel, and CFE/platform dill carry the same null.
+PINNED=$(sed -n 's/^dart_sdk_verification_hash = "\(.*\)"$/\1/p' "$IOS_OUT/args.gn")
+[ -z "$PINNED" ] || [ "$PINNED" = "$SDK_HASH" ] || \
+  echo "NOTE: args.gn dart_sdk_verification_hash $PINNED is stale; using the VM's $SDK_HASH"
 grep -q '^dart_force_simulator = true' "$IOS_OUT/args.gn" || {
   echo "FATAL: dart_force_simulator is not true in $IOS_OUT/args.gn --"
   echo "       without it the Simulator / wrapper / C1-C7 path is never executed."; exit 1; }

@@ -19147,3 +19147,20 @@ QA-iPhone-YPVYHY2D90（iPhone 14，iOS 26.6，UDID `00008110-000E583836F3601E`�
 - 引擎的 `third_party/dart` 是 `~/dart-3122/sdk` 的符号链接，**和循环切换提交的是同一棵树** ⇒ 构建引擎时循环必须停着（PAUSE 且无轮次在飞）。
 - `ninja` 任何 action 要 `~/depot_tools` 在 PATH。签名：`DEVELOPMENT_TEAM=WAL983V9MH` + Automatic + `-allowProvisioningUpdates`。
 - `devicectl --console` 看不到 `FML_LOG`：没看到日志不等于没跑到。
+
+## 2026-09-30 第二阶段首次上机：D1、D2 达成
+
+设备 QA-iPhone-YPVYHY2D90（iPhone 14，iOS 26.6，`00008110-000E583836F3601E`），SDK `b468884fa7d`（`agent/sdk-phase-c1`，干净），
+引擎 `~/shorebird_engine/.../out/ios_release`（`dart_force_simulator = true`）。
+
+- **D1 MET**：引擎 `LC_UUID` `4C4C4497-5555-3144-A1A2-EA238147ABC3`，装机后 bundle 里的与之相同；构建树引擎 md5 `0c4dfec93ec155b4f7ba30316dd0b73b`。
+- **D2 MET**：设备控制台 `[B5_RESULT] PASS: PASS ✅`（app 自己的判定）。`dart_force_simulator = true` 改的是代码生成，
+  这样编出来的代码不能原生执行 ⇒ 跑对了就是在我们的模拟器里跑（判据见 `reference_b5_device_swap` 第 4 条）。
+- 另见一行无害报错：`[B5_RESULT_FILE_ERROR] … /var/mobile/Documents/b5_result.txt … Operation not permitted`（沙箱外路径，结果已从控制台取到）。
+
+**路上修掉的一个问题**（与今天模拟器构建目录的同一类）：`out/ios_release/args.gn` 钉着 09-03 的 `dart_sdk_verification_hash = "11dcd2b4c9"`，
+而 VM 的 hash 每次构建从 git HEAD 取（`b468884fa7`），CFE 先后报 `Invalid SDK hash` 与 `Unexpected Kernel SDK Version 11dcd2b4c9 (expected b468884fa7)`。
+改成 `verify_sdk_hash = false`（和其他所有能工作的构建目录一致），`gn gen`，重建；`build_and_run_b5.sh` 改为从 VM 自己的 `version.cc` 读 hash。
+这个 `args.gn` 不在任何仓库里，原文件备份在本会话 scratchpad `phase2/ios_release.args.gn.bak`。
+
+**下一项 D3**：补丁生效。09-03 的已知失败是 `patch 1 failed to launch` → `BootCrash` → 回落。
