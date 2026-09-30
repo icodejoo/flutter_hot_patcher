@@ -18982,3 +18982,59 @@ HEAD `f5b94e5b439`；`sdk_phase_checklist.py` 重跑仍是 `3 of 3 criteria met 
 `F158`/`F159` 仍是 `built`，仍欠各自的新鲜证伪 pass。下一轮请派 `F158`（JumpToFrame +84 B，
 落地提交 `0c3139c6749`），并把 `GetCStackPointer` 的旁支发现原样转给它的证伪 pass 提示词，
 要求专门核实这条「判据在落地点上其实破过」的可能性，而不是默认信任卡片的「11→7→2→0」叙事。
+
+---
+
+## 2026-09-30（本轮）：F158 证伪 pass 判 PARTIAL，未关卡
+
+按上一轮的交接，本轮派了一个新鲜 Opus 子代理专测 `F158`（JumpToFrame），并把
+`GetCStackPointer` 旁支发现原样转给了它。
+
+**`F158` VERDICT: PARTIAL -- JumpToFrame's own +84B construct is real and verified
+byte-for-byte, but the card's own "lists no stub not listed before" criterion was
+verifiably violated at its cited landing commit (GetCStackPointer 8B→20B,
+padding-driven, self-corrects later).**
+
+七项攻击逐条（子代理在钉住的构建目录里**自己重建**，不是照抄卡片数字）：
+① 读了 `sdk_phase_checklist.py` 的 C1 逻辑（按名字键的 size dict-diff，非硬编码），
+`--self-test` 26/26 过，含「C1 +4 字节要报 NOT MET」与「尺寸拉平要报 MET」两个能双向翻转的用例。
+② 亲自 `git checkout de660deeae5` + 增量 ninja 重建（397 步，rc0，`ProductSimIosARM64`），
+自己重新生成 `hello.so`/`--disassemble`，不是复用旧产物；theirs 侧仍读 `out_pm`（生产者已核验）。
+③ **JumpToFrame 本身干净**：自建重建 68→152 与 theirs 精确相符，21 条指令反汇编核实是模拟器
+寄存器堆重载 + `dart_state_is_on_cpu_` 翻转，非 padding。**但发现未披露的残差**：在卡片引用的
+落地点 `0c3139c6749` 亲自重建后，`GetCStackPointer` 从 8B 变成 20B（仅我们一侧，theirs 仍 8B），
+反汇编显示真实函数体（`mov x0,sp; ret`，8B，与 theirs 一致）后面跟着 3 个此前不以同样方式存在的
+`brk #0` 填充词——一个真实但非语义性的连带效应，卡片的「+84」表述未披露也未解释它。
+④ 未系统扫过；已知是 F157 旁支发现同一类「最后一个 stub 的对齐填充」仪器怪癖。
+⑤ HEAD `f5b94e5b439` 确实祖先包含 `0c3139c6749`（线性分支历史），落地完整；实验后 checkout
+回 HEAD，`gen_snapshot`/`analyze_snapshot` sha256 与实验前基线读数逐字节相同
+（`4daf022352d71d45.../cb798841983f5fb4...`），确认 HEAD 状态未被实验污染，当前 C1 确实是
+三个 fixture 全 0 不一致。
+⑥ **负控制是真跑的，不是复用**：亲自 checkout `de660deeae5` 重建、重新生成 `hello.so`/
+`.disassemble`，确认 `0c3139c6749` 处恰好 7 个不一致（`CallAutoScopeNative`、
+`CallBootstrapNative`、`CallNoScopeNative`、`CallToRuntime`、`CallNativeThroughSafepoint`、
+`FfiCallbackTrampoline`、`GetCStackPointer`）——数字上与卡片的「7」相符，但证明第 7 个
+（`GetCStackPointer`）是净新增，不在原始 11 个之列；之后复原 HEAD，两个二进制 sha256 与
+实验前逐字节相同，`git status` 干净。
+⑦ **问题被换成了更容易的那个**：卡片自己的判据写着「lists no stub not listed before」，
+子代理在 `0c3139c6749` 独立重建后证实这句话字面上为假（`GetCStackPointer` 净新增）；
+卡片证据文本把「11→7→2→0」写成一条干净的单调收缩叙事，没有披露「7」这一步里其实已经混进
+一个被后续五处修复掩盖的净新增项——与 F157 旁支发现点名的失效模式完全同型。
+
+**处置**：判决 PARTIAL ⇒ **不关卡**（按 `falsify.md`：「do not close，同轮内修可修的部分，
+再跑一遍」）。本轮可修的部分是卡片证据文本本身失实（声称「干净单调收缩」）——已在
+`cards.tsv`（研究树 `spikes/shorebird_linkinfo_oracle/`，`F158` 行）把这段叙事改实：
+JumpToFrame 构造本体独立核实为真，但披露 `0c3139c6749` 处 `GetCStackPointer` 净新增违反了
+卡片自己「lists no stub not listed before」的字面判据这件事，并注明「NOT CLOSED pending
+a fresh pass」。**不能在本轮修的部分**：`run_vm_tests` 在 `0c3139c6749` vs `de660deeae5`
+两点的独立重跑（子代理判定超出增量重建范围，`ReleaseARM64`/`DebugSIMARM64` 相对源码树已落后
+若干步，卡片沿用的仍是原作者读数，未被独立核实）——留给 F158 的下一次证伪 pass。
+**不开新卡**：这是 F157 旁支发现在 F158 落地点上的具体印证，属于卡片自身判据要核的一部分，
+不是新的循环机械问题。收尾核对：`cards_check.sh` 仍是编辑前就存在的两类失败
+（`F84`/`F136`/`F143` no-commit、一批 `commits-not-sha`，均不含 `F158`，未被本轮引入）；
+`sdk_phase_checklist.py` 重跑仍 `3 of 3 criteria met -- COMPLETE`，SDK 树 HEAD 未动
+（`f5b94e5b439`，`git status --porcelain` 干净）。
+
+`F158` 仍 `built`，欠下一次证伪 pass（要求：确认卡片文本已改实、且带 `run_vm_tests` 独立重跑）。
+`F159` 仍 `built`，仍欠首次证伪 pass。SDK 清单读数不变：C1/C2/C3 三条全满足，
+`sdk_phase_checklist.py` rc=0。本轮到此结束。
