@@ -237,6 +237,9 @@ if [ -n "$PHASE_SCOPE" ]; then
 本阶段只做 SDK 清单，完成判据事先写死：研究树 spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py 退出码 0
 （C1 全部 VM stub 两侧尺寸一致；C2 stub 顺序一致；C3 field_table ×6 格是 structural 或 gap）。
 开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。
+2026-09-30 现状：清单已读 3 of 3（尺寸全部对齐，SDK 分支 agent/sdk-phase-c1），但运行时没完成——新 stub 形状依赖我们还没有的
+on-CPU 状态维护，模拟器构建上还没真跑过。所以本阶段剩下的是：F155–F159 各派一次新鲜证伪 pass（built 卡），以及 F160（让它真能运行）。
+清单读 3 of 3 不等于本阶段结束；任何改动之后清单必须仍是 rc 0，变红就先修回来。
 只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-09-30 操作者决定」一节）。
 其余所有卡冻结：不派、不做、不关。证伪 pass 在清单工作里发现的循环机械问题，只在 memo.md 记一行，
 不开新卡，除非它挡住了清单上的某一项。汇报进度引用 sdk_phase_checklist.py 的读数，不报卡片数。"

@@ -18646,11 +18646,11 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 **09-30 读数**：`SDK PHASE: 1 of 3 criteria met -- NOT COMPLETE`（C1 11 个 stub、C3 6 格 unknown）。
 
 **本阶段在做的卡（其余全部冻结）**：
-- [ ] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`open`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。
-- [ ] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`open`，2026-09-30，deps=F138）
-- [ ] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`open`，2026-09-30，deps=F138）
-- [ ] **F158：JumpToFrame +84 B**（`open`，2026-09-30，deps=F138）
-- [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`open`，2026-09-30，deps=F138）
+- [ ] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`built`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。
+- [ ] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`built`，2026-09-30，deps=F138）
+- [ ] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`built`，2026-09-30，deps=F138）
+- [ ] **F158：JumpToFrame +84 B**（`built`，2026-09-30，deps=F138）
+- [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`built`，2026-09-30，deps=F138）
 - 另：F138（这 11 个 stub 的总卡）、F128（field_table 定性，C3）。
 
 **冻结规则**：清单外的卡（含修补丁欠账队列里清单外的条目）本阶段不派、不做。
@@ -18681,3 +18681,5 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
   模拟器构建的 AOT 运行时第一次运行时调用就会 trap。**所以这个分支现在只是尺寸对齐，不能用来出产物。**
 
 **下一步（仍在清单范围内，属于让清单结果能运行）**：补齐运行时的 on-CPU 状态维护，然后在模拟器构建上真跑 AOT 程序。
+
+- [ ] **F160：让尺寸对齐后的 stub 真能运行**（`open`，2026-09-30，deps=F155,F156,F157,F158,F159）运行时补 on-CPU 状态维护；先修好模拟器构建的测试环境（DebugSIMARM64 的 kernel isolate、ProductSimARM64 的 SDK hash），再在模拟器构建上真跑 AOT 程序。判据与负控制见 `cards.tsv`。
