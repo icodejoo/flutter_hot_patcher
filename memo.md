@@ -18647,8 +18647,8 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 
 **本阶段在做的卡（其余全部冻结）**：
 - [x] **F155：FfiCallbackTrampoline 共享部分他们 540 B、我们 232 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
-- [ ] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`built`，2026-09-30，deps=F138）
-- [ ] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`built`，2026-09-30，deps=F138）
+- [x] **F156：CallAutoScopeNative / CallBootstrapNative / CallNoScopeNative 各 +244 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见上方 09-30 结果节。
+- [x] **F157：CallToRuntime +240 B、CallNativeThroughSafepoint +228 B**（`closed`，2026-09-30，deps=F138）判据与负控制见 `cards.tsv`。证伪 pass VERDICT: SURVIVES，详见下方 09-30 结果节。
 - [ ] **F158：JumpToFrame +84 B**（`built`，2026-09-30，deps=F138）
 - [ ] **F159：Deopt 系列 4 个 stub 各 +24 B**（`built`，2026-09-30，deps=F138）
 - 另：F138（这 11 个 stub 的总卡）、F128（field_table 定性，C3）。
@@ -18922,3 +18922,63 @@ F138/PARTIAL 判据修复的先例原地修、修完再跑一次，不开新卡�
 `f5b94e5b439` 且 `git status --porcelain` 干净，未在本轮内验证复原）；
 `~/Documents/fhp-research`（子代理可能跑脚本读 cards.tsv，未提交）；本仓 `memo.md`（写，本节）。
 未动 `cards.tsv`、未动 `.loop/` 队列文件、未动 `ProductARM64`。本轮 agents=1（后台，尚未回收）。
+
+## 2026-09-30 F157 证伪 pass 结果：SURVIVES，卡片关闭
+
+同一轮（run_round.sh PID 47586 仍在）收到 agentId `aeb5fc9d8c662b972` 的完成通知，判决：
+
+```
+F157 VERDICT: SURVIVES -- both stubs are word-for-word identical to Shorebird's on hello,
+base_dd and prog (not just the same size) at f147b32f87f and at HEAD f5b94e5b439; a real
+revert brings them back with the card's exact deltas. (Model: Opus 5.5.)
+```
+
+七项攻击逐条：① 读了 `sdk_phase_checklist.py:evaluate()`：C1 是按名字键的尺寸比较，无硬编码，
+只在两侧恰好 187 个不重名 stub 时才给判决；`--self-test` 仍 rc=0（含 +4 NOT MET 控制）。尺寸比较
+看不见内容，子代理另写了逐词比对（objdump raw words），第一版比较了两个空列表说「相同」（0 vs 0
+词，同一空哈希 `da39a3ee`）——**自己先抓到自己的坏检查并修好**，修完在父提交 `0c3139c6749`
+证明能报红（CallToRuntime 我们 39 词 vs 他们 99 词，重叠部分 17 词不同）。② 两侧 `.so` 是不同
+生产者产出的不同文件（哈希各异，`cmp -l` 340,736 字节不同），都是 iOS product 构建；探针
+`ninja -C xcodebuild/ProductSimIosARM64 -n clang_arm64/{gen_snapshot,analyze_snapshot}` = 0/0
+步，构建未过期。③ 对他们的产物逐词核账：CallToRuntime 99/99 词、CallNativeThroughSafepoint
+102/102 词，三个 fixture 上 0 差异词（`EXAMINED 99`/`102`，`UNEXPLAINED 0`）；对我们源码逐词核账：
+`CallOnClangStack` 块是 stub 第 22..59 词（38 词）+ 后续 22 词 = 60 词 = +240 B（CallToRuntime）；
+CallNativeThroughSafepoint = +240 − 4（模拟器 FFI 重定向词已不存在）− 8（两条 safepoint 慢路径
+各少一个词，因为改从 Thread 读缓存的入口点）= +228；两个 stub 都无 nop/udf/.word，仅有的 brk
+词是该构造自带的 2 个 guard trap。④ 重名检查：`<stub CallToRuntime>` 与
+`<stub CallNativeThroughSafepoint>` 两侧各恰好出现一次；`git grep` 原始字面量指令只命中上游
+FFI 重定向路径（非 Shorebird 分支）——没有指令词被照抄，全部由汇编器调用构造（规则 3）。
+⑤ 陈旧性：`git diff f147b32f87f..HEAD -- runtime/vm/compiler/` 只动了 F155 的 FFI trampoline
+区域，0 行提及 `CallOnClangStack`/`CallToRuntime`/`NativeThroughSafepoint`；两个 stub 在
+`f147b` 与 HEAD 两点实测均 0 差异词，没有可被掩盖的差异。⑥ **真做了负控制，同一轮内**：
+在钉住的构建目录里，`de660deeae5`（重建，gen `e808ea69`）→ C1 NOT MET，同样 11 个 stub，
+两个目标 stub 的尺寸与卡片一致（+240/+228）；`0c3139c6749`（父提交）→ 7 个 stub，两个目标仍在；
+`f147b32f87f` → 2 个 stub，两个目标都已消失；**复原**到 `agent/sdk-phase-c1`＝`f5b94e5b439`，
+重建，gen/analyze 产物哈希与 pass 开始前逐字节相同，`ninja -n` 0/0，`git status --porcelain`
+0 行，清单读回 3/3 COMPLETE。⑦ 卡片要求「尺寸相符 + 说明是哪个构造 + 不照抄指令词」，子代理做的
+更强：逐词恒等 + 定位构造边界 + 词数算术核账。**未做**的一项：没有重跑 `run_vm_tests`，
+「no worse」的 153/0、158/5 两个数字沿用的是卡片作者的读数。
+
+**旁支发现（不是本卡的问题，交给 F158/F159 自己的证伪 pass）**：`GetCStackPointer`
+（我们 20 词 vs 他们 8 词，−12）**不在** `de660` 的原始 11-stub 名单里，但在 `0c3139c6749`
+（F158/F159 自己的落地提交，7 个 stub）与 `f147b32f87f`（2 个 stub）里都列着，直到
+`76a02f2df50`（F155，与 F158/F159 无关的改动）之后才消失。⇒ **F158/F159 卡片自己的判据
+「lists no stub that was not listed before」在它们自己落地那一点上实际是破的**，只是恰好被
+后来一个无关改动顺带修好；F158/F159 各自的证伪 pass 应该直接核这一点，不要照抄
+「11 → 7 → 2 → 0」这条「同一批 stub 单调收缩」的叙事。
+
+**旁支发现二（未经独立核实，先标记，引用前先自己测）**：子代理观测到 out_pm 里我们的 `.so`
+`.text` 段在三个 fixture 上与他们逐字节相同（`hello`/`base_dd` 367,264 B、`prog` 812,256 B，
+0 差异词），差异全在 `.rodata`（67,156/67,156/140,182 差异词）。这与本仓库更早关于「逐函数
+指令差异」的记录不一致，**引用前先自己核一遍**，本轮未独立复核。
+
+**处置**：判决 SURVIVES ⇒ 关卡。`cards.tsv`（研究树，spikes/shorebird_linkinfo_oracle/，
+第 161 行）F157 改为 `closed`，判决全文追加进卡片本体；本文件顶部 F156/F157 两个 checkbox
+一并订正为 `[x]`（F156 此前已判 SURVIVES 关卡，但漏了同步这个 checkbox，本轮顺手修）。
+**不开新卡**：`GetCStackPointer` 旁支发现是 F158/F159 判据本身要核的一部分，不是新的循环机械
+问题；`.rodata` 旁支发现留作待核，不开卡。本轮收尾复核：SDK 树 `git status --porcelain` 干净、
+HEAD `f5b94e5b439`；`sdk_phase_checklist.py` 重跑仍是 `3 of 3 criteria met -- COMPLETE`。
+
+`F158`/`F159` 仍是 `built`，仍欠各自的新鲜证伪 pass。下一轮请派 `F158`（JumpToFrame +84 B，
+落地提交 `0c3139c6749`），并把 `GetCStackPointer` 的旁支发现原样转给它的证伪 pass 提示词，
+要求专门核实这条「判据在落地点上其实破过」的可能性，而不是默认信任卡片的「11→7→2→0」叙事。
