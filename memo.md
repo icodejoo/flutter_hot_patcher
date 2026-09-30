@@ -19119,3 +19119,31 @@ SDK PHASE: 4 of 4 criteria met -- COMPLETE`（SDK `b468884fa7d`，0 未提交）
 `GetCStackPointer` 缺陷是否也该在 F157/F160 的收尾叙事里提一句，但那不是新卡）。
 本阶段收尾还差：F158、F159 各自的下一轮证伪 pass，以及 F160 的落地提交（本体已落地，
 卡片状态仍 `open`，收尾判据见卡片本体的 (1)(2)(3) 三条）。本轮到此结束。
+
+## 2026-09-30 第二阶段：真机端到端
+
+
+## 完成判据（事先写死；全部满足即本阶段结束，不再追加范围）
+
+- **D0 不回退**：第一阶段 `sdk_phase_checklist.py` 全程保持 `4 of 4`，每次改 SDK 后重读。
+- **D1 装机的是我们的引擎**：bundle 内 Flutter 引擎的 `LC_UUID` 等于我们构建树产出的那份（装机前另比 md5）；
+  引擎构建树的 `third_party/dart` 指向 `~/dart-3122/sdk`，读数时记下它的 HEAD，必须是 `agent/sdk-phase-c1` 上的提交且工作树干净。
+- **D2 基础包能跑**：app 启动后在设备上输出基础版本的标记文字（`PASS`），并且输出能证明 Dart 在我们的模拟器里执行。
+- **D3 补丁生效**：用我们的工具链（我们的 CFE、gen_snapshot、analyze_snapshot、`tools/linker.py`）造补丁，推到设备、重启 app，
+  设备上输出 `PATCHED_V2`，且 updater 自己写的状态文件不是 `Bad`。**「看起来正常」不算**——回落也会看起来正常。
+- **D4 负控制**：推一个故意改坏的补丁，必须回落到基础版本、被标 `Bad`，输出基础文字而不是 `PATCHED_V2`。
+
+## 设备
+
+QA-iPhone-YPVYHY2D90（iPhone 14，iOS 26.6，UDID `00008110-000E583836F3601E`，2026-09-30 17:50 `available (paired)`）。
+上次（09-03）用的是 iPhone 13 `00008110-000868212686601E`，本阶段首次换设备，签名与开发者模式要在第一次装机时确认。
+
+## 已知风险
+
+09-03 最后一次上机：补丁被激活，引擎报 `patch 1 failed to launch`，看门狗标 `BootCrash` 并回落。原因从未查清，是本阶段的核心。
+
+## 硬约束
+
+- 引擎的 `third_party/dart` 是 `~/dart-3122/sdk` 的符号链接，**和循环切换提交的是同一棵树** ⇒ 构建引擎时循环必须停着（PAUSE 且无轮次在飞）。
+- `ninja` 任何 action 要 `~/depot_tools` 在 PATH。签名：`DEVELOPMENT_TEAM=WAL983V9MH` + Automatic + `-allowProvisioningUpdates`。
+- `devicectl --console` 看不到 `FML_LOG`：没看到日志不等于没跑到。
