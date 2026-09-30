@@ -18656,3 +18656,28 @@ HEAD 状态，确认 HEAD 与 `git status --porcelain` 恢复干净；⑦ 还原
 **冻结规则**：清单外的卡（含修补丁欠账队列里清单外的条目）本阶段不派、不做。
 证伪 pass 在清单工作里发现的循环机械问题，只在本文件记一行，不开新卡，除非它挡住了清单上的某一项。
 范围文件：本仓 `tools/loop/phase_scope.txt`。**汇报进度一律引用 `sdk_phase_checklist.py` 的读数，不报卡片数。**
+
+## 2026-09-30 SDK 清单读数：3 of 3 COMPLETE（尺寸层面），运行时未完成
+
+**读数**（研究树 `sdk_phase_checklist.py`，SDK 分支 `agent/sdk-phase-c1` `76a02f2df50`，product_build gen_snapshot `85bd611e6c3efcae`）：
+`C1 STUB_SIZE MET (0 of 187 differ) · C2 STUB_ORDER MET · C3 FIELD_TABLE MET (6/6 measured order-only) · SDK PHASE: 3 of 3 criteria met -- COMPLETE`。
+
+**落地顺序与逐步读数**（每步：打补丁 → 重建 ProductSimIosARM64 clang_arm64 → `./parity_matrix.sh` → 清单）：
+- F158/F159 `0c3139c6749`：C1 11 → 7。JumpToFrame、4 个 Deopt 离开名单，与预测逐字吻合。
+  同时冒出 `GetCStackPointer ours 20 theirs 8`：它是最后一个 VM stub，尺寸含尾部对齐填充，是前面 stub 变长的连带效应。
+- F156/F157 `f147b32f87f`：C1 7 → 2。3 个 Call*Native、CallToRuntime、CallNativeThroughSafepoint 离开名单。
+- F155 `76a02f2df50`：C1 2 → 0。FfiCallbackTrampoline 16364 B，GetCStackPointer 随之归位。
+  F155 的 thread.cc 初始化与 F156/F157 重复，已去掉 F155 那一份；FFI 慢路径需要的是 EnterSafepoint 还是 SimulatorEnterSafepoint，**未核验**。
+- **还原对照**：切回 `de660deeae5` 重建重跑，C1 回到同样的 11 个 stub、同样的差值，逐行一致。
+
+**运行时（不是清单判据，但决定能不能用）**：
+- 在 `de660deeae5` 与落地分支上用同一脚本（`scratchpad/rt_tests.sh`）对比，结果**逐行相同**：
+  ReleaseARM64 选中测试 153/0、FFI/deopt/异常 13/0；DebugSIMARM64 选中测试 158/5、FFI/deopt/异常 3/10。
+  DebugSIMARM64 的失败在基线上一模一样（`Error while initializing Kernel isolate`，与本次改动无关），
+  ⇒ **这组测试在模拟器构建上本来就测不到这些 stub，「没变差」不能当「能运行」的证据。**
+- ReleaseARM64（原生，不带模拟器）不编译这些改动，153/0 只说明没把原生路径弄坏。
+- 真跑一个 AOT 程序：ProductSimARM64 的 `gen_kernel_aot.dart.snapshot` 在基线上就构建失败（`Invalid SDK hash`），**还没跑成**。
+- subagent 明确报告：F156/F157 的新 stub 形状依赖运行时维护 on-CPU 状态，我们的运行时还没有，
+  模拟器构建的 AOT 运行时第一次运行时调用就会 trap。**所以这个分支现在只是尺寸对齐，不能用来出产物。**
+
+**下一步（仍在清单范围内，属于让清单结果能运行）**：补齐运行时的 on-CPU 状态维护，然后在模拟器构建上真跑 AOT 程序。
