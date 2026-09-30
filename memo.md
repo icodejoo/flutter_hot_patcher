@@ -18879,3 +18879,16 @@ Shorebird's.
 
 **同时：两个模拟器构建目录的 SDK hash 已修**（`verify_sdk_hash = true → false`，重跑 `gn gen`，重建）。
 两边 `git_short_hash_` 现在都是 `0000000000`，与其他能工作的目录一致；这两个目录的 `args.gn` 不在任何仓库里，原文件备份在本会话 scratchpad。
+
+## 2026-09-30 F160 进展：模拟器测试环境修好，运行时补丁落地（SDK `f5b94e5b439`）
+
+- **测试环境**：DebugSIMARM64 与 ProductSimARM64 是仅有的两个 `verify_sdk_hash = true` 的目录（VM 侧 hash 每次构建从 git HEAD 取，
+  kernel 侧只在 `gn gen` 时定，HEAD 一动就对不上）。改成 false 后：DebugSIMARM64 选中测试 158/5 → 162/1，FFI/deopt/异常 3/10 → 9/4；
+  ProductSimARM64 能构建 gen_kernel 快照并 AOT 编译程序。
+- **运行时补丁**（agy 设计，`dart_entry.cc` 补了一个 `#endif` 才能编译；subagent 的模拟器 hypercall 补丁）：
+  DebugSIMARM64 163/0、12/1（剩 `TrampolineRecycling`，上游故意 UNREACHABLE）；ReleaseARM64 153/0、13/0 不变。
+- **最硬的一条证据**：原生 ReleaseARM64 `dartvm` 上，F155 的 FFI trampoline 慢路径跳进只在模拟器里有效的 `SimulatorEnterSafepoint`，
+  `callback_unwind_error_test` 等 4/4 被 SIGKILL（subagent 用 lldb 截到停在那条 brk）。改成 `EnterSafepoint` 后 8/8 通过；
+  **只退回这一处** → 4/4 rc 137。F156/F157 当初按声明顺序选了 Simulator 版本，是错的。
+- 落地后 `sdk_phase_checklist.py` 仍是 3 of 3（read against `f5b94e5b439`，0 uncommitted）。
+- **仍开着**：用本 SDK 编出的 AOT 程序还没在模拟器 product 构建上跑到底（上次停在 brk #0，用的是别的 SDK 编的 fixture）。
