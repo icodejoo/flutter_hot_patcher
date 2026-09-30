@@ -19060,3 +19060,62 @@ a fresh pass」。**不能在本轮修的部分**：`run_vm_tests` 在 `0c3139c6
 C4 负控制：错误期望、编不过的程序、不存在的 FFI 测试 → NOT MET；缺失构建目录、过期的原生构建 → 拒读；**真 bug 控制**：退回模拟器 stub 替换、两个构建都重建 → C4 7/7 FAIL `Simulator hit brk #0x0`。自检 30/0。
 
 **本阶段收尾还差**：F157（本轮已在审）、F158（PARTIAL：卡面「11→7→2→0」漏写了 GetCStackPointer 在中间一步短暂出现，需修措辞）、F159 的证伪 pass。
+
+## 2026-09-30（本轮，run_round.sh PID 4104）：F159 证伪 pass 判 PARTIAL，未关卡；卡面已修
+
+按队列指示（built 卡欠证伪 pass：F158、F159），本轮派了一个新鲜 Opus 子代理专测 `F159`
+（DeoptForRewind/Deoptimize/DeoptimizeLazyFromReturn/DeoptimizeLazyFromThrow +24B each），
+并把 F158 证伪 pass 发现的 `GetCStackPointer` 旁支缺陷原样转给它，要求专门核实 F159 自己的
+落地点 `0c3139c6749`（与 F158 同一个提交）是否有同款问题，而不是默认信任卡片叙事。
+
+**`F159` VERDICT: PARTIAL -- 四个 Deopt stub 本身的 +24B 是真的（在隔离 worktree 里对
+`0c3139c6749` 与 `de660deeae5` 各自独立重建验证，负控制真实），但卡片自己的字面判据
+「lists no stub not listed before」在同一个落地点上被违反——`GetCStackPointer` 8→20B
+（仅我们一侧，theirs 仍 8B），与 F158 证伪 pass 在同一提交发现的缺陷完全同型，
+卡片引用的「7」桶掩盖了这个净新增（11 − 5 修复 + 1 净新增 = 7）；后续被无关提交
+`76a02f2df50`（F155）顺带修好。另外「run_vm_tests identical before/after」站不住：
+卡片引用的 158/5 + 3/10 是在 Kernel isolate 坏掉的环境里量的（F160 的 verify_sdk_hash bug），
+修好后重跑，`DebugSIMARM64` 从 161/15（base）变成 171/5（landing）——不是「identical」，
+是「no worse」，且剩下 5 个失败是另一个未实现的 hypercall（`brk #0xb129`，
+`CallFFIOnCPUCode`），不是原来那 10 个（`brk #0xb12a`）。**
+
+七项攻击逐条（子代理在 `/tmp/f159wt` 独立 worktree 里自己重建，不是照抄卡片数字）：
+① 读了 `sdk_phase_checklist.py` 的 C1 逻辑（按名字-尺寸字典比对，187 stub 数目硬校验），
+`--self-test` 0 failure；自己的 +4B 扰动确认能报红。
+② 独立 worktree 用相同 `ProductSimIosARM64` args.gn 重建 `0c3139c6749` 与 `de660deeae5`
+两点的 `gen_snapshot`/`analyze_snapshot --disassemble`（3 fixture）；旁支发现共享的
+`ProductSimIosARM64` 当前有 2 步 ninja 待办（`simulator_arm64.cc` mtime 新于 `gen_snapshot`），
+`git status` 却是 0 行——即第 38 种仪器缺陷的又一次重现，但**只影响 C4 的构建，不影响
+C1 生产者**（子代理自己用独立 worktree 重建，未受影响）。
+③ 逐 fixture 求和：base→landing 每个 fixture 都是 +192B = 84（JumpToFrame）+ 4×24（Deopt）
++ 12（GetCStackPointer 净新增）——命名原因不能解释全部差异。
+④ 反汇编逐词对比：4 个 Deopt stub 各新增 6 个真实 guard word
+（`ldr x17,[x26,#0x8d8]; cbz x17; brk #0xb12a`，两次，在两个 leaf `blr x16` 前面），
+0 是 padding，theirs 同一构造同一立即数。
+⑤ `git merge-base --is-ancestor` 确认两点都是 HEAD 祖先；卡片引用的 run_vm_tests 数字
+来自一个 Kernel isolate 起不来的 `DebugSIMARM64`（`ReleaseARM64` 根本不编译这处改动，
+`DART_INCLUDE_SIMULATOR` 只在 `dart_force_simulator` 时才开）。
+⑥ **负控制真实**：亲自重建 `de660deeae5`，11 个原始 stub 与原始 delta 原样恢复，
+且没有 `GetCStackPointer` 净新增。
+⑦ 用修好 `verify_sdk_hash` 的 `DebugSIMARM64` 重新跑同一组 176 项测试：
+161/15（base）→ 171/5（landing），10 个原失败（`brk #0xb12a`）修好，无新失败，
+但卡片说的「identical」为假。
+
+**处置**：判决 PARTIAL ⇒ **不关卡**。本轮可修的部分是卡片证据文本本身：已在
+`cards.tsv`（研究树 `spikes/shorebird_linkinfo_oracle/`，`F159` 行）改实——补上
+「四个 stub 不是三个」、`GetCStackPointer` 净新增缺陷、以及「no worse 不是 identical」
+三处失实，并标注「STILL OPEN：一次真正跑到 deopt leaf call 的 AOT 执行（deopt 在这里只在
+JIT 触发，归口 F160/C4）」。**不能在本轮修的部分**：F160 的 `verify_sdk_hash`/构建修复
+本身已经落地（见上文 F160 段），本卡引用的旧 run_vm_tests 数字已经过期，但**没有必要
+新开卡**——这是 F158 旁支发现在 F159 落地点上的又一次具体印证，属于卡片自身判据要核的
+一部分。子代理离场前遗留了一个 SDK 树的临时 worktree `/tmp/f159wt`，已由本轮清理
+（`git worktree remove --force`）。
+
+收尾核对：`sdk_phase_checklist.py` 重跑仍是 `STATIC C1-C3: 3 of 3 · C4 0 of 12 failed ·
+SDK PHASE: 4 of 4 criteria met -- COMPLETE`（SDK `b468884fa7d`，0 未提交），未受本轮影响。
+
+`F158` 仍 `built`，卡面已在上一轮修实，仍欠一次带 `run_vm_tests` 独立重跑的新鲜证伪 pass。
+`F159` 仍 `built`，卡面已在本轮修实，仍欠一次确认修辞已改实的新鲜证伪 pass（可以顺带核实
+`GetCStackPointer` 缺陷是否也该在 F157/F160 的收尾叙事里提一句，但那不是新卡）。
+本阶段收尾还差：F158、F159 各自的下一轮证伪 pass，以及 F160 的落地提交（本体已落地，
+卡片状态仍 `open`，收尾判据见卡片本体的 (1)(2)(3) 三条）。本轮到此结束。
