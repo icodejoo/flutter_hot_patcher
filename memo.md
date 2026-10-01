@@ -20111,3 +20111,60 @@ upstream 测试套跑过。flags 判据只测「> 0」不是精确计数，parti
 
 本轮按本阶段排序，下一个未完成项：F161（built，PARTIAL 遗留，来自 2026-10-01 15:01 三卡 pass commit
 `52c5fbf4`，未自审）。下一轮应派新鲜子代理对 F161 修补丁跑独立证伪 pass。
+
+## 2026-10-01 F161 negative-control evidence gathered (isolate.cc / exceptions.cc hunks tested individually)
+
+Raw readings only. No VERDICT here -- that needs a separate fresh pass per `tools/loop/prompts/falsify.md`.
+
+**Setup.** SDK `~/dart-3122/sdk` HEAD `252c31c45f6` (`agent/sdk-phase-c1`), `git status --porcelain` 0 lines, before and after.
+`git diff f5b94e5b439^ HEAD -- runtime/vm/isolate.cc runtime/vm/exceptions.cc` prints nothing (card criterion (1)).
+The SDK working tree was **never edited**: the loop was live (`run_round.sh` running, no `.loop/PAUSE`), and its dirty-tree guard
+auto-stashes `$SDK`, and checking files out again would bump mtimes (defect #38). So all work ran in an APFS clone
+`~/dart-3122/F161clone/sdk` (`cp -c -R` of every top-level entry except `xcodebuild` and `.git`). The clone was checked equal to
+`252c31c45f6` with a temp index (`GIT_INDEX_FILE=/tmp/f161idx git read-tree 252c31c45f6; git update-index --refresh; git diff-files` -> 0 lines),
+both before the variants and after the last revert.
+Build dir: `xcodebuild/F161negctl_ProductSimARM64`, `args.gn` copied from `ProductSimARM64` (byte-identical), `buildtools/gn --root=. gen`.
+**Only one scratch dir was built, not two:** `ProductSimARM64_cpu/args.gn` is byte-identical to `ProductSimARM64/args.gn`
+(`diff` prints nothing). "CPU mode" is just the runtime flag `--no-use_simulator` given to `dartaotruntime`, so one binary covers both modes.
+
+**Pinned E3 dirs, start = end (left exactly as found):** `ProductSimARM64` all-targets 1350, C4 targets (`gen_snapshot dartaotruntime copy_gen_kernel_snapshot`) **0**;
+`ReleaseARM64` all-targets 1109, C4 targets (`dartvm ffi_test_functions`) **0**, `gen_snapshot analyze_snapshot` 174.
+⚠️ These non-zero all-target and gs/as counts were already there **before** this task started. They are E3's business, not caused here.
+`isolate.cc`/`exceptions.cc` mtimes in the SDK tree were unchanged (`1790834426.587663834` / `.585330995`).
+
+**Runner.** `~/dart-3122/F161out/run_corpus.sh <build> <outdir>` copies `sdk_phase_checklist.py` `run_c4()` step (a) exactly:
+`dartaotruntime gen/gen_kernel_aot.dart.snapshot --platform vm_platform.dill --aot -o X.dill pN.dart` ->
+`gen_snapshot --snapshot_kind=app-aot-elf --elf=X.so X.dill` -> `dartaotruntime X.so` (sim), plus `dartaotruntime --no-use_simulator X.so` (cpu).
+Before every run it refuses if `ninja -n` on those three targets is not 0, and it records the tool sha256. For each program and mode it saves stdout, stderr and rc,
+plus the `.so` sha256. Corpus = `runtime_check/` at research `dd69ddad`: **9 programs p1..p9** (expected.tsv has 9 rows; sha256 of all
+files in `F161out/corpus_sha.txt`). This settles the card's "8 vs 9" note: today it is 9.
+
+**Baseline (HEAD), run twice:** sim 9/9 ok. cpu 8/9 ok, and **p9 cpu rc 134** (`Trace/BPT trap`, the known F162-family crash, stdout empty).
+Between run 1 and run 2 the only difference anywhere is `p9.cpu.stderr` `si_addr` (`0x1096b8d4c` vs `0x104c0cd4c`), which is ASLR. The page offset `0xd4c` is the same.
+
+| variant (on HEAD, uncommitted, in clone) | rebuild | ninja pending after | dartaotruntime sha changed | stdout / rc / `.so` sha vs baseline, 9 progs x 2 modes | stderr vs baseline |
+|---|---|---|---|---|---|
+| `isolate.cc` hunk alone (`git diff f5b94e5b439^ f5b94e5b439 -- runtime/vm/isolate.cc`, `patch -p1`) | 8 steps | 0 | yes (`b5eabd...` -> `9f3515...`) | **byte-identical, all 18 + 9** | only p9.cpu `si_addr` (ASLR, offset `0xd4c` same) |
+| `exceptions.cc` hunk alone (same, `-- runtime/vm/exceptions.cc`) | 11 steps | 0 | yes (-> `d9ea4b...`) | **byte-identical, all 18 + 9** | only p9.cpu `si_addr` (ASLR, offset `0xd4c` same) |
+
+**Answer to the question asked, per hunk:**
+- `isolate.cc`, re-applied alone: changed **no** observable output (stdout, rc, snapshot bytes) in either mode across p1..p9.
+- `exceptions.cc`, re-applied alone: changed **no** observable output (stdout, rc, snapshot bytes) in either mode across p1..p9.
+
+**Reach probe (extra, so the next pass can weigh the identity above).** Built a third variant: HEAD plus four `OS::PrintErr("F161PROBE ...")` lines and no behaviour change
+(diff in `F161out/probe.diff`). The probes sit at: the `exceptions.cc` `if (FLAG_use_simulator)` before `JumpToFrame` (prints `use_sim`, `is_sim`); the `isolate.cc` hunk site
+(prints whether `simulator()` is null); `Simulator::Current()` lazy alloc (prints whether `s_pending_vmcode_path_` is set); and the `dart_entry.cc` on-demand alloc.
+stdout summary is the same as baseline. Hits per run:
+- `initisolate sim_null=1` x2 in **every** program and both modes, so the isolate hunk's body would run twice per process.
+  Without it, exactly one Simulator gets allocated lazily: `current-lazy-alloc` x1 in sim mode, `dart_entry-alloc` x1 in cpu mode.
+  **`pending=1` was hit 0 times**, so the `s_pending_vmcode_path_` / `ApplyPendingVmcodeIfNeeded` lazy path is never reached by this corpus.
+- `jumptoframe`: p4 x102, p5 x2, p9 x7 (sim only). **In every hit, sim mode had `use_sim=1 is_sim=1` and cpu mode had `use_sim=0 is_sim=0`.**
+  The only case where the two forms of the `exceptions.cc` condition differ is `use_sim=1 && is_sim=0`, and it was **hit 0 times**.
+  p9 cpu crashes before any JumpToFrame (0 hits).
+- So for `exceptions.cc` the byte-identity above comes from a corpus that **never makes the old and new conditions disagree**.
+  For `isolate.cc` the hunk's code does run, but the only paths where eager versus lazy allocation could matter (pending vmcode, or a reader of
+  `Isolate::simulator_` that runs before the first alloc) are not reached. This is reported as a fact about coverage, not as a judgment.
+
+**Artifacts** (outside every repo, ~1.4 MB): `~/dart-3122/F161out/` -- `run_corpus.sh`, `{isolate,exceptions}_hunk.diff`,
+`variant_*.applied.diff`, `probe.diff`, `build_*.log`, `base_r1/ base_r2/ isolate/ exceptions/ probe/` (per-program stdout/stderr/rc/so.sha, `summary.tsv`, `tool_sha.txt`, `pending.txt`).
+⚠️ The scratch clone `~/dart-3122/F161clone` (9.7G apparent, mostly CoW) is **still on disk**: the recursive delete was blocked by the deny-destructive hook. The operator must delete it by hand.
