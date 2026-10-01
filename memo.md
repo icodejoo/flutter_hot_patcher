@@ -20634,3 +20634,57 @@ above; try constructing a case where the byte check passes (gen_snapshot `.so` m
 content check should still have caught a mismatch (or vice versa) to see if the two gates are
 actually independent or redundant; confirm `dd_slot_chain.sh` really is shared by both the matrix and
 the reproducer (not just claimed) by diffing how each invokes it.
+
+### F165 second falsification pass verdict: PARTIAL -- content gate checks the wrong thing
+
+**F165 VERDICT: PARTIAL** (fresh Opus agent, 45 tool calls, 478s, independent of the binding-fix
+agent). Byte gate (a) independently re-derived and holds: fresh `.so` builds on both sides, full
+matrix re-run from scratch in a separate scratch dir, all 105 cells match the committed
+`parity_matrix.tsv` exactly (53 na/49 unknown/3 structural, rc 0) except the `dd_max_bytes/zero`
+evidence NOTE text (already known WORK-path-sensitive, class unchanged, pre-existing per the
+implementing subagent's own list).
+
+**FLAW found**: the content gate (`ddid_binding_check.py`) only compares the SET of function
+indices (plus which rows are allocation-stub rows), never the other `FunctionKey` fields
+(`signature_hash` etc.). Three constructed mutations of an otherwise-valid `.ddid` -- swapping two
+keys' positions, rotating all non-alloc keys, flipping one `signature_hash` bit -- were ALL reported
+`bound` by the gate; the first two actually changed the resulting `.ddsm` (25263->25259 B,
+->24713 B) while the mismatch went undetected BY THE GATE ITSELF (only visible after the fact by
+diffing `.ddsm` output, which is not what the gate exists to do). This means the "bound two ways,
+byte + content" framing is overstated for identity corruption specifically -- the byte gate is
+carrying essentially all the real protection; the content gate only catches gross mismatches (wrong
+fixture entirely, the original reproducer's case) not a subtle identity permutation within a
+same-sized/same-count `.ddid`. Also reconfirmed (a) from the prior pass is latent, not yet active:
+classification still depends only on `.ddsm` bytes, not on cross-checking the two sides' `.ddid`
+inputs against each other -- moot today only because both sides' `.ddid` happen to be byte-identical.
+
+**COST OF BEING WRONG**: a future round reading "two independent binding checks" in the card would
+reasonably assume identity corruption is covered; it is not -- only the byte-identity-of-the-whole-.so
+path is load-bearing, and that path's own soundness still rests on the unproven-but-untested
+assumption (c) from the prior pass (gen_snapshot output is deterministic).
+
+**New committed reproducer**: `nc_f165_ddid_key_permutation.sh` (research tree commit `7fd5471b`) --
+exits 1 (BLIND) today on both the key-permutation and signature-bit-flip cases; must exit 0 once the
+content gate actually checks `FunctionKey` identity fields, not just the index set.
+
+**Disposition**: per E5, PARTIAL does not close the card. `cards.tsv` F165 row updated in place
+(research tree commit `efceeb6c`) with this verdict and the new required-but-not-yet-passing control.
+**F165 stays `built`**.
+
+**Round PID 58931 summary and stopping point**: this round ran F165 through implement -> falsify
+(PARTIAL, found ddid/.so binding gap) -> fix -> falsify (PARTIAL, found the fix's content-gate is
+weaker than claimed) -- two real, narrowing-but-not-closing defects found in a row, each round
+costing real spend and finding a smaller residual gap than the last (the classic pattern this
+project's CLAUDE.md already warns about: "每做一次证伪 pass 就会长出新的仪器卡"). Per that experience
+and current budget usage (~$11.6 of $25 spent this session), this round stops here rather than
+immediately dispatching a third fix. **Handoff for the next round**: either (a) fix
+`ddid_binding_check.py` to compare `FunctionKey` identity fields (not just the index set) against
+`nc_f165_ddid_key_permutation.sh`, accepting that another falsification pass may again find a
+narrower residual gap (this could in principle continue for a while -- a future round should weigh
+whether the remaining gap is small enough to document as a known limitation rather than chase
+further, similar to how F164's NC1 was eventually narrowed-and-documented rather than fully closed),
+or (b) move on to a different phase-scope card (F167/F168/F169/F170/F172/F174) and leave F165 `built`
+with its current, now well-documented, residual gap. **Also still outstanding from earlier this
+round, not yet acted on**: the 56 pre-existing staged files in the research tree flagged as a
+possible risk (may include their tool's `.so` output) -- needs operator attention before any bare
+`git add -A`/`git commit` in that tree.
