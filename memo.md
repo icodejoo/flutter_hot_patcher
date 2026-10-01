@@ -19982,3 +19982,16 @@ note 字段写着「Attribution not computed」——程序化分类器的判定
 声称（可能要换被翻转的文件或偏移，让它命中某一格实际读取的字节区间）；②同时顺手订正 3 个 structural 格 note
 字段的「Attribution not computed」过期文字，使其与 `structural_evidence.tsv` 一致；③完成后需要新一轮独立
 证伪 pass（不能是做修复的那个子代理）才能关卡。本轮派出修复子代理，详情见下一条记录。
+
+### 2026-10-01 F166 修复已派出：换一个可复现的负控制 + 订正 structural 格过期备注
+
+针对上一条记录的 PARTIAL 结论，派出一个全新 Opus 子代理（与跑证伪 pass 的那个子代理不同）去：
+①调查为什么翻转 gen_snapshot 工具二进制的任意字节对 21 个新格零影响，找到真正命中
+save_obfuscation_map/gen_snapshot help/dd_max_bytes 这几格实际读取内容的扰动点，写成落盘脚本、
+实测并记录真实的 before/after 分类变化，替换卡片里那个无法复现的括注；
+②修正 3 个既有 `structural` 格（dump_object_pool ×3，非本次新增）note 字段里过期的
+「Attribution not computed」文字，使其与 `structural_evidence.tsv` 的 `EXAMINED 36/UNEXPLAINED 0`
+一致（若 note 是生成产物则改生成源头，不手改 TSV）；③确认矩阵整体仍是 105/53/3/49、其余格分类不变；
+④只在研究树提交，不碰 SDK 树，不推送。明确要求它不下判决——证伪 pass 必须由另一个新鲜子代理做。
+
+本轮到此结束，等待完成通知。
