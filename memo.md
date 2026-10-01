@@ -20082,3 +20082,32 @@ SURVIVES 才能关 F163；若仍 PARTIAL/FALSIFIED，按规矩当场修、不许
 expected.tsv 行→rc=2 REFUSED；删 p9.dart→rc=2 REFUSED），确认新鲜构建下的失效方式与声称一致；⑥问题是否被
 换成了更容易的那个。判决必须含 `F163 修补丁 VERDICT: ... (fix)`。本轮到此结束，等待完成通知；SURVIVES 才能关
 F163，否则记录新发现、继续 PARTIAL/open。
+
+### 2026-10-01 F163 修补丁独立证伪 pass 回收：SURVIVES (fix) ——关卡，附一处新发现
+
+**F163 修补丁 VERDICT: SURVIVES (fix)**（Opus，18 次工具调用，937s，与实现它的子代理不同）。
+七项攻击全部亲手复现：C4 检查本身不是硬编码判决，`--self-test` 现场跑 rc=0、0 failure(s)、p9 三个内联用例全部
+从真实 `expected.tsv` 读期望值；两侧构建钉住目标 `ninja -n` 均 0 待办（ProductSimARM64: gen_snapshot
+dartaotruntime copy_gen_kernel_snapshot；ReleaseARM64: dartvm ffi_test_functions），SDK `252c31c45f6`
+干净；独立 oracle 确认是不同二进制（`dartaotruntime` sha 不同）而非同一份分叉；四个变体（m1 删 catch、
+m2 catch 分支改返回值、m3 去掉 throw、m4 catch 分支改比较方向）在 stock JIT 上逐一现场跑，证明排序数组
+本身不足以分辨「catch 真的跑了」，但 descending 数组+flag 一起能分辨，删 catch（m1）/去掉 throw（m3）在
+C4 live 下均变 `NOT MET, 3 of 4`；三项负控制亲手重跑，失效方式与声称一致（扰动排序→C4 NOT MET rc=1；
+删 expected.tsv 行→rc=2 REFUSED；删 p9.dart→rc=2 REFUSED）；`40bca045` 确认是 route-a-research 当前 HEAD
+祖先；扰动后研究树已还原（`git diff --quiet HEAD` 干净）。唯一文字瑕疵：原文说「结果由 native caller 打印」，
+实为 Dart 的 main 打印——不影响判决。
+
+**STILL OPEN**（新发现，原文抄录）：同一份 p9.so 在 ProductSimARM64 上加 `--no-use_simulator` 时以 rc=134
+（Trace/BPT trap）崩溃，打印 F162 的守卫信息（CPU-shape simulator_csp_ reentry 与真实 OS C 栈底碰撞，经由
+noSuchMethod/allocation/exception dispatch）；p1、p7、p8 在该模式下都能正常跑。即「异常穿过回调」在
+`--no-use_simulator` 这条路径（与 E1 SEGV 修复同一模式）上是崩的，而 C4 只跑默认模式，不会发现这个。
+upstream 的 callback_unwind 测试只在 ReleaseARM64（无模拟器）上跑，异常逃出回调这件事从未在模拟器上被
+upstream 测试套跑过。flags 判据只测「> 0」不是精确计数，partial catch failure 可能仍然通过。
+
+**F163 关闭**（研究树 `cards.tsv` F163 行 `built`→`closed`，提交 `dd69ddad`）。**E5 仍未完成**：F160 仍
+`open`，F161/F162 仍 `built`（F162 不在本阶段范围内，见上条心跳）。新发现的 `--no-use_simulator` + 异常穿
+回调崩溃点与 F162（已知真 bug，CPU-shape 守卫缺陷）同源，暂记在此，不单独开卡（按本阶段范围不许开新卡，
+除非它挡住本阶段某项——它不挡 F163 自身已关闭的判据，F162 卡面本身已经记着同一类问题）。
+
+本轮按本阶段排序，下一个未完成项：F161（built，PARTIAL 遗留，来自 2026-10-01 15:01 三卡 pass commit
+`52c5fbf4`，未自审）。下一轮应派新鲜子代理对 F161 修补丁跑独立证伪 pass。
