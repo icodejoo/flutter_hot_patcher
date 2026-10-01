@@ -21770,3 +21770,36 @@ already. Taking the honest, bounded fix instead: change `ddid_binding_check.py`'
 semantics so a `.ddid` with any unresolved rows can no longer return the SAME rc=0 as full coverage
 -- a caller checking only `rc==0` (as the pass's attack exploited) must not be able to mistake
 partial coverage for full binding. Dispatching the implementation now.
+
+### 2026-10-02 round (PID 93615, continued): dispatched fix for F165's PARTIAL finding (honest exit-code distinction, not parser coverage extension)
+
+Decided against attempting full kernel parsing of closures/constructors/field-initializers to
+close the Field-backed-kind gap outright (disproportionate for one round, and would repeat the
+"small sample, not really checked at scale" shape the pass just caught once already on the
+procedure-backed path). Instead dispatched a bounded fix: add a `--require-full-coverage` flag to
+`ddid_binding_check.py` that returns a distinct exit code (3, `PARTIAL_COVERAGE`) when
+`unresolved > 0`, so a caller that opts into strict mode cannot mistake "some rows unverified" for
+"fully bound" the way the falsification pass's attack exploited -- default (no-flag) behavior,
+which is what `dd_slot_chain.sh`'s existing call site uses and what actually protects the 3 real
+matrix cells (via the independent byte-identical cross-toolchain `.ddsm` comparison, not this check
+alone), must stay unchanged so no matrix cell regresses from na/identical to blocked/unknown
+without a deliberate, separately-reviewed decision to do that. Told the subagent explicitly not to
+touch `dd_slot_chain.sh`'s call site unless it found a specific reason the current behavior is
+wrong, and to confirm the 3 `compute_dd_slot_mapping` cells' classification is byte-for-byte
+unchanged in `parity_matrix.tsv` after the fix. Also asked for a new dedicated reproducer
+`nc_f165_unresolved_kind_permutation.sh` (separate file, per this project's one-reproducer-per-
+attack convention) demonstrating: default mode still returns "bound" on the Field-backed-kind
+permutation attack (known, now honestly documented, not silently fixed), strict mode returns the
+new distinct code, and the resulting `.ddsm` is genuinely byte-different from correct (so the
+attack is real, not cosmetic). Told it not to close F165, not to edit memo.md, not to touch
+`~/dart-3122/sdk` beyond read-only reference + the build-freshness check, not to touch any
+`shorebird` CLI release/publish path. Bounded to ~40-60 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification. **Next item
+for whoever picks this up**: verify the fix independently (do not just trust the report -- rerun
+the three reproducers and the parity_matrix.tsv diff yourself, same as this round did for the
+first F165 fix), record the outcome in memo.md, and dispatch yet another fresh falsification pass
+on this new fix before F165 can be considered for closing (a fix never inherits review of what it
+fixed). If the subagent's fix itself turns out inadequate, fix it further in that round rather
+than stacking another unreviewed layer. Independently, F167/F168/F169/F176 remain open with no
+dependency blockers; F161/F174 remain correctly `built`/blocked on F175.
