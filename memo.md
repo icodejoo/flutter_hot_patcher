@@ -20956,3 +20956,13 @@ F167-F170/F172 still waiting.
   No checkbox moved, no card closed. F175 stays `open`; F161/F174/F165 remain `built`, still
   blocked/deferred. Next round (if budget allows a multi-hour build) should pick up the split-card
   proposal as its own card rather than retrying Q2 inline. Round ends here.
+
+- 2026-10-02 round (PID 1486, heartbeat): round started. `.loop/PAUSE` absent. Checked `~/dart-3122/sdk`
+  and `~/Documents/fhp-research` -- both clean. `flutter_hot_patcher` has only its pre-existing untracked
+  block (unchanged since session start, not this round's concern). Inspected the `loop-rescue
+  2026-10-02T00:54:39 round-58931` stash per the rescue note: it is F69/F111 work (frozen, out of
+  phase-scope) plus regeneratable `test_work/` binary dumps -- left stashed, not acted on, consistent
+  with the prior round's own note on it. Reviewed built-card queue: F161/F174 blocked on F175 (open,
+  unresolved); F165 has two PARTIAL falsification passes already and its continue-or-move decision has
+  been deferred twice. Picking a fresh open card instead of re-litigating F165 a third time in one round:
+  **F172** (G4 negative-patch set, host-side). Dispatching a background subagent now.
