@@ -20846,4 +20846,83 @@ Round ends here per contract step 4, awaiting the subagent's completion notifica
 
 **STILL OPEN per the subagent**: the two "0 references in engine trees" gates (S1/S3) were not separately forced to fail (only S2 got a constructed negative control); step 4 (an actual runtime repro of the restart path under `--no-use_simulator`) was not attempted -- `dartaotruntime` doesn't load link-header patches on its own, it would need a small embedder calling `Shorebird_SetBaseSnapshots` -> `Shorebird_ReadLinkHeader` -> `Dart_LoadELF` and creating the isolate group from the patch snapshot; and whether D3's actual device build had linking enabled (non-null base-instructions table at deserialization) was not checked.
 
+### 🔴 F175 falsification pass verdict: PARTIAL -- neither mechanism is shown to work under CPU-shape, and D3 ran entirely inside the simulator
+
+**F175 VERDICT: PARTIAL** (fresh Opus, 18 tool calls, 259s, independent of the agent that made the
+static-trace finding). Research tree commit `ce510295` appends this verdict to F175's own cards.tsv
+row (status column untouched).
+
+**The static-trace finding (two separate mechanisms exist in source) holds up** -- the falsifier
+independently forced gates S1 (renamed `LinkOracle::Install`) and S3 (a fake `engine_hook.mm` caller)
+red with their own constructed negative controls (the prior pass had only done this for S2), and
+independently confirmed `c15ef637`/`c2515c46` resolve to real `~/.shorebird/bin/cache/flutter/`
+checkouts with `origin https://github.com/shorebirdtech/flutter.git` -- genuine third-party Shorebird
+source, not a mislabeled local fork.
+
+**But the claim built on top of that finding does NOT hold.** Two defects, both load-bearing:
+
+1. **The "real" engine path is ALSO inert under CPU-shape, by the same mechanism as the one F174
+   examined.** `Deserializer::WrapCode` (`app_snapshot.cc` ~lines 10029-10118) has four return paths
+   and **all four return `identity`** -- linking never redirects a call site to different code. The
+   function's own comments say this is deliberate: patch bytes are only ever *interpreted* by the
+   Simulator, and native (CPU) execution of `payload_start` would fault because the mapping is
+   PROT_READ-only (this is literally the B6 real-device crash on record, `reference_b5_device_swap.md`).
+   So "the Deserializer never names `Simulator::`" (step 2 of the prior pass) is true but is **not
+   independence from the simulator** -- it is the identical inertness-under-CPU-shape that F174 found
+   for the OTHER mechanism, one layer up. Neither code path has ever been shown to deliver a working
+   patch without the Simulator actually running.
+
+2. **D3 (the closed real-device milestone CLAUDE.md cites as proof patching works, `PATCHED_V2` ✅)
+   never ran CPU-shape in the first place.** `grep -rn use_simulator` across all three engine trees'
+   `runtime`/`shell`/`lib` returns **0 hits** for anything that would turn it off; `flag_list.h:266`
+   defaults `use_simulator` to **true**; and `memo.md:19157` (the D2 criterion, already on record)
+   states the D3 base was built with **`dart_force_simulator = true`**, i.e. "cannot execute
+   natively." **D3 ran the entire program inside the Simulator, not CPU-shape.** The card's own
+   CRITERION has a second branch written for exactly this outcome ("show D3's passing result in fact
+   ran the entire program inside the simulator... D3's claim needs re-reading") -- that branch is now
+   the one that fired.
+
+**FLAW** (verbatim from the falsifier): "The card's criterion asks which mechanism makes a patched
+function run under CPU-shape in D3's configuration. Neither one does... The accurate statement is
+that CPU-shape patch delivery has never been demonstrated by any mechanism, and D3's claim needs
+re-reading." Minor secondary defect also found: gate S3 whitelists `ViewController.m` (an iOS-app
+caller from `m3_ios_realdevice`) and never scanned the main `flutter_hot_patcher` repo, where
+`engine/patches/dartsdk_simulator_ffi.diff` does reference the symbol.
+
+**STILL OPEN** (copied verbatim): a runtime test that loads a patch through
+`Shorebird_ReadLinkHeader` + `Dart_LoadELF` (the "real" engine path) under `--no-use_simulator` and
+checks whether the patched function's output actually changes or the process faults; and whether the
+iOS ELF mapping is PROT_READ or R+X (`elf_loader.cc:303-343`) and which mode the engine's plain
+`Dart_LoadELF` call actually uses.
+
+**COST OF BEING WRONG** (verbatim): "F161/F174 closure, the 'D3 proves real-device patching'
+statement in CLAUDE.md, and any plan to run base code natively (CPU-shape) all depend on this.
+Believing it would sign off production patch delivery that is either inert or crashes outside the
+full simulator."
+
+**Disposition**: per falsify.md, PARTIAL means **do not close**. The underlying question (does ANY
+mechanism deliver a working patch under true CPU-shape) is too large to resolve in this round -- it
+requires a new runtime repro of a path that has never been exercised end-to-end, plus a possible
+ELF-mapping-permission investigation. **Not fixed this round**; F175 stays `open` with this verdict
+appended to its cards.tsv row. `tools/loop/phase_scope.txt` left as-is (F175 already in scope).
+
+🔴 **Flagging prominently for the operator, not acted on by this round**: this is the second
+independent pass (after F174's own) pointing the same direction, and it now has concrete evidence
+rather than a hypothesis -- **D3's real-device milestone, cited throughout CLAUDE.md regla 0 and
+memo.md as a closed proof that "推送并重启后设备输出 PATCHED_V2" demonstrates working patch delivery,
+appears to have validated patching **under the full Simulator**, not under the CPU-shape/native
+configuration a production release build would actually ship.** This does not mean D3's result is
+false -- the device genuinely printed `PATCHED_V2` -- but it means the scope of what D3 proved may be
+narrower than how it has been cited (simulator-mode patching works; CPU-shape/native patching is, as
+of this pass, **not yet demonstrated by either known mechanism**). Re-reading or re-scoping D3's
+claim, and/or commissioning the runtime repro the falsifier names, is a decision for the operator or
+a future round with real budget for it -- not something this round should silently resolve by editing
+CLAUDE.md or closing/reopening D3 itself.
+
+Round PID 89977 stopping point: two dispatches this round (F175 investigation, then its independent
+falsification pass), ending on a PARTIAL verdict per contract discipline -- no checkbox moved, no
+card closed. Not acted on: F161/F174 remain built/blocked on F175 (now even more clearly blocked,
+since the finding sharpened rather than resolved); F165's continue-or-move decision (deferred again);
+F167-F170/F172 still waiting.
+
 **Subagent's own proposed verdict**: "Likely closable as 'claim confirmed: two separate mechanisms'. F174's finding is real but only affects the standalone harness's way of loading patches, not the engine's restart-based one... Shorebird has no equivalent [of `Dart_ShorebirdLoadVmcode`/the link table], so rule 1 suggests removing them." **Not acted on** -- per E5/LOOP_CONTRACT 五之四, this is `built`/partial, not closed, and the subagent explicitly asked for an independent pass before closing. Dispatching a fresh, independent falsification pass now, per falsify.md, before any checkbox moves or F161/F174's blocked status is revisited. Round ends here awaiting completion notification.
