@@ -21473,3 +21473,57 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   only then consider F172 for closing. Independently, F167/F168/F169/F176 remain open with no
   dependency blockers, and F161/F165/F174's larger falsification backlogs remain untouched by this
   round.
+
+- 2026-10-02 round (PID 975, continued): the dispatched falsification pass completed (Opus, fresh,
+  11 tool calls, 325s). **F172 fix (`4ce36436`) VERDICT: PARTIAL.** The 11-fixture disposition claim
+  and the thrown-string spoof guard both reproduced exactly as the commit states. Two real flaws
+  survived: (a) the script has no expected-disposition table and never gates on one, so it cannot
+  itself detect a wrong disposition -- demonstrated by perturbing one fixture (e3_isomagic) to exit
+  0/silent-accept and observing the script still return rc=0; (b) a program that loaded, ran, and
+  *printed* one of the rejection strings on any stream, then exited non-zero with **any** code (not
+  only the documented 255), still read `clean-reject` -- demonstrated with three fresh constructed
+  fixtures: `stderr.writeln('Invalid snapshot'); exit(255)`, the exact main_impl.cc line via `print()`
+  plus `exitCode=255`, and `stderr.writeln('Incompatible snapshot kinds: z'); exit(1)` -- all three
+  landed `clean-reject`. A minor factual flaw was also found: the e3/e4 comment's citation of
+  `dart_api_impl.cc:5651/6096` is wrong -- those lines are `Dart_LoadModuleSnapshot`/
+  `DeferredLoadComplete` (the dynamic-module/deferred-unit loading path), not the isolate-creation
+  path e3/e4 actually exercise; the correct citation (`dart.cc:869/874`,
+  `Dart::InitIsolateGroupFromSnapshot`) was already present alongside the wrong one. The pass also
+  flagged (not a defect, a scope note): the script only exercises our standalone `dartaotruntime`, not
+  the engine's `patch_cache.cc` path, so none of this directly compares against Shorebird's handling --
+  already an open question per the script's own end-of-run note, not new here.
+
+  **Fixed in this same round** (commit `4b6fc266`, fhp-research tree, self-tested against the real
+  build, NOT yet independently falsified): (1) added `expected_disp()`, a fixed table mapping each
+  fixture label to its known-correct disposition (8x `clean-reject`, 2x `crash`, 2x `silent-accept` for
+  baseline/h_otherbase), and a MISMATCH check in `run_case` that increments a `FAIL_COUNT` the script
+  now exits 1 on if nonzero; verified both directions -- a deliberately perturbed `expected_disp()`
+  (f1/f2 remapped to `silent-accept`) produces two MISMATCH lines and rc=1, the real table produces
+  rc=0 with all 12 fixtures matching; (2) `clean-reject` now additionally requires `rc==255`
+  (kErrorExitCode, the only exit code every genuine rejection this script exercises actually uses);
+  verified the `stderr.writeln(...); exit(1)` spoof now lands `exited-nonzero-unknown` instead of
+  `clean-reject`; (3) removed the wrong `dart_api_impl.cc:5651/6096` citation, kept and clarified the
+  correct `dart.cc:869/874` one; (4) added `vm_platform.dill` to the ninja-pending probe (the script's
+  own compile step depends on it but the probe never covered it). **Residual, explicitly not closed**
+  (narrower than before, not eliminated): a program that prints the exact rejection text and exits with
+  precisely 255 (not throwing, so the `Unhandled exception:` guard doesn't apply) can still spoof
+  `clean-reject` -- same adversarial construction 4ce36436 itself already flagged as having no analog
+  in G4's actual broken-ELF/version/truncated negative-control set, intentionally not engineered
+  against.
+
+  cards.tsv **not edited this round** (F172 stays `open`, correctly -- PARTIAL with a new unreviewed
+  fix does not qualify for closing). `sdk_phase_checklist.py` not rerun (no SDK-tree source changes;
+  only read-only fixture builds against the pinned `ProductSimARM64`, confirmed 0 ninja pending
+  including the newly-added `vm_platform.dill` target before and after). One housekeeping item: a
+  temp probe directory `/tmp/f172verify.qdXx` from this round's own verification is outside all three
+  repos, left on disk (the recursive-force-delete safety hook blocked cleanup, same as two prior
+  rounds' notes on this) -- harmless, a human can remove it directly.
+
+  **Next item for whoever picks this up**: run a falsification pass on fix commit `4b6fc266`
+  (fhp-research tree) -- the fourth fix in this chain (`f7de3cb2` → `f7253402` → `4ce36436` →
+  `4b6fc266`). If it survives, fold the full F172 history (all four fixes plus every pass's residual
+  notes, including the still-open print+exit(255) spoof and the patch_cache.cc-vs-dartaotruntime scope
+  question) into `cards.tsv`'s own text for F172 rather than leaving it scattered across memo.md
+  rounds, and only then consider F172 for closing. Independently, F167/F168/F169/F176 remain open with
+  no dependency blockers, and F161/F165/F174's larger falsification backlogs remain untouched by this
+  round. Ending this round here per contract step 4.
