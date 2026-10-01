@@ -21032,3 +21032,21 @@ F167-F170/F172 still waiting.
   known `run_vm_tests '<regex>'` trap works, whether the narrow per-row criterion vs the card's broader G2
   framing matches). Round continues, awaiting that falsification pass's notification before any checkbox
   state is trusted.
+
+- 2026-10-02 round (PID 74211, continued): F170 falsification pass completed (Opus, independent of the
+  implementer). **F170 VERDICT: PARTIAL.** Confirmed real: both trees' builds current, stock tree
+  genuinely stock (0 Shorebird symbols vs 84 in ours, 120 changed files byte-identical to the 3.12.2
+  tag), 652/652 identical test names both sides, 5 random spot-checks actually executed with real
+  codegen, negative control reproducible. **But real flaws, not fixable by re-litigating the same
+  claim**: (a) the implementing agent closed F170 itself in the same commit -- gate violation, already
+  flagged pre-emptively and now confirmed load-bearing; (b) `g2_run_cc.sh` discards stdout and verdicts
+  purely on exit code, so a stub that silently no-ops and exits 0 reports "652 tests run, 0 UNEXPECTED" --
+  the harness cannot detect a test that never ran; (c) the script header/plan/commit message's claim that
+  `run_vm_tests '<pattern>'` "exits 0" on no-match is itself false (it exits 1) -- a documentation error
+  that happened to not matter for this run (exact names were used, not patterns) but means the written
+  record doesn't reproduce what it claims. Reverted cards.tsv F170 status to `open` (not closing on a
+  PARTIAL). Dispatching one more subagent (3rd this round) to add a per-test "Done: <name>" presence
+  check to `g2_run_cc.sh`, prove the exit-0-stub negative control now goes red, rerun the real suite on
+  both trees to reconfirm 0 UNEXPECTED/652 under the fixed harness, fix the false "exits 0" documentation
+  line, and commit -- explicitly instructed NOT to mark F170 closed itself (the fix needs its own fresh
+  falsification pass before any closure, per contract 五之四).
