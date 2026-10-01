@@ -21274,3 +21274,26 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   or (b) review commit `f7de3cb2`'s fix with a fresh pass, or (c) pick up F167/F168/F169/F176 (open,
   no unmet dependencies). Ending this round here (one dispatch, one verdict recorded, trees left clean)
   per contract step 4.
+
+- 2026-10-02 round (PID 2393, run_round.sh): round started. `.loop/round.lock` holds this PID
+  (own lock, not a competing writer). `.loop/PAUSE` absent. Checked all three trees: `~/dart-3122/sdk`
+  on `agent/sdk-phase-c1` clean; `~/Documents/fhp-research` only pre-existing untracked `scratchpad/`;
+  `~/Documents/flutter_hot_patcher` only pre-existing untracked block (pre-existing, not from this
+  round). Reviewed prior round's (PID 614) open item list: F172 fix commit `f7de3cb2` (adds an
+  "accepted-unknown-output" bucket to `nc_f172_broken_patches.sh` so an rc-0 run without the expected
+  fixture marker is no longer silently bucketed as clean-reject) was flagged as owed a falsification
+  pass by a future round, never self-reviewed by the same dispatch that made it (only one subagent ran
+  that round, so it didn't qualify for same-round self-review under contract 五之四). Per the injected
+  "修补丁尚未经证伪" list and rule 0 priority (SDK-real-work before mechanical), picked this as the
+  next item. Dispatched one fresh Opus subagent (general-purpose, background, agentId `aa9aba3552c550d00`)
+  per `tools/loop/prompts/falsify.md`'s full seven-attack format against the fix commit specifically
+  (CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK filled in with the fix's diff, the F172 card text, and the
+  two known-but-uncommitted sub-findings from the same originating dispatch -- the missing
+  case-is-actually-correct check on the clean exit-0 branch, and the SIGABRT-vs-real-SIGBUS mislabel in
+  the truncation cases -- so the fresh agent doesn't rediscover them from scratch but also doesn't
+  conflate them with what f7de3cb2 itself claims to fix). Explicitly told it not to self-close any card,
+  not to edit cards.tsv, and to use the F116 multi-card verdict line format (`F172 fix VERDICT: ...`,
+  distinct from a bare `F172 VERDICT:` since this reviews the fix commit, not the card as a whole).
+  Did not touch `sdk_phase_checklist.py` or `verify_all.sh` this round (no SDK-tree changes made by me).
+  Round ends here per contract step 4, awaiting the subagent's completion notification before recording
+  any verdict.
