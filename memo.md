@@ -19827,7 +19827,7 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 另：`gen_snapshot` 把输出文件名写进产物（`none.so`→`none2.so` 差 99,177 B）；`hello.dill` 与 `base.dill` sha1 相同，**三个 fixture 实为两个**。
 
 - [x] **F164：analyze_snapshot 的 dd 四个选项**（`closed`，2026-10-01，SDK `252c31c45f6`）九组逐字节相同；三处未复现项写在卡上。判据见 `cards.tsv`。（2026-10-02 订正：卡片本体已是 `closed`，这里的复选框此前一直是 `[ ]`，cards_check.sh 的 open/closed 漂移里点名的就是这一处，现同步。F164 VERDICT: SURVIVES——引用的是 PID 83995 那一轮派的独立新鲜 Opus 子代理证伪 pass（45 次调用、362 秒，与此前两次 PARTIAL 的实现者无关），已记在 memo.md 本文件更早处（`cards.tsv` 第三次证伪 pass 行）；本行只是把卡号与判决词在同一处 diff 里对齐，补的是记账格式，不是新开一次 pass。）
-- [ ] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`open`，deps=F164）判据见 `cards.tsv`。
+- [x] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`closed`，2026-10-02，研究树 `df1c6387`/`75183c80`）三轮证伪 pass 各挑出一处真缺口（wrong-fixture .ddid 绑定、FunctionKey 内容未核、Field-backed 行种类未核）均当轮修复；第四轮对最后一处修补丁（`75183c80`/`8f567d2b`）独立证伪，F165 修补丁 VERDICT: SURVIVES，STILL OPEN 两条已原文抄进 `cards.tsv` 的收尾记录（`--require-full-coverage` 的 rc=3 与 dd_slot_chain.sh 自身 "exit 3=not bound" 语义的潜在冲突；closures/constructors/implicit accessors 的 20–24% 行仍未被独立核验，按设计留白）。3 个真实矩阵格（hello/base_dd/prog）全程未变，每一步都附空 diff 证明。判据见 `cards.tsv`。
 - [x] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`closed`，研究树 `581869b2`）顺带修了 `WORK=` 不隔离 TSV 的缺陷；负控制修复后经独立证伪 pass SURVIVES (fix)。判据见 `cards.tsv`。
 - [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
 - [ ] **F168：复核 44 个 not-comparable 判定**（`open`）那是 agy 未经审的交付，每条要跑二进制核。判据见 `cards.tsv`。
