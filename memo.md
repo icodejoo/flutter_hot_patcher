@@ -21563,3 +21563,48 @@ it; if PARTIAL/FALSIFIED, fix in the same round per falsify.md's "after the
 verdict" guidance rather than leaving a fifth layer of unreviewed fix.
 Independently, F167/F168/F169/F176 remain open with no dependency blockers, and
 F161/F165/F174's larger falsification backlogs remain untouched by this round.
+
+### 2026-10-02 round (PID 19946, continued): F172 fix 4b6fc266 VERDICT: SURVIVES, history folded into cards.tsv
+
+The dispatched falsification pass completed (fresh Opus, 14 tool calls, 227s,
+independent of all three prior rounds that touched `nc_f172_broken_patches.sh`).
+
+**F172 修补丁 VERDICT: SURVIVES (fix)** -- re-ran the fixed script live against the
+pinned fresh ProductSimARM64 build (`ninja -n` pending=0 confirmed before trusting
+any binary), independently perturbed `expected_disp()` (not just read the commit's
+claim) and watched it correctly MISMATCH + exit 1, independently constructed its
+own exit(1)+exact-rejection-text spoof fixture from scratch and confirmed it now
+lands `exited-nonzero-unknown` not `clean-reject`, confirmed the admitted residual
+spoof (exact text + exit(255) exactly, no throw) still lands `clean-reject` exactly
+as 4ce36436's pass disclosed (not hidden, not newly closed, not a new flaw), and
+confirmed by direct grep that the corrected citation `dart.cc:869/874`
+(`Dart::InitIsolateGroupFromSnapshot`) is the real match while the old
+`dart_api_impl.cc:5651/6096` citation is confirmed unrelated (module/deferred-unit
+path). `git status --porcelain` in fhp-research confirmed clean after the pass
+(all scratch work stayed in /tmp). No flaw found; two STILL OPEN items named (not
+flaws in 4b6fc266 itself): (a) `expected_disp()` is self-authored from source
+reasoning, never cross-checked against Shorebird's own closed loader on the same
+12 inputs; (b) the exact-text+exit(255)-exactly spoof remains exploitable by
+construction, same residual 4ce36436 already flagged, intentionally not engineered
+against since it has no analog in the real broken-ELF/version/truncated fixture
+set.
+
+Per falsify.md's "after the verdict" guidance (SURVIVES -> fold history, then
+consider closing), folded the full four-fix chain (`f7de3cb2` -> `f7253402` ->
+`4ce36436` -> `4b6fc266`, all on `nc_f172_broken_patches.sh`) plus this pass's
+findings into `cards.tsv`'s own F172 row text (fhp-research commit `40bc3fb7`,
+direct byte-level append preserving the file's CRLF line endings and 7-field
+structure, confirmed with `awk -F'\t' '{print NF}' | sort | uniq -c` before and
+after -- 148 rows still at 7 fields, only F172's line changed per `git diff
+--stat`). **F172 the card itself stays `open`**: this pass verified the
+verification script's internal self-consistency, not the card's own criterion
+(G4 disposition parity across the full negative-control set against the real
+production patch-loading path) -- that needs its own dedicated falsification pass,
+explicitly called out as the next step in the text just folded in.
+
+Did not touch `sdk_phase_checklist.py` or `verify_all.sh` this round (no SDK-tree
+change). Round ends here per contract step 4. **Next item for whoever picks this
+up**: either run a dedicated falsification pass on the F172 card's own criterion
+(not another pass on the verification script) to see whether it can close, or move
+on to F167/F168/F169/F176 (open, no dependency blockers) or F161/F165/F174's
+larger falsification backlogs.
