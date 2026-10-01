@@ -22022,3 +22022,51 @@ finding). If SURVIVES, F169 can be considered for closing. Independently, F167/F
 open with no dependency blockers; F160 still owes its own two follow-up tasks (`--dfe` doc +
 criterion-(1) rerun on `de660deeae5`); F161/F174 remain correctly `built`/blocked on F175; F176
 needs its own dedicated multi-hour round with nothing else scheduled on `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 5987, continued): F169 VERDICT: PARTIAL -- fixing in same round
+
+The dispatched falsification pass completed (Opus, 38 tool calls, 413s).
+
+**F169 VERDICT: PARTIAL.** Two real defects, both independently spot-checked by me before
+trusting the report: (1) **the card's own negative control doesn't test what it claims** --
+`g1_denominator.sh`'s registration detector is purely string-based (checks for the literal
+"Empty/Non-empty value for option NAME" text). The pass built a disguised copy of our
+`analyze_snapshot` with only that error-string text altered (functionality untouched), and
+confirmed the option still works fully (rc 0, byte-identical `.ddt`/`.ddcl` output, no
+"Unrecognized flags"). The script still reports this as a lost option -- so the card's own
+specified negative control ("patch out the string -> gap rises by 1") is actually exercising a
+**false positive**, not a real capability loss. (2) **the "89" denominator is incomplete**: both
+binaries also accept `--define=a=b`/`-Da=b` and (analyze_snapshot) `--dds=`, which are
+`DEFINE_CB_OPTION`-style options (`runtime/bin/options.h`) that never emit the string-based
+test's error text at all -- true total is at least 92, not 89 (this doesn't move the gap/extra
+count since both sides have them, but it's part of the actual G1 question).
+
+**Independently verified before trusting**: read `runtime/bin/options.h` lines 55-90 myself --
+confirmed `DEFINE_CB_OPTION(callback)` (line 60) registers a raw `CallbackOptionProcessor` with no
+`Syslog::PrintErr` call anywhere in that macro path, structurally distinct from
+`DEFINE_STRING_OPTION_CB` (line 63, which does emit "Empty value for option..." at line 73) --
+confirms the pass's root-cause claim is a real, checkable structural fact, not just an assertion.
+
+**Fixing in this same round** (per LOOP_CONTRACT, do not close/defer on PARTIAL). Dispatched a
+fresh Opus subagent (background, general-purpose) with both defects spelled out concretely: add a
+second, string-independent functional test (invoke `--NAME=<value>` with a real `--out=`+`.so`
+run, check for "Unrecognized flags: NAME" vs acceptance); an option counts as registered if either
+test says so; repurpose the negative control to use the disguised-string case (must now read as
+"no gap", proving the false positive is fixed) while keeping a true-removal case that must still
+show a real gap; audit `DEFINE_CB_OPTION` call sites reachable from `gen_snapshot.cc`/
+`analyze_snapshot.cc` (and `main_options.cc`, cited as the source of `base_snapshot`/
+`shorebird_vmcode`) to correct the total count upward from 89. Told it the same hard constraints
+as the original build dispatch (no `~/.shorebird` cache mutation, no `shorebird` CLI publish/
+release, no SDK rebuild, read-only SDK source use for the audit, leave F169's status at `built`,
+don't touch memo.md), and to re-run `g1_denominator.sh` plus `cards_check.sh` itself before
+reporting. Bounded to ~60-90 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification. **Next item
+for whoever picks this up**: verify the fix independently (rerun the disguised-string control and
+the true-removal control yourself, don't just trust the report; confirm the corrected total),
+record the outcome, and dispatch yet another fresh falsification pass on this new fix before F169
+can be considered for closing (a fix never inherits review of what it fixed). If the fix itself
+turns out inadequate, fix it further in that round rather than stacking another unreviewed layer.
+Independently, F167/F168/F170/F172 remain open with no dependency blockers; F160 still owes its own
+two follow-up tasks; F161/F174 remain correctly `built`/blocked on F175; F176 needs its own
+dedicated multi-hour round.
