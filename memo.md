@@ -19832,7 +19832,7 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 - [ ] **F170：G2 测试套方案**（`open`）判据见 `cards.tsv`。
 - [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
 - [ ] **F172：G4 负向补丁集**（`open`）改 ELF 魔数的那个必须被证明能加载，不算负控制。判据见 `cards.tsv`。
-- [ ] **F173：`--base_ft_link_data` 在我们这侧不起作用**（`open`，deps=F166）链接器核心输入上的真能力缺口。判据见 `cards.tsv`。
+- [x] **F173：`--base_ft_link_data` 在我们这侧不起作用**（`closed`，deps=F166，fix sha `f5d9e96e231`）链接器核心输入上的真能力缺口，已修复并经独立证伪 pass SURVIVES（2026-10-01，见本文件对应条目）。判据见 `cards.tsv`。
 
 ### 2026-10-01T11:17Z 心跳（round PID 16375）：F162 第二次修复（ab20455635b）独立证伪 pass 已派出
 
@@ -20300,3 +20300,81 @@ F172（G4 负向补丁集），卡片上也没有任何地方承认它**。
 
 按本阶段排序，下一个未完成项：**F165/F173**（open，真缺口，优先于 F167–F170/F172 整理类），
 或先处理 F160（第三阶段欠账，运行时判据可能已被 F161/F162/F163 间接满足，需要核实）。本轮到此结束。
+
+- 2026-10-01 22:52:23 round heartbeat (PID 13845, run_round.sh): round started, reading memo tail + phase scope before dispatch
+
+- 2026-10-01 22:53:19 round (PID 13845): dispatching fresh subagent for F173 (real gap, --base_ft_link_data has no effect on our side)
+
+- 2026-10-01 22:54:25 round (PID 13845): dispatched fresh Opus subagent (agentId aac8d539e43a2eece, background) for F173 -- investigate/fix why --base_ft_link_data has no effect in our gen_snapshot (dead-code locus confirmed by dispatcher: ShorebirdLinker::base_field_table() getter at runtime/vm/shorebird/linker.h:399-400 is never called anywhere in runtime/vm; set but unread). Round ends here per contract step 4, awaiting completion notification before recording result.
+
+### F173 implementation round: subagent reports STATUS: fixed (commit f5d9e96e231)
+
+**Summary from subagent** (Opus, 61 tool calls, 918s): found the real consumption point is `FieldTable::Register`
+(via their disassembly) -- their version reads `base_field_table_` at linker offset +0x30, on first
+registration reserves every base id (grows table, sets `top_` to max_field_id+1), then looks up each
+field's `FieldHasher::DuplicateAwareHash` in a hash->id map built when `FieldTableLinkInfo` is constructed;
+a hit reuses the base id, a miss appends at `top_`. Implemented the same in our `FieldTable`/`FieldTableLinkInfo`
+(`runtime/vm/field_table.h/.cc`, `runtime/vm/shorebird/link_info.h`). **Second hidden cause** found: field ids
+are assigned during kernel load, but our `InitializeShorebirdLinkData()` ran later in
+`CreateAndWritePrecompiledSnapshot`; theirs runs it in `main` right after `Dart_SetVMFlags`, before
+`Dart_Initialize` -- moved ours to match (`runtime/bin/gen_snapshot.cc`). Without the move, a correct
+consumer would still never observe the base table.
+
+**CRITERION reported**: before fix, 3 runs byte-identical (sha `54b9cccc...`); after fix, flag changes
+output by 133,885 bytes vs their 133,879 (6-byte unexplained residual, NOT investigated further -- flagged
+as open by the subagent); one-byte flip of a hash string inside base.ft changes output (first flip landed
+in a FieldInfo *name* byte, which is correctly NOT part of the hash key and changed nothing -- subagent
+noted this, re-flipped inside a hash string, got a change); revert restores byte-identical (`54b9cccc...`).
+
+**NOT verified by the subagent**: no host `dartaotruntime` in `ProductSimIosARM64` build dir, so whether
+a snapshot linked with reused base field ids actually *runs* correctly was not checked. Build note: binary
+is `xcodebuild/ProductSimIosARM64/clang_arm64/gen_snapshot` (0 pending ninja steps); the top-level
+`ProductSimIosARM64/gen_snapshot` is an iOS-platform binary that SIGKILLs on this host -- the subagent
+rebuilt it anyway before learning this, so it is now 237 steps behind HEAD (unrelated to this fix,
+noted for whoever next touches that build dir).
+
+**This is STILL `built`, not `closed`** -- per LOOP_CONTRACT 五之四 it needs a fresh independent
+falsification pass before any checkbox moves. Open items for that pass to attack: (a) the unexplained
+6-byte residual (133,885 vs 133,879), (b) whether reused field ids actually produce a runnable snapshot
+(dartaotruntime missing from this build dir -- is one available elsewhere, e.g. ReleaseARM64/ProductARM64?),
+(c) whether the main()-time move of InitializeShorebirdLinkData() broke anything else that depended on
+the old (late) initialization point, (d) whether sdk_phase_checklist.py still exits 0 against the new HEAD.
+
+- 2026-10-01 23:11:00 round (PID 13845): dispatched fresh Opus falsification pass (agentId aa54d93668b6ec9cb, background) against the F173 fix claim (commit f5d9e96e231). Attacks assigned: independent re-run of negative control + revert check, chase the 6-byte residual (133885 vs 133879), look for a runnable dartaotruntime to test an actual linked snapshot, check collateral damage from moving InitializeShorebirdLinkData() earlier in main(), re-run sdk_phase_checklist.py. Round ends here awaiting completion notification.
+
+### F173 falsification pass verdict: SURVIVES -- card closed (SDK f5d9e96e231)
+
+F173 VERDICT: SURVIVES -- Reverting the commit makes the flag do nothing again; the 6-unit
+gap (133,885 vs 133,879) is a counting artifact (same byte edit on both sides, the unit
+count drifts because it counts every byte after an insertion, not because a field id is
+wrong); 6/6 random base.ft id swaps matched theirs byte-for-byte on effect size; a program
+built with the flag (base+patch field ids reused, including a patch that leaves id gaps)
+actually **runs to completion with correct output** on `ProductSimARM64` (this closes the
+"not verified: does it run" gap left open by the implementation round); moving
+`InitializeShorebirdLinkData()` into `main()` was checked harmless -- the other link options
+(`--base_op_link_data`, `--base_dt_link_data`, `--dd_slot_mapping`) give unchanged readings
+before/after the move, matching `parity_matrix.tsv`.
+
+Five attacks run: (A) independent negative control + revert -- SURVIVES; (B) chased the
+6-byte residual -- resolved as a counting artifact, not a defect; (C) found and built a
+current `dartaotruntime` (`ProductSimARM64`, previously 163 steps behind, now 0 pending) and
+ran an actual linked AOT program -- runs correctly, including a gap-leaving patch; (D) checked
+collateral damage from the init-call-site move -- none found, other link flags unchanged;
+(E) ran `sdk_phase_checklist.py` -- **no reading obtained**, rc 2 `REFUSED: STALE` both times
+(first: `ProductSimIosARM64` 163 pending steps; after rebuilding `clang_arm64/analyze_snapshot`,
+second: pinned tool hash `eebcedf558f8d044` != new `473c7cac2ca96cbd` -- the fix necessarily
+changed the `gen_snapshot`/`analyze_snapshot` binaries, so the checklist requires
+`parity_matrix.sh` to re-run and re-pin before it will read again; that re-run was correctly
+not attempted in this pass, per the explicit instruction not to run the expensive full matrix).
+
+**Card F173 closed** (`cards.tsv` row updated, `closed`, fix sha `f5d9e96e231` recorded,
+research tree). This is a real G1 gap closed, not an integration/bookkeeping item.
+
+**Follow-up, not yet started**: `sdk_phase_checklist.py` currently reads STALE against this
+commit and `parity_matrix.tsv` is unpinned relative to the new `gen_snapshot`/`analyze_snapshot`
+binaries. Until `parity_matrix.sh` is re-run, there is no current G1 "N of 4" reading, and any
+matrix cell that reads `gen_snapshot`/`analyze_snapshot` output (which is most of the 105-cell
+matrix) is reading against a tool hash that no longer matches the SDK's HEAD. This is the next
+thing a round should do before reporting any G1 matrix numbers -- it is itself a `干净重建`/
+`全量重跑`-shaped task per LOOP_CONTRACT 1.5 (parity_matrix.sh touches the whole matrix) and
+should be dispatched as its own scoped task, not folded into whatever card runs next.
