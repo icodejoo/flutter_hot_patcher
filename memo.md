@@ -19889,4 +19889,12 @@ sim 堆缓冲区——如果实际落在 OS 栈上，这条 FLAW 不成立。
 `ProductSimARM64/obj/runtime/vm/libdart_vm_aotruntime_product.simulator_arm64.o`
 （内容经 `cmp` 核实与当前源码一致，不是污染，但给 `analyze_snapshot`/`dart`/`dartaotruntime_product`
 各多出一个待链接步骤——这几个都不是 E3 判据覆盖的三个钉住目标，不影响 E3 读数）。
+
+### 2026-10-01T19:40+0800 心跳（round PID 94647）：按阶段范围派 F164 独立证伪 pass
+
+F162 不在 `tools/loop/phase_scope.txt` 范围内（它是 phase 3 的 F155-159 子项，不是本阶段 F160/F161/F163
+三张债之一），上一条心跳记的 F162 第三次 pass 结论已记录在案，本轮不再碰它。
+按本阶段排序（先 built 卡 F164/F166，再 phase 3 债 F160/F161/F163，再 open 卡 F173/F165 优先），
+本轮派一个全新 Opus 子代理对 **F164**（`analyze_snapshot` 的 dd 四个选项）跑独立证伪 pass。
+派发详情见下一条记录（等待完成通知）。
 SDK 树已核实干净：`git status` 0 行，HEAD `252c31c45f6`。
