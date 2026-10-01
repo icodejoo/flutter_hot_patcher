@@ -21742,3 +21742,31 @@ same round per falsify.md's "after the verdict" guidance. If SURVIVES, F165 can 
 closing (fold this fix's history into the card's own cards.tsv text first, per the pattern used
 for F172's fix chain). Independently, F167/F168/F169/F176 remain open with no dependency blockers,
 and F161/F174 remain correctly `built`/blocked on F175.
+
+### 2026-10-02 round (PID 93615, continued): F165 fix VERDICT: PARTIAL, fixing in same round
+
+The dispatched falsification pass completed (Opus, fresh, 54 tool calls, 422s).
+
+**F165 修补丁 VERDICT: PARTIAL** -- the procedure-backed/alloc-stub coverage (kind in
+{RegularFunction, GetterFunction, SetterFunction, alloc-stub}) survived every attack attempted,
+including a genuinely third-party cross-check (the real unmodified `dart-lang/sdk pkg/kernel`
+BinaryBuilder source's `readLibrary`/`readClass`/`readProcedure`, not just re-running the 5-function
+selftest), which confirmed `dill_kernel_oracle.py`'s offset-table formulas match field-for-field.
+But the one thing the implementing agent named as the weakest point and did not attempt --
+targeting only Field-backed/synthetic-kind rows (closures, constructors, implicit accessors,
+dispatchers, field initializers; kind not in {0,3,4,255}) -- is now confirmed real: those rows are
+257/1266 (20.3%) of hello/base_dd's identity rows and 736/3040 (24.2%) of prog's. A `.ddid` with
+ONLY those rows' FunctionKeys permuted is still reported `bound ... resolved=N unresolved=M, ok`
+(rc=0) by `ddid_binding_check.py`, while `--compute_dd_slot_mapping` on it produces a byte-different
+`.ddsm` (hello: 25263->25241 B) from the correct one -- i.e. the check says "bound" exactly where
+the thing it is supposed to protect has in fact changed. The pass independently re-ran both existing
+reproducers and reconfirmed 0 ninja-pending, matching this round's own prior checks.
+
+**Fixing in this same round** (not deferring -- LOOP_CONTRACT: do not close on PARTIAL, fix what
+was found). Full kernel-level parsing of closures/constructors/field initializers to extend
+`dill_kernel_oracle.py`'s coverage is a larger undertaking than fits the remaining round budget and
+risks the same "5-function selftest, not really checked at scale" shape the pass just found once
+already. Taking the honest, bounded fix instead: change `ddid_binding_check.py`'s exit-code
+semantics so a `.ddid` with any unresolved rows can no longer return the SAME rc=0 as full coverage
+-- a caller checking only `rc==0` (as the pass's attack exploited) must not be able to mistake
+partial coverage for full binding. Dispatching the implementation now.
