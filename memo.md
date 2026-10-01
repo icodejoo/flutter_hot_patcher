@@ -20488,3 +20488,47 @@ then open cards (F165/F167/F168/F169/F170/F172/F174), skipping F171 (G3, needs t
   `--dd_caller_links` output byte-identical to theirs in one invocation, so the blocked branch is
   stale. Round ends here per contract step 4, awaiting completion notification before recording
   a result.
+
+### F165 implementation round: subagent reports STATUS: built (commits 0fbf4b1c, 908af025)
+
+**Summary from subagent** (Opus, 55 tool calls, 922s, research tree): removed the `blocked`
+branch from `parity_matrix.sh`'s `run_as_cell`; the cell now runs the full chain per side --
+`analyze_snapshot --compute_dd_table --dd_caller_links` (.ddt+.ddcl in one call), `gen_snapshot
+--print_dd_function_identity_to` (.ddid, per-side directory because the tool writes the output
+name into the file itself), then `analyze_snapshot --compute_dd_slot_mapping --dd_caller_links
+--dd_table_data --dd_function_identity`. Added a guard so a cell cannot read `identical` on an
+empty (0-slot) header -- caught the subagent's own first varint-decoding bug before it shipped.
+Also corrected the stale "aot-tools.dill only" claim in `dd_pipeline.sh` (step 6 docstring) and
+`write_dd_slot_voters.py` (module docstring). `parity_matrix.tsv` re-pinned (only the 3 rows
+changed); matrix is now 105 cells / 0 unrun / **0 blocked** (was 3); `phase_gate.sh` exits 0.
+Build confirmed current before running (`ninja -n` 0 pending, SDK `f5d9e96e231`).
+
+**Before -> after**: hello/base_dd/prog all `blocked/na/na` -> `yes/identical/na`
+(25263 B/67 slots, 25263 B/67 slots, 91685 B/357 slots respectively; intermediate .ddt/.ddcl/.ddid
+also identical on all three).
+
+**Both negative controls run and reported pass**: (1) a wrapper `analyze_snapshot` flipping byte
+1000 of the ddsm it writes -> all 3 cells went to `unknown` ("1 differing bytes"), no other cell
+moved; (2) a temporary copy with the old `blocked` branch restored -> all 3 cells back to
+`blocked/na/na`, no other cell moved, copy deleted after.
+
+**STILL OPEN, flagged by the subagent for a falsification pass to attack**: (a) hello and
+base_dd share the same `.dill` sha1 (per F164) -- this is 2 independent fixtures, not 3, same
+caveat F164 already carries; (b) the `.ddid` comes from a separate `gen_snapshot` invocation, not
+from the run that built the `.so` being analyzed -- not checked whether the two runs agree on
+identity; (c) the zero-slot guard exists but a small, wrong, coincidentally-matching slot count on
+both sides would not be caught; (d) the .ddcl crash-vs-clean-reject asymmetry already on record
+under F164/F172 is not exercised by this cell. **Side finding, not this card's concern**:
+`cards_check.sh` was already failing before this subagent touched anything -- `cards.tsv` at HEAD
+has CRLF line endings on every line, breaking 144 rows' "commits column is a sha" check; the
+subagent correctly left line endings alone and did not try to fix this in scope. Recorded here
+per LOOP_CONTRACT (circular/instrument problem found in passing), no new card unless it blocks a
+phase-scope item.
+
+**F165 is `built`, not `closed`** -- needs a fresh independent falsification pass per LOOP_CONTRACT
+五之四 before any checkbox moves.
+
+- 2026-10-01 round (PID 58931, continued): dispatching a fresh background Opus subagent to run
+  an independent falsification pass on the F165 implementation (commits `0fbf4b1c`/`908af025`,
+  research tree). Attacks assigned from the subagent's own STILL OPEN list plus the standard
+  seven-attack falsify.md template. Round ends here awaiting completion notification.
