@@ -21219,3 +21219,58 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   `tools/loop/prompts/falsify.md` against F172's claim and its 10-case negative-control set. Not
   self-certifying; explicitly instructed not to touch cards.tsv status. Round continues, awaiting
   the subagent's completion notification before recording any verdict.
+
+- 2026-10-02 round (PID 614, continued): F172 falsification pass completed (Opus, fresh, independent of
+  the implementer). **F172 VERDICT: PARTIAL.** All 10 recorded dispositions reproduce on a fresh run
+  against a current build (0 pending ninja for gen_snapshot/dartaotruntime/copy_gen_kernel_snapshot/
+  vm_platform.dill/gen_kernel_aot.dart.snapshot). Positive control present and passing (well-formed
+  ELF accepted, unpatched baseline prints clean). **The card's own flagged UNRESOLVED item is now
+  resolved, and the resolution is a real gap, not a non-issue**: using lldb against a live
+  `dartaotruntime` process, the pass called the engine's actual entry point
+  `Dart_LoadELF_Shorebird(path, 0, &err, &data, &instr, kReadOnly)` directly (the same call
+  `~/.shorebird/.../runtime/shorebird/patch_cache.cc:51` makes, with only `Shorebird_ReadLinkHeader`
+  in front of it) on both a zeroed-first-byte ELF and a `JUNK`-magic ELF -- both loaded successfully
+  (non-null handle, null error, snapshot data starting with the correct Dart magic `0xf5f5dcdc`),
+  while the same harness correctly rejects `b_etype` ("Can only load dynamic libraries."). **So the
+  ELF-magic check gap in `LoadedElf::ReadHeader()` is confirmed real on the actual engine patch-load
+  path**, not just on the standalone CLI oracle this card's host-side script exercises (which only
+  looked clean because of an outer CLI-only sniff never reached by the engine). This upgrades the
+  card's "UNRESOLVED" framing to "gap confirmed at loader layer" -- relevant to F171 (device-path
+  dispositions) and to G4 overall, since a_magic was previously being counted toward "same disposition
+  as theirs" credit it has not actually earned on the real path.
+
+  Two smaller flaws, also real: (a) the script's exit-0 branch had no case-is-actually-correct check --
+  any exit-0 run with no crash fell into the `clean-reject` bucket regardless of what it printed,
+  demonstrated by feeding a well-formed ELF that prints `WRONG_OUTPUT` and watching it get labelled
+  `clean-reject` too (none of the 10 real cases happen to be affected, all exit 255 or 134, so this
+  flaw was latent, not active -- same shape as a prior round's F170 finding on a different script).
+  (b) the truncation cases' "SIGABRT" label names the wrapper, not the cause: lldb backtraces show both
+  are **SIGBUS** inside `LoadedElf::ReadSectionStringTable` (`elf_loader.cc:253`, f1) and `File::Map`'s
+  `__bzero` via `LoadSegments` (`elf_loader.cc:336`, f2) -- unmapped-memory touches past EOF with no
+  file-length bounds check in the loader, which Dart's crash handler re-reports as SIGABRT/134. Minor
+  citation errors also found and not yet corrected: the card says `runtime/vm/elf_loader.cc`, the real
+  path is `runtime/bin/elf_loader.cc`; the script's own "confirmed by grep" line (line 33) prints
+  nothing, so it was never actually confirming anything.
+
+  **Fix applied by the same dispatch** (commit `f7de3cb2`, fhp-research tree): adds an
+  `accepted-unknown-output` bucket so an exit-0 run without the expected marker no longer silently
+  falls into `clean-reject`. Per contract 五之四, **this fix has not itself been reviewed** -- only one
+  subagent ran this round, so it does not qualify for same-round self-review under either path in that
+  section. Flagging it here as owed a falsification pass by a future round (fix commit `f7de3cb2` on
+  F172, fhp-research tree), rather than entering it into the mechanical fix-queue (which this round did
+  not have the `run_round.sh`-supplied arguments to invoke standalone).
+
+  cards.tsv F172 **not closed, not changed** (already `open`, correctly stays `open` on PARTIAL). Did
+  not round-trip cards.tsv through any parser this round -- no edits made to it at all, per the lesson
+  PID 69344's round recorded about csv re-quoting corrupting untouched rows; this finding is recorded
+  here in memo.md instead, to be folded into the card's text by a future round doing a careful
+  line-level patch. `sdk_phase_checklist.py` not rerun this round (no SDK tree changes; the lldb probe
+  was read-only against a built binary, not a source edit). `verify_all.sh` not rerun (out of this
+  card's scope; F172 is host-side G4 negative controls, not the parity matrix).
+
+  **Next item for whoever picks this up**: either (a) fold this pass's findings into F172's cards.tsv
+  text (careful line-level edit, not a csv round-trip) and open the question of whether the newly-
+  confirmed ELF-magic gap needs its own fix-or-record-as-structural treatment before F172 can close,
+  or (b) review commit `f7de3cb2`'s fix with a fresh pass, or (c) pick up F167/F168/F169/F176 (open,
+  no unmet dependencies). Ending this round here (one dispatch, one verdict recorded, trees left clean)
+  per contract step 4.
