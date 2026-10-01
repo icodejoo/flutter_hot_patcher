@@ -20038,3 +20038,47 @@ different byte-count text) -- unrelated to F166 but worth a future card; also th
 independently verified on 4 of 105 cells, not all 49 unknown/53 na cells.
 
 **F166 关闭**（`cards.tsv` 第 170 行 `built`→`closed`；memo 本节上方清单改 `[x]`）。
+
+### 2026-10-01 心跳（round PID 25199）：本轮排序，拟处理 F163 PARTIAL 遗留的覆盖缺口
+
+F166 已于上一轮关闭（SURVIVES fix）。按本阶段排序，下一个是第三阶段欠账 F161/F163（均 built/PARTIAL，
+且均来自同一次 2026-10-01 15:01 的三卡证伪 pass，commit 52c5fbf4）。F162 已证实为真 bug 且不在
+`tools/loop/phase_scope.txt` 本轮范围内，跳过。F164 已有自己的 PARTIAL 修正与 next-step 清单，暂不动。
+
+本轮选 F163：其 PARTIAL 发现里，CLAUDE.md 的「p1..p7/7-of-7」过期措辞已在 52c5fbf4 一并订正，
+剩下未解决的是真实覆盖缺口——p8 不覆盖 `NativeCallable.listener`、异常穿过回调、float/struct 参数。
+派一个全新子代理去补其中最小可交付的一块（异常穿过 C→Dart 回调），而不是自己动手实现（契约第一条：
+调度器不是执行者）。本轮到此结束，等待完成通知。
+
+### 2026-10-01 F163 p9 覆盖缺口（异常穿 callback）落地回收（子代理完成，未自审，等新鲜证伪 pass）
+
+子代理（agentId a7d320b7，65 次工具调用，990s）报告已提交研究树 `40bca045`（分支 `route-a-research`，
+未独立核验，按契约不采信）：新增 `runtime_check/p9.dart`（C→Dart 回调内抛异常、Dart 侧捕获后继续、
+把捕获结果经由回调返回值带回原生侧再打印，证明的是「正确处理」不是「没崩」），`expected.tsv` 补 p9 行，
+`sdk_phase_checklist.py` C4(a) 并入 p9（9 项）。独立 oracle：stock Dart 3.13.2
+（`~/fvm/default/bin/cache/dart-sdk/bin`）JIT 与 AOT 两种路径均精确复现期望输出
+`cb 1,2,3,4,5,7,8,9 9,8,7,5,4,3,2,1 true true`。三项负控制均现场跑通：①期望值扰动一处 → C4 NOT MET
+（SDK PHASE 掉到 3 of 4）；②删 expected.tsv 的 p9 行 → rc=2 REFUSED（不是静默跳过）；③删 p9.dart →
+rc=2 REFUSED。构建陈旧性检查：`ProductSimARM64`（gen_snapshot/dartaotruntime/copy_gen_kernel_snapshot）
+与 `ReleaseARM64`（dartvm/ffi_test_functions）两处 `ninja -n` 均读 0 待办。接入后现场跑
+`sdk_phase_checklist.py`：C4 RUNS MET、0/14 失败、**SDK PHASE: 4 of 4 criteria met -- COMPLETE**；
+`--self-test` 0 failure(s)。未碰 `~/dart-3122/sdk`（子代理确认不需要 SDK 改动）。
+`cards.tsv` F163 行已更新，**status 仍保持 `built`**（子代理未自行判定，未关卡）。
+
+**明确未覆盖、留作后续**：gap (a) `NativeCallable.listener` 回调形式、gap (c) float/struct 参数的回调，
+两者均未被任何检查执行到，记在 F163 卡面上。
+
+**未自审，不得当结论引用**：下一轮需派一个全新子代理，专门核验这次 p9 落地（按
+`tools/loop/prompts/falsify.md` 对 F163 做新一轮证伪 pass，而不是对实现它的那个子代理自问自答），
+SURVIVES 才能关 F163；若仍 PARTIAL/FALSIFIED，按规矩当场修、不许拖到下一轮。
+
+### 2026-10-01 F163 修补丁独立证伪 pass 已派出（agentId a38aa64de0eff7cff，与实现它的子代理不同）
+
+针对 `40bca045`（p9.dart，封住 F163 gap (b)：异常穿过 C→Dart 回调），派一个全新 Opus 子代理专门核验
+这个修复本身（不是原卡的其余缺口）：①读 `sdk_phase_checklist.py` 的 C4 检查本身能不能报红（而非只信输出）；
+②两侧构建是否同龄可比（`ninja -n` 两个目标 0 待办再信任任何现场跑的结果）；③p9 是否真的在测「异常被捕获、
+结果被正确带回」而非「没崩就算过」（例如删掉 catch 块是否仍然通过）；④核实 `40bca045` 确实在 route-a-research
+当前 HEAD 上、「9 of 14」与构建新鲜度的说法亲手复核；⑤亲手重跑三项负控制（扰动期望排序→C4 NOT MET；删 p9
+expected.tsv 行→rc=2 REFUSED；删 p9.dart→rc=2 REFUSED），确认新鲜构建下的失效方式与声称一致；⑥问题是否被
+换成了更容易的那个。判决必须含 `F163 修补丁 VERDICT: ... (fix)`。本轮到此结束，等待完成通知；SURVIVES 才能关
+F163，否则记录新发现、继续 PARTIAL/open。
