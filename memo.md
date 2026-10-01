@@ -20966,3 +20966,26 @@ F167-F170/F172 still waiting.
   unresolved); F165 has two PARTIAL falsification passes already and its continue-or-move decision has
   been deferred twice. Picking a fresh open card instead of re-litigating F165 a third time in one round:
   **F172** (G4 negative-patch set, host-side). Dispatching a background subagent now.
+
+- 2026-10-02 round (PID 1486, continued): F172 subagent completed (fhp-research commit `3ab4707a`,
+  new `nc_f172_broken_patches.sh`). Built 10 deliberately broken AOT `.so` variants, ran each through
+  `dartaotruntime` (pinned ProductSimARM64), recorded disposition: magic/e_type/e_machine/EI_DATA/
+  ELF-version/Dart-snapshot-version corruption and an empty file all **clean-reject (exit 255)**;
+  **50%/10% truncation both CRASH (SIGABRT, exit 134)** -- a real clean-reject-vs-crash divergence,
+  same family as F164's `.ddt`/`.ddcl` findings already in this card; a patch built for a different
+  base (wrong program, otherwise valid ELF) is **silent-accept (exit 0)** -- no "wrong base" detection
+  at this layer at all. **Finding, not yet resolved**: the ELF-magic check gap from 2026-09-30 is
+  confirmed still present at `LoadedElf::ReadHeader()` (no EI_MAG0-3 check), but the clean rejection
+  observed for case (a) is a false signal -- it's actually caught earlier by `dartaotruntime`'s own
+  CLI sniff (`DartUtils::kAotELFMagicNumber`), which the **production patch path
+  (`patch_cache.cc` -> `Dart_LoadELF`) does not go through**. So whether the real engine-side loader
+  would reject a magic-corrupted patch is **still unknown**, not disproven. Subagent skipped building
+  a direct `Dart_LoadELF` harness (judged open-ended linking risk) and skipped chasing the truncation
+  SIGABRT further. Card F172 stays `open` (not closed -- this round built and ran the test set, did
+  not close the card, no falsification pass dispatched since no checkbox moved). Two follow-up threads
+  now on the card for whoever picks it up next: (1) whether the engine's real `Dart_LoadELF` path
+  rejects magic-corrupted input (needs either the skipped harness or F175's planned `shell_unittests`
+  build, since both want the same unreachable-from-`dartaotruntime` engine code path); (2) the
+  truncation-crashes-instead-of-rejecting finding is a genuine divergence worth its own line in the
+  eventual G4 disposition table, not a bug to silently fix. Both trees left clean (fhp-research commit
+  above; SDK tree untouched, `git status --porcelain` empty). Round ends here.
