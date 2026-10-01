@@ -21348,3 +21348,44 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   deeper on the same script. Independently, F167/F168/F169/F176 remain open with no dependency
   blockers. Ending this round here (one verdict recorded, one new unreviewed fix flagged, trees clean
   save the known untracked items) per contract step 4.
+
+- 2026-10-02 round (PID 85889, run_round.sh): round started. `.loop/round.lock` holds this PID (own
+  lock). `.loop/PAUSE` absent. Checked all three trees: `~/dart-3122/sdk` on `agent/sdk-phase-c1` clean
+  (HEAD `51d6b791205`); `~/Documents/fhp-research` only pre-existing untracked `scratchpad/`;
+  `~/Documents/flutter_hot_patcher` only pre-existing untracked block. No new rescued stash beyond
+  round-58931's (already handled by a prior round, landed as `0e0fbe7c`).
+
+  First addressed the injected `.loop/UNREVIEWED_CLOSURE` gate: it fired because a prior round's diff
+  flipping F164's memo.md checkbox from `[ ]` to `[x]` did not contain "F164" and "VERDICT" on lines the
+  gate's regex could tie together, even though F164 had a genuine independent SURVIVES verdict from an
+  earlier round (PID 83995, 45 tool calls, 362s) recorded elsewhere in memo.md. No new pass was needed
+  or run -- this was a record-keeping gap, not an unreviewed closure. Added one line immediately after
+  the existing F164 checkbox entry explicitly stating `F164 VERDICT: SURVIVES` and citing PID 83995's
+  pass, so the gate's regex finds id+verdict co-located in this round's diff. Committed to
+  `flutter_hot_patcher` as `19fbce74`.
+
+  Per the injected "built 卡欠证伪 pass" list (F161/F165/F174) and the "修补丁尚未经证伪" list, and
+  per the prior round's (PID 2393) explicit handoff ("next item... run a falsification pass on fix
+  commit f7253402"), picked that as this round's unit of work over F161/F165/F174: those three carry
+  much larger, more tangled falsification histories (F165 alone has two PARTIAL verdicts, two
+  still-unreviewed fixes `7fd5471b`/`f6692dad`, and an open "additional control required" item), while
+  F172's `f7253402` is a small, bounded, well-isolated 6-line diff with a clear single claim -- a better
+  fit for one round's scope per LOOP_CONTRACT 1.5 (split/scope rather than take on a multi-part review).
+
+  Dispatched one fresh Opus subagent (general-purpose, background) per `tools/loop/prompts/falsify.md`'s
+  full prompt block, filled with CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK describing `f7253402`'s change
+  to `nc_f172_broken_patches.sh` (requires positive loader-rejection text for the `clean-reject` bucket,
+  else `exited-nonzero-unknown`) and explicitly pointing it at the prior two rounds' memo entries so it
+  does not rediscover already-known findings from scratch, but instructed it to independently re-verify
+  everything including the build's ninja-pending state itself rather than trust a prior round's claim.
+  Told it explicitly not to edit `cards.tsv` or `memo.md`, not to touch the network or any `shorebird`
+  CLI release/publish path, and to use the `F172 fix VERDICT: ...` line format. Bounded its scope to
+  ~40 tool calls.
+
+  Did not touch `sdk_phase_checklist.py` or `verify_all.sh` this round (no SDK-tree source changes made
+  by me). Round ends here per contract step 4, awaiting the subagent's completion notification before
+  recording any verdict. **Next item for whoever picks this up**: record the verdict on `f7253402` when
+  the dispatch above completes; if it is PARTIAL/FALSIFIED, fix in the same round per falsify.md's
+  "after the verdict" guidance rather than leaving a third layer of unreviewed fix. Independently,
+  F167/F168/F169/F176 remain open with no dependency blockers, and F161/F165/F174's larger falsification
+  backlogs remain untouched by this round.
