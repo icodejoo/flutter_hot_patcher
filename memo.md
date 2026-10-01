@@ -21527,3 +21527,39 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   rounds, and only then consider F172 for closing. Independently, F167/F168/F169/F176 remain open with
   no dependency blockers, and F161/F165/F174's larger falsification backlogs remain untouched by this
   round. Ending this round here per contract step 4.
+
+### 2026-10-02 round (PID 19946, run_round.sh): dispatched falsification pass on F172 fix 4b6fc266
+
+Read LOOP_CONTRACT + phase scope; confirmed round PID 19946 is this round's own
+run_round.sh (not a competing writer). Checked the rescued stash from round-58931
+(left untouched, not this round's concern -- no task currently depends on it).
+Per the previous round's explicit handoff ("Next item for whoever picks this up:
+run a falsification pass on fix commit 4b6fc266"), and per LOOP_CONTRACT 五之四
+(a fix never inherits its target's review verdict), picked this as the round's
+one task: F172's fix chain is now four deep (f7de3cb2 -> f7253402 -> 4ce36436 ->
+4b6fc266) and only f7de3cb2's target (the original card) and 4ce36436 (reviewed
+PARTIAL) have been reviewed; 4b6fc266 itself has never been independently tested.
+
+Read cards.tsv's F172 row and `git show 4b6fc266` in the research tree to build a
+self-contained CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK block (the commit adds
+`expected_disp()` + a MISMATCH gate so the script can actually fail, narrows
+`clean-reject` to require `rc==255` exactly, and fixes a stale source citation).
+Dispatched a fresh Opus subagent (general-purpose, background, agentId
+aa3dfe4d9cdee33ca) with the full falsify.md seven-attack template, instructed to
+work only in ~/Documents/fhp-research + /tmp scratch, not touch cards.tsv/memo.md,
+not rebuild the pinned ProductSimARM64 unilaterally (report BLOCKED instead if
+ninja -n shows pending steps), and return the `F172 修补丁 VERDICT: ... (fix)`
+format required for a fix-not-card verdict.
+
+Did not touch sdk_phase_checklist.py or verify_all.sh this round (no SDK-tree
+change made by me). Round ends here per contract step 4, awaiting the subagent's
+completion notification before recording any verdict. **Next item for whoever
+picks this up**: record the verdict on `4b6fc266` when the dispatch above
+completes; if SURVIVES, fold the full F172 history (all four fixes across
+f7de3cb2/f7253402/4ce36436/4b6fc266 plus every pass's residual notes, including
+the still-open print+exit(255)-exact spoof and the patch_cache.cc-vs-dartaotruntime
+scope question) into cards.tsv's own text for F172 and only then consider closing
+it; if PARTIAL/FALSIFIED, fix in the same round per falsify.md's "after the
+verdict" guidance rather than leaving a fifth layer of unreviewed fix.
+Independently, F167/F168/F169/F176 remain open with no dependency blockers, and
+F161/F165/F174's larger falsification backlogs remain untouched by this round.
