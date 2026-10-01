@@ -21867,3 +21867,23 @@ could have been masking a different failure elsewhere in the same script.
 
 Dispatching next: a fresh falsification pass on the F165 `--require-full-coverage` fix
 (`75183c80`/`8f567d2b`) per the prior entry's handoff.
+
+### 2026-10-02 round (PID 93615, continued): dispatched falsification pass on F165 fix (75183c80/8f567d2b)
+
+Dispatched one fresh Opus subagent (general-purpose, background) per falsify.md, CLAIM/CRITERION/
+EVIDENCE/WHERE-TO-LOOK filled in for the `--require-full-coverage` mechanism. Weighted two
+unattempted attacks: (a) whether the new flag ever misfires in the OPPOSITE direction (a fully-
+resolved input wrongly getting rc=3); (b) whether "default mode untouched" holds under actual
+command-output diffing against the pre-fix version, not just a source-text diff. Told it explicitly
+to grep for every call site of `ddid_binding_check.py` itself rather than trust the claim there is
+exactly one. Told it not to edit cards.tsv/memo.md, not to touch `~/dart-3122/sdk` beyond read-only
++ build-freshness check, not to touch any `shorebird` CLI release/publish path, and to use the
+`F165 修补丁 VERDICT: ...` line format. Bounded to ~40-60 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification. **Next item**:
+record the verdict; if PARTIAL/FALSIFIED, fix in the same round. If SURVIVES, fold the entire F165
+fix-chain history (df1c6387 -> ae1300a8 -> 596cc94a -> 75183c80 -> 8f567d2b, plus both passes'
+findings) into cards.tsv's F165 row and only then consider closing it. Independently,
+F167/F168/F169/F176 remain open with no dependency blockers; F161/F174 remain correctly
+`built`/blocked on F175; the cards_check.sh CRLF fix (`f944b8cc`) left 16 genuine commits-not-sha
+flags unaddressed on purpose (real data, not this round's task).
