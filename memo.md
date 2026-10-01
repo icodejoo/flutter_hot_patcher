@@ -21155,3 +21155,40 @@ F167-F170/F172 still waiting.
   F174/F175 (the deeper, SDK-real-work cluster this blind spot is downstream of).
 
 - 2026-10-02 round (PID 63757, run_round.sh): round started. `.loop/PAUSE` absent, `.loop/round.lock` holds this PID (own lock). All three trees clean (`~/dart-3122/sdk` on `agent/sdk-phase-c1`, `~/Documents/fhp-research`, `~/Documents/flutter_hot_patcher` only pre-existing untracked block). Reviewed scope-file cards.tsv: F161/F165/F174 `built` but all documented blocked on multi-hour/operator-adjacent work (F175 real-device cluster, F165 needs a new FunctionKey-schema card per PID 69344's finding) -- not re-litigating per contract 五之四. F160 `open`, deps F155-F159 all closed, and per 2026-10-01 notes its runtime criterion looks plausibly already met by f5b94e5b439 + the 10-01 p8 FFI-callback negative control, but the card itself still says its own independent falsification pass was never done ("F160 独立证伪 pass: 未做"). Picked **F160** (next ready item, SDK-real-work priority per rule 0) and dispatched a fresh Opus subagent (background, general-purpose) to run falsify.md's seven-attack pass against F160's full criterion, including rebuilding its own fresh FFI-callback AOT test program (no scratchpad artifacts survive from prior sessions) and running the card's own required negative control (revert the safepoint-entry-point hunk, rebuild, confirm trap/regression, restore). Explicitly told not to self-close cards.tsv. Did not run sdk_phase_checklist.py myself this round (no SDK changes made by me; the dispatched subagent will touch the SDK tree and is instructed to confirm build cleanliness before and will leave it reverted to current state). Round ends here per contract step 4, awaiting the subagent's completion notification before recording any verdict.
+
+### F160 falsification pass回收：PARTIAL ——AOT 回调真的跑通，但卡片归因的是错误的改动
+
+**F160 VERDICT: PARTIAL**（Opus，69 次工具调用，background，SDK 树当时在 `51d6b791205`，比派单时假定的
+`252c31c45f6` 领先 3 个提交——F173/F174 中间落地过，派单读数过期，本 pass 的全部结论针对 `51d6b791205`）。
+
+**核心主张本身 SURVIVES**：一个全新写的 AOT FFI 回调程序（libc `qsort` 经 `Pointer.fromFunction` 与
+`NativeCallable.isolateLocal` 两种方式回调 Dart，另加 30 层 throw/catch 与 10 万元素分配），用
+`ProductSimARM64` 自己的工具链编译，在模拟器构建下跑到底，输出与 stock Dart 3.13.2 逐字节相同；
+`sdk_phase_checklist.py` 仍是 `4 of 4 COMPLETE`，C4 14/14。
+
+**但两处真实缺陷，都改动了卡片记录的因果关系**：
+1. **归因错误**：卡片记的因果是「safepoint entry point 改动（`EnterSafepoint`/`ExitSafepoint`）」让 AOT 跑通。
+   该 pass **现场撤回那处改动并重建**：AOT 程序与 DebugSIMARM64 测试子集**完全不受影响**，只有原生
+   `ReleaseARM64` 的两个 `callback_unwind` 测试变红。**真正承重的是 `SimulatedStubFor`**（`simulator_arm64.cc`，
+   来自 `b468884fa7d`）——把它强制 `return dest` 后，同一批 AOT 二进制才会死于 `Simulator hit brk #0x0`。
+   ⇒ **卡片写的负控制「撤回 runtime 改动」如果撤的是 safepoint 那处是空操作**，必须改成撤 `SimulatedStubFor`。
+2. **判据 (1) 依赖一个未写下来的 flag**：`run_vm_tests` 裸调用在 DebugSIMARM64 上 FFI/deopt/exception
+   子集 20/28 失败（`Error while starting Kernel isolate task`）；加 `--dfe=$PWD/gen/kernel_service.dill`
+   才是 26/28（剩 2 个已知：`TrampolineRecycling` UNREACHABLE、`SafepointOperation_NonDeoptAndDeoptNesting`
+   记在案的 expected Crash）。这个 flag 此前没有被写进任何文档。
+
+**STILL OPEN**（该 pass 原文）：判据 (1) 从未在 `de660deeae5` 本身重跑过（只在当前 HEAD 跑过）；
+`--dfe` flag 需要写进判据所在的文档；`NativeCallable.listener` 与 float/struct 参数回调仍未覆盖。
+
+**处置**：研究树 `cards.tsv` F160 行已追加本次 pass 的完整结论、更正负控制描述（commit `e03585b9`），
+**卡片保持 `open`，不是 `built`**——归因错误意味着「实现故事」本身需要订正，不只是再核验一遍。
+现场改动（`thread.cc`、`simulator_arm64.cc` 的临时修改）均已还原，四个构建目录（ProductSimARM64/
+DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相同；测试程序未提交，留在
+`~/Documents/fhp-research/scratchpad/f160_fp/q.dart`。本轮未进一步派子代理（--dfe 文档化与补判据 (1)
+在 `de660deeae5` 本身重跑都是独立的小任务，留给下一轮，避免本轮体量过大）。
+
+**顺带确认**：`cards_check.sh` 当前有 3 项既有失败（`commits-not-sha` 命中几乎全部卡号、以及 F164/F175
+的 open/closed 漂移），经撤销本轮改动后复测确认**与本轮无关、改动前就存在**，不在本轮范围内处理。
+
+按本阶段排序，下一个未完成项：**给 F160 的两处发现各开一张小任务**（归因订正已入卡、--dfe 文档化、
+判据 (1) 在 `de660deeae5` 重跑），**或** F167/F168/F169/F172（open，无依赖阻塞）。本轮到此结束。
