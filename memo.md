@@ -19964,3 +19964,21 @@ heartbeat: 2026-10-01 19:56:25 round PID 38089 begin
 本轮到此结束：子代理异步跑在后台，完成会有通知；不等待、不重跑验证、不读中间 transcript。
 下一轮：收到回复后按格式记录 F166 的 VERDICT；若 PARTIAL/FALSIFIED 则当场修复能修的部分并重跑一遍；
 若 SURVIVES 则关卡并把 STILL OPEN 原文抄进 memo。
+
+### 2026-10-01 F166 第一次证伪 pass 回收：PARTIAL ——负控制 (a) 不可复现、无落盘依据
+
+**F166 VERDICT: PARTIAL**（Opus，45 次工具调用，713s）。矩阵重生成本身（105 格、53 na/3 structural/49 unknown、
+WORK= 隔离、phase_gate pin-flip 负控制）全部独立复现成功（攻击 2/3/4/5/6b/6c/7 均过）。
+
+**唯一缺陷（攻击 1 + 6a）**：卡片负控制 (a) 「flip one byte... done 2026-10-01: save_obfuscation_map x3,
+gen_snapshot help, dd_max_bytes x3 went na->unknown」**无法复现**——子代理在 `/tmp` 临时产物上翻转
+`gen_snapshot` 的一个字节（偏移 4528596）重跑 `parity_matrix.sh`，105 格里 **0 格**变类，不是声称的 7 格；
+且仓库里没有任何脚本/日志/diff 能重新打印出当初那个「7 格 na→unknown」的结果（`cards.tsv`、`git log` 全文搜不到），
+违反铁律第 8 条。3 个既有 `structural` 格（dump_object_pool ×3，非本次新增 21 格之一）另查出一处文字矛盾：
+`structural_evidence.tsv` 有 `EXAMINED 36/UNEXPLAINED 0` 的 LOCUS_OK 行，但 `parity_matrix.tsv` 里同几格的
+note 字段写着「Attribution not computed」——程序化分类器的判定本身有证据支撑，只是备注文字过期/矛盾，不影响分类正确性。
+
+**不关卡**：按 E5 规矩 PARTIAL 不许关 F166。下一步：①实测出一个真正能复现的负控制替换卡片里那个不可复现的
+声称（可能要换被翻转的文件或偏移，让它命中某一格实际读取的字节区间）；②同时顺手订正 3 个 structural 格 note
+字段的「Attribution not computed」过期文字，使其与 `structural_evidence.tsv` 一致；③完成后需要新一轮独立
+证伪 pass（不能是做修复的那个子代理）才能关卡。本轮派出修复子代理，详情见下一条记录。
