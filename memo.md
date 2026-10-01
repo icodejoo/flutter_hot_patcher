@@ -21098,3 +21098,23 @@ F167-F170/F172 still waiting.
   unchanged from this round's revert. Not picking a new card this round -- four subagent dispatches
   and five commits is a full round's work; ending here so the next round starts fresh rather than
   compounding context.
+
+- 2026-10-02 round (PID 69344, heartbeat): round started. `.loop/round.lock` holds this same PID
+  (69344) -- this is my own lock, not a competing writer. `.loop/PAUSE` absent. All three trees clean
+  (`~/dart-3122/sdk`, `~/Documents/fhp-research`, `~/Documents/flutter_hot_patcher` porcelain empty
+  except pre-existing untracked files). `.loop/RESCUED` refers to round-58931's stash, already handled
+  by the PID 74211 round above (committed as `0e0fbe7c`) -- nothing further to rescue. Reviewed
+  cards.tsv (fhp-research tree) scope-file state: F160/F167/F168/F169/F170/F172/F175 open; F161/F165/
+  F174 built (awaiting falsification per this round's injected prompt); F163/F164/F166/F173 closed.
+  F165's card trail shows two prior PARTIAL falsification passes and an unresolved "ADDITIONAL CONTROL
+  REQUIRED" tail: `ddid_binding_check.py`'s content gate only checks alloc-stub/code-index set
+  membership, not `FunctionKey` identity fields (signature_hash etc.), so the committed reproducer
+  `nc_f165_ddid_key_permutation.sh` (key-swap / rotation / signature-bit-flip mutations of an otherwise
+  byte-identical `.ddid`) currently exits 0 (BLIND -- undetected) even though those mutations do change
+  the resulting `.ddsm` output. This is the clearest single bounded next step in the F161/F165/F174/F175
+  cluster (scope-file order: built cards before open ones), so dispatching one subagent to close that
+  specific gap: extend `ddid_binding_check.py`'s content check to validate FunctionKey fields, rerun
+  `nc_f165_ddid_key_permutation.sh` and confirm it now goes red on the mutation cases, rerun
+  `parity_matrix.sh` to confirm the 105-cell pin is unchanged, commit. Explicitly instructed not to mark
+  F165 closed itself -- the fix needs its own fresh falsification pass first (contract 五之四). Round
+  continues, awaiting subagent completion.
