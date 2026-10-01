@@ -21050,3 +21050,19 @@ F167-F170/F172 still waiting.
   both trees to reconfirm 0 UNEXPECTED/652 under the fixed harness, fix the false "exits 0" documentation
   line, and commit -- explicitly instructed NOT to mark F170 closed itself (the fix needs its own fresh
   falsification pass before any closure, per contract 五之四).
+
+- 2026-10-02 round (PID 74211, continued): F170 fix subagent completed (fhp-research commit
+  `39f9ab3b`). `g2_run_cc.sh` now captures stdout and requires the literal `Running test: <name>`
+  line before trusting `rc`; absence is a new `NO-RUN` category, kept separate from MATCH/UNEXPECTED
+  so `total == MATCH + UNEXPECTED + NO-RUN` is self-auditing. New negative control: a stub binary
+  outside both build trees that answers `--list` correctly but no-ops individual test runs (exit 0)
+  produced `4 NO-RUN out of 4`, confirming the gap the falsification pass found is now caught. Also
+  fixed the false "`run_vm_tests` exits 0 on no-match" documentation line (verified actual behavior:
+  rc=1, "No tests matched" printed) in both the script header and G2_TEST_PLAN.md. Rerun of the real
+  cc Assembler* suite under the fixed harness: 652 MATCH / 0 UNEXPECTED / 0 NO-RUN on both
+  `~/dart-3122/sdk` and `~/dart-3122/G2stock/sdk` (DebugSIMARM64) -- the original result was not a
+  false positive of the NO-RUN kind. cards.tsv F170 left untouched (still `open`). Dispatching a
+  fourth subagent this round (independent of the first three) to run a final falsification pass on
+  this fix specifically, per contract 五之四 (a fix inherits none of the reviewed status of what it
+  fixed) -- if it SURVIVES, F170 closes on this round's trail of evidence; otherwise it stays `open`/
+  `built` for a future round.
