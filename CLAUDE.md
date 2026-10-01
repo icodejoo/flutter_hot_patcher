@@ -57,6 +57,8 @@
 - **C4 能运行**（09-30 操作者决定加的：尺寸一样但跑不起来不算完成，当天两次出现）：判据**当场运行**，不读任何保存的日志——(a) `runtime_check/p1..p7.dart` 用钉住的模拟器 product 构建（`sim_product_build`）自己的 kernel 编译器、gen_snapshot、dartaotruntime 编译并运行，输出与 `runtime_check/expected.tsv` 一致（原版 Dart 3.13.2 独立复现 7/7）；(b) 上游 5 个 FFI callback 测试在钉住的原生构建（`native_build`）的 dartvm 上全部 rc 0。两个构建对所用工具有 ninja 待办就拒读。真 bug 负控制：把模拟器的 stub 替换退回并重建 → 7/7 FAIL `brk #0`。
 - 拒读（rc=2）的情形：`parity_matrix.sh` 正在跑；判据读的任一文件（`.so`、`.disassemble`、field_table）没有来历行、哈希对不上、我们一侧不是钉住的工具产出、或 `.disassemble` 不是从现在这个 `.so` 读出来的；VM stub 不是恰好 187 个且名字不重复。（09-30 证伪 pass PARTIAL：原来只核 `.so`，拿他们的 `.disassemble` 盖掉我们的照样报 COMPLETE。）`--self-test` 26 项。
 
+🔴 **上面这条 C4 的「7/7」是 09-30 当天的读数，已过期（F163，2026-10-01 独立证伪 pass PARTIAL 指出）**：`p8`（C→Dart 回调）已于 10-01 加入 C4，现读数为 **8 of 8**（`p1..p8.dart`），原版 Dart 3.13.2 独立复现同样是 8/8；真 bug 负控制相应是「退回模拟器 stub 替换并重建 → 8/8 FAIL `brk #0`」。详情与该 pass 发现的覆盖缺口（p8 不含 `NativeCallable.listener`、异常穿过回调、浮点/结构体参数）见 `memo.md`「2026-10-01 F160–F163 独立证伪 pass」。
+
 **范围**：只做 `tools/loop/phase_scope.txt` 里的卡（F128 F138 F155–F159）。**其余所有卡冻结**：不派、不做、不关；
 修补丁队列里清单外的条目留着，不派。清单工作中发现的循环机械问题只在 `memo.md` 记一行，
 **不开新卡**，除非它挡住了清单上的某一项。`run_round.sh` 按范围文件过滤轮次看到的 built 卡与修补丁队列

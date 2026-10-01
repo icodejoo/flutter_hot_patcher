@@ -19441,3 +19441,49 @@ A 交付态 9/9 两模式 · B 负控制（两 hunk 贴回）9/9 两模式、**�
 而这正是 `cards_check.sh` 当前报的两条红之一（`closed cards citing commits that do not exist in any tree: F84 F136 F143`）。
 为一条措辞去制造一条我们正在修的病，不划算。三处更正（方向反了、conjunct 写成 disjunct、行号 630/646 实为 631/676）
 在 `dd75946f81a` 里逐条写明，顺 F161 卡片走过来的人两边都看得到。
+
+## 2026-10-01 F160–F163 独立证伪 pass（三个新鲜 Opus 子代理并行，无共享上下文）
+
+**三张全部不绿**，按 E5 规矩一张都不关：
+
+**F161 VERDICT: PARTIAL** -- the reverts hold on p1-p8 stdout, but the harness cannot tell the kept dart_entry.cc hunk from the reverted ones, and the effects on the untested CPU-island and vmcode paths were left out。
+FLAW：C4(a) 只跑模拟器模式，`dart_entry.cc` 的嵌套分支在那条路上命中 0 次；C4(b)（native ReleaseARM64）三处全被 `#if defined(DART_INCLUDE_SIMULATOR)` 编译掉。所以「保留 dart_entry.cc／撤回另外两处」这个取舍完全靠一次 off-harness 的 `--no-use_simulator` 跑在 `ProductSimARM64_cpu` 上，且**只记了撤回后的一个方向**，没有留下「把 hunk 加回去、真重建、再跑」那次的输出。`isolate.cc` 撤回带回了 `Simulator::Current() → ApplyPendingVmcodeIfNeeded` 的惰性路径（harness 从不设 `s_pending_vmcode_path_`，0 命中、无测试）；`exceptions.cc` 撤回改的是 CPU 岛内的异常路径（`simulator_arm64.cc:2153/2165`，0 命中、无测试）。两者都被「changes nothing observable」这句话盖过去了。
+STILL OPEN：在**非钉住**的构建目录重建、确认 `ninja -n` pending=0 后，把 `isolate.cc`/`exceptions.cc` 的 hunk 分别加回去，复现负控制该有的读数。
+
+**F162 VERDICT: FALSIFIED** -- the nested branch keeps the same-stack CSP collision with only a 0x1d0 margin (n3.dart crashes in --no-use_simulator), the top-level 0xd0 is not load-bearing, and 0x100 is unexplained and cannot be perturbed on its own。
+FLAW（真 bug，可复现）：`simulator_csp_ = RoundDown(current_csp - 0xd0 - 0x100, 16)` 把嵌套调用的 C 运行时帧放在**同一条栈**上、只留 0x1d0（464 字节）余量，这正是这个提交本该消除的那种碰撞。子代理造的 15 行复现程序（`noSuchMethod → 递归方法 → List.filled/StringBuffer/throw`）在 `--no-use_simulator` 下：递归深度 0 时 `BUS_ADRALN`，深度 1–1000 全 `SEGV_ACCERR`；模拟器模式下同一程序全过。把余量手工扩到 0xff0 能撑到深度 20，深度 1000 仍崩——崩溃深度相关，与诊断的机制完全吻合。顶层 `0xd0` 单独扰动（0、0xc0、0xe0、0x400）全部 11/11 过，即**不承重**；`0x100` 编译器把它与 `0xd0` 折进同一条立即数 `0x1d0`，二进制里**不存在单独扰动 0x100 的办法**——「两个常数分别扰动」这条判据在嵌套分支上原理上做不到。`simulator_arm64.cc:2165` 另一条路径仍是原来那种 `set_simulator_csp(OSThread::GetCurrentStackPointer())` 写法，同款隐患还在。E1/E5 都压在这个修复上；真正撑重它的是「CPU 模式能跑」这件事本身，而它在嵌套调用深度足够时会崩。
+STILL OPEN：在独立构建目录（非钉住）里退回 `dart_entry.cc`/`simulator_arm64.h`、确认 `ninja -n` pending=0、复现 `si_addr=0x0` 的顶层 SEGV 作为真负控制（这次子代理只在 `/tmp/f162` 做了二进制立即数级扰动，没有做源码级重建回退）。
+
+**F163 VERDICT: PARTIAL** -- wiring, stock-oracle byte-identity and negative controls hold, but CLAUDE.md:57 still says p1..p7/7-of-7 and p8 covers only sync callbacks。
+FLAW：`CLAUDE.md:57` 仍写着「`runtime_check/p1..p7.dart` 用钉住的模拟器 product 构建…独立复现 7/7」与「7/7 FAIL `brk #0`」，「7/7 已订正为 8/8」这句只在 checklist 的 docstring 里做了，顶层规则文件没跟着改。另外 p8 只覆盖 `Pointer.fromFunction` + `NativeCallable.isolateLocal` 的同步回调，不覆盖 `NativeCallable.listener`、异常穿过回调、浮点/结构体参数，`FfiRedirectResumePc`（f5b94e5b439）在 f160_negctl2/SUMMARY.tsv 里仍是 `HITS 0`——docstring 没有说清楚 p8 关的是哪一条缝。
+确认 scratchpad 报告其实都在（`agy_nosim/`、`segv_verify/`、`f160_negctl2/REPORT.md` 均存在，只是在上一轮子代理私有临时目录下，之前的「已从磁盘消失」判断是搜索范围不够广，不是真的丢失）。
+STILL OPEN：一个覆盖 `NativeCallable.listener` 与「异常穿过回调」的模拟器构建 C4 用例，退回 `f5b94e5b439` 应该能让它变红；在那之前 `FfiRedirectResumePc` 这条路在模拟器构建下完全没有测试覆盖。
+
+**三家子代理共同纠正一条此前的误判**：主会话派发时以为 `agy_nosim/REPORT.md`、`segv_verify/`、`f160_negctl2/REPORT.md` 已从磁盘消失（`find ~/Documents` 与 `find /` 深度 6 均未命中），F163 的子代理在 `/private/tmp/claude-502/.../scratchpad/` 下找到了全部三个目录——它们活在**上一轮子代理的私有临时工作区**，不在本仓库任何路径下，所以主会话的全盘 `find` 看不到。⇒ **这些 scratchpad 证据从未进过版本库，只存在于已经退出的子代理进程的临时目录里，本质上等于不可复核**（下一个新鲜子代理大概率也找不到）；引用它们之前要么把内容落盘到仓库内路径，要么重新实测。
+
+⚠️ **三次都不是「仪器给假绿」，是「判据本身在交付配置里测不到问题」**：F161/F163 是覆盖面不够（harness 没走到那条路），F162 是真 bug 被一个只覆盖浅递归的测试集放过。三者共同指向同一句话：**C4 当前的 8（或 13）条读数只覆盖浅递归、同步回调、模拟器优先路径；没有一条深递归或嵌套异常的探针。**
+
+
+## 2026-10-01 F162 修复排期（按 LOOP_CONTRACT 1.5 拆卡：重的那半不塞进本轮）
+
+本轮已完成 E5 要求的三张独立证伪 pass（F161/F162/F163，上一节），F162 FALSIFIED 且是真 bug，
+但修复不是「换一个魔数」那么简单——子代理的 0xff0 试验证明**线性加大余量只是把崩溃深度往后推**，
+不是消除碰撞（嵌套调用在同一条 OS 线程栈上反复往下切 CSP，没有机制检查是否已经逼近栈底/
+`OSThread::stack_limit()`）。这需要先搞清楚正确的不变量（例如改用 `Thread::saved_stack_limit()`
+或已有的 Dart 栈溢出检测机制去守卫这次切换，而不是裸常数），再实现、重建、拿新的深递归负控制
+（子代理的 `/tmp/f162/n3.dart` 可以直接复用）过一遍，然后**还需要一次新鲜的独立证伪 pass**才能关 F162。
+这一整条链路装不进一轮，按契约 1.5 拆开：
+
+- **重的那半（新任务，F162 仍 FALSIFIED、不关）**：在 `~/dart-3122/sdk`（`agent/no-use-sim-segv` 或
+  `agent/sdk-phase-c1`，先确认当前 HEAD）修复嵌套 CSP 分配，使其对递归深度安全。
+  **判据**：① 子代理原有的 n3.dart 风格深递归复现程序（递归深度至少到 2000）在 `--no-use_simulator`
+  下不崩溃、不产生错误输出；② 原有 9 项（hi + p1..p8）两种模式下仍 9/9；③ 钉住的构建目录
+  （本任务用的那个，不一定是 `ProductSimARM64`/`ProductSimARM64_cpu` 这两个被 E3 钉住的目录——
+  如果要改这两个目录之一，先确认循环没有并发在用它们）`ninja -n` 待办为 0；④ 新的安全边界要么能
+  推导（写出推导），要么显式承认是经验值并说明为什么选这个数（不能是又一个裸魔数）。
+  **负控制**：在修复后的二进制上，故意把安全边界改小到接近 F162 发现的碰撞点，必须复现崩溃。
+- **轻的那半**：F162 卡片在重的那半关闭前保持 FALSIFIED/open，E5 与本阶段完成判据同样等它。
+
+**不受影响**：F161、F163 的 STILL OPEN 项（见上一节）是覆盖面缺口，不是已知会崩的 bug，
+不阻塞本轮结束，留给后续轮按同样「新鲜证伪 pass」的要求处理。
+
