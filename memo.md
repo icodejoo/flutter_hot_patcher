@@ -21803,3 +21803,48 @@ on this new fix before F165 can be considered for closing (a fix never inherits 
 fixed). If the subagent's fix itself turns out inadequate, fix it further in that round rather
 than stacking another unreviewed layer. Independently, F167/F168/F169/F176 remain open with no
 dependency blockers; F161/F174 remain correctly `built`/blocked on F175.
+
+### 2026-10-02 round (PID 93615, continued): F165 partial-coverage fix landed, independently re-verified
+
+The dispatched fix completed (Opus, 75 tool calls, 529s; commits `75183c80`/`8f567d2b` in
+`fhp-research`). Took exactly the scoped approach: added `--require-full-coverage` to
+`ddid_binding_check.py`, returning a new distinct exit code 3 (`PARTIAL_COVERAGE`) only when that
+flag is passed and `unresolved > 0`; default (no-flag) behavior for the 3- and 4-positional-arg
+forms -- the only forms `dd_slot_chain.sh`'s call site ever uses -- is unchanged, confirmed by the
+agent and independently re-confirmed by me (`git diff 596cc94a HEAD --stat -- spikes/...` shows
+only `cards.tsv`, `ddid_binding_check.py`, and the new `nc_f165_unresolved_kind_permutation.sh`
+touched; `parity_matrix.tsv` diff is 0 lines). New reproducer demonstrates all three required
+facts: default mode still reports `bound rc=0` on the Field-backed-kind-only permutation attack
+(now honestly documented, not silently "fixed" -- out of scope was correctly respected); strict
+mode returns the new `rc=3 PARTIAL_COVERAGE` naming the unresolved count; the corruption is real,
+not cosmetic (`.ddsm` 25263->25241 B on hello, 91685->91432 B on prog).
+
+**Independently re-ran all three reproducers myself** (not trusting the report): confirmed
+`ninja -n` 0 pending on the pinned `ProductSimIosARM64` targets first, then
+`nc_f165_ddid_key_permutation.sh`, `nc_f165_wrong_ddid.sh`, and
+`nc_f165_unresolved_kind_permutation.sh` all exit 0, with the unresolved-kind script's own output
+matching the agent's reported numbers exactly (rc=0 default / rc=3 strict / mapping changed=yes on
+both fixtures). `parity_matrix.tsv` diff against the pre-fix commit is empty -- the 3 real matrix
+cells are untouched, as required.
+
+One side finding, not acted on: the agent reports `cards_check.sh` fails a `commits-not-sha` check
+on nearly every row in `cards.tsv` (F36 through F177, not specific to F165), attributed to the
+2026-10-02 CRLF-restoration commit (`596cc94a`) -- its awk apparently never strips `\r` from the
+line, so a trailing `\r` makes every "sha" field fail a bare-SHA pattern match. Not fixed this
+round (out of scope, flagged by the fixing agent, not independently confirmed by me yet) -- if this
+is real it is a gating tool defect, not a content defect, and belongs to the circulating-not-
+opening-a-card bucket unless it turns out to actually block a judgment this phase depends on.
+Worth a quick independent check early in whichever round picks this up next, since `cards_check.sh`
+rc is this project's standing phase gate for card-state integrity.
+
+F165 left `built`, not `closed` (correct -- this fix is itself new, unreviewed work). **Next item**:
+dispatch a fresh falsification pass on `75183c80`/`8f567d2b` (the `--require-full-coverage`
+mechanism itself -- does the new exit code actually fire in every case it should, does it leave the
+default-mode behavior truly untouched as claimed, is the new reproducer's adversarial construction
+actually equivalent to what the prior pass used) before F165 can be considered for closing; if it
+survives, fold the full fix history (`df1c6387`->`ae1300a8`->`596cc94a`->`75183c80`->`8f567d2b`,
+plus both passes' findings) into `cards.tsv`'s F165 row text and only then consider closing.
+Independently check whether `cards_check.sh`'s CRLF issue is real and, if so, whether it's worth a
+one-line fix (strip `\r` before the sha-pattern match) regardless of F165's own status, since it is
+flagged as hitting essentially every card. F167/F168/F169/F176 remain open with no dependency
+blockers; F161/F174 remain correctly `built`/blocked on F175.
