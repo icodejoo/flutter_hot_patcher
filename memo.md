@@ -20396,3 +20396,44 @@ should be dispatched as its own scoped task, not folded into whatever card runs 
   `--base_ft_link_data` or the DD options (F164/F165/F166/F173's subject). No cards/checkboxes
   touched this round (this is baseline re-pinning infrastructure, not a card verdict). Round ends
   here awaiting completion notification.
+
+### parity_matrix.sh re-pin: done; matrix distribution unchanged; a different staleness still blocks rc=0
+
+Subagent `afebd56d70e1c1dd6` completed (131,310 tokens, 42 tool calls, 315s). **Result**: the
+`clang_arm64/gen_snapshot`+`clang_arm64/analyze_snapshot` targets (the only ones `parity_matrix.sh`
+actually invokes, in `xcodebuild/ProductSimIosARM64`) were already 0 pending ninja steps before and
+after -- no rebuild was needed there, just the matrix re-run. `parity_matrix.sh` ran, regenerated
+`out_pm/` and re-pinned `parity_matrix.tsv` (research tree commit `0a323afe`). Confirmed by hand:
+`base_ft_link_data` (F173's subject) now reads `ours 133885, theirs 133879` for both `base_patch`
+and `base_insert` fixtures -- was `ours 0, theirs 133879/134001` pre-fix. This is real, visible
+evidence the fix changed the matrix's own recorded numbers, not just the standalone card evidence.
+
+**Matrix distribution unchanged**: new reading is still 105 cells / 53 na / 3 structural / 49
+unknown / 0 gap / 3 blocked (102 ran, 3 blocked, 0 unrun) -- identical bucket counts to the
+pre-F173 baseline pinned at SDK `252c31c45f6`. The `base_ft_link_data`/`print_field_table_link_info_to`
+cells stayed `unknown` (the byte counts changed but nobody has yet decided whether the new
+133885-vs-133879 gap counts as `structural` with a residual row or stays `unknown`) and the DD
+cells (F164/F165/F166's subject) are unchanged. **So the F173 fix is real and visible in the
+matrix, but it has not yet moved any cell's classification bucket.**
+
+**The matrix-staleness gate on `sdk_phase_checklist.py` is now clear** -- the earlier
+`REFUSED: STALE ... as.hello.ours.so` message is gone. But the checklist still refuses overall
+(rc=2), now on a **separate, unrelated** staleness: `REFUSED (C4): STALE: .../xcodebuild/ReleaseARM64
+has 483 pending ninja step(s) for dartvm ffi_test_functions -- rebuild first`. This is the C4
+criterion (upstream FFI callback tests), not G1/the matrix, and `ReleaseARM64` being behind these
+two targets is unrelated to F173's SDK commits. There is currently **no clean "N of 4" reading at
+all** against the post-F173 SDK state -- the matrix half is fixed, the C4 half is not.
+
+The subagent also flagged, unprompted, a real build break it found by accident: a full `ninja -C
+xcodebuild/ProductSimIosARM64 gen_snapshot analyze_snapshot` (the top-level iOS-target config, not
+the `clang_arm64` host variant `parity_matrix.sh` actually uses) fails on `analyze_snapshot` with
+`ld64.lld: error: cannot use both -exported_symbol* and -unexported_symbol* options`. This config
+is not on the critical path for anything in the current phase scope, so it is recorded here per
+LOOP_CONTRACT (circular/instrument problems found in passing go in memo, not a new card) and not
+otherwise acted on.
+
+- 2026-10-01 round (PID 23281, continued): dispatching a second background subagent to rebuild
+  the specific `ReleaseARM64` targets `dartvm` and `ffi_test_functions` (483 pending ninja steps,
+  not a from-scratch clean build -- an incremental catch-up, judged small enough for one round per
+  LOOP_CONTRACT 1.5) and then re-run `sdk_phase_checklist.py` to get the first clean "N of 4"
+  reading against post-F173 HEAD. Round ends here awaiting completion notification.
