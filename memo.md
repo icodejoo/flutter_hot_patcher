@@ -19845,3 +19845,48 @@ FATAL）；③ 亲手在同一处换成另一个地板试一遍（depth 500/2000
 判断是否由本任务引入；⑥ 核对提交信息现在是否与代码一致。完整提示词见本轮会话（未落盘到仓库，按需从这条心跳
 向上文重建）。本轮到此结束，等待完成通知；收到后若 SURVIVES 则关 F162、把 STILL OPEN 原文抄进 memo；
 若仍 PARTIAL/FALSIFIED 则记录新发现，不关卡。
+
+### 2026-10-01 F162 第三次证伪 pass 回收：PARTIAL ——两个下限都不对，正确做法要按 CSP 落在哪段区间选
+
+**F162 VERDICT: PARTIAL** —— (a)–(d) 全部亲手复现，但 `OSThread` 下限成立的前提（「这个逃逸永远跑在真实
+OS C 栈上」）在 **CPU 底座 → 补丁代码被模拟** 这条生产路径上不成立；那条路径上这道守卫从不触发。
+
+**真实缺陷（独立实测，非读代码采信）**：
+- `runtime/vm/compiler/stub_code_compiler_arm64.cc:1144-1146` 的 CPU→Sim 包装器把 CSP 切到
+  `THR.simulator_csp`（注释原文「Move onto the simulator's own C stack before calling into it」），
+  再 `blr Simulator::Execute`。
+- `dart_entry.cc:138` 在 `--no-use_simulator` / CPU 底座下把 `simulator_csp` 设成
+  `sim->stack_base() - 0xd0`，即 **sim 自己堆分配的缓冲区内**，不是 OS 栈。
+- 后果：CPU 底座→补丁代码（被模拟）→`brk #kRunDartOnCPUCode` 这条路上，
+  `DecodeSimulatorToNativeTransition` 跑在 sim 堆缓冲区上，csp≈`0x92a8…`，永远高于 OS 下限
+  `0x16a…`，**守卫从不触发**。
+- 子代理用内联汇编把 CSP 设成 `sim->stack_base()-0x10000`（模拟 `EnterSimulator`）后复现：
+  用交付的 OS 下限 → 765 次逃逸后 rc=132（SIGILL，无诊断）；换成 sim 下限 → rc=134（受控 FATAL）。
+- **结论：单选任何一个下限都不对**，正确做法是按当前 csp 落在哪个区间来选：落在
+  `[sim->stack_limit(), sim->stack_base())` 内用 sim 下限，否则用 OS 下限。
+
+**p1..p8 对 F162 不构成证据**：两种模式下这个守卫的命中数都是 0——13 个手挑程序从未走到这条逃逸路径，
+再次印证规则 0 第四阶段 G2 判据存在的理由（手挑测试会漏掉承重的基本能力）。
+E3 钉住目录的「0 待办」读数本身成立，但探针只验证了 mtime 层面，子代理顺带指出这个前提可被静默破坏
+（它自己复现过一次：改 `simulator_arm64.cc` 的 mtime 到 2026-01-01，ninja 照样报 0 待办）——不是本次新缺陷，
+是对已记录的「`git status` 干净不等于构建未陈旧」那类仪器缺陷的又一例独立印证。
+提交信息里的两处新矛盾：guard 上方注释仍写「a self-recursive noSuchMethod chain that keeps tripping this
+native-call trap」，与 `ab20455635b` 自己「n3 这条链到不了这里」的结论矛盾；`d10ab819892` 的提交信息「depth ~500
+仍 SIGSEGV」与 `ab20455635b` 也矛盾。
+
+**STILL OPEN**：用真实的 `.vmcode` 补丁（或 `shorebird_test` 的 `WrapperForRunTarget` 路径）在
+`--no-use_simulator` 下跑一条真正的 CPU→Sim→CPU 深递归，确认生产场景里逃逸处的 csp 是否真的落在
+sim 堆缓冲区——如果实际落在 OS 栈上，这条 FLAW 不成立。
+
+**不关卡**：按 E5 规矩，PARTIAL 不许关 F162，继续 FALSIFIED/open。下一步（未派，留给后续轮次）：
+① 把守卫改成按 csp 区间选地板（`[sim->stack_limit(), sim->stack_base())` 用 sim 下限，否则 OS 下限），
+而不是二选一；② 修正两处与代码矛盾的提交信息/注释；③ 构造一个真正命中 CPU 底座下该逃逸路径的复现
+（子代理的内联汇编模拟不算，需要真实路径）；④ 完成后仍需新一轮独立证伪 pass。
+
+**遗留清理（留给操作者，不由本轮/子代理处理）**：子代理在 `~/dart-3122/sdk/xcodebuild/F162p3_cpu`
+留了一个 2.5G 的临时构建目录，`rm -rf` 被 `deny-destructive.sh` 拦下（预期行为，无覆盖开关）；
+需要操作者在终端手动删除。另外子代理误用一条写错的命令在原地重编了
+`ProductSimARM64/obj/runtime/vm/libdart_vm_aotruntime_product.simulator_arm64.o`
+（内容经 `cmp` 核实与当前源码一致，不是污染，但给 `analyze_snapshot`/`dart`/`dartaotruntime_product`
+各多出一个待链接步骤——这几个都不是 E3 判据覆盖的三个钉住目标，不影响 E3 读数）。
+SDK 树已核实干净：`git status` 0 行，HEAD `252c31c45f6`。
