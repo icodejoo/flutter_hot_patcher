@@ -21297,3 +21297,54 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   Did not touch `sdk_phase_checklist.py` or `verify_all.sh` this round (no SDK-tree changes made by me).
   Round ends here per contract step 4, awaiting the subagent's completion notification before recording
   any verdict.
+
+- 2026-10-02 round (PID 2393, continued): F172 fix falsification pass completed (Opus 5.5, fresh,
+  independent of the implementer, 13 tool calls). **F172 fix (`f7de3cb2`) VERDICT: PARTIAL.** The
+  rc-0-without-marker fix itself is correct and verified not to regress the 10 recorded dispositions
+  (same build, SDK `51d6b791205` on `agent/sdk-phase-c1`, `ninja -n` 0 pending for gen_snapshot/
+  dartaotruntime/copy_gen_kernel_snapshot/vm_platform.dill). **But a real, broader flaw in the same
+  classifier survived f7de3cb2 untouched**: `clean-reject` was being assigned to any `rc != 0` run
+  with no fixture marker, not specifically to a loader rejection. Since `dartaotruntime` returns
+  `kErrorExitCode` (255, `runtime/bin/error_exit.h:20`) both when the loader rejects a file AND when a
+  validly-loaded snapshot throws an unhandled exception or calls `exit(3)`, a patch that **loaded, ran,
+  and failed** was indistinguishable from one the loader actually rejected -- demonstrated with two
+  fresh test ELFs (one whose `main()` throws, rc 255; one calling `exit(3)`, rc 3), both misclassified
+  `clean-reject` under f7de3cb2. None of F172's 10 recorded cases happen to exercise this (all exit
+  255/134/0, and the ones that exit 255 are genuine loader rejections), so it was latent on the
+  existing fixture set, not an active miscount -- but it directly undermines the thing F172/G4 exists
+  to measure (whether our loader actually rejects bad patches the way theirs does, vs. just failing for
+  an unrelated reason after a successful load).
+
+  **New fix applied by the same pass** (commit `f7253402`, fhp-research tree, 6-line change):
+  `clean-reject` now requires the loader-rejection text itself in the output ("is not an AOT snapshot",
+  "VM initialization failed", "Loading ... failed"); anything else with nonzero rc falls into a new
+  `exited-nonzero-unknown` bucket. Negative control run and reported: the throw/exit3 probes moved from
+  `clean-reject` to `exited-nonzero-unknown`, while the full 10-case script still reports the same 10
+  dispositions unchanged. **This second fix (`f7253402`) has itself not been reviewed by anyone --
+  same situation as f7de3cb2 before this round, now one level deeper. Owed a falsification pass by a
+  future round before F172 can be considered to have a reliable classifier.**
+
+  Two secondary findings reconfirmed, both still open, neither touched by either fix: (a) the
+  exit-0/marker-present branch still has no check beyond the marker string -- a program printing the
+  correct marker plus extra wrong content would still read `silent-accept`; marker matching also reads
+  stdout+stderr combined, so a marker written to stderr by a program that exits 1 would misclassify as
+  `silent-accept`, demonstrated but not hit by any of the 10 recorded cases. (b) the truncation cases'
+  `f1_trunc50`/`f2_trunc10` rows still print `signal=SIGABRT` in the script output while the actual
+  crash (confirmed again this pass with `VERBOSE`, `si_signo=Bus error: 10 ... BUS_ADRALN`) is SIGBUS;
+  the Dart crash handler re-reports it as SIGABRT/134, which neither fix commit touches or hides. Also
+  reconfirmed stale: the card's citation of `runtime/vm/elf_loader.cc` -- the real path is
+  `runtime/bin/elf_loader.cc`.
+
+  cards.tsv **not edited this round or by the subagent** (F172 stays `open`, correctly -- a PARTIAL
+  verdict with a new unreviewed fix does not qualify for closing). `sdk_phase_checklist.py` not rerun
+  (no SDK-tree changes this round). One housekeeping item left for a human: a leftover temp probe
+  directory `/tmp/fp172.Fvjv` from the subagent's work is outside all three repos; the subagent's own
+  force-delete attempt on it was blocked by a safety hook guarding against accidental build-tree
+  deletion outside a repo, and this round did not override that hook -- harmless to leave on disk,
+  a human can remove it directly if desired, not acted on further.
+
+  **Next item for whoever picks this up**: run a falsification pass on fix commit `f7253402`
+  (fhp-research tree) -- the same shape of review this round just did for its predecessor, one level
+  deeper on the same script. Independently, F167/F168/F169/F176 remain open with no dependency
+  blockers. Ending this round here (one verdict recorded, one new unreviewed fix flagged, trees clean
+  save the known untracked items) per contract step 4.
