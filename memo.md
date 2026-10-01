@@ -20437,3 +20437,39 @@ otherwise acted on.
   not a from-scratch clean build -- an incremental catch-up, judged small enough for one round per
   LOOP_CONTRACT 1.5) and then re-run `sdk_phase_checklist.py` to get the first clean "N of 4"
   reading against post-F173 HEAD. Round ends here awaiting completion notification.
+
+### Clean SDK PHASE 4-of-4 reading obtained post-F173 (ReleaseARM64 rebuilt, round done)
+
+Subagent `ae9f238ca0842ed25` completed (65,966 tokens, 12 tool calls, 365s). Tree confirmed clean
+before starting (`git status --porcelain` empty, HEAD `f5d9e96e231`). `ninja -n -C
+xcodebuild/ReleaseARM64 dartvm ffi_test_functions` read 483 pending before, 0 after; `dartvm`
+binary mtime moved (Oct 1 19:05 -> 23:48, size 42005520 -> 42023728 bytes, build log ended
+`[483/483] LINK ./dartvm`); `ffi_test_functions` was already current (mtime unchanged, all 483
+steps belonged to the `dartvm` link chain). Build took ~3m8s.
+
+Re-run of `sdk_phase_checklist.py` (live, not `--self-test`) now gives a clean read with no
+REFUSED/BLOCKED:
+```
+C1 STUB_SIZE   MET      0 stub(s) differ in size
+C2 STUB_ORDER  MET      same order on all fixtures
+C3 FIELD_TABLE MET      0 of 6 cells neither classified nor measured order-only
+STATIC C1-C3: 3 of 3 criteria met -- MET
+C4 RUNS        MET      0 of 14 live checks failed (sim ProductSimARM64, native ReleaseARM64)
+SDK PHASE: 4 of 4 criteria met -- COMPLETE
+  read against SDK f5d9e96e231 (agent/sdk-phase-c1), 0 uncommitted path(s);
+  gen_snapshot eebcedf558f8d044..., analyze_snapshot 88fcdbe1ae99cadd...
+```
+Exit code 0. **This is the first clean reading taken after F173 landed** -- the two staleness
+gates hit earlier this round (matrix/`out_pm` staleness, then `ReleaseARM64` C4 staleness) are
+both now cleared. Both fixes this round are infrastructure/bookkeeping (re-pinning and rebuilding
+to catch up), not new SDK behavior -- the checklist's own 4-of-4 criteria are unchanged in
+substance from the pre-F173 reading, this just re-establishes a trustworthy baseline to read from
+next round. **No card checkboxes flip from this round's work** -- F173 was already closed by its
+own falsification pass; this just cleared the follow-up it left open.
+
+**Round summary (PID 23281)**: three sequential subagent dispatches (parity_matrix.sh re-pin,
+then ReleaseARM64 rebuild), both infrastructure to restore a readable G1 baseline after F173's
+fix, no card work this round. Next round should resume normal card-priority order per
+`tools/loop/phase_scope.txt`: built cards needing falsification passes first (F161/F162/F164 are
+still `built`, not `closed`; F161 stays `built`/FALSIFIED pending F174's fix per phase_scope.txt),
+then open cards (F165/F167/F168/F169/F170/F172/F174), skipping F171 (G3, needs the operator).
