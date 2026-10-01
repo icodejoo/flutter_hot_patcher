@@ -19743,3 +19743,25 @@ Shorebird 词汇子集另一刀：60 注册 / 31 比过 / **29 从未比过**，
 **矩阵对它那 3 格的处置是对的**——标 `na`，注明「文档里有、两个二进制都没注册」。主会话核过。
 
 **G1 还没满足**：判据要求每个选项的产物有分类与依据。现在是 80 个工具选项从未对拍、4 个真缺口未实现。
+
+## 2026-10-01 16:27 心跳 + F162 STILL OPEN 项派发
+
+本轮（run_round.sh PID 8392）核对现状：F162 最新一次独立证伪 pass（见上节）判 PARTIAL，
+STILL OPEN 指向 `simulator_arm64.cc` 的 `DecodeSimulatorToNativeTransition` 处那个 F162 guard——
+实测发现**这处 guard 当前活在 `~/dart-3122/sdk` 的 `agent/f162-csp-fix` 分支（HEAD `d10ab819892`），
+尚未并入 `agent/sdk-phase-c1`（HEAD `dd75946f81a`）**，E1 判据（修复须在 `agent/sdk-phase-c1` 且树干净）
+因此目前不满足。且当场核实了 PARTIAL pass 指出的那处矛盾确实存在：`d10ab819892` 的提交信息写
+「against sim->overflow_stack_limit()」，但它实际提交的代码（`simulator_arm64.cc:2177` 附近）用的是
+`OSThread::Current()->overflow_stack_limit()` —— 与 `dart_entry.cc` 那处已证实的正确地板不一致，
+原字面读数确认无误。
+
+派发了一个新鲜子代理（agentId 内部跟踪，异步后台跑，与此前任何实现/证伪子代理都无共享上下文）去：
+① 构造一个真正打到 `DecodeSimulatorToNativeTransition` 的深递归复现（已有的 `f162_repro/n3.dart`
+只打 `dart_entry.cc` 那条路径，打不到这条）；② 经验性确定正确地板（同一套「先用 sim 地板建一次、
+再用 OSThread 地板建一次、看哪个在真崩溃前报安全」的方法）；③ 按结果改代码或加新提交说明；
+④ 重建并过 p1-p8 + 负控制；⑤ 把 `agent/f162-csp-fix` 并回 `agent/sdk-phase-c1`。
+提示词已要求它用严格返回格式、不回大段日志，完整提示词见本轮会话（未落盘，按需可从这条记录重建）。
+
+本轮到此结束，等待完成通知。下一轮收到结果后：若 SURVIVES/success 则更新 F162 卡面并重新派一次
+全新独立证伪 pass（规矩要求审查者与实现者不同代理）；若仍 PARTIAL/blocked 则记录新的 STILL OPEN 并
+判断是否需要再拆一张卡。
