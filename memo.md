@@ -21715,3 +21715,30 @@ functions (the selftest sample is small relative to ~1266-3040 identity rows per
 documented blind spot while still changing the slot mapping -- the agent named this as the weakest
 remaining point but did not attempt it. Independently, F167/F168/F169/F176 remain open with no
 dependency blockers; F161/F174 remain correctly `built`/blocked on F175.
+
+### 2026-10-02 round (PID 93615, continued): dispatched falsification pass on F165 fix (df1c6387/ae1300a8/596cc94a)
+
+Per LOOP_CONTRACT (a fix never inherits review of what it fixed) and the previous entry's own
+handoff, dispatched one fresh Opus subagent (general-purpose, background) with the full
+falsify.md seven-attack template, CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK filled in describing the
+three F165 fix commits, explicitly told my own independent re-verification (0 ninja pending,
+both reproducers `caught`/exit 0, parity_matrix.tsv diff showing only 3 note-text changes with
+classification columns byte-identical) is already on record but must not be trusted blindly --
+re-run it yourself. Weighted two attacks as mandatory, not optional, since nobody has tried them
+yet: (a) whether `dill_kernel_oracle.py`'s from-scratch kernel-binary parser is correct beyond the
+~5 functions its own selftest spot-checked, against the ~1266-3040 identity rows per fixture;
+(b) whether an attacker can target only the Field-backed/synthetic-kind rows the oracle leaves
+`unresolved` (the blind spot the implementing agent itself named but did not attempt) to permute
+FunctionKeys while staying invisible to the new content gate, still changing the slot mapping.
+Told it not to edit `cards.tsv`/`memo.md` (report back, dispatcher records the verdict), not to
+touch `~/dart-3122/sdk` except read-only + the pinned-build staleness check, not to touch any
+`shorebird` CLI release/publish path, and to use the `F165 修补丁 VERDICT: ...` line format.
+Bounded to ~50-70 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification before
+recording any verdict. **Next item for whoever picks this up**: record the verdict on
+df1c6387/ae1300a8/596cc94a when the dispatch above completes; if PARTIAL/FALSIFIED, fix in the
+same round per falsify.md's "after the verdict" guidance. If SURVIVES, F165 can be considered for
+closing (fold this fix's history into the card's own cards.tsv text first, per the pattern used
+for F172's fix chain). Independently, F167/F168/F169/F176 remain open with no dependency blockers,
+and F161/F174 remain correctly `built`/blocked on F175.
