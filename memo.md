@@ -19951,3 +19951,16 @@ F166 pass 撞车，参照并发四条——两者不共享工作树/harness，�
 本轮未派子代理（纯文本修正，判据已在上面给出且已实测 `cards_check.sh` 失败数不变）。下一轮：
 派一个新鲜子代理对 **F166**（21 格进矩阵，matrix 59→105 格）跑独立证伪 pass（它是 built 卡，优先于 open 卡）。
 heartbeat: 2026-10-01 19:56:25 round PID 38089 begin
+
+### 2026-10-01T19:56+0800 心跳（round PID 38089）：F166 独立证伪 pass 已派出
+
+按上一轮心跳排的下一步（F164 PARTIAL 已订正文本，F166 是 built 卡，优先于 open 卡），
+本轮派一个全新 Opus 子代理对 **F166**（21 格进矩阵，59→105 格，`f1ceebbb`/`d5ac81cc`）跑独立证伪 pass。
+提示词按 `tools/loop/prompts/falsify.md` 七项攻击 + F116/F117 格式要求填入 CLAIM/CRITERION/EVIDENCE/WHERE TO LOOK
+（卡片原文取自研究树 `cards.tsv` 第 170 行）。研究树 `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle`
+派发前已核实：HEAD `73f701f5`，`git status --porcelain` 只有既有未跟踪杂物（`.serena/`、`f69_check_v3_ceiling_test.sh`、
+`test_work/`），与本任务无关，未清理。
+
+本轮到此结束：子代理异步跑在后台，完成会有通知；不等待、不重跑验证、不读中间 transcript。
+下一轮：收到回复后按格式记录 F166 的 VERDICT；若 PARTIAL/FALSIFIED 则当场修复能修的部分并重跑一遍；
+若 SURVIVES 则关卡并把 STILL OPEN 原文抄进 memo。
