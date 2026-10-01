@@ -20011,3 +20011,14 @@ not computed」改为引用 `structural_evidence.tsv` 的 `EXAMINED 36/UNEXPLAIN
 **未自审，不得当结论引用**：下一轮需派一个与前两个子代理都不同的全新子代理，专门核验这个修复
 （负控制脚本是否真的命中声称的扰动点、note 文字订正是否影响分类、矩阵 breakdown 重跑后确实不变），
 SURVIVES 才能关 F166。
+
+### 2026-10-01 F166 修补丁独立证伪 pass 已派出（agentId a9be25972ebf3d5aa，与前两个子代理均不同）
+
+针对 `581869b2`（负控制脚本 + note 文字订正），派第三个全新 Opus 子代理专门核验这个修复本身
+（不是原卡）：①脚本是否真的复用 `parity_matrix.sh` 的 `cmp_files()/m21_cell()` 逻辑而非另写一套；
+②亲手重跑脚本确认 na→unknown→na 且仓库 `parity_matrix.tsv` sha256 不变；③挑一个脚本未覆盖的第三格
+自己试同类字节翻转，看是否也能正确变类（防止两个样例是巧合）；④note 文字修复是否真的在
+`parity_matrix.sh` 生成源头而非手改 TSV（全量重跑验证不会被打回原状）；⑤全量重跑确认 105/53/3/49
+且除 note 文字外无格变类；⑥查 `581869b2` 是否是当前 HEAD 祖先、现在跑 `phase_gate.sh`/
+`structural_evidence_check.sh` 的真实 rc。判决必须含 `F166 修补丁 VERDICT: ... (fix)`。
+本轮到此结束，等待完成通知；SURVIVES 才能关 F166，否则记录新发现、继续 PARTIAL/open。
