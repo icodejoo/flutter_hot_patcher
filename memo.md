@@ -21435,3 +21435,41 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   card's own text in `cards.tsv` rather than leaving it scattered across memo.md rounds. Independently,
   F167/F168/F169/F176 remain open with no dependency blockers, and F161/F165/F174's larger falsification
   backlogs remain untouched. Ending this round here per contract step 4.
+
+- 2026-10-02 round (PID 975, run_round.sh): round started. `.loop/round.lock` holds this PID (own
+  lock, not a competing writer). `.loop/PAUSE` absent. Checked all three trees: `~/dart-3122/sdk` on
+  `agent/sdk-phase-c1` clean (HEAD `51d6b791205`); `~/Documents/fhp-research` clean save pre-existing
+  untracked `scratchpad/` (HEAD `4ce36436`, confirmed matches the fix this round is reviewing);
+  `~/Documents/flutter_hot_patcher` only pre-existing untracked block. No new rescued stash beyond
+  round-58931's (already handled by a prior round).
+
+  Per the injected "built 卡欠证伪 pass" list (F161/F165/F174) and the "修补丁尚未经证伪" list, and
+  per the prior round's (PID 85889) explicit handoff ("run a falsification pass on fix commit
+  4ce36436 -- same shape of review, one level deeper again on the same script; this is now the third
+  fix in this chain"), picked that handoff item over F161/F165/F174: those three carry larger, more
+  tangled falsification histories (same reasoning the prior two rounds gave for deferring them), while
+  F172's `4ce36436` is the next bounded, well-isolated review in a chain already two levels deep, and
+  leaving a third unreviewed fix stacked on top would make the eventual review strictly harder.
+
+  Dispatched one fresh Opus subagent (general-purpose, background, agentId `a4e135c6da78a3233`) per
+  `tools/loop/prompts/falsify.md`'s full seven-attack format, CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK
+  filled in with `4ce36436`'s diff (two new fixtures e3_isomagic/e4_isokind for isolate-snapshot-level
+  rejections, an `^Unhandled exception:` guard, and an anchored AOT-sniff regex), explicitly pointing
+  it at this chain's full memo.md history so it doesn't rediscover f7de3cb2/f7253402's already-known
+  findings from scratch, and explicitly told to construct its own adversarial fixture for the
+  print-then-exit spoof the commit message itself flags as an open residual (attack 6). Told it not to
+  edit cards.tsv or memo.md, not to touch the network or any `shorebird` CLI release/publish path, to
+  treat a `ninja -n` pending result on the pinned ProductSimARM64 targets as BLOCKED rather than
+  rebuilding unilaterally, and to use the `F172 fix VERDICT: ...` line format (reviewing the fix
+  commit, not the card F172 as a whole).
+
+  Did not touch `sdk_phase_checklist.py` or `verify_all.sh` this round (no SDK-tree changes made by
+  me). Round ends here per contract step 4, awaiting the subagent's completion notification before
+  recording any verdict. **Next item for whoever picks this up**: record the verdict on `4ce36436`
+  when the dispatch above completes; if PARTIAL/FALSIFIED, fix in the same round per falsify.md's
+  "after the verdict" guidance rather than leaving a fourth layer of unreviewed fix. If SURVIVES, fold
+  the full F172 history (all three fixes across f7de3cb2/f7253402/4ce36436 plus every pass's residual
+  notes) into cards.tsv's own text for F172 rather than leaving it scattered across memo.md rounds, and
+  only then consider F172 for closing. Independently, F167/F168/F169/F176 remain open with no
+  dependency blockers, and F161/F165/F174's larger falsification backlogs remain untouched by this
+  round.
