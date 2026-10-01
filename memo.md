@@ -20580,7 +20580,13 @@ commit anything beyond its own script. **This needs operator attention before an
 `git add -A`/`git commit` in that tree** -- confirmed present via `git status --porcelain | grep -c
 '^A '` = 56 as of this round.
 
-Round PID 58931 ends here. Next round per phase-scope ordering: either continue F165's ddid-binding
-fix (same scope item, real gap) or move to F167/F168/F169/F170/F172/F174 per the standing order
-(built cards with open defects before pure cleanup); F161/F174 (the pending-vmcode fix) remains the
-other real-gap item not yet started.
+- 2026-10-01 round (PID 58931, continued): dispatching a third background Opus subagent, same
+  round, to fix the ddid/.so binding blind spot just found. Told it to investigate `run_as_cell`/
+  `gen_as_cell` (commit `0fbf4b1c`) before picking an approach (either make the ddid-producing `.so`
+  the cell's actual analyzed artifact, or cross-check the ddid's identity set against the analyzed
+  `.so` and fail loudly on mismatch), re-run `nc_f165_wrong_ddid.sh` to confirm it now passes, confirm
+  the original positive case and both original negative controls still hold, and optionally (if
+  small) record the `.ddcl` crash-vs-reject distinction instead of folding it into plain `unknown`.
+  Explicitly told not to touch the 56 pre-existing staged files in the research tree, not to fix the
+  hello/base_dd fixture-overcount wording, and not to touch CLAUDE.md/memo.md wording. Round ends
+  here awaiting completion notification.
