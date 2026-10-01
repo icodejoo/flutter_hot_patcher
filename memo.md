@@ -21389,3 +21389,49 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   "after the verdict" guidance rather than leaving a third layer of unreviewed fix. Independently,
   F167/F168/F169/F176 remain open with no dependency blockers, and F161/F165/F174's larger falsification
   backlogs remain untouched by this round.
+
+- 2026-10-02 round (PID 85889, continued): the dispatched falsification pass completed (Opus, fresh,
+  12 tool calls, 276s). **F172 fix (`f7253402`) VERDICT: PARTIAL.** The commit's own claims reproduce
+  (0 ninja pending on `ProductSimARM64`, SDK `51d6b791205`, all 7 clean-reject + 2 run-to-completion
+  cases match), but the text-matching rule was fitted to the 7 existing fixtures and has both a false
+  negative and a false positive outside that set: (a) corrupting `_kDartIsolateSnapshotData`'s magic or
+  kind field produces genuine, deterministic rejections (`Invalid snapshot`, `Incompatible snapshot
+  kinds: ...`) that f7253402's regex never recognised, so they fell into `exited-nonzero-unknown`
+  instead of `clean-reject` -- a real G4-relevant gap since "patch built for a different SDK/config" is
+  exactly the realistic bad-patch case this card exists to measure; (b) the unanchored substring match
+  let a Dart program that *throws* a string containing "is not an AOT snapshot" verbatim (constructed
+  by the pass) be misread as a loader rejection even though it had already loaded and run.
+
+  **Fixed in this same round** (commit `4ce36436`, fhp-research tree, self-tested against the real
+  build, NOT yet independently falsified): (1) added `e3_isomagic.so`/`e4_isokind.so` fixtures (same
+  symbol-table-driven byte-flip approach the existing `e2` fixture uses for the VM snapshot, applied to
+  `_kDartIsolateSnapshotData` instead) plus regex alternatives for their exact text; (2) anchored the
+  AOT-snapshot-sniff alternative to the full line `main_impl.cc:1358` prints, and added an
+  `^Unhandled exception:` guard checked before any rejection match -- that line can only appear once an
+  isolate is already executing, which rules out the throw-based spoof regardless of its message content.
+  Verified: all 11 fixtures (9 original + 2 new) disposition correctly on a fresh run; rebuilt the
+  pass's exact spoofed-throw fixture and confirmed it now lands `exited-nonzero-unknown` (not
+  `clean-reject`); rebuilt the prior round's `throw`/`exit3` regression fixtures and confirmed they stay
+  `exited-nonzero-unknown`. **One residual explicitly not closed, documented in the commit message rather
+  than claimed solved**: a program that *prints* fabricated rejection text via `print()`/stderr (not
+  `throw`, so the `Unhandled exception:` guard doesn't apply) and then calls `exit()` with a matching
+  code could still spoof `clean-reject` -- a deliberately adversarial construction with no analog in
+  G4's actual negative-control set (broken ELF/version/truncated files), flagged for a future pass
+  rather than engineered against here.
+
+  Trees: `~/dart-3122/sdk` untouched this round (no SDK source edits, only read-only fixture builds
+  against the pinned `ProductSimARM64`); `fhp-research` has the one fix commit above plus the
+  pre-existing untracked `scratchpad/`. Temp probe directories under `/tmp/f172fix.*` /
+  `/tmp/f172spoof.*` / `/tmp/f172regress.*` were left on disk (the safety hook against recursive
+  force-delete outside a repo blocked cleanup, same as a prior round's note on this) -- harmless,
+  outside all three repos, a human can remove them directly.
+
+  cards.tsv **not edited this round** (F172 stays `open`, correctly -- a PARTIAL verdict with a new
+  unreviewed fix does not qualify for closing). `sdk_phase_checklist.py` not rerun (no SDK-tree
+  changes). **Next item for whoever picks this up**: run a falsification pass on fix commit `4ce36436`
+  (fhp-research tree) -- same shape of review, one level deeper again on the same script; this is now
+  the third fix in this chain (`f7de3cb2` → `f7253402` → `4ce36436`) awaiting its own pass. If it
+  survives, fold the full F172 history (all three fixes plus this round's residual note) into the
+  card's own text in `cards.tsv` rather than leaving it scattered across memo.md rounds. Independently,
+  F167/F168/F169/F176 remain open with no dependency blockers, and F161/F165/F174's larger falsification
+  backlogs remain untouched. Ending this round here per contract step 4.
