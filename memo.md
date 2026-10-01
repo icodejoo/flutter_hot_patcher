@@ -19389,7 +19389,11 @@ p8 的期望输出是否有独立于我们代码的 oracle（原版 Dart）尚�
 
 - [ ] **F161：`f5b94e5b439` 的 `isolate.cc` 与 `exceptions.cc` 两处撤回，`dart_entry.cc` 保留**（`built`，2026-10-01，deps=F160）两条独立证据判它们不承重；负控制=把任一处加回去后每条读数必须逐字节全同，且要证明真重建发生过。判据见 `cards.tsv`。
 - [ ] **F162：`--no-use_simulator` 在地址 0 的 SEGV 修复**（`built`，2026-10-01，deps=F160，SDK `8cd798e1804`）`SaveClangState/RestoreClangState` + 把 C 运行时栈从 Dart 栈上挪开；🔴 **`0xd0` 与 `0x100` 无推导**，pass 要么推导出来，要么白纸黑字写「未解释的常数」，且两个常数要**分别**扰动。判据见 `cards.tsv`。
-- [ ] **F163：p8（C→Dart 回调）加进 C4**（`built`，2026-10-01，deps=F160）补的缺口是 C4 从未在模拟器构建下跑过 C→Dart 回调；期望输出由 stock Dart 3.13.2（`~/fvm/versions/3.47.2`，revision `60a57cd42d6`）独立复现，**p1–p8 共 8 of 8**，docstring 的「7/7」已订正为「8/8」。判据见 `cards.tsv`。
+- [ ] **F174：`dart_entry.cc` 保留的 Simulator 分配路径在 `--no-use_simulator` 下从不查
+  `s_pending_vmcode_path_`**（`open`，2026-10-01，deps=F161，LOOP_CONTRACT 1.5 拆卡，
+  F161 独立证伪 pass FALSIFIED 找到的真实缺陷）pending vmcode 可能被静默丢弃；同时要补上
+  `exceptions.cc` 的 `use_sim=1 && is_sim=0` 分歧态从未被语料命中的测试空白。判据见 `cards.tsv`。
+- [x] **F163：p8（C→Dart 回调）加进 C4，后续加 p9（异常穿回调）**（`closed`，2026-10-01，deps=F160）补的缺口是 C4 从未在模拟器构建下跑过 C→Dart 回调；期望输出由 stock Dart 3.13.2 独立复现。p8 落地后又发现 gap (b)（异常穿过回调未覆盖），加 p9 补上，独立证伪 pass（agentId a38aa64de0eff7cff）判 **SURVIVES (fix)**，七项攻击全部亲手复现，关卡（提交 `dd69ddad`）。STILL OPEN（该 pass 原文抄录，未关闭）：同一份 p9.so 在 `--no-use_simulator` 下 rc=134（Trace/BPT trap，F162 同族崩溃）；gap (a) `NativeCallable.listener` 与 gap (c) float/struct 参数回调仍未覆盖。判据见 `cards.tsv`。
 
 ## 2026-10-01 第三阶段 E1–E4 达成；读数回来了
 
@@ -20215,3 +20219,28 @@ stdout summary is the same as baseline. Hits per run:
 以及待人工删除的 `~/dart-3122/F161clone` 9.7G scratch clone），仅结论与复核清单落盘进 memo.md。
 按本阶段排序，F161 本轮到此为止；下一轮应继续本阶段排序里的下一项（F165 或 F173，`compute_dd_slot_mapping`/
 dd_ft_link_data 真缺口，优先于整理类的 F167/F168/F169/F170/F172）。本轮结束。
+
+## 2026-10-01 round (PID 7480): sync memo/cards drift on F163 + formalize F161 split as F174
+
+**心跳**：2026-10-01 22:28 PST。
+
+本轮做了两件在范围内的事（无需派子代理，均为状态同步/拆卡性质的工作，按 LOOP_CONTRACT 1.5 允许）：
+
+1. **修复 cards_check.sh 的 rc=1**：`memo.md` 里 F163 的复选框仍是 `- [ ]`（open），但 `cards.tsv`
+   早已是 `closed`（上一轮 F163 修补丁独立证伪 pass 判 SURVIVES (fix) 后关卡，提交 `dd69ddad`）。
+   把该行改成 `- [x]` 并补全 p9/STILL OPEN 的摘要。`cards_check.sh` 从 open/closed 不一致的红
+   回到只剩一项既有的、跨全仓库的 `commits-not-sha` 格式失败（本行已核实为既有已知问题，
+   非本轮引入，见 memo.md 17991/18197/19034/19433/19945 行历史记录）。
+2. **按 LOOP_CONTRACT 1.5 formalize F161 的拆卡**：F161 的独立证伪 pass（上一轮）判 FALSIFIED，
+   找到真实缺陷——`dart_entry.cc` 保留的那处 Simulator 分配路径在 `--no-use_simulator` 下
+   从不查 `s_pending_vmcode_path_`，pending vmcode 补丁可能被静默丢弃；且 `exceptions.cc` 的
+   `use_sim=1 && is_sim=0` 分歧态从未被语料命中。这是「重的那半」，装不进一轮（需要先设计
+   不变量再改代码+写探针程序+负控制），按规矩拆成新卡 **F174**（`cards.tsv` 已追加，
+   `tools/loop/phase_scope.txt` 已加入范围并写明拆卡原因）。F161 保持 `built`/FALSIFIED，
+   不计入本阶段完成判据，直到 F174 关闭。
+
+**本轮未跑 `sdk_phase_checklist.py`**：上面两项都不改 SDK 源码或构建产物，只动
+`cards.tsv`/`memo.md`/`phase_scope.txt`，不影响 C1–C4 的判据或矩阵读数。
+
+按本阶段排序，下一个未完成项：**F164**（built，待独立证伪 pass，dd 四选项对拍）或
+**F165/F173**（open，真缺口，优先于 F167–F170/F172 整理类）。本轮到此结束。

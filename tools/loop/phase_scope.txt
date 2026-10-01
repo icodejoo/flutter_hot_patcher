@@ -5,8 +5,13 @@
 # rule 0 and memo.md "第四阶段判据". This scope is the part of it the loop can
 # do unattended.
 #
-# Phase 3 still owes falsification passes on F160, F161, F163 (F162 was
-# changed by its own pass and re-verified by hand on 2026-10-01).
+# Phase 3 still owes falsification passes on F160, F163 (F162 was changed by
+# its own pass and re-verified by hand on 2026-10-01; F163 closed 2026-10-01
+# via its own fix pass). F161's falsification pass (2026-10-01) returned
+# FALSIFIED with a real defect, not merely incomplete; F174 (added 2026-10-01,
+# LOOP_CONTRACT 1.5 split) is the heavy half -- fixing the pending-vmcode drop
+# in dart_entry.cc under --no-use_simulator -- and F161 stays built/FALSIFIED
+# until F174 closes.
 #
 # Deliberately NOT here:
 #   F171  G3, the first real app -- needs the operator present (device
@@ -33,3 +38,4 @@ F169
 F170
 F172
 F173
+F174
