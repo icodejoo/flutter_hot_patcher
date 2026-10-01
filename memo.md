@@ -21943,3 +21943,82 @@ Did not pick F160's own follow-up work (the two findings from its PARTIAL falsif
 Read `parity_matrix.sh` (binary paths: ours = `$HOME/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/{gen_snapshot,analyze_snapshot}`, theirs = `$HOME/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/{gen_snapshot_arm64,analyze_snapshot_arm64}`, `EXPECTED_CELLS=105`) and `analyze_snapshot_help_check.sh` (existing pattern for comparing registered options, with a documented false-positive history -- `--no_pp_hash` exists only in --help text, in neither binary's real option table -- so F169's registration-detection cannot be a bare --help grep) to brief a fresh Opus subagent (background, general-purpose, agentId `a3da8192e5664c264`) with the full spec: build the script, reproduce (not assume) the card's claimed numbers (89 registered options, 9->30 compared after F166, the four dd options, the "25/25 6/6 263/263 8/8" control counts), wire into `verify_all.sh` following its existing numbered-check pattern, and execute the card's own written negative control (patch out the "Empty value for option" string from a copy of our analyze_snapshot, confirm the gap count rises by exactly 1). Told it explicitly: never touch `~/.shorebird`'s cached binaries except read-only invocation, never run any `shorebird` CLI subcommand that could publish/release/upload, confirm `ninja -n` reports 0 pending on the pinned build before trusting it (do not rebuild if stale -- report and stop), may edit `cards.tsv`'s F169 row and commit in `fhp-research`, must NOT touch `~/dart-3122/sdk` beyond read-only use, must NOT edit `memo.md` or flip F169's status to `closed` (leave `built` after self-test, per LOOP_CONTRACT a build never self-closes). Bounded to ~60-90 tool calls.
 
 Round ends here per contract step 4, awaiting the subagent's completion notification before recording any outcome. **Next item for whoever picks this up**: record F169's build outcome when the dispatch above completes; if it reports STILL OPEN items or an inadequate registration-detection mechanism, fix in the same round per LOOP_CONTRACT guidance, then dispatch a fresh falsification pass before considering F169 for closing. Independently, F167/F168/F170/F172 remain open with no dependency blockers; F160 still owes its own two follow-up tasks (attribution note already landed, `--dfe` doc + criterion-(1) rerun on `de660deeae5` still pending); F161/F174 remain correctly `built`/blocked on F175; F176 needs its own dedicated multi-hour round.
+
+### 2026-10-02 round (PID 5987, continued): F169 build completed, independently re-verified
+
+The dispatched subagent completed (Opus, 70 tool calls, 743s; `fhp-research` commits `6b842ac1`
+`67b0b0cf`). New script `g1_denominator.sh` decides "registered" by requiring BOTH (a) the option's
+exact error string (from `runtime/bin/options.h`'s macro-generated "Empty value for option NAME" /
+"Non-empty value for option NAME") present in the binary's arm64 slice, AND (b) the binary's own
+parser actually printing that line when invoked with `--NAME=`/`--NAME=f169x` -- a real two-sided
+test, not a bare `--help` grep (the card's own history flagged `--no_pp_hash` as a false positive
+of the weaker test; this script correctly reads it as not registered).
+
+**Independently re-verified myself** (not trusting the report): (1) `ninja -n` on the pinned
+`ProductSimIosARM64` targets reports 0 pending. (2) Ran `./g1_denominator.sh` fresh myself: rc 0,
+every line matches the subagent's reported numbers exactly -- 89 registered options both sides
+(gs 25+6, as 25+33); gap=1 (`analyze_snapshot:base_snapshot`, theirs-yes/ours-no); extra=1
+(`analyze_snapshot:shorebird_vmcode`, ours-yes/theirs-no); matrix coverage 9 declared / 8 ran at
+commit `975c640e` (pre-F166) vs 30 declared/30 ran now; DD4 control 4/4 theirs, 4/4 ours-now, 0/4
+ours-pre-F164; positive control B 25/25, 6/6, 263/263(VM flags), 8/8+7/7; impossible-name control C
+both a fabricated name and a real-but-non-tool-option VM flag (`print_class_table_link_info_to`)
+read as absent/not-a-tool-option on all 5 binaries. (3) Negative control reproduced live: patching
+1 byte of the "Empty value for option dd_caller_links" string in a copy of our analyze_snapshot
+(then re-signing) makes the gap count rise from 1 to 2, with the new entry correctly named
+`analyze_snapshot:dd_caller_links`. (4) `verify_all.sh` wiring confirmed by grep: `EXPECTED_CHECKS`
+47->48, a new `run_script g1_denominator.sh ...` call added following the existing pattern; did not
+run the full `verify_all.sh` myself either (same reason the subagent gave -- `ReleaseARM64` is
+behind and its own preflight would block the whole run, unrelated to this card). (5) `cards_check.sh`:
+rc 1, but the only failure is the same pre-existing 16-card `commits-not-sha` list (confirmed by
+name match against PID 93615's round note) -- no new regression from this change.
+
+**One correction the subagent made to the card's own assumed numbers, now independently confirmed**:
+the pre-F166 matrix had 9 *declared* cells but only 8 had actually *run* (3 `compute_dd_slot_mapping`
+cells were `blocked` at that commit) -- "was 9" in the card text conflated declared with ran.
+
+**STILL OPEN** (subagent's own list, not altered by my re-check): (a) a genuinely disguised attack --
+an option whose error-string text is altered but whose parser match still accepts the flag -- would
+misread as "not registered" the same way a truly-absent option does, because neither test alone can
+tell "registered but silently rejects without that exact string" apart from "not registered" without
+a real invocation that gets far enough to hit the binary's "Unrecognized flags" path; not built.
+(b) Control B's "25/25 6/6 263/263 8/8" numbers have no key in the card text -- the subagent's
+reconstruction (string/bool options per tool x VM --help --verbose flag count) might not be what
+whoever wrote that into the card originally meant. (c) what `base_snapshot` (the real gap) and
+`shorebird_vmcode` (the real extra) actually DO was not investigated -- only that they exist/don't
+in each binary's option table. (d) Control A depends on a pinned pre-F164 build tree (`F152neg`)
+staying as-is; rebuilding it would make that control report BLOCKED, not silently wrong, which is
+the right failure mode but worth knowing. (e) `/tmp/f169` has leftover scratch text (not the patched
+binary copies, which were deleted) -- the implementing agent's cleanup command was blocked by a
+safety hook against recursive deletes; harmless (not in any git tree, outside all three repos) but
+flagging it since this project's own rules call out leftover test_work artifacts as a recurring
+source of confusion.
+
+F169 left `built`, not `closed` (correct -- this is new, unreviewed work). Per LOOP_CONTRACT
+(a fix/build never inherits review of itself), dispatching a fresh independent falsification pass
+now before F169 can be considered for closing.
+
+### 2026-10-02 round (PID 5987, continued): dispatched falsification pass on F169's build (6b842ac1/67b0b0cf)
+
+Dispatched one fresh Opus subagent (general-purpose, background) per `tools/loop/prompts/falsify.md`,
+CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK filled in from F169's cards.tsv row and the build summary
+above. Weighted three attacks as mandatory: (a) the disguised-registration gap the implementing
+agent itself flagged (construct a copy of one binary whose error-string text is altered but whose
+parser still accepts and processes the flag -- does the script correctly distinguish this from a
+truly unregistered option, or does it silently misclassify it as absent?); (b) whether "matrix
+coverage 30 of 89" is actually counting parity_matrix.tsv cells correctly, independent of the
+implementing agent's own script (hand-count a sample of cells against the option list); (c) whether
+`verify_all.sh`'s new check actually fires/fails correctly when g1_denominator.sh itself reports a
+non-zero exit, not just when it's never invoked. Told it explicitly: confirm `ninja -n` 0-pending
+on the pinned build first (do not rebuild); never touch `~/.shorebird`'s cached binaries except
+read-only invocation; never run any `shorebird` CLI subcommand that could publish/release/upload;
+not to edit `memo.md`, not to touch `~/dart-3122/sdk` beyond read-only use; use the standard
+`F169 VERDICT: ...` line format from falsify.md. Bounded to ~50-70 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification before
+recording any verdict. **Next item for whoever picks this up**: record the verdict on F169's build;
+if PARTIAL/FALSIFIED, fix in the same round per falsify.md's "after the verdict" guidance (the
+disguised-registration blind spot, named by the implementing agent itself, is the most likely real
+finding). If SURVIVES, F169 can be considered for closing. Independently, F167/F168/F170/F172 remain
+open with no dependency blockers; F160 still owes its own two follow-up tasks (`--dfe` doc +
+criterion-(1) rerun on `de660deeae5`); F161/F174 remain correctly `built`/blocked on F175; F176
+needs its own dedicated multi-hour round with nothing else scheduled on `~/shorebird_engine`.
