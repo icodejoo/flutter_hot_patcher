@@ -20168,3 +20168,50 @@ stdout summary is the same as baseline. Hits per run:
 **Artifacts** (outside every repo, ~1.4 MB): `~/dart-3122/F161out/` -- `run_corpus.sh`, `{isolate,exceptions}_hunk.diff`,
 `variant_*.applied.diff`, `probe.diff`, `build_*.log`, `base_r1/ base_r2/ isolate/ exceptions/ probe/` (per-program stdout/stderr/rc/so.sha, `summary.tsv`, `tool_sha.txt`, `pending.txt`).
 ⚠️ The scratch clone `~/dart-3122/F161clone` (9.7G apparent, mostly CoW) is **still on disk**: the recursive delete was blocked by the deny-destructive hook. The operator must delete it by hand.
+
+## 2026-10-01 F161 独立证伪 pass 回收：FALSIFIED，不关卡——真实缺陷，pending-vmcode 在两种模式下都可能从未生效
+
+**F161 VERDICT: FALSIFIED**（Opus，55 次工具调用，973s，与做证据收集的那个子代理不同）——
+`isolate.cc` hunk**不是惰性的**：把它单独加回去会让 `Simulator::Current()` 的惰性分支被跳过
+（`InitIsolate` 改成直接 `new Simulator()`），于是经 `Dart_ShorebirdLoadVmcode`/`fhp_shorebird_load_vmcode`
+登记的 pending link table **在两种模式下都从未被应用**——撤回它本身没错，但卡片给的理由（「从不承重」）是假的。
+
+**七项攻击逐条**：① 犯规能力证实——撤回 `dart_entry.cc` 单独一项让全部 9 个程序在 CPU 模式下崩溃（见下），
+证明 harness 能分辨这一个 hunk，但分不出另外两个；② 两侧可比：同一 scratch 目录、0 ninja 待办、同一 9 程序语料
+（`expected.tsv` 9 行，就此坐实「8 还是 9」=9）；③ 只是一部分：`exceptions.cc` 条件唯一分歧态
+（`use_sim=1 && is_sim=0`）在整个语料里命中 **0 次**——「字节相同」说明的是「没测到」不是「不承重」；
+④ 同一 pattern 别处命中：`ApplyPendingVmcodeIfNeeded` 只有一个调用点（`Simulator::Current()` 惰性分支），
+当前 HEAD 唯一绕过它的地方就是保留的 `dart_entry.cc:131`——**与被撤回的 `isolate.cc` 是同一类缺陷**；
+⑤ 无陈旧：SDK HEAD `252c31c45f6`，前后 `git status --porcelain` 0 行；⑥ **criterion (2) 首次被真正测试**：
+单独撤回 `dart_entry.cc`（8 步重建，0 待办，sha 变为 `3dbe0df8…`）——模拟器模式 9/9 过，
+**CPU 模式 9/9 全崩**，lldb 定位到 `CallOnClangStack` 的 `str x15,[x10,#0x78]`（`x10 = Isolate::simulator_ = 0`），
+即第一次从 Dart 发起的运行时调用解引用了从未分配的 Simulator；在此基础上把 `isolate.cc` 也加回去，
+崩溃点挪到 `dart_state_is_on_cpu` 断言（`brk`，页内偏移 `0xb4c`）——是该 hunk 的第二个可观察效应；
+⑦ 问题被换成了更容易的那个：「在未打补丁的 p1..p9 上无变化」被当成「从未承重」的证据，
+而探针实测显示 `ApplyPendingVmcodeIfNeeded` 在 HEAD 的模拟器模式下会被命中、加回 `isolate.cc` 后降为 0 次命中——
+两者差异正是缺陷本体，只是语料从未设置 pending vmcode 所以看不出来。
+
+**FLAW（真实缺陷，四处）**：(a) `isolate.cc` hunk 在有害方向上确实承重——撤回它是对的，但卡片给的理由错了；
+(b) **同一缺陷现在仍活在被保留的 `dart_entry.cc` 里**：`--no-use_simulator` 模式下通过 `dart_entry.cc:131`
+分配 Simulator 不经过惰性路径，pending vmcode 永远不会被应用（已实测确认）；(c) `exceptions.cc` 仍是未测试，
+不是已证实「不承重」——其唯一分歧态需要「补丁路径上、异常穿过 CPU-island 逃逸」这个场景，语料和上游测试都没有；
+(d) criterion (3) 在 HEAD 上不成立：p9 在 CPU 模式下 rc 134（`Trace/BPT trap`，页内偏移 `0xd4c`），
+这是已知的 F162 同族崩溃，不是新闻，但意味着「两种模式都跑通」这条判据本身当前读不到 PASS。
+
+**COST OF BEING WRONG**：如果「从不承重」被采信，没人会去查为什么 CPU 模式下补丁可能从不生效——
+被撤回的 hunk 在两种模式下都悄悄丢过补丁，保留的 hunk 在 CPU 模式下现在仍这样做，两者看起来都和一次
+干净的回落（fallback）一模一样。
+
+**F161 不关卡，保持 FALSIFIED/`built`**。按 LOOP_CONTRACT 1.5 拆卡（重的那半装不进一轮，参照 F162 的处理方式）：
+- **重的那半（新任务，留给后续轮次，需要先设计不变量而非裸改一行）**：在 `~/dart-3122/sdk` 上让
+  `dart_entry.cc` 的 Simulator 分配路径（或其调用点）在分配前检查 `s_pending_vmcode_path_`，
+  使 `--no-use_simulator` 下登记的 pending vmcode 不再被静默丢弃；判据=子代理探针风格的
+  env-var 驱动复现程序，在修复前后对比命中次数（HEAD 应从「不命中」变为「命中」）；
+  负控制=故意让检查失效一次，确认它能报错。同时需要设计一个会**真正触发** `exceptions.cc`
+  分歧态的补丁场景（异常穿过 CPU-island 逃逸）来补上 (c) 的测试空白。
+- **轻的那半**：F161 卡片在重的那半关闭前保持 FALSIFIED/open，不计入本阶段完成判据。
+
+本轮证据与证伪 pass 的产物均在仓库外（`~/dart-3122/F161out/`、`~/dart-3122/F161verify/`，
+以及待人工删除的 `~/dart-3122/F161clone` 9.7G scratch clone），仅结论与复核清单落盘进 memo.md。
+按本阶段排序，F161 本轮到此为止；下一轮应继续本阶段排序里的下一项（F165 或 F173，`compute_dd_slot_mapping`/
+dd_ft_link_data 真缺口，优先于整理类的 F167/F168/F169/F170/F172）。本轮结束。
