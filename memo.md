@@ -19384,3 +19384,9 @@ E 独立复现了 C4 记的「真 bug 负控制」（退回 stub 替换 → `brk
 🔴 **本阶段开始时已知的债**：`0xd0` 与 `0x100` 两个魔数无推导（F162 必须处理）；
 p8 的期望输出是否有独立于我们代码的 oracle（原版 Dart）尚待确认（F163）；
 研究树 `evidence_field_table_order_residual.sh` 已被主会话标死（恒等式，详见当日该节），未提交。
+
+## 2026-10-01 第三阶段的三张新卡（`built`，等独立证伪 pass）
+
+- [ ] **F161：`f5b94e5b439` 的 `isolate.cc` 与 `exceptions.cc` 两处撤回，`dart_entry.cc` 保留**（`built`，2026-10-01，deps=F160）两条独立证据判它们不承重；负控制=把任一处加回去后每条读数必须逐字节全同，且要证明真重建发生过。判据见 `cards.tsv`。
+- [ ] **F162：`--no-use_simulator` 在地址 0 的 SEGV 修复**（`built`，2026-10-01，deps=F160，SDK `8cd798e1804`）`SaveClangState/RestoreClangState` + 把 C 运行时栈从 Dart 栈上挪开；🔴 **`0xd0` 与 `0x100` 无推导**，pass 要么推导出来，要么白纸黑字写「未解释的常数」，且两个常数要**分别**扰动。判据见 `cards.tsv`。
+- [ ] **F163：p8（C→Dart 回调）加进 C4**（`built`，2026-10-01，deps=F160）补的缺口是 C4 从未在模拟器构建下跑过 C→Dart 回调；期望输出由 stock Dart 3.13.2（`~/fvm/versions/3.47.2`，revision `60a57cd42d6`）独立复现，**p1–p8 共 8 of 8**，docstring 的「7/7」已订正为「8/8」。判据见 `cards.tsv`。
