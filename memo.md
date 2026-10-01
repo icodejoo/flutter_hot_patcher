@@ -21848,3 +21848,22 @@ Independently check whether `cards_check.sh`'s CRLF issue is real and, if so, wh
 one-line fix (strip `\r` before the sha-pattern match) regardless of F165's own status, since it is
 flagged as hitting essentially every card. F167/F168/F169/F176 remain open with no dependency
 blockers; F161/F174 remain correctly `built`/blocked on F175.
+
+### 2026-10-02 round (PID 93615, continued): confirmed and fixed the cards_check.sh CRLF bug
+
+Independently confirmed the fixing agent's flagged side-finding was real: `bash cards_check.sh`
+rc=1, `commits-not-sha` flagged on essentially every card with a real commit list (148 of them).
+Root cause confirmed directly: `cards.tsv` is CRLF, and the commits-field check (col 7, the line's
+last column) never stripped the trailing `\r` before matching the bare-sha regex on each token --
+the last token of every such row's last column carried the `\r`, failing
+`tok !~ /^[0-9a-f]+$/`. One-line fix (`fhp-research` commit `f944b8cc`): added `{ sub(/\r$/, "") }`
+as the first rule in that awk block. Re-ran `cards_check.sh`: false-flag count dropped from 148 to
+16; confirmed by inspection those 16 are genuine non-sha content in the commits column (not another
+instance of the same masking bug), i.e. this fix surfaced real, previously-hidden data-quality
+issues rather than hiding anything -- left those 16 alone, not this round's task. All of
+`cards_check.sh`'s other checks (open-set/closed-set agreement, invalidation checks) were already
+passing before and after, confirming this was an isolated, low-risk one-line fix, not something that
+could have been masking a different failure elsewhere in the same script.
+
+Dispatching next: a fresh falsification pass on the F165 `--require-full-coverage` fix
+(`75183c80`/`8f567d2b`) per the prior entry's handoff.
