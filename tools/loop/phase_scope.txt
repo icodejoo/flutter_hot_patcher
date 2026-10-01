@@ -1,18 +1,19 @@
-# Cards in scope for the current phase (operator decision 2026-09-30).
+# Cards in scope for the current phase (operator decision 2026-10-01).
 #
-# The phase is the SDK checklist: it ends when
+# PHASE 3 -- CONSOLIDATION. Everything that landed on 2026-10-01 gets one
+# independent falsification pass, and the pinned builds are made readable
+# again. The phase ends when all four cards below are closed AND
 #   fhp-research/spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py
-# exits 0 (C1 every VM stub the same size, C2 same stub order, C3 the six
-# field_table cells structural or gap). Every card not listed here is frozen:
-# run_round.sh shows rounds only these cards in the built list and the
-# fix-patch queue, and tells them not to open new loop-mechanics cards.
+# exits 0 (it currently REFUSES: the pinned ProductSimARM64 is older than the
+# SDK tree, which moved from b468884fa7d to the phase-3 tip).
+#
+# Full criteria E1-E5 are in memo.md, section "2026-10-01 第三阶段：固化".
+# Every card not listed here is frozen: run_round.sh shows rounds only these
+# cards in the built list and the fix-patch queue, and tells them not to open
+# new loop-mechanics cards.
 #
 # One card id per line. Edit this file (and commit why) to change the scope.
-F128
-F138
-F155
-F156
-F157
-F158
-F159
 F160
+F161
+F162
+F163

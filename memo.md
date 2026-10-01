@@ -19226,3 +19226,161 @@ link 100.00%，5,214,560 字节，md5 `d5b472386087b6fb77078fcd92e469c9`。推�
 
 **安全分类器拦截**：本方向累计 6 次（F155、F128、F156/F157 三个 subagent，我自己两次派单，以及 10-01 调试 CPU 路径时我自己的一次分析）。
 按规则：被拦的内容不重写、不换说法再发；后续怎么推进由操作者决定。
+
+## 2026-10-01 F160 证伪 pass（主会话，进行中）：模拟器构建下的 FFI 回调此前从未被测过
+
+**最可能错的那条**（先核）：卡面判据 (2) 要求「FFI callback 在模拟器构建下跑通」，但 C4(a) 的 `p7.dart` 只做 Dart→C（`strlen`/`malloc`），
+C4(b) 的 5 个上游 callback 测试跑在 `native_build` = `ReleaseARM64`（`args.gn` 无 `dart_force_simulator`）。⇒ **C→Dart 回调在模拟器构建下从未被运行过。**
+
+**补测**（scratchpad `f160/p8.dart`：libc `qsort` 回调 Dart 比较函数，`Pointer.fromFunction` 一次、`NativeCallable.isolateLocal` 一次），
+`ProductSimARM64` 自己的 kernel 编译器 → gen_snapshot → dartaotruntime，三个目标 ninja 待办 0：
+输出 `cb 1,2,3,4,5,7,8,9 9,8,7,5,4,3,2,1 true`，rc 0。
+
+**lldb 命中计数**（同一程序，`breakpoint command add -o "return False"` 只计数）：
+`Simulator::DoRedirectedFfiCallback` 36 · `DLRT_GetFfiCallbackMetadata` 36 · `DecodeSimulatorToNativeTransition` 31 · `DoRedirectedFfiCall` 3 ·
+`DLRT_EnterSafepoint` / `DLRT_ExitSafepoint` / `DLRT_GetFfiCallbackMetadataForInlineDispatch` / `Exceptions::JumpToFrame` 全为 0。
+⇒ 模拟器构建里回调走的是 `DoRedirectedFfiCallback`，**不走 F155 的 inline-dispatch 蹦床，也不走 safepoint 慢路径**；
+所以 F155 那条路径与 `thread.cc` 的 safepoint 改动在模拟器构建下仍只被原生构建上的测试覆盖。
+
+**尚未完成**：这个回调程序还没见过红（负控制未做）；是否把 p8 加进 C4 要操作者同意（改判据）。
+
+**同日派单**（操作者指令）：`--no-use_simulator` SEGV 派给 agy（任务文件 scratchpad `agy_nosim/TASK.md`，分支 `agent/no-use-sim-segv`，
+自建构建目录 `xcodebuild/ProductSimARM64_cpu`）；agy 那三处改动（`isolate.cc`/`dart_entry.cc`/`exceptions.cc`）的去留派给一个只读 subagent（scratchpad `hunks3/`）。
+SEGV 复现 10-01 10:00：同一 `hi.so` 模拟器模式 `hi` rc 0，`--no-use_simulator` → `SEGV_ACCERR si_addr=0x0` rc 134。
+
+**10-01 F160 负控制 subagent 被安全分类器拦下**（本方向第 7 次）：写扰动驱动脚本时被拦，扰动 a–d 一个都没跑、没有 REPORT.md。
+已做：`ProductSimARM64/dartaotruntime` 为单一 arm64（非 fat）；原版与副本跑 `p8.so` 均复现 `cb … true` rc 0。未做：lldb 命中 36 次未重测。
+未核验的推断：`FfiRedirectResumePc` 在 blr 紧跟 hlt 时返回 hlt+8，与改动前相同 ⇒ 若 p8 的 3 次 FFI 调用都是这种形状，「退回恢复点」这个扰动对 p8 是空操作。
+产物在 scratchpad `f160_negctl/`（`neg.py` 是被截断的半成品，不可用）。⇒ **p8 仍未被见过变红。** 按规则不重写、不换说法再发，后续由操作者决定。
+
+**10-01 agy 三处改动去留（只读 subagent，报告 scratchpad `hunks3/REPORT.md`，命中表 `hunks3/table_sim.tsv` 已由主会话复读）**
+🔴 **订正 09-30 消融那条「三处当前没有任何测试走到」**：模拟器模式下 `isolate.cc:1951/1952` 每个程序命中 2 次（p1–p8、hi 全部），
+`exceptions.cc:630/631` 在 p4 命中 102、p5 命中 2；只有 `dart_entry.cc:130–138` 为 0。⇒ 消融证的是「行为不变」，不是「没执行到」——两处在发货路径上**执行**着。
+SEGV 根因定位（未修）：`dart_entry.cc:134` 把 `simulator_csp_` 设成 InvokeDartCode 的 C 栈指针，CPU 上 Dart 帧在它下方同一条栈 ⇒ CPU 形状 native stub 切栈后 C++ 帧压在活着的 Dart 帧上，`VMHandles::~VMHandles` 把返回地址写成 0。
+建议：exceptions.cc 撤回 · isolate.cc 默认撤回（除非 agy 判据 E 显示承重）· dart_entry.cc 等 agy 的修复结果。撤回补丁 `hunks3/revert_three.patch` 已 `apply --check` 通过，**未应用**。
+
+## 2026-10-01 field_table ×6 证据审计（只读 subagent）：6 格全部不满足判据 2
+
+**判决：不满足，且证据行 09-29 就已撤回。** `structural_evidence.tsv` 活着的只剩 2 条 `dump_object_pool`
+（`git show HEAD:...structural_evidence.tsv | grep -v '^#'` 实测；4 条 field_table 行标 `WITHDRAWN 2026-09-29 (F128 triage)`，已提交，主会话复核过）。
+撤回理由是实质性的：他们用 WeakTable 标记的 pre-order DFS + libc++ introsort，我们用 `IterateObjects` + `std::stable_sort`
+⇒ **是我们这侧的算法差异，属 gap 候选，不是 structural。**
+
+🔴 **那条 residual 是恒等式**：`evidence_field_table_order_residual.sh:158` 直接 `print(f'EXAMINED {expected_units} UNEXPLAINED 0')`
+—— 分子是字面量 0，分母原样回打，**从不枚举任何差异单位**（主会话读过该行）。分母**没有**被窄化（100273 = 22612+22612+55049，6408 = 1470+1470+3468，
+`structural_evidence_check.sh:285` 对 `input='*'` 本就比 flag 总数）——**病灶在分子，不在分母**，与本仓库惯性预期相反。
+
+**三种自造扰动打不红**（自带 `--negctl-add-entry` 能红，但它只测这脚本唯一会测的那件事）：
+P2 `max_field_id` 244→245（**纯内容差异、零排序成分**）→ 全绿；P3 跨 id 组交换（直接证伪 `stable_sort` by id 这个 locus）→ 全绿；
+P4 整表倒序（`UNITS` 被顶到 115397/8630，`EXAMINED==UNITS` 闸门照样成立）→ 全绿。
+对照：`sdk_phase_checklist.py` 的 C3 `order_only()` **四种全抓到** ⇒ **C3 的测量健全，这条 residual 不健全**；
+但 C3 是操作者选项 2 刻意绕开 structural 的替代判据，**C3 绿 ≠ 判据 2 满足**。
+
+**locus 仍分不出活代码与编译掉的代码**（第 40 种缺陷同款）：源码副本上 `#if 0` 包住 `IterateObjects`、`#if 0` 包住 `stable_sort`（真跑 `std::sort`）、
+块注释三种全绿，只有文本真删掉才红。另：该脚本硬编码 `d='out_pm/'` 不认 `WORK`；只读 hello 一个 fixture，打的 `EXAMINED 622` 是条目数，**与这格的 UNITS 不同量纲**。
+
+**各格实测差异**（`./diff_units.sh <flag>`）：info_to = 22612/22612/55049 B（UNITS 100273）；debug = 1470/1470/3468 行（UNITS 6408）。
+条目位置不同 371/622（hello、base_dd）、888/1206（prog）；id 组内乱序 14/245、29/318；`max_field_id` 与 id 序列两侧相同。与 09-25 `R4_field_table_blindspots.out` 逐项复现。
+
+⚠️ **顺带实测：今天 `sdk_phase_checklist.py` 会 REFUSE** —— `out_pm` 产物 mtime 09:39–09:40，钉住的 `gen_snapshot` 09:41（两个 agent 正在那棵树上），
+provenance 报 `STALE`。**所以今天不能引用 4 of 4**，要重读得等 SDK 树安静下来。
+
+证据在 scratchpad `ft6/`（subagent 落盘报告被拦，中间读数齐全）。
+
+## 2026-10-01 F160 `p8` 负控制完成（主会话亲自跑，报告 scratchpad `f160_negctl2/REPORT.md`）
+
+**p8 已被见过变红**，四种扰动全部带「扰动确实打中」的证据，SDK 树与二进制均未改动（纯 lldb 运行期干预）。
+
+| 扰动 | 打中证据 | p8 输出 | 判决 |
+|---|---|---|---|
+| A 回调体不执行（入口 ReturnFromFrame） | FIRED 1 | 无 `cb` 行，`runtime_entry.cc:5099 Cannot invoke native callback from a leaf call` | RED |
+| B 回调照跑、返回值取反 | ENTERED 37 / FIRED 37，样本 (-4→4)(5→-5) | `cb 9,8,7,5,4,3,2,1 1,2,3,4,5,7,8,9 true`（两数组各自颠倒） | RED |
+| C0 只打 `Pointer.fromFunction` | per_form {0:19,1:17}，FIRED 19 | 只有第一个数组错 | RED |
+| C1 只打 `NativeCallable.isolateLocal` | per_form {0:18,1:17}，FIRED 17 | 只有第二个数组错 | RED |
+| E 撤销 `SimulatedStubFor` 替换（b468884fa7d） | 基线命中 3191 | 无 `cb` 行，`Simulator hit brk #0x0` | RED |
+
+⇒ **两半都承重**（C0/C1 互不掩盖）；**B 证明 p8 看的是值不是「有没有跑」**（`calls > 0` 仍 true，只是排序错）。
+E 独立复现了 C4 记的「真 bug 负控制」（退回 stub 替换 → `brk #0`）。
+
+🔴 **撤回一条未核验的推断**：此前记「`FfiRedirectResumePc` 在 blr 紧跟 hlt 时返回 hlt+8，所以扰动它是空操作」——**错，它根本没被调用**。
+`b468884fa7d` 给 `DoRedirectedFfiCall` 加了 `resume_pc` 参数，调用点是 `set_pc(resume_pc != 0 ? resume_pc : FfiRedirectResumePc(saved_pc))`
+（`simulator_arm64.cc:1990-1991`），p8 的 3 次调用全走前一支。实测：`:1920` 与 `:1930` 两个断点**均 resolved、hit 0**，而 `DoRedirectedFfiCall` hit 3。
+⇒ **f5b94e5b439 的 FFI 恢复点逻辑在 p8 上完全未覆盖**；要覆盖它得造一个 `resume_pc == 0` 的场景。
+
+**p8 看不见的**：`FfiRedirectResumePc`（不执行）· F155 inline-dispatch 蹦床与 safepoint 慢路径（此前实测 0 次）· 异常穿过回调（p8 不抛）· 浮点/结构体参数。
+
+⚠️ **方法学一例（当场自捉）**：P-B 初版读数 `ENTERED 32 / FIRED 528`——**量纲一眼不对**。
+根因：lldb 的 one-shot 断点在回调 `return False`（不停住）时不会被删，32 个断点堆在同一地址反复触发。
+改成显式 `BreakpointDelete` 后 `37/37`，输出恰为「两数组各自颠倒」，与机制逐字对应。
+**那个红是真的，机制是错的** —— 不核这一步就会把过度触发的扰动当干净证据。
+
+⚠️ E 的两次运行都在 `brk #0x0` 后停在模拟器自己的 `sim>` 提示符（它不吃 `/dev/null` 的 EOF），由我 `pkill` 结束 ⇒ **E 没有干净退出码**，判据是「无 `cb` 行 + `brk #0x0`」。
+
+**仍未做**：把 p8 加进 C4 是改判据，需操作者同意。
+
+## 2026-10-01 `--no-use_simulator` SEGV 已修（agy 派单，主会话独立复核）
+
+**SDK `8cd798e1804`**（分支 `agent/no-use-sim-segv`，从 `b468884fa7d` 起），只改 `dart_entry.cc`(+11/-1) 与 `simulator_arm64.h`(+15)，
+**未碰任何 stub 或代码生成 ⇒ C1 尺寸判据不受影响**。报告在 scratchpad `agy_nosim/REPORT.md`，修复 diff 在同目录 `fix.diff`。
+
+**根因**：`f5b94e5b439` 的 `dart_entry.cc` 把 `simulator_csp_` 设成进入 Dart 前的 OS 线程栈指针。CPU 模式下 Dart 帧就在它下方同一条栈上，
+`CallOnClangStack` 把 CSP 切到那里后，C++ 运行时帧压在活着的 Dart 帧上，覆写保存的 FP/LR ⇒ 返回时 `ret` 到 0。
+二次崩溃来自重入（`Field::InitializeStatic` → `EvaluateInitializer` → 嵌套 `InvokeDartCode`）：内层覆写同一个 `Isolate::simulator_` 的寄存器池。
+
+**修法**：`Simulator::SaveClangState/RestoreClangState` 在 `InvokeDartCode` 前后存取寄存器文件；
+顶层调用 `simulator_csp_ = sim->stack_base() - 0xd0`，嵌套调用 `= RoundDown(current_csp - 0xd0 - 0x100, 16)`。
+
+**主会话独立复核（全部在 ninja 待办归零的 `ProductSimARM64_cpu` 上，工作文件 scratchpad `segv_verify/`）**：
+
+| 判据 | 读数 |
+|---|---|
+| A `--no-use_simulator` hi+p1..p8 | **9 PASS 0 FAIL**（逐条对拍 expected.tsv，rc 全 0） |
+| B 默认模拟器模式不回退 | **9 PASS 0 FAIL** |
+| C 负控制：只退回这两个文件、重建（pending 0） | `SEGV_ACCERR si_addr=0x0` rc 134 **复现** |
+| 复验：恢复修复、重建 | 9 PASS 0 FAIL，树干净，HEAD `8cd798e1804` |
+
+**消融（agy 做，与只读 subagent 独立一致）**：`dart_entry.cc` **承重**（退回 → 9/9 `Trace/BPT trap`，因 CPU 形状 stub 的
+`dart_state_is_on_cpu_` 断言触发 `brk #0`）· `isolate.cc` **不承重**（`InvokeDartCode` 自己有按需分配）· `exceptions.cc` **不承重**
+（`--no-use_simulator` 下 `FLAG_use_simulator` 为假，新加的后半句被短路；模拟器模式下两者等价）。
+
+🔴 **第 38 种缺陷又一次实例**：agy 交报告时 `ProductSimARM64_cpu` **落后源码树 202 步**（消融反复改源码重建，最后恢复源码后没重建），
+而报告写着「工作树干净」——那是真的，但**构建状态不干净**。它报的 A/B `ok` 当时不构成证据；**上表的读数是重建后由主会话重跑建立的**。
+⚠️ 同日第二次：负控制与恢复两轮我只建了 `dartaotruntime` 没建 `gen_snapshot`，于是目录又报 202 待办。
+🔑 **「我刚重建过」≠「构建是最新的」——要看重建的是不是判据读的全部目标。**
+
+🔴 **两个魔数没有来由**：`0xd0` 与 `0x100` 报告未给推导。记为已知债。
+
+⚠️ **HEAD 已从 `b468884fa7d` 移到 `8cd798e1804`** ⇒ 钉住的 `ProductSimARM64` 相对 HEAD 陈旧，
+**`sdk_phase_checklist.py` 会拒读，今天不能引用 4 of 4**。要恢复读数需重建钉住的构建目录。
+
+**待操作者决定**：① 三处改动去留（撤回补丁 `hunks3/revert_three.patch` 已备、未应用）· ② 这个修复要不要进 `agent/sdk-phase-c1` ·
+③ 重建钉住的 `ProductSimARM64` · ④ p8 加进 C4（改判据）。
+
+## 2026-10-01 第三阶段：固化（操作者授权我定安排，判据事先写死）
+
+**为什么是这件事**：10-01 一天落地了三件东西（SEGV 修复、两处撤回、p8 进 C4），**没有一件过独立证伪 pass**；
+同一天钉住的 `ProductSimARM64` 变陈旧，`sdk_phase_checklist.py` 开始拒读 ⇒ **当前没有任何可引用的阶段读数**。
+本阶段不加新功能，只把已落地的东西证伪一遍、把读数恢复。
+
+**完成判据**（五条全满足才算结束；改判据要操作者同意并在此写明原因）：
+- **E1**：`agent/sdk-phase-c1` 含 SEGV 修复（`8cd798e1804` 的内容），工作树干净。
+- **E2**：`f5b94e5b439` 的 `isolate.cc` 与 `exceptions.cc` 两处已撤回至 `f5b94e5b439^`；`dart_entry.cc` 保留。
+- **E3**：钉住的构建目录（`ProductSimARM64`、`ReleaseARM64`，以及判据读的其他目标）`ninja -n` 待办为 **0**。
+  ⚠️ 判别法是**跑那个探针**，不是看 `git status`；且要覆盖判据读的**全部**目标（10-01 两次栽在只建了其中一个）。
+- **E4**：`sdk_phase_checklist.py` **不拒读**且退出码 0，C4 含 p8。
+- **E5**：F160、F161、F162、F163 四张卡各过一次**独立**证伪 pass 并关闭。
+
+**范围**：只做 `tools/loop/phase_scope.txt` 里的四张卡（F160 F161 F162 F163），其余全部冻结，照上一阶段的规矩办。
+**汇报**：引用 `sdk_phase_checklist.py` 的读数与这四张卡的开闭，不报卡片总数。
+
+**四项决定的依据**（本阶段的输入，逐条已实测，见当日各节）：
+1. `isolate.cc`/`exceptions.cc` 撤回、`dart_entry.cc` 保留 —— 两条独立证据一致（agy 消融 + 只读 subagent 的 lldb 命中计数）。
+2. SEGV 修复并入阶段分支 —— A/B/C/复验四条判据由主会话在待办归零的构建上重跑建立。
+3. 重建钉住的构建 —— 它是 E4 的前提，且不依赖另外三项。
+4. p8 进 C4 —— **这是改判据**。理由：C4 原本在模拟器构建下**从未运行过 C→Dart 回调**（`p7` 只做 Dart→C，
+   C4(b) 的 5 个 callback 测试跑在不含模拟器的 `ReleaseARM64` 上）；p8 已有四种扰动全红的负控制。
+   操作者 10-01 授权「你安排」，据此执行并在此记明。
+
+🔴 **本阶段开始时已知的债**：`0xd0` 与 `0x100` 两个魔数无推导（F162 必须处理）；
+p8 的期望输出是否有独立于我们代码的 oracle（原版 Dart）尚待确认（F163）；
+研究树 `evidence_field_table_order_residual.sh` 已被主会话标死（恒等式，详见当日该节），未提交。
