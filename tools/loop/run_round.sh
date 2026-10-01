@@ -233,17 +233,23 @@ in_phase_scope() {
 if [ -n "$PHASE_SCOPE" ]; then
   PROMPT="$PROMPT
 
-【本阶段范围，2026-09-30 操作者决定，优先于下面所有指令】
-本阶段只做 SDK 清单，完成判据事先写死：研究树 spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py 退出码 0
-（C1 全部 VM stub 两侧尺寸一致；C2 stub 顺序一致；C3 field_table ×6 格是 structural 或 gap）。
-开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。
-2026-09-30 晚现状：清单读 SDK PHASE: 4 of 4 criteria met -- COMPLETE（C1–C3 尺寸/顺序/field_table，C4 当场运行 7 个 AOT 程序 + 5 个 FFI callback 测试；
-SDK agent/sdk-phase-c1 b468884fa7d）。本阶段剩下的**只有**证伪 pass：F157、F158（上次 PARTIAL，卡面措辞要修）、F159，以及 F160 的落地提交。
-没有新的实现工作。清单跑一次约 2 分钟（C4 会真跑程序）；任何改动之后清单必须仍是 rc 0，变红就先修回来。
+【本阶段范围，2026-10-01 操作者决定，优先于下面所有指令】
+第三阶段 = 固化。10-01 落地了三件东西且**都还没过独立证伪 pass**，本阶段只做这个，不加新功能。
+完成判据事先写死（全文见 memo.md「2026-10-01 第三阶段：固化」与 CLAUDE.md 规则 0）：
+E1 修复进 agent/sdk-phase-c1 且树干净 · E2 f5b94e5b439 的 isolate.cc/exceptions.cc 已撤回、dart_entry.cc 保留 ·
+E3 钉住的构建 ninja 待办为 0 · E4 sdk_phase_checklist.py 不拒读且 rc 0 · E5 F160-F163 四张卡各过一次独立证伪 pass 并关闭。
+**E1-E4 已于 10-01 15:0x 达成，本阶段剩下的只有 E5。**
+2026-10-01 现状：清单读 SDK PHASE: 4 of 4 criteria met -- COMPLETE，
+read against SDK agent/sdk-phase-c1 **dd75946f81a**（C4 当场跑 **8 个 AOT 程序**（p1-p8，p8 是 C→Dart 回调）**+ 5 个 FFI callback 测试 = 13 项**）。
+开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。清单跑一次约 2 分钟；
+任何改动之后清单必须仍是 rc 0，变红就先修回来。
+⚠️ **陈旧探针要用判据自己那串目标名去跑，并查退出码**——10-01 同一个坑栽了三次：构建落后 202 步被当成证据、
+只建 dartaotruntime 没建 gen_snapshot、以及建了 gen_snapshot 而判据读的是 clang_arm64/gen_snapshot。
+`git status` 干净不是「构建是最新的」的证据，自己另写的探针会把 `ninja: error` 当成 0 待办。
 证伪 pass 全部关掉后，在 memo.md 写「本阶段完成」并放 .loop/PAUSE（首行写 operator-requested stop），不要再找新活。
-只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-09-30 操作者决定」一节）。
-其余所有卡冻结：不派、不做、不关。证伪 pass 在清单工作里发现的循环机械问题，只在 memo.md 记一行，
-不开新卡，除非它挡住了清单上的某一项。汇报进度引用 sdk_phase_checklist.py 的读数，不报卡片数。"
+只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-10-01 第三阶段：固化」一节）。
+其余所有卡冻结：不派、不做、不关。证伪 pass 在本阶段工作里发现的循环机械问题，只在 memo.md 记一行，
+不开新卡，除非它挡住了本阶段的某一项。汇报进度引用 sdk_phase_checklist.py 的读数与这四张卡的开闭，不报卡片数。"
 else
   # say() is defined further down; logged once it exists.
   PHASE_SCOPE_NOTE="note: no phase scope ($PHASE_SCOPE_FILE absent or empty) -- rounds are shown every card"

@@ -19487,3 +19487,52 @@ STILL OPEN：一个覆盖 `NativeCallable.listener` 与「异常穿过回调」�
 **不受影响**：F161、F163 的 STILL OPEN 项（见上一节）是覆盖面缺口，不是已知会崩的 bug，
 不阻塞本轮结束，留给后续轮按同样「新鲜证伪 pass」的要求处理。
 
+
+## 2026-10-01 `compute_dd_slot_mapping` ×3 不是 blocked，是 gap —— 一条错注释让缺口在账上隐身
+
+**操作者 10-01 指示「跑他们的 aot-tools.dill 试试」。跑了，结论是矩阵那条注释的前提错了。**
+
+矩阵写的是 `needs --dd_caller_links from closed-source aot-tools.dill`（`parity_matrix.sh:743-746`，同文
+`dd_pipeline.sh:86`、`write_dd_slot_voters.py:4` 三处同一说法）。**`aot-tools.dill` 不产出它**——它只是把这个 flag
+转给 `analyze_snapshot`。证据在他们 dill 的字符串里：`'--dd_caller_links=$callerLinksOutputPath'`（**OutputPath**）、
+`'--dd_caller_links=$callerLinksPath'`、以及 `analyze_snapshot failed to compute DD caller links to`。
+
+**实测（只读跑他们的二进制，产物全在 scratchpad `ddcl/`，未入任何树）**：
+`aot-tools.dill` 要用他们自己的 Dart 3.12.2 跑（`~/.shorebird/.../c15ef6379403.../dart-sdk/bin/dart`）；
+我们的 Dart 3.13.2 报 `Invalid kernel binary format version (expected 138, found 130)`。
+他们的 `analyze_snapshot_arm64` 一条龙 rc 0：
+
+    $T --compute_dd_table=<o.ddt> --dd_caller_links=<o.ddcl> <so>
+    $T --compute_dd_slot_mapping=<o.ddsm> --dd_caller_links=<o.ddcl> --dd_table_data=<o.ddt> <so>
+
+| fixture | ddt | ddcl | ddsm |
+|---|---|---|---|
+| hello | 3969 | 54060 | 9 |
+| base_dd | 3969 | 54060 | 9 |
+| prog | 21245 | 217856 | 9 |
+
+`ddsm` 9 字节 = `55 7e ca dd`（magic 0xDDCA7E55）+ `02 00 00 00`（version 2）+ `80`
+⇒ **正是 `write_dd_slot_voters.py` 早已逆出的那个格式**，内容为空（这些 fixture 没有待解析的 DD 槽）。
+
+**真正的阻塞点在我们这侧**（两侧二进制的 `Empty value for option X` 字符串实测）：
+
+| option | 他们 | 我们 |
+|---|---|---|
+| `compute_dd_table` | ✅ | ✅ |
+| `dd_max_bytes` | ✅ | ✅ |
+| `dd_caller_links` | ✅ | ❌ |
+| `compute_dd_slot_mapping` | ✅ | ❌ |
+| `dd_function_identity` | ✅ | ❌ |
+| `dd_table_data` | ✅ | ❌ |
+
+他们还有 `Error: --dd_caller_links is required with --compute_dd_slot_mapping.`
+
+⇒ **不是「两侧都拿不到产物」(blocked)，是「他们有、我们没实现」(gap)。**
+🔑 **这是复刻面上一块此前不在任何清单里的缺口：四个未实现的 analyze_snapshot flag。**
+它隐身了一个月，就因为格子被用一个**错误的理由**标成 blocked —— 而 blocked 在这套账里意味着「谁也没办法」，于是没人再碰。
+同科于「断言保鲜期」第 7 个实例：**一条长得像证据的注释，让一个本可以关掉的缺口在账上消失。**
+
+**未做，待操作者决定**（都不在第三阶段范围内）：
+① 矩阵 3 格 `blocked → gap` 是实质改判（判据 1 要求没跑到的显式标注，改分类要操作者同意）；
+② 三处注释（`parity_matrix.sh:743`、`dd_pipeline.sh:86`、`write_dd_slot_voters.py:4`）要改，它们现在说的是错的；
+③ 四个 flag 在我们的 `analyze_snapshot` 里实现，之后这 3 格才能真对拍。
