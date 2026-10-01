@@ -20688,3 +20688,132 @@ with its current, now well-documented, residual gap. **Also still outstanding fr
 round, not yet acted on**: the 56 pre-existing staged files in the research tree flagged as a
 possible risk (may include their tool's `.so` output) -- needs operator attention before any bare
 `git add -A`/`git commit` in that tree.
+
+- 2026-10-02 01:04:40 round heartbeat (PID 56081, run_round.sh): round started. Confirmed
+  `.loop/PAUSE` absent, three trees' git status clean except `v1`'s pre-existing large block of
+  untracked non-loop files (unrelated, present since session start). Inspected the rescued stash
+  `loop-rescue 2026-10-02T00:54:39 round-58931` in the research tree (round-58931, interrupted):
+  its content is `f69_check_v3_ceiling_test.sh` + a `.serena/` config file -- F69/F111 work, which
+  is OUT of `tools/loop/phase_scope.txt` (frozen this phase). Not popped, not acted on; left
+  stashed as-is, no redo risk (it isn't a phase-scope card). Confirmed via research-tree `cards.tsv`:
+  F163/F166/F173 closed; F161 built/FALSIFIED (blocked on F174); F164 built/PARTIAL (two PARTIAL
+  passes, narrowing but not closing); F165 built/PARTIAL (two PARTIAL passes this session already,
+  prior round's own handoff says move to a different card). Per the prior round's explicit handoff
+  and per phase_scope's "real gaps before cleanup" ordering, picking **F174** this round (the heavy
+  fix that unblocks F161 -- a real correctness defect, not a cleanup/triage card).
+
+  Pre-dispatch locus confirmed by hand (to avoid the subagent re-deriving it, per dispatch
+  discipline point 2): `runtime/vm/dart_entry.cc:131`, inside `InvokeDartCode`'s CPU-shape branch
+  (`#if defined(DART_INCLUDE_SIMULATOR)`, `!FLAG_use_simulator`), does
+  `thread->isolate()->set_simulator(new Simulator());` directly -- it never calls
+  `Simulator::ApplyPendingVmcodeIfNeeded`. The ONLY other call site of that function is
+  `Simulator::Current()` (`runtime/vm/simulator_arm64.cc:1005-1021`), which is the sim-mode path
+  (`FLAG_use_simulator == true`) and is never reached when running CPU-shape. This confirms F161's
+  finding: a vmcode patch registered via `Dart_ShorebirdLoadVmcode`/`fhp_shorebird_load_vmcode`
+  before first Dart entry is silently dropped under `--no-use_simulator`, because the only per-isolate
+  `Simulator` allocation on that path bypasses the one function that applies a pending patch.
+
+  Dispatching a fresh background Opus subagent for **F174** now. Round ends here per contract
+  step 4, awaiting completion notification before recording a result.
+
+### F174 implementation round: subagent reports STATUS: built (SDK `51d6b791205`, RESEARCH `eccc4309`)
+
+**Summary from subagent** (Opus, 47 tool calls, 786s): in `runtime/vm/dart_entry.cc`'s CPU-shape
+branch of `InvokeDartCode`, the newly allocated per-isolate `Simulator` now gets
+`Simulator::ApplyPendingVmcodeIfNeeded(new_sim, base)` with the same base computation
+`Simulator::Current()` uses (`isolate->group()->source()->snapshot_instructions`). No other
+logic in the function touched, no new includes needed.
+
+**Repro** (new `nc_f174_cpu_shape_pending_vmcode.sh`, RESEARCH): an injected dylib's constructor
+calls `Dart_ShorebirdLoadVmcode` (per `shorebird_test.cc`'s usage pattern) before `main`, then runs
+`dartaotruntime` (ProductSimARM64) and checks for the `[B4] Applied` line. Three gates: P
+(`--use_simulator`, sanity-checks the probe itself) · R (`--no-use_simulator`, the actual fix) ·
+Z (no patch registered, confirms no false-positive `[B4]` line). Refuses to run if ninja has
+pending steps.
+
+**Before -> after** (ProductSimARM64 rebuilt each time, 8 steps both times): fix off (original HEAD
+`f5d9e96e231`, and again with the hunk reverted) -> `P OK applied=1` / **`R FAIL applied=0 (want 1)
+ran=1 registered=1`** / `Z OK applied=0`, rc 1. Fix on -> `P OK` / **`R OK applied=1 ran=1`** / `Z OK`,
+rc 0.
+
+**`sdk_phase_checklist.py`**: rc 0, `SDK PHASE: 4 of 4 criteria met -- COMPLETE`, read against SDK
+`51d6b791205`, 0 uncommitted paths, C4 0/14 failed. Required rebuilding ProductSimARM64,
+ReleaseARM64 (`dartvm`, `ffi_test_functions`), and ProductSimIosARM64
+(`clang_arm64/gen_snapshot`, `clang_arm64/analyze_snapshot`) plus a `parity_matrix.sh` rerun (105
+cells, 0 unrun, 0 blocked) because the checklist refused stale `out_pm` provenance.
+
+**STILL OPEN per the subagent**: (a) out of scope by design, not attempted: the
+exception-escaping-CPU-island case where `exceptions.cc`'s `use_sim=1`/`is_sim=0` diverge; (b) the
+probe only shows the patch gets APPLIED (the `[B4] Applied` line) -- it does not show patched
+BEHAVIOR actually runs under CPU-shape (in CPU-shape the Simulator's link table may never be
+consulted at all, a different question from "was the relink performed"); (c) already on record,
+unrelated: top-level `ProductSimIosARM64`'s own `analyze_snapshot` fails to link
+(`ld64.lld: cannot use both -exported_symbol* and -unexported_symbol*`).
+
+**F174 is `built`, not `closed`** -- dispatching a fresh independent falsification pass now, per
+LOOP_CONTRACT 五之四, before any checkbox moves or F161 is reconsidered. Round ends here awaiting
+completion notification.
+
+### F174 fix falsification pass verdict: FALSIFIED -- the fix is real but inert in CPU-shape
+
+**F174 VERDICT: FALSIFIED** (fresh Opus agent, 25 tool calls, 702s, independent of the implementing
+agent). Fresh-run confirmation: `sdk_phase_checklist.py` still 4 of 4 against `51d6b791205`, 0
+uncommitted; probe re-run fresh shows P/R/Z all "OK" with 0 pending ninja steps.
+
+**FLAW**: `ApplyPendingVmcodeIfNeeded` fills `shorebird_link_table_`, but the ONLY code that ever
+reads that table is the simulator's own branch decoders (`simulator_arm64.cc` ~line 2491/2562) --
+and those only execute while the simulator is actually decoding instructions. Under
+`--no-use_simulator`, Dart code runs natively on the real CPU and never reaches them, so the table
+is populated but never consulted. **Demonstrated directly**: a `loop.so` with a never-inlined
+`f()`, vmcode entries pointing `f`'s `cpu_off` at an invalid target -- `--use_simulator` SIGBUSes at
+that target (table is live), `--no-use_simulator` returns rc 0 with the correct UNPATCHED output
+and still prints the `[B4] Applied N` log line (table is dead). **The probe's "applied=1" reading
+only means the log line printed, not that behavior changed** -- this is attack 7 (question
+swapped): F161's real question was "is a registered patch silently dropped", and the probe only
+ever answered "was a log line printed."
+
+**Also found**: the probe's first entry-pair `(128, 52016)` is read as an OTA `instr_size` header,
+silently eating one real entry (a probe bug, not a VM bug -- not acted on this round, not
+blocking).
+
+**STILL OPEN** (the falsifier's own framing, not resolved by this pass): whether CPU-shape
+execution ever consults a patch via a DIFFERENT mechanism -- e.g. dispatch stubs that redirect
+specific patched call sites through the simulator while the rest of the program runs on CPU, which
+could be exactly what the shape-A/B dispatch work (F37's SDK history) already does for the
+`dart_dynamic_modules` call-site patching this project validated on a real device (D3). This pass
+only shows the *specific* mechanism F174 touched (the general per-isolate `shorebird_link_table_`)
+is inert in CPU-shape -- it does NOT show patching is impossible in CPU-shape by every mechanism,
+and it does NOT re-examine whether D3's real-device pass secretly ran the whole program inside the
+simulator rather than CPU-shape.
+
+**COST OF BEING WRONG**: F161/F174 would be closed on a no-op fix; any G3/D3 claim that a patch
+takes effect under CPU-shape/production configuration rests on this being resolved correctly.
+
+**Disposition**: per E5, FALSIFIED does not close the card. This defect is too large to fix in this
+round (per LOOP_CONTRACT 1.5: it is not a bug in F174's fix, it is a question about which production
+mechanism -- if any -- actually delivers patches under CPU-shape, requiring investigation of the
+shape-A/B dispatch stubs and possibly re-reading what D3's real-device validation actually ran).
+Split into a new card: **F175** (research tree `cards.tsv`, commit `c499ee37`) -- asks concretely
+which mechanism (if any) redirects a patched call site to patched code while the VM runs CPU-shape,
+using the SAME production configuration D3 validated on a real device, or else shows D3's passing
+result ran the whole program inside the simulator and its claim needs re-reading. `F174`'s row
+updated in place (status `built`, FALSIFIED verdict appended) in the same commit. `F161`'s row
+updated to note it is blocked on F175, not just F174. `tools/loop/phase_scope.txt` updated (added
+F175, corrected the F174/F161 status comment) in this tree, this round.
+
+**`cards_check.sh`**: rc=1, but the only failure is the pre-existing, already-documented
+`commits-not-sha` CRLF issue (144 rows, noted by the F165 implementing subagent earlier this
+session, out of scope, not introduced by this round's edits) -- confirmed the only NEW line in its
+output from this round's edits is "open in cards.tsv only: F175" (expected: a brand-new open card
+not yet mirrored into `memo.md`'s own checkbox list, which this project does not literally keep
+one-for-one with every research-tree card).
+
+**Round PID 56081 stopping point**: this round ran F174 through implement -> falsify (FALSIFIED,
+a real and significant finding: the vmcode link-table mechanism is inert under CPU-shape) in one
+round, then recorded the split to F175 and updated phase scope. Per contract step 4, ending here.
+**Flagging for the operator, not acted on**: F175's premise touches whether D3's existing
+real-device PASS result (`PATCHED_V2` ✅, referenced throughout `memo.md`/`CLAUDE.md`) is actually
+evidence of CPU-shape patching working, or whether it ran under the simulator the whole time --
+this is a candidate reinterpretation of a previously-closed milestone, not a confirmed one; next
+round or the operator should decide how to prioritize F175 against the rest of the phase-scope list
+(F160/F167/F168/F169/F170/F172 are still waiting, all lower apparent risk than F175).

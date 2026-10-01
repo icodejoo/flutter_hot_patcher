@@ -5,13 +5,19 @@
 # rule 0 and memo.md "第四阶段判据". This scope is the part of it the loop can
 # do unattended.
 #
-# Phase 3 still owes falsification passes on F160, F163 (F162 was changed by
-# its own pass and re-verified by hand on 2026-10-01; F163 closed 2026-10-01
-# via its own fix pass). F161's falsification pass (2026-10-01) returned
-# FALSIFIED with a real defect, not merely incomplete; F174 (added 2026-10-01,
-# LOOP_CONTRACT 1.5 split) is the heavy half -- fixing the pending-vmcode drop
-# in dart_entry.cc under --no-use_simulator -- and F161 stays built/FALSIFIED
-# until F174 closes.
+# Phase 3 still owes a falsification pass on F160 (F162 was changed by its own
+# pass and re-verified by hand on 2026-10-01; F163/F166/F173 closed 2026-10-01).
+# F161's falsification pass (2026-10-01) returned FALSIFIED with a real defect;
+# F174 (added 2026-10-01, LOOP_CONTRACT 1.5 split) fixed the pending-vmcode-drop
+# TIMING bug in dart_entry.cc under --no-use_simulator, but F174's OWN
+# falsification pass (2026-10-02) found the fix is FALSIFIED: the link table it
+# fills is never read by anything in CPU-shape execution (only the simulator's
+# own instruction decoder reads it, and that never runs under --no-use_simulator).
+# F174 is `built`, not closed. F175 (added 2026-10-02) is the real open question
+# this surfaced -- whether ANY mechanism makes a patched function's native call
+# sites redirect to patched code while the VM runs CPU-shape, as opposed to this
+# specific (now-shown-inert) link table. F161 stays built/FALSIFIED, blocked on
+# F175, not just F174.
 #
 # Deliberately NOT here:
 #   F171  G3, the first real app -- needs the operator present (device
@@ -39,3 +45,4 @@ F170
 F172
 F173
 F174
+F175
