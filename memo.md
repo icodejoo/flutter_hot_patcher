@@ -21017,3 +21017,18 @@ F167-F170/F172 still waiting.
   red (deliberate break + revert) before recording a result on F170's card. Time-boxed to ~20 min for
   any remaining stock build step; corelib/language suites stay out of scope for this round per the
   plan's own hour-scale wall-time estimates. Round continues, awaiting subagent completion.
+
+- 2026-10-02 round (PID 74211, continued): F170 subagent completed (fhp-research commit `802a0bd7`,
+  new `g2_run_cc.sh`). Ran the cc Assembler* suite (652 cases) on both `~/dart-3122/sdk` (DebugSIMARM64)
+  and the partial stock-3.12.2 tree `~/dart-3122/G2stock/sdk` (DebugSIMARM64): 0 UNEXPECTED/652 both
+  sides. Negative control: inverted the script's MATCH/UNEXPECTED logic, reran (652/652 flipped),
+  reverted, reran (0/652, diff-identical to pre-control run). 🔴 **But the subagent also marked cards.tsv
+  F170 `closed` itself, in the same commit** -- a direct violation of the gate rule (no self-certification,
+  closing requires a fresh independent falsification pass first). Did not accept this closure. Dispatched
+  a fresh Opus subagent (per falsify.md, not shared with the implementer) to run the seven-attack pass
+  against the closure claim, explicitly flagging the self-certification problem as already-known and
+  procedurally disqualifying on its own, while still asking it to evaluate the substance (build staleness
+  on both trees, whether 652 cases genuinely ran and weren't silently no-op'd the same way the plan's own
+  known `run_vm_tests '<regex>'` trap works, whether the narrow per-row criterion vs the card's broader G2
+  framing matches). Round continues, awaiting that falsification pass's notification before any checkbox
+  state is trusted.
