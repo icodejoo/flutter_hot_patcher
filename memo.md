@@ -20938,3 +20938,21 @@ F167-F170/F172 still waiting.
   time-boxed to ~25-30 tool calls with an explicit instruction to bail into a scoped split-card
   proposal rather than force an infeasible multi-hour build. No checkbox moved, no card closed this
   round. Round ends here awaiting completion notification.
+
+- 2026-10-02 round (PID 34449, continued): F175 repro subagent completed (fhp-research commit
+  `561b3d2b`). **Q1 resolved**: ELF mapping is PROT_READ-only, confirmed against genuine Shorebird
+  engine source (`patch_cache.cc:53` calls `Dart_LoadELF(..., kReadOnly)`), consistent with our
+  fork's `elf_loader.cc:516-518` comment -- native/CPU-shape execution of patch payload bytes is
+  not possible via this path, corroborating the prior PARTIAL verdict's hypothesis.
+  **Q2 not attempted**: the real engine path's WrapCode/LinkOracle machinery is wired up only in
+  the Flutter engine's shell/runtime layer (`flutter/runtime/shorebird/*.cc`), unreachable from
+  standalone `dartaotruntime` -- zero hits under `runtime/bin/`. Smallest buildable target is the
+  engine's `shell_unittests` (includes `patch_cache_unittests.cc`); `ninja -n shell_unittests`
+  reports 3516 pending steps, i.e. a multi-hour build, out of budget for this round. Subagent
+  recorded a split-card proposal in F175's cards.tsv row (fhp-research): (1) a dedicated round to
+  pre-build `shell_unittests` and pin it; (2) extend `patch_cache_unittests.cc` with a base+patch
+  AOT case asserting on stdout under CPU-shape; (3) negative control = corrupted ELF/zeroed link
+  table must show unpatched output or clean failure, not silent pass.
+  No checkbox moved, no card closed. F175 stays `open`; F161/F174/F165 remain `built`, still
+  blocked/deferred. Next round (if budget allows a multi-hour build) should pick up the split-card
+  proposal as its own card rather than retrying Q2 inline. Round ends here.
