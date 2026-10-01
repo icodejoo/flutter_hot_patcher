@@ -19536,3 +19536,27 @@ STILL OPEN：一个覆盖 `NativeCallable.listener` 与「异常穿过回调」�
 ① 矩阵 3 格 `blocked → gap` 是实质改判（判据 1 要求没跑到的显式标注，改分类要操作者同意）；
 ② 三处注释（`parity_matrix.sh:743`、`dd_pipeline.sh:86`、`write_dd_slot_voters.py:4`）要改，它们现在说的是错的；
 ③ 四个 flag 在我们的 `analyze_snapshot` 里实现，之后这 3 格才能真对拍。
+
+### 心跳 2026-10-01T15:09:20（round PID 26211）：F162 真 bug 修复——重的那半，按契约 1.5 派发
+
+派出一个 general-purpose 子代理（异步后台，agentId 内部，本轮不等待其完成）去做
+memo.md 上一节写死的「重的那半」：在 `~/dart-3122/sdk` 新建分支 `agent/f162-csp-fix`
+（基于 `agent/sdk-phase-c1` 当前 tip `dd75946f81a`），修 `runtime/vm/dart_entry.cc`
+`InvokeDartCode` 里嵌套重入时 `simulator_csp` 只留固定 0x1d0 字节余量、不随真实栈余量
+变化的碰撞 bug（F162 FALSIFIED 的那个真 bug），要求：
+① 用真实不变量（对比 `OSThread::stack_limit()` 之类）替掉裸魔数，不是再放大常数
+（放大常数已被证明只是推迟崩溃深度，不解决碰撞）；
+② 建在 `xcodebuild/ProductSimARM64_cpu`（或自建副本），**明确禁止**碰 E3 钉住的
+`ProductSimARM64`/`ReleaseARM64`/`ProductSimIosARM64`；
+③ 把深递归复现脚本落盘到 `fhp-research/spikes/shorebird_linkinfo_oracle/f162_repro/n3.dart`
+（此前子代理的复现脚本只在 `/tmp`，已证明会丢，这次要求提交进研究树）；
+④ 四条判据（深递归不崩 / 既有 p1..p8 两种模式仍过 / `ninja -n` 待办为 0 / 负控制证明新检查承重）；
+⑤ 增量提交、不许留脏树；做不完就如实停手汇报，不许编结果。
+严格返回格式见派发提示词全文（已写入 `/tmp/f162_dispatch_prompt.txt`，但该文件是临时的，
+不在仓库里，下一轮若要复核派发内容需要重新从这条心跳的摘要或本节向上的
+「2026-10-01 F162 修复排期」一节重建，不要依赖 /tmp）。
+
+**本轮到此结束**：子代理异步跑在后台，完成会有通知；本轮不等待、不重跑验证、
+不读它的中间 transcript。F160/F161/F163 的 STILL OPEN 覆盖面缺口（见上一节）
+留给后续轮次按同样「新鲜证伪 pass」要求处理，本轮不碰。E5/本阶段完成判据继续等
+F162 的独立证伪 pass（要等这个修复落地之后，由另一个新鲜子代理做，不能是这同一个）。
