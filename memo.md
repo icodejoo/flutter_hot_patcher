@@ -20532,3 +20532,55 @@ phase-scope item.
   an independent falsification pass on the F165 implementation (commits `0fbf4b1c`/`908af025`,
   research tree). Attacks assigned from the subagent's own STILL OPEN list plus the standard
   seven-attack falsify.md template. Round ends here awaiting completion notification.
+
+### F165 falsification pass verdict: PARTIAL -- real blind spot found, card stays built
+
+**F165 VERDICT: PARTIAL** (fresh Opus agent, 49 tool calls, 494s, independent of the implementing
+agent). Core claim RE-SURVIVES on independent re-derivation (full chain rebuilt by hand from
+fresh `.so` files, 0 pending ninja confirmed first; all three cells' `.ddt`/`.ddcl`/`.ddid`/`.ddsm`
+byte-identical ours-vs-theirs, matching the committed `out_pm`); both reported negative controls
+(ddsm byte flip, old-blocked-branch restore) independently re-run and reproduced, with full
+`parity_matrix.tsv` diffs confirming no other cell moved.
+
+**FLAW found**: the cell's `.ddid` comes from a SEPARATE `gen_snapshot --print_dd_function_identity_to`
+invocation whose `.so` is NOT the same file as the `.so` that `analyze_snapshot` actually analyzes in
+this cell (hello differs by +8 bytes and 106309 differing bytes; prog differs by 276240 differing
+bytes at the same size) -- nothing binds the two together. Feeding hello's chain the **prog**
+fixture's `.ddid` is silently accepted (rc 0, no error on either tool) and produces 61 slots/21477 B
+instead of the correct 67 slots/25263 B, and the current classifier still reports this as
+`yes/yes/na "identical"`. A committed reproducer (`nc_f165_wrong_ddid.sh`, research tree `f6692dad`)
+exits 1 while this blind spot is open. Separately reconfirmed (d): a corrupted `.ddcl` makes our side
+reject cleanly (rc 255) while theirs SIGBUS (rc 138) -- same asymmetry already on record under
+F164/F172 -- but the cell currently reads this as plain `unknown`/"differs", losing the
+crash-vs-reject distinction rather than recording it.
+
+**Also reconfirmed (a)**: hello and base_dd share identical dill sha1 -- 2 independent fixtures, not
+3; the subagent flagged this overcount also appears as "3 fixtures" in `CLAUDE.md` (3x) and `memo.md`
+(56 matches), not something to chase down this round.
+
+**COST OF BEING WRONG**: if "identical" is trusted without the .ddid binding, this cell's green
+reading does not actually demonstrate the slot MAPPING is correct -- only that two self-consistent-
+but-possibly-mismatched identity tables agree with each other, which a wrong identity table can
+satisfy by accident (as demonstrated).
+
+**Disposition**: per E5, PARTIAL does not close the card. `cards.tsv` F165 row updated in place
+(research tree commit `ecc8585d`) with the verdict, the reproducer script reference, and marked the
+new control as REQUIRED-BUT-NOT-YET-PASSING. **F165 stays `built`**, open for a future round to (1)
+bind the `.ddid` to the actual analyzed `.so` (e.g. make the ddid-producing run's `.so` the cell's
+artifact, or verify the ddid's function set against that `.so`'s own `--shorebird` output) until
+`nc_f165_wrong_ddid.sh` passes, and (2) decide whether the `.ddcl` crash-vs-reject asymmetry should
+be recorded as a distinct classification rather than folded into plain `unknown` (relates to F172).
+
+**Side note, NOT acted on, flagged for the operator**: the falsification agent noticed the research
+tree's git index already has 56 pre-existing staged entries (dated 2026-09-25, `test_work` files plus
+`f69_check_v3_ceiling_test.sh`) that reportedly include `.so` snapshots, some apparently produced by
+their tools -- these must never reach the public origin per the standing rule that their binaries
+never enter version control. This round did not touch them (not mine, not blocking F165) and did not
+commit anything beyond its own script. **This needs operator attention before anyone runs a bare
+`git add -A`/`git commit` in that tree** -- confirmed present via `git status --porcelain | grep -c
+'^A '` = 56 as of this round.
+
+Round PID 58931 ends here. Next round per phase-scope ordering: either continue F165's ddid-binding
+fix (same scope item, real gap) or move to F167/F168/F169/F170/F172/F174 per the standing order
+(built cards with open defects before pure cleanup); F161/F174 (the pending-vmcode fix) remains the
+other real-gap item not yet started.
