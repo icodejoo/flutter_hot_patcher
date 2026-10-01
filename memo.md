@@ -19605,3 +19605,42 @@ F162 在这次独立证伪 pass 过（SURVIVES）之前仍是 `FALSIFIED`/open�
 （两处改动是否都必要、地板选 Simulator 还是 OSThread 哪个对、判据 b 的手工脚本是否绕过了真检查、
 判据 c 的「0 待办」范围、E3 三个钉住目录真的没被碰、负控制独立复现、以及一条实现者没测的新增项——
 正常浅递归不应该被新 guard 误判)。本轮到此结束,等完成通知。
+
+### 2026-10-01 F162 修复独立证伪 pass 回收：PARTIAL，提交信息与代码对不上
+
+**F162 VERDICT: PARTIAL** -- dart_entry.cc 的修复被独立确认必要且地板选对了（`sim->overflow_stack_limit()`），
+但 simulator_arm64.cc 那处修复「必要性」在这次复现脚本上**没有复现**，且它自己的提交信息**与实际代码不符**。
+
+逐项（都是独立动手跑的实验，不是读代码采信）：
+- **dart_entry.cc 的修复确认必要**：单独撤回它（保留 simulator_arm64.cc 那处）在 n3.dart depth 500/2000
+  下复现真实 `BUS_ADRALN`（`si_addr=0x1`）。但**提交信息里那句具体断言被证伪**：「只保留 dart_entry.cc 的修复
+  重建后在 depth ~500 复现 SIGSEGV」——独立复现脚本在这个配置下 depth 500/800/1500/2000 全部是干净的
+  `FATAL`，从未崩溃；默认模拟器模式下在走到那段代码之前就先触发了正常的 Dart `StackOverflowError`。
+  ⇒ **第二个提交（simulator_arm64.cc）的必要性没有被这份复现脚本确认**。
+- **地板确认对**：把 dart_entry.cc 那处的地板换成 `OSThread::Current()->overflow_stack_limit()` 会让检查
+  静默放行，复现出真实 `SIGSEGV`（`si_addr=0x0`）——证实 `sim->overflow_stack_limit()` 在这个点是对的地板。
+- 🔴 **但 simulator_arm64.cc 提交信息与自己的代码矛盾**：提交信息（以及回收到 memo 里的那份自报摘要）都说
+  它检查的是「同样的 `sim->overflow_stack_limit()`」，**实际代码**（`simulator_arm64.cc:2177`）用的是
+  `OSThread::Current()->overflow_stack_limit()`。`Simulator::overflow_stack_limit()` 在那个作用域里本来可以
+  通过 `this` 访问，不存在「够不到」的技术原因 ⇒ **这是一处真实的「断言与代码不符」，此前没被抓到，
+  是因为（见上条）复现脚本根本没走到这条逃逸路径**。
+- 判据 3(a) 确认为真（`run_c4` 确实写死了非 `_product` 的二进制名）。
+- 判据 3(b) 独立手跑（不走 `run_c4`）：p1–p8 两种模式各自对上 `expected.tsv`，8/8；并补跑了实现者自报里
+  没提到的 5 个 FFI 测试（对 `ReleaseARM64` 既有 `dartvm`），全部 rc=0——**但这顺带发现 `ReleaseARM64`
+  当前落后 15 步 ninja，是本任务之前就存在的陈旧，不是本任务引入的**；清单本来的 `run_c4`/checklist
+  路径现在会拒读。
+- 判据 4 确认：子代理建的四个目标 `ninja -n` 待办为 0。
+- 判据 5 确认：E3 三个钉住目录按 mtime 探针核实未被碰；**清单本身目前因 `ProductSimIosARM64` 落后 6 步
+  而 rc=2 拒读，但这是本任务开始前就有的陈旧，与本任务无关**。
+- 判据 6（负控制）用真实撤回/重建复现，不是只翻一个 `if(false)` 的二进制级扰动。
+- 判据 7（假阳性）确认无误判：`fib(20)`、`sumRec(50)` 两种模式都干净通过。
+
+**STILL OPEN**：simulator_arm64.cc 那处逃逸（`DecodeSimulatorToNativeTransition`）在深递归下
+到底可不可达、是否真的需要这个 guard、它用 `OSThread` 的地板在那个执行语境下是巧合地没问题还是真的错——
+都没有解决，需要一个真正能命中那条路径的复现脚本才能回答。
+
+**不关卡**：按 E5 规矩，PARTIAL 不许关 F162，保持 FALSIFIED/open。下一步（未派，留给后续轮次）：
+① 要么找到/构造一个能走到 `DecodeSimulatorToNativeTransition` 深递归逃逸路径的复现脚本，验证那处
+guard 是否真的承重，并把它的地板改成与提交信息一致的 `sim->overflow_stack_limit()`（或者如果验证后
+`OSThread` 地板在那条路径上确实是对的，就反过来改提交信息，不要留着自相矛盾的记录）；
+② 这两个修正之后，仍需要**再一次新鲜独立证伪 pass**才能把 F162 标 SURVIVES/关闭。
