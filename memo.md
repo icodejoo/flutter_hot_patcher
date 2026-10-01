@@ -19390,3 +19390,48 @@ p8 的期望输出是否有独立于我们代码的 oracle（原版 Dart）尚�
 - [ ] **F161：`f5b94e5b439` 的 `isolate.cc` 与 `exceptions.cc` 两处撤回，`dart_entry.cc` 保留**（`built`，2026-10-01，deps=F160）两条独立证据判它们不承重；负控制=把任一处加回去后每条读数必须逐字节全同，且要证明真重建发生过。判据见 `cards.tsv`。
 - [ ] **F162：`--no-use_simulator` 在地址 0 的 SEGV 修复**（`built`，2026-10-01，deps=F160，SDK `8cd798e1804`）`SaveClangState/RestoreClangState` + 把 C 运行时栈从 Dart 栈上挪开；🔴 **`0xd0` 与 `0x100` 无推导**，pass 要么推导出来，要么白纸黑字写「未解释的常数」，且两个常数要**分别**扰动。判据见 `cards.tsv`。
 - [ ] **F163：p8（C→Dart 回调）加进 C4**（`built`，2026-10-01，deps=F160）补的缺口是 C4 从未在模拟器构建下跑过 C→Dart 回调；期望输出由 stock Dart 3.13.2（`~/fvm/versions/3.47.2`，revision `60a57cd42d6`）独立复现，**p1–p8 共 8 of 8**，docstring 的「7/7」已订正为「8/8」。判据见 `cards.tsv`。
+
+## 2026-10-01 第三阶段 E1–E4 达成；读数回来了
+
+**`SDK PHASE: 4 of 4 criteria met -- COMPLETE`，rc 0**，read against SDK `dd75946f81a`（`agent/sdk-phase-c1`，0 未提交），
+`gen_snapshot 48f7de0f685de753…` / `analyze_snapshot 0c794e8478c8eb08…`。
+C1 三个 fixture 各 187/187、0 个尺寸不同 · C2 同序 · C3 6 格实测只差组内顺序 · **C4 13 项实跑全过（12→13，多的是 p8）**。
+
+| 判据 | 状态 | 依据 |
+|---|---|---|
+| E1 修复进 `agent/sdk-phase-c1` | ✅ | fast-forward（`b468884fa7d` 是 `8cd798e1804` 的父提交），`agent/no-use-sim-segv` 原样保留 |
+| E2 两处撤回、`dart_entry.cc` 保留 | ✅ | `f24498a3740`；A/B/C/D 四态读数见下 |
+| E3 钉住的构建待办归零 | ✅ | ProductSimARM64 514→0 · ReleaseARM64 17→0 · ProductSimIosARM64 **clang_arm64/** 目标 309→0 |
+| E4 清单不拒读且 rc 0 | ✅ | 上面那行读数 |
+| E5 F160–F163 证伪 pass | ⏸ | 循环的活，范围已写进 `tools/loop/phase_scope.txt`（已提交 `d5ea8245`） |
+
+**E2 的四态读数**（SDK subagent 做，每轮读数前跑陈旧探针、并 `rm -f *.so` 让快照由当次 `gen_snapshot` 重生成）：
+A 交付态 9/9 两模式 · B 负控制（两 hunk 贴回）9/9 两模式、**逐格与 A 相同** · **C 正控制（退回 `dart_entry.cc`）`--no-use_simulator` 0 过 9 败、模拟器模式 9/9** · D 还原后 9/9。
+🔑 **C 是它自己加的，补上了一个真缺口**：负控制预期「读数不变」，而「读数不变」与「仪器瞎了」在输出上分不开；C 证明 `run.sh` 在这个构建上确实能红、且只在 CPU 那条路上红。
+
+**`--self-test` 0 failure(s)，且 `NOT EXERCISED` 计数消失**（构建新鲜后 9 个 C4 用例真执行）。p8 相关 5 条全过，含
+「排序错一次交换 → NOT MET」「拿 p7 的行冒充 → NOT MET」「expected.tsv 不点名 p8 → 拒读」「p8.dart 不在 → 拒读」。
+⚠️ 那个 `NOT EXERCISED` 计数器是研究树 subagent 为这件事加的：**旧版在 C4 整块被跳过时会打印一个干净的 `0 failure(s)`**。
+
+🔴 **订正一条我自己 10-01 早些时候记的**：「单独退回 `dart_entry.cc` → `Trace/BPT trap`」——SDK subagent 这次拿到的是 `SEGV_ACCERR`。
+差别在于它的正控制是在 `isolate.cc` **已撤回**的基础上做的 ⇒ **`isolate.cc` 那处并非在所有配置下都是空操作**，
+它会改变「已经坏掉」的配置里的崩溃形态；在交付配置里对任何被测读数无影响。撤回仍然成立，但「空操作」这个说法要收窄。
+
+🔴 **第三次栽在「我建的不是判据读的那个」（同日第三种变体，主会话自犯）**：
+① agy 交报告时构建落后 202 步 ② 我只建 `dartaotruntime` 没建 `gen_snapshot` ③ **我建 `gen_snapshot`，判据读的是 `clang_arm64/gen_snapshot`**
+——带工具链前缀的是另一个目标，我的探针报 pending 1，清单报 309。
+⚠️ 同时我那个临时探针自己有缺陷：`ninja: error: loading 'build.ninja'` 也以 `ninja: ` 开头，被 `grep -vc '^ninja: '` 吃掉 ⇒
+**目标名不存在被数成 `pending=0`**（`ProductSimIosARM64/clang_arm64` 根本没有 `build.ninja`，它只是输出目录）。
+`sdk_phase_checklist.py` 自己的 `ninja_pending` 查退出码与 `ninja: error`，不犯这个错。
+🔑 **E3 的措辞要收紧：陈旧探针必须用判据自己那串目标名去跑，并且查退出码——不要另写一个探针。**
+
+⚠️ **iOS 构建里 `analyze_snapshot`（默认工具链那个变体）链接不了**：同时带 `-Wl,-exported_symbol` 与
+`-Wl,-unexported_symbols_list`，`ld64.lld` 拒绝；同目录 `gen_snapshot` 只有后者所以没事。**无判据读它**，
+带前缀的 `clang_arm64/analyze_snapshot` 309 步全建通。记为已知的配置债。
+
+**路上做的两件机械事**：`parity_matrix.sh` 重跑（新钉住的二进制产出新 `out_pm`，`59 cells, 0 unrun, 3 blocked`，分类计数未变）；
+`cards_check.sh` 从 3 红回到 2 红（补了 F161–F163 的 memo 行；剩下两红是既有的 commits-not-sha / no-commit）。
+
+⏸️ **待操作者**：① `f24498a3740` 的提交信息有三处错（方向反了、conjunct 写成 disjunct、行号 630/646 实为 631/676），
+`--amend` 被钩子拒绝且硬约束禁止改写历史 ⇒ subagent 另加空提交 `dd75946f81a` 记录更正。**建议保留，不改写历史。**
+② 起循环（终局 PAUSE 只有人能删）：`rm .loop/PAUSE` 后在终端里 `./tools/loop/ralph.sh`。
