@@ -20243,4 +20243,54 @@ dd_ft_link_data 真缺口，优先于整理类的 F167/F168/F169/F170/F172）。
 `cards.tsv`/`memo.md`/`phase_scope.txt`，不影响 C1–C4 的判据或矩阵读数。
 
 按本阶段排序，下一个未完成项：**F164**（built，待独立证伪 pass，dd 四选项对拍）或
-**F165/F173**（open，真缺口，优先于 F167–F170/F172 整理类）。本轮到此结束。
+
+## 2026-10-01 22:34 心跳（round PID 66696，ralph.sh）
+
+本轮排序：F166 已 closed；F163 已 closed；F161 FALSIFIED 并已拆为 F174（open，重的那半，不在本轮能装下的范围）；
+F160 仍 open（第三阶段欠账，但其判据的运行时部分看起来已被 F161/F162/F163 的后续工作间接满足，
+需要先核实而非假定）。按契约 1.5，F160 的"核实判据是否已满足+若满足再走证伪 pass"这类工作本身较重，
+且 F164 是现成的 built 卡、判据范围明确（dd 四个选项对拍，已有完整 criterion 与 negative control
+记在 cards.tsv），适合一轮装下。本轮派一个全新子代理对 **F164** 跑独立证伪 pass
+（`tools/loop/prompts/falsify.md`），本轮到此结束，等待完成通知。
+
+### 2026-10-01 F164 第二次证伪 pass 回收：PARTIAL ——核心主张 RE-SURVIVES，NC1 查出一处未记录的 .ddcl 崩溃分歧
+
+**F164 VERDICT: PARTIAL**（Opus，68 次工具调用，556s，与上一次 PARTIAL pass 及改文字的主循环均不同一方）。
+
+七项攻击逐条亲手复现，两侧构建均重新确认 0 待办 ninja（`ReleaseARM64` 从 174 步重建到 0；
+`ProductSimIosARM64` 的 `clang_arm64/analyze_snapshot`+`gen_snapshot` 本已 0）：
+① 篡改一个 .ddt 输出首字节，`cmp` 能报出差异——判据能报红；
+② 两侧同龄（重建后）；
+③ 新鲜重新生成 hello/prog/base_dd 的 `.so`，`hello.dill` 与 `base_dd.dill` sha1 相同，核实「2 个独立 fixture ×
+6 个可比产物组」的计数成立，15 组 ours-vs-theirs 比对（ddt/ddcl/ddsm-no-identity/ddsm-with-identity/ddid
+×3 fixture）全部逐字节相同；
+④ 字符串生成走 `options.h` 的 `DEFINE_STRING_OPTION` 宏在编译期对 `#name` 求值，机制上每个 flag 唯一；
+⑤ 现场重新量过 698829/704596，与卡片记的订正值一致；
+⑥ **NC1（修正后方向，`.ddcl` 篡改）现场真实重建后跑：7 个采样偏移里 6 个符合「两侧等量平移、保持 0 差」，
+但第 7 个（偏移 20000，`hello` fixture）不是——我们干净拒绝（rc=255，"truncated at link 349 of 930"），
+他们崩溃（SIGBUS，rc=138，无输出）**。NC3（逐选项计数归零）现场重建两次（去掉再恢复）确认：移除
+`dd_function_identity` 的注册后，该选项自己的字符串计数 1→0，其余三个仍各为 1，总数 25→24；
+⑦ 「9 组→2 fixture×6 组」的收窄是合理收窄，不是换题；但 NC1 新发现的 `.ddcl` 崩溃分歧**没有被归并进
+F172（G4 负向补丁集），卡片上也没有任何地方承认它**。
+
+**FLAW**：修正后的 NC1（"两侧 `ddsm` 等量平移、保持 0 差"）**不是普遍成立**——`.ddcl` 偏移 20000
+（hello fixture，XOR 0x02）处，我们干净拒绝而他们崩溃（SIGBUS rc=138），这与已经记在案的
+`.ddt` 篡改崩溃-拒绝不对称（已移进 F172）是同一类，但这个 `.ddcl` 实例此前未被记录在 F164 或 F172 任一张卡上。
+
+**STILL OPEN**：核心主张本身（SURVIVES）唯一仍待做的是把 `.ddcl` 字节范围扫更宽，量出崩溃-拒绝分歧出现的
+频率，而不只是这一个偏移点。
+
+**COST OF BEING WRONG**：F164 是 DD（deferred-dispatch）链接管线唯一能做到「同输入下我们 vs 他们」逐字节
+对拍的直接依据（`dd_caller_links` 的生产者是闭源的 `aot-tools.dill`），G1/G4 读数与 F165/F172/F173
+都引用它的「逐字节相同」结论作为证据基础。
+
+**处置**：按 E5 规矩 PARTIAL 不许关卡。本轮已在主循环内（无需再派子代理，纯文本订正，同上一轮 F164 PARTIAL
+的处理方式一致）完成：① 研究树 `cards.tsv` F164 行追加本次 pass 的核心结论与 NC1 的新发现；
+② 新发现的 `.ddcl` 崩溃-拒绝分歧作为 F172(c) 追加进 G4 负向补丁集素材；③ `cards_check.sh` 跑后失败数不变
+（仍是既有的、范围外的 `commits-not-sha` 问题，1 项，非本轮引入）；研究树提交 `b83f76c6`
+（`spikes/shorebird_linkinfo_oracle/cards.tsv`，`+3/-3`）。**F164 仍是 `built`，未关卡**：
+需要新一轮独立证伪 pass 核对「NC1 改窄到实际成立的偏移范围」或「扫宽范围量出分歧频率」之后才能考虑关闭。
+
+本轮未进一步派子代理（控制单轮体量，参照并发四条）。按本阶段排序，下一个未完成项：**F165/F173**
+（open，真缺口，优先于 F167–F170/F172 整理类），或先处理 F160（第三阶段欠账，运行时判据可能已被
+F161/F162/F163 间接满足，需要核实）。本轮到此结束。
