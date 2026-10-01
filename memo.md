@@ -19821,7 +19821,7 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 
 - [ ] **F164：analyze_snapshot 的 dd 四个选项**（`built`，2026-10-01，SDK `252c31c45f6`）九组逐字节相同；三处未复现项写在卡上。判据见 `cards.tsv`。
 - [ ] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`open`，deps=F164）判据见 `cards.tsv`。
-- [ ] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`built`，研究树 `f1ceebbb`）顺带修了 `WORK=` 不隔离 TSV 的缺陷。判据见 `cards.tsv`。
+- [x] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`closed`，研究树 `581869b2`）顺带修了 `WORK=` 不隔离 TSV 的缺陷；负控制修复后经独立证伪 pass SURVIVES (fix)。判据见 `cards.tsv`。
 - [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
 - [ ] **F168：复核 44 个 not-comparable 判定**（`open`）那是 agy 未经审的交付，每条要跑二进制核。判据见 `cards.tsv`。
 - [ ] **F169：G1 分母脚本进仓库、接闸门**（`open`）判据见 `cards.tsv`。
@@ -20022,3 +20022,19 @@ SURVIVES 才能关 F166。
 且除 note 文字外无格变类；⑥查 `581869b2` 是否是当前 HEAD 祖先、现在跑 `phase_gate.sh`/
 `structural_evidence_check.sh` 的真实 rc。判决必须含 `F166 修补丁 VERDICT: ... (fix)`。
 本轮到此结束，等待完成通知；SURVIVES 才能关 F166，否则记录新发现、继续 PARTIAL/open。
+
+### 2026-10-01 F166 修补丁独立证伪 pass 回收：SURVIVES (fix) ——关卡
+
+**F166 修补丁 VERDICT: SURVIVES (fix)**（Opus，20 次工具调用，405s，与前两个子代理均不同）。
+七项攻击全部亲手复现：脚本确认是从 `parity_matrix.sh` `sed` 提取原文而非另写一套；亲手重跑负控制
+na→unknown→na、仓库 `parity_matrix.tsv` sha256 不变；另挑两个脚本未覆盖的格（`gen_snapshot/verbose`
+日志文件、`hello/loading_unit_manifest` JSON 清单）独立复测，同样正确变类，证明不是巧合（`cmp_files()`
+对内容按字节比对、格式无关）；note 文字修复确认在生成源头 `parity_matrix.sh:975`，全量重跑后仍是修复后的文字；
+全量重跑 105 行逐格 class 列与已提交 TSV 字节相同（105/53/3/49 不变，仅 note 文字按预期差异）；
+`581869b2` 确认是当前 HEAD 祖先，`phase_gate.sh`/`structural_evidence_check.sh` 现场跑都是 rc 0。
+
+**STILL OPEN**（原文抄录）：dd_max_bytes/zero's note text is non-deterministic across reruns (same class,
+different byte-count text) -- unrelated to F166 but worth a future card; also the technique has only been
+independently verified on 4 of 105 cells, not all 49 unknown/53 na cells.
+
+**F166 关闭**（`cards.tsv` 第 170 行 `built`→`closed`；memo 本节上方清单改 `[x]`）。
