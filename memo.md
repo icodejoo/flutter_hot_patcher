@@ -19765,3 +19765,40 @@ STILL OPEN 指向 `simulator_arm64.cc` 的 `DecodeSimulatorToNativeTransition` �
 本轮到此结束，等待完成通知。下一轮收到结果后：若 SURVIVES/success 则更新 F162 卡面并重新派一次
 全新独立证伪 pass（规矩要求审查者与实现者不同代理）；若仍 PARTIAL/blocked 则记录新的 STILL OPEN 并
 判断是否需要再拆一张卡。
+
+## 2026-10-01 F162 修复子代理回收（self-reported, 尚未经证伪）
+
+子代理报告 `STATUS: success`（agentId 内部跟踪，耗时 ~27 分钟，140 次工具调用）。自报摘要：
+
+- **结论是「代码本来就对，提交信息错了」，不是反过来**：`simulator_arm64.cc` 的
+  `DecodeSimulatorToNativeTransition` 处地板**应为 `OSThread::Current()->overflow_stack_limit()`**
+  （与 `dart_entry.cc` 那处不同），原因是这个 brk trap 执行点始终在 `Simulator::Execute`
+  解释器循环内、跑在真实 OS C 栈上，不在 Simulator 自己的堆分配栈缓冲区——
+  跟 `dart_entry.cc` 那处"必须用 sim 地板"的论证**前提相反**。自报改用 sim 地板会在 depth=2000
+  产生假阳性 FATAL（之前该深度是干净的）。
+- 自报新增了一个可复现到 `DecodeSimulatorToNativeTransition` 的测试
+  （`ShorebirdSimToCpu_DeepRecursion_ToFloor`，用嵌套 Sim(brk)→CPU(native)→Sim(brk) 递归），
+  并用临时 hit-counter 确认过命中（depth=3 → 恰好 4 次命中，之后已撤回）。
+- 自报负控制：guard 关闭时 depth=20000 产生真实未控制 SIGSEGV（exit 139）；guard 打开时
+  是受控 FATAL（exit 134）——据此判 guard 承重。
+- 自报新提交 `ab20455635b`（信息订正，不改地板代码）已把 `agent/f162-csp-fix` **快进式**
+  合并进 `agent/sdk-phase-c1`（因为前者本就是后者旧 HEAD `dd75946f81a` 的直接后代）；
+  **主会话已独立核实**：`git -C ~/dart-3122/sdk log --oneline -1 agent/sdk-phase-c1` → `ab20455635b`，
+  树干净。
+- 自报 p1-p8 在默认模拟器与 `--no-use_simulator` 两种模式下均 8/8；6 个 `ShorebirdSimToCpu_*`
+  单测逐个通过。
+- 🔴 **自报的遗留问题，主会话尚未核实**：E3 钉住的三个构建目录
+  （`ProductSimARM64`/`ReleaseARM64`/`ProductSimIosARM64`）当前各有 8/13/2 步 ninja 待办，
+  自报称全部由 `dart_entry.cc` 的 mtime 变化造成（且称这是**此前**那个 F162 子代理改动引入的陈旧，
+  不是本次任务引入的），本次任务本身对这三个目录净待办为 0。**这句话没有独立验证**，
+  且如果为真，E3（钉住的构建 ninja 待办为 0）目前**不满足**，需要在关卡前重建这三棵树并重新核实。
+
+**这是自报结论，不是证伪结论**——按本项目规矩（五之四），修补丁不继承任何审查结论，必须有一个
+全新的、与实现者无关联上下文的子代理按 `tools/loop/prompts/falsify.md` 跑一遍，重点查：
+① 地板该用 `sim->overflow_stack_limit()` 还是 `OSThread` 的那条论证是否站得住（亲手复现，不读代码采信）；
+② `ShorebirdSimToCpu_DeepRecursion_ToFloor` 测试是否真的命中 `DecodeSimulatorToNativeTransition`
+（不能只信自报的「之前验过」，要自己想办法确认，比如重新插一次计数器）；
+③ 负控制独立复现（depth=20000，guard 开关各一次）；
+④ **独立核实 E3 三个钉住目录的 ninja 待办数**，并判断这笔债是否真的与本任务无关、是否挡住 E5/第三阶段收尾；
+⑤ `ab20455635b` 提交信息本身是否准确（它现在的措辞是否又引入新的不一致）。
+派发留给下一轮（本轮子代理回报已到，为了控制单轮体量，证伪 pass 单独派）。
