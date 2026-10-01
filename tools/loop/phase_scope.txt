@@ -1,19 +1,35 @@
 # Cards in scope for the current phase (operator decision 2026-10-01).
 #
-# PHASE 3 -- CONSOLIDATION. Everything that landed on 2026-10-01 gets one
-# independent falsification pass, and the pinned builds are made readable
-# again. The phase ends when all four cards below are closed AND
-#   fhp-research/spikes/shorebird_linkinfo_oracle/sdk_phase_checklist.py
-# exits 0 (it currently REFUSES: the pinned ProductSimARM64 is older than the
-# SDK tree, which moved from b468884fa7d to the phase-3 tip).
+# PHASE 3 tail + PHASE 4 (G1, with the first G2/G4 steps). The definition of
+# "SDK replication complete" is G1-G4, written down 2026-10-01 in CLAUDE.md
+# rule 0 and memo.md "第四阶段判据". This scope is the part of it the loop can
+# do unattended.
 #
-# Full criteria E1-E5 are in memo.md, section "2026-10-01 第三阶段：固化".
+# Phase 3 still owes falsification passes on F160, F161, F163 (F162 was
+# changed by its own pass and re-verified by hand on 2026-10-01).
+#
+# Deliberately NOT here:
+#   F171  G3, the first real app -- needs the operator present (device
+#         unlock, trust prompts) and has hard constraints about never
+#         publishing to Shorebird's servers. Done interactively.
+#   The 15 old unknown cells' cards (F55/F62 shorebird, F101, F103, F104,
+#   F128 field_table) -- field_table's only route was abandoned 2026-09-30,
+#   shorebird awaits the operator. Including them would lead rounds back into
+#   known dead ends.
+#
 # Every card not listed here is frozen: run_round.sh shows rounds only these
-# cards in the built list and the fix-patch queue, and tells them not to open
-# new loop-mechanics cards.
+# cards in the built list and the fix-patch queue.
 #
 # One card id per line. Edit this file (and commit why) to change the scope.
 F160
 F161
-F162
 F163
+F164
+F165
+F166
+F167
+F168
+F169
+F170
+F172
+F173

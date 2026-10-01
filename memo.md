@@ -19802,3 +19802,30 @@ STILL OPEN 指向 `simulator_arm64.cc` 的 `DecodeSimulatorToNativeTransition` �
 ④ **独立核实 E3 三个钉住目录的 ninja 待办数**，并判断这笔债是否真的与本任务无关、是否挡住 E5/第三阶段收尾；
 ⑤ `ab20455635b` 提交信息本身是否准确（它现在的措辞是否又引入新的不一致）。
 派发留给下一轮（本轮子代理回报已到，为了控制单轮体量，证伪 pass 单独派）。
+
+## 2026-10-01 第四阶段开卡（G1 六张 + G2/G3/G4 + base_ft 缺口）与收尾读数
+
+**收尾读数（循环恢复前）**：`SDK PHASE: 4 of 4 criteria met -- COMPLETE`，rc 0，read against SDK `252c31c45f6`（含 dd 四个选项），
+C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 · ReleaseARM64 19→0 · ProductSimIosARM64 `clang_arm64/` 203→0，
+探针用判据自己的目标名并查退出码）。矩阵 `105 cells, 0 unrun, 3 blocked`（53 na / 3 structural / 49 unknown）；
+`phase_gate.expected` 从 59 格重钉到 105 格（`105 measured, 105 pinned, 0 mismatching`；负控制：改一格的钉值 → rc 1）。
+
+**dd 四个选项（F164）主会话独立复核**：三个 fixture 上 ddt/ddcl/ddsm 我们的二进制跑我们的 `.so` 对他们的二进制跑他们的 `.so`，
+**九组 `cmp -l` 全部 0**。`--compute_dd_slot_mapping` 输出的是 **DDSlotVoters**（magic 0xDDCA7E55），不是 DDSlotMapping。
+
+**21 格进矩阵（F166）带回的最重发现 → F173**：`--base_ft_link_data` 在我们这侧**不起作用**——给了它，他们的快照变 133,879 B，
+我们的变 0 B；而我们确实解析了它（坏的 `base.ft` 我们 rc 255 干净报错，他们 bus error）。同族：`--dd_slot_mapping` 我们变 3,114 B、
+他们变 611,558 B；给了 ct/op link data 他们自动打印链接器报告并多一行 `Sorted ObjectPool, moved N of M entries.`，
+我们都没有——**现有 `print_shorebird_info` 那格的 grep 正好把这一行滤掉了**。
+另：`gen_snapshot` 把输出文件名写进产物（`none.so`→`none2.so` 差 99,177 B）；`hello.dill` 与 `base.dill` sha1 相同，**三个 fixture 实为两个**。
+
+- [ ] **F164：analyze_snapshot 的 dd 四个选项**（`built`，2026-10-01，SDK `252c31c45f6`）九组逐字节相同；三处未复现项写在卡上。判据见 `cards.tsv`。
+- [ ] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`open`，deps=F164）判据见 `cards.tsv`。
+- [ ] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`built`，研究树 `f1ceebbb`）顺带修了 `WORK=` 不隔离 TSV 的缺陷。判据见 `cards.tsv`。
+- [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
+- [ ] **F168：复核 44 个 not-comparable 判定**（`open`）那是 agy 未经审的交付，每条要跑二进制核。判据见 `cards.tsv`。
+- [ ] **F169：G1 分母脚本进仓库、接闸门**（`open`）判据见 `cards.tsv`。
+- [ ] **F170：G2 测试套方案**（`open`）判据见 `cards.tsv`。
+- [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
+- [ ] **F172：G4 负向补丁集**（`open`）改 ELF 魔数的那个必须被证明能加载，不算负控制。判据见 `cards.tsv`。
+- [ ] **F173：`--base_ft_link_data` 在我们这侧不起作用**（`open`，deps=F166）链接器核心输入上的真能力缺口。判据见 `cards.tsv`。

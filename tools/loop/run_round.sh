@@ -234,22 +234,29 @@ if [ -n "$PHASE_SCOPE" ]; then
   PROMPT="$PROMPT
 
 【本阶段范围，2026-10-01 操作者决定，优先于下面所有指令】
-第三阶段 = 固化。10-01 落地了三件东西且**都还没过独立证伪 pass**，本阶段只做这个，不加新功能。
-完成判据事先写死（全文见 memo.md「2026-10-01 第三阶段：固化」与 CLAUDE.md 规则 0）：
-E1 修复进 agent/sdk-phase-c1 且树干净 · E2 f5b94e5b439 的 isolate.cc/exceptions.cc 已撤回、dart_entry.cc 保留 ·
-E3 钉住的构建 ninja 待办为 0 · E4 sdk_phase_checklist.py 不拒读且 rc 0 · E5 F160-F163 四张卡各过一次独立证伪 pass 并关闭。
-**E1-E4 已于 10-01 15:0x 达成，本阶段剩下的只有 E5。**
+本阶段 = 第三阶段收尾 + 第四阶段（G1 为主，外加 G2/G4 的第一步）。
+「dart-sdk 复刻完成」的定义是 G1–G4，2026-10-01 写死在 CLAUDE.md 规则 0 与 memo.md「第四阶段判据」：
+G1 接口面（他们的工具注册的每个选项我们都有、且产物有分类）· G2 行为面（上游测试套在模拟器构建上跑）·
+G3 端到端（≥3 个真实 app × ≥2 个 iOS 版本）· G4 负向（一组坏补丁两边处置相同）。**本循环只做 G1 与 G2/G4 的第一步**；
+G3（F171）要操作者在场，**不在范围内，不许做**。
+第三阶段还欠证伪 pass：F160、F161、F163（F162 已被自己的 pass 改过、10-01 人工重验 9/9）。
+第四阶段的卡：F164 dd 四个选项（built，待证伪）· F165 compute_dd_slot_mapping ×3 去掉 blocked · F166 21 格进矩阵（built，待证伪）·
+F167 12 个 needs-input-first · F168 复核 44 个 not-comparable · F169 G1 分母脚本进仓库 · F170 G2 测试套方案 ·
+F172 G4 负向补丁集 · F173 `--base_ft_link_data` 在我们这侧不起作用（链接器核心输入上的真缺口）。
+**排序**：先把 built 卡（F164、F166）和第三阶段欠账过证伪 pass，再做 open 卡；open 卡里 F173 与 F165 排前面（真缺口优先于整理）。
 2026-10-01 现状：清单读 SDK PHASE: 4 of 4 criteria met -- COMPLETE，
-read against SDK agent/sdk-phase-c1 **dd75946f81a**（C4 当场跑 **8 个 AOT 程序**（p1-p8，p8 是 C→Dart 回调）**+ 5 个 FFI callback 测试 = 13 项**）。
+read against SDK agent/sdk-phase-c1 **252c31c45f6**（C4 当场跑 **8 个 AOT 程序**（p1-p8，p8 是 C→Dart 回调）**+ 5 个 FFI callback 测试 = 13 项**）。
+矩阵 **105 格**（53 na / 3 structural / 49 unknown，3 blocked），`phase_gate.expected` 已钉到 105 格——**改矩阵就要在同一提交里重钉它**。
 开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。清单跑一次约 2 分钟；
 任何改动之后清单必须仍是 rc 0，变红就先修回来。
 ⚠️ **陈旧探针要用判据自己那串目标名去跑，并查退出码**——10-01 同一个坑栽了三次：构建落后 202 步被当成证据、
 只建 dartaotruntime 没建 gen_snapshot、以及建了 gen_snapshot 而判据读的是 clang_arm64/gen_snapshot。
 `git status` 干净不是「构建是最新的」的证据，自己另写的探针会把 `ninja: error` 当成 0 待办。
-证伪 pass 全部关掉后，在 memo.md 写「本阶段完成」并放 .loop/PAUSE（首行写 operator-requested stop），不要再找新活。
-只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-10-01 第三阶段：固化」一节）。
+范围内的卡全部关掉后，在 memo.md 写「本阶段完成」并放 .loop/PAUSE（首行写 operator-requested stop），不要再找新活。
+🔴 **绝不对外发布**：不跑 `shorebird release` / `shorebird patch`，不碰任何会上传到 Shorebird 服务器的命令。他们的二进制只读运行，产物永不入库。
+只做这些卡：${PHASE_SCOPE}（见 tools/loop/phase_scope.txt 与 memo.md「2026-10-01 第四阶段开卡」一节）。
 其余所有卡冻结：不派、不做、不关。证伪 pass 在本阶段工作里发现的循环机械问题，只在 memo.md 记一行，
-不开新卡，除非它挡住了本阶段的某一项。汇报进度引用 sdk_phase_checklist.py 的读数与这四张卡的开闭，不报卡片数。"
+不开新卡，除非它挡住了本阶段的某一项。汇报进度引用 sdk_phase_checklist.py 的读数与范围内各卡的开闭（以及 G1 分母读数：他们注册的工具选项里有多少已对拍），不报卡片总数。"
 else
   # say() is defined further down; logged once it exists.
   PHASE_SCOPE_NOTE="note: no phase scope ($PHASE_SCOPE_FILE absent or empty) -- rounds are shown every card"
