@@ -21118,3 +21118,38 @@ F167-F170/F172 still waiting.
   `parity_matrix.sh` to confirm the 105-cell pin is unchanged, commit. Explicitly instructed not to mark
   F165 closed itself -- the fix needs its own fresh falsification pass first (contract 五之四). Round
   continues, awaiting subagent completion.
+
+- 2026-10-02 round (PID 69344, continued): subagent reported **STATUS: blocked, no change made**
+  (correctly refused to ship a false-green fix). Correction to this round's own heartbeat above:
+  `nc_f165_ddid_key_permutation.sh`'s exit-code convention is 1=BLIND/0=CAUGHT per the script itself
+  (I had it backwards reading compressed text pre-dispatch); it exits 1 (BLIND, unfixed) before and
+  after -- no regression, just confirmed unfixed. Root finding: extending `ddid_binding_check.py`'s
+  content gate to catch the swap/rotate/bit-flip mutations is **not a bounded extension** of its
+  existing design -- its only second source of truth, `analyze_snapshot --shorebird`'s `functions`
+  JSON, has never exposed the four `FunctionKey` fields the mutations target (`library_kernel_offset`,
+  `owner_class_kernel_offset`, `kernel_offset`, `signature_hash`); `FunctionKey` values inside
+  `Dart_ComputeDDSlotMapping` are trusted from the `.ddid` blindly and never independently recomputed
+  anywhere in this spike. Closing the gap needs one of two actually-new designs: (a) add those fields
+  to `--shorebird` JSON (SDK already has `FunctionKey::FromFunction`/`ForAllocStub` to compute them),
+  but risks reclassifying the `shorebird` matrix cells that 2026-10-01 marked `unknown` on
+  per-function-key-schema-matching reasoning -- i.e. fixing this blind spot could move cells the
+  scope file says must not move without its own review; or (b) parse the `.dill` directly in Python,
+  a new capability this spike does not have. Did not take either path (both are "own criterion and
+  negative control" territory per LOOP_CONTRACT 五之四, not a same-round fix). ninja -n pending
+  for `clang_arm64/{gen_snapshot,analyze_snapshot,dartaotruntime}` under ProductSimIosARM64 was 0
+  before and after (whole-tree ninja -n reports 3531 pending for unrelated targets, not these three).
+  No git changes from this investigation -- I attempted to append this finding as a card-text note on
+  F165 in cards.tsv via a Python csv round-trip, then caught and reverted it before committing: the
+  csv module's re-quoting silently reformatted embedded-quote fields on three *other* rows (F164,
+  F173, F175) it never touched in content, which is exactly the kind of state corruption contract
+  六之三 warns about -- `git -C ~/Documents/fhp-research checkout -- spikes/shorebird_linkinfo_oracle/cards.tsv`
+  confirmed clean after revert. **Lesson for future rounds: cards.tsv's existing quoting is not safe to
+  round-trip through Python's csv module; any edit to it must be a surgical line-level patch, not a
+  parse-mutate-rewrite of the whole file.** F165 stays `built`, unchanged, with this finding recorded
+  here in memo.md instead of on the card. Ending this round here: one real (negative) finding, no
+  commits, three clean trees -- the honest output for a task that turned out to need its own new card
+  rather than a one-round fix. Suggest whoever picks this up next either opens a new scoped card for
+  path (a) above (extend `--shorebird` JSON with the four FunctionKey fields, with its own negative
+  control verifying no currently-`unknown` shorebird cell silently reclassifies as a side effect) or
+  explicitly accepts this as a documented limitation of `ddid_binding_check.py` and moves on to F161/
+  F174/F175 (the deeper, SDK-real-work cluster this blind spot is downstream of).
