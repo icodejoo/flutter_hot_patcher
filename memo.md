@@ -21066,3 +21066,35 @@ F167-F170/F172 still waiting.
   this fix specifically, per contract 五之四 (a fix inherits none of the reviewed status of what it
   fixed) -- if it SURVIVES, F170 closes on this round's trail of evidence; otherwise it stays `open`/
   `built` for a future round.
+
+- 2026-10-02 round (PID 74211, continued): F170 fix's own falsification pass completed (Opus,
+  4th independent subagent on this card this round). **F170 VERDICT: PARTIAL again.** Reproduced
+  652/652 MATCH, 0 UNEXPECTED, 0 NO-RUN on both trees independently (own stubs, own reruns -- holds
+  up). Confirmed build currency on both trees directly. But found a second real flaw in the same
+  fix: `g2_run_cc.sh`'s new "Running test: <name>" check uses `grep -qF` (substring match), not
+  `grep -qxF` (exact line match) -- the script's own comment and G2_TEST_PLAN.md both claim it
+  requires "the exact test just invoked", which is false. 400 of the 652 Assembler test names are
+  substrings of other names in the same list (e.g. `Assembler_Simple` ⊂ `Assembler_SimpleLoadStore`),
+  so a stub that silently no-ops one test but prints a *longer* name containing it would pass as
+  MATCH under the current logic -- demonstrated with an independent stub (3/3 false MATCH). **This is
+  latent, not active**: the real `run_vm_tests` binary does an exact `strcmp` on the requested name
+  (confirmed by reading `run_vm_tests.cc`), so it cannot itself trigger this path -- but the harness's
+  own self-description is still wrong and the weakness is real if the binary's behavior ever changes
+  or a different binary is pointed at it. A one-line fix (`grep -qF` -> `grep -qxF`) would close it.
+  **Bigger unresolved point flagged by this pass's STILL OPEN**: no negative control has shown the
+  Assembler suite actually catches a real codegen regression (e.g. deliberately breaking one emitter
+  in a scratch tree, rebuilding, confirming UNEXPECTED > 0) -- only "didn't run" has been tested, not
+  "ran and produced wrong output". Without that, "0 UNEXPECTED both sides" proves less than it
+  appears to.
+
+  **Stopping here on F170 this round** (contract §6: repeated PARTIAL on related issues is the signal
+  to stop re-litigating the same card in one round, not keep dispatching). Summary of real, committed
+  progress this round: plan rescued (`0e0fbe7c`), suite actually run both sides (`802a0bd7`),
+  self-closure caught and reverted (`899cf229`), NO-RUN gap found and fixed with its own verified
+  negative control (`39f9ab3b`). Known remaining debt, left explicit for whoever picks this card up
+  next: (a) the `grep -qF`->`grep -qxF` one-line fix, unapplied; (b) no real-codegen negative control
+  has ever been run against this harness; (c) G2 proper (corelib/language suites) is still entirely
+  unattempted, per the plan's own hour-scale estimates. F170 stays `open`, status in cards.tsv
+  unchanged from this round's revert. Not picking a new card this round -- four subagent dispatches
+  and five commits is a full round's work; ending here so the next round starts fresh rather than
+  compounding context.
