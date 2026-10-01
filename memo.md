@@ -19560,3 +19560,42 @@ memo.md 上一节写死的「重的那半」：在 `~/dart-3122/sdk` 新建分�
 不读它的中间 transcript。F160/F161/F163 的 STILL OPEN 覆盖面缺口（见上一节）
 留给后续轮次按同样「新鲜证伪 pass」要求处理，本轮不碰。E5/本阶段完成判据继续等
 F162 的独立证伪 pass（要等这个修复落地之后，由另一个新鲜子代理做，不能是这同一个）。
+
+### 2026-10-01 F162 修复落地回收（子代理完成，本轮未自审，等新鲜证伪 pass）
+
+异步子代理报 `STATUS: done`。两棵树核验过（git log/status 实测，非轻信回复）：
+`~/dart-3122/sdk` 分支 `agent/f162-csp-fix`（HEAD `d10ab819892`，父 `95c901172d7`，再父
+`dd75946f81a`），树干净；`~/Documents/fhp-research` 新增 `0d7b59e2`
+（`spikes/shorebird_linkinfo_oracle/f162_repro/n3.dart`），树干净（另有与本任务无关的既有未跟踪杂物）。
+
+**子代理自报摘要（未经独立证伪，不得当结论引用）**：
+- 两处都改了，不是一处：`dart_entry.cc` 的 `InvokeDartCode` 重入分支，以及
+  `simulator_arm64.cc` 里原生调用陷阱逃逸（`set_simulator_csp(OSThread::GetCurrentStackPointer())`，
+  原来余量是 0）——只修第一处时复现脚本仍然崩，这是子代理自己发现的。
+- 正确的「地板」是 `Simulator::overflow_stack_limit()`（Simulator 自己堆分配栈缓冲区的低水位），
+  不是 `OSThread::Current()->overflow_stack_limit()`（pthread 原生栈）——子代理称后者「静默永不触发」，
+  因为重入时真实 CSP 寄存器已经指向 Simulator 的缓冲区，是一段不相交的地址区间；
+  说是靠打印 `current_csp` 与两种地板的地址量级对比发现的。
+- 用的是 `FATAL()` 硬中止，不是可恢复的 Dart `StackOverflow` 异常（任务允许的退路，commit message 里记为后续待办，不是声称已完全优雅）。
+- 构建目录 `xcodebuild/F162fix_ProductSimARM64_cpu`（从 `ProductSimARM64_cpu` 的 `args.gn` 新建），
+  声称 E3 钉住的三个目录未被碰过。
+- 判据 a：深递归（depth 2000）在 `--no-use_simulator` 下从野地址 SIGSEGV/SIGBUS 变成受控 `FATAL()`（rc 134，无内存破坏迹象）。
+- 判据 b：p1..p8 两种模式各 8/8（称 `run_c4` 原生写死非 `_product` 二进制名，手工复刻了该流水线，不是直接跑清单脚本）。
+- 判据 c：`ninja -n` 待办为 0（只针对子代理实际建的四个目标：`dartaotruntime_product`/`gen_snapshot_product`/`copy_gen_kernel_snapshot`/`vm_platform.dill`，不是全量 309 步清单）。
+- 判据 d：负控制——把 `dart_entry.cc` 的新 guard 改成 `if (false && ...)` 复现了真崩溃（`BUS_ADRALN`，depth 2000），
+  恢复 guard 重建后又复现干净的 `FATAL()`。
+- 顺带记一个复现脚本的坑（非 F162 本身）：在 `noSuchMethod` 里读 `Invocation.positionalArguments`
+  在 CPU-shape 执行下无条件崩（与递归深度无关）——另一个未修的 bug，提交的复现脚本改用可变字段传深度绕开了它。
+
+⚠️ **以上全部是子代理自报，按契约「修补丁不会继承被修对象的审查结论」与 F42 规矩，
+本轮不能自己给自己判决，必须派一个新鲜、独立的子代理重新跑一遍**：
+① 独立确认两处改动的必要性（关掉任一处单独验证是否仍崩）；
+② 独立复核「`Simulator::overflow_stack_limit()` 是对的地板，`OSThread` 的那个不是」这个结论
+（不要只信子代理的文字解释，要自己构造一次能让这个判断证伪的实验）；
+③ 独立确认判据 b 用的是清单本来的跑法还是子代理另写的脚本，如果是后者要独立验证那个脚本没有跳过真实检查；
+④ 独立确认 c 的「0 待办」只覆盖了子代理建的那四个目标、不是在暗示整个清单 309 步都清空了；
+⑤ 确认 E3 钉住的三个目录（ProductSimARM64/ReleaseARM64/ProductSimIosARM64）确实原封未动
+（`ninja -n` 用判据自己的目标名查，别用另写的探针——2026-10-01 当天已经在这件事上栽过三次）；
+⑥ 确认 `FATAL()` 退路没有引入新的误报（比如正常深度的递归是否也会被误判成溢出）。
+
+F162 在这次独立证伪 pass 过（SURVIVES）之前仍是 `FALSIFIED`/open，E5 与本阶段完成判据同样等它。
