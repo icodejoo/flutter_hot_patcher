@@ -20989,3 +20989,14 @@ F167-F170/F172 still waiting.
   truncation-crashes-instead-of-rejecting finding is a genuine divergence worth its own line in the
   eventual G4 disposition table, not a bug to silently fix. Both trees left clean (fhp-research commit
   above; SDK tree untouched, `git status --porcelain` empty). Round ends here.
+
+- 2026-10-02 round (PID 28248, heartbeat): round started. `.loop/PAUSE` absent. Checked all three
+  trees: `~/dart-3122/sdk` clean, `~/Documents/fhp-research` clean (the `loop-rescue
+  2026-10-02T00:54:39 round-58931` stash from before PID 1486 is still sitting there, untouched,
+  confirmed frozen/out-of-scope per two prior rounds' notes -- not acting on it again), and
+  `flutter_hot_patcher` has only its pre-existing untracked block (unchanged, not this round's
+  concern). Reviewed built-card queue: F161/F174 blocked on F175 (open, needs a multi-hour
+  `shell_unittests` build out of round budget, per PID 34449's split-card proposal); F165 has two
+  deferred PARTIAL passes already. Not re-litigating either this round. Picking **F170** (G2 test
+  plan, open, no deps, explicitly "suitable for agy", no multi-hour build required -- its own negative
+  control is just one small suite actually run once on each side) instead. Dispatching a subagent now.
