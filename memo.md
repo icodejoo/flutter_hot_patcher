@@ -21887,3 +21887,51 @@ findings) into cards.tsv's F165 row and only then consider closing it. Independe
 F167/F168/F169/F176 remain open with no dependency blockers; F161/F174 remain correctly
 `built`/blocked on F175; the cards_check.sh CRLF fix (`f944b8cc`) left 16 genuine commits-not-sha
 flags unaddressed on purpose (real data, not this round's task).
+
+### 2026-10-02 round (PID 93615, continued): F165 closed (SURVIVES, 4th pass on 4th-generation fix)
+
+The falsification pass on `75183c80`/`8f567d2b` completed (Opus, fresh, 27 tool calls, 219s).
+**F165 修补丁 VERDICT: SURVIVES** -- all 7 standard attacks plus two extra (whether the new
+`--require-full-coverage` flag misfires on a genuinely fully-resolved input; whether "default mode
+untouched" holds by diffing actual command output against the pre-fix binary, not just source
+text) failed to break it. The pass constructed a synthetic fully-resolved `.ddid`+`.so` pair to
+test the flag's other direction (real fixtures can't produce `unresolved=0` because `dart:core`
+always links closures/implicit accessors) and confirmed rc=0, not rc=3, there. It also checked out
+the parent commit's `ddid_binding_check.py` into a scratch copy and diffed actual stdout/rc against
+HEAD's version on both a known-good and a known-corrupted `.ddid`, both call-argument forms --
+byte-identical in all four comparisons.
+
+Folded the full four-round fix chain (`df1c6387` -> `ae1300a8` -> `596cc94a` -> `75183c80` ->
+`8f567d2b`, three PARTIAL verdicts each fixed same-round, final fix SURVIVES) into `cards.tsv`'s
+F165 row by direct raw-line replacement (first attempt via Python's `csv` module round-tripping the
+whole file was wrong and reverted -- it silently re-quoted unrelated rows whose fields needed CSV
+quoting, which would have been a second, self-inflicted "row corruption that looks like nothing
+changed" instance of this project's own recurring failure mode; redone as a precise single-line
+byte replacement, confirmed by zero-context diff that only F165's line changed and all 180 rows'
+field counts are unchanged). Marked F165 `closed` in `cards.tsv` (`fhp-research` commit
+`1d2a7821`). Copied the pass's two STILL OPEN items verbatim into the card's closing note per
+falsify.md: (1) if `dd_slot_chain.sh` or any future caller is ever changed to pass
+`--require-full-coverage`, that script's own pre-existing "exit 3 = not bound" convention would
+collide semantically with `ddid_binding_check.py`'s new rc=3 (`PARTIAL_COVERAGE`, itself a form of
+"bound") -- not live today since the flag is never passed there, but unguarded if someone wires it
+up later; (2) the 20-24% Field-backed-kind coverage gap remains genuinely open by design, not a
+defect -- closing it would require extending `dill_kernel_oracle.py`, explicitly out of scope
+across this whole chain.
+
+`cards_check.sh` caught a real, separate bookkeeping drift while closing this: the memo.md
+checkbox line for F165 (`- [ ] **F165：...`) was still unchecked even though `cards.tsv` now said
+`closed`, same shape as the F164 drift noted earlier this week. Fixed by flipping it to `- [x]`
+with a dated note (this file). Re-ran `cards_check.sh`: `open set agrees (65 cards)`, `closed set
+agrees (82 cards)`, F165 no longer appears in either disagreement list; the only remaining failure
+is the pre-existing, unrelated 16-card `commits-not-sha` list (genuine non-sha content in that
+column, confirmed earlier this round, not this closure's concern).
+
+G1 status update: F165 was the last open card gating `compute_dd_slot_mapping` out of the matrix's
+`blocked` state. With it closed, all `dd` family cells (F164's 4 options + F165's slot-mapping
+binding) are now fully reasoned-about with both byte- and content-level negative controls, not just
+byte-identical output -- a meaningfully stronger form of "compared" than most of the matrix's other
+`na` cells currently have. Independently, F167/F168/F169/F176 remain open with no dependency
+blockers; F161/F174 remain correctly `built`/blocked on F175. Ending this round here per contract
+step 4 -- this round (PID 93615) has done a full closed-loop cycle (found gap -> fixed -> verdict
+-> fixed again -> verdict -> closed) on F165 plus an unrelated tooling fix (cards_check.sh CRLF),
+all independently re-verified at each step rather than taken on report alone.
