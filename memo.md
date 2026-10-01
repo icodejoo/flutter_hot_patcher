@@ -21608,3 +21608,57 @@ up**: either run a dedicated falsification pass on the F172 card's own criterion
 (not another pass on the verification script) to see whether it can close, or move
 on to F167/F168/F169/F176 (open, no dependency blockers) or F161/F165/F174's
 larger falsification backlogs.
+
+### 2026-10-02 round (PID 93615, run_round.sh): dispatched F165 ddid content-check fix
+
+Read LOOP_CONTRACT phase scope; confirmed round PID 93615 is this round's own run_round.sh
+(not a competing writer). Checked the injected handoffs: F174's own falsification pass
+already ran and recorded FALSIFIED (2026-10-02, spawned F175) -- so despite the stale
+"built 卡欠证伪 pass: F161 F165 F174" list at round start, F174 was not actually owed a
+fresh pass; F161 is `built`/FALSIFIED-derived and explicitly blocked on F175 per
+`tools/loop/phase_scope.txt`'s comment, not an independent task. That left **F165** as the
+one genuinely actionable built card: two prior independent falsification passes (2026-10-02)
+both returned PARTIAL on the same finding, demonstrated by committed reproducer
+`nc_f165_ddid_key_permutation.sh` (fhp-research commit `7fd5471b`, currently exits 1/BLIND) --
+`ddid_binding_check.py` only compares the .ddid's code-index set and a per-index alloc/non-alloc
+boolean, never the other FunctionKey fields (library_kernel_offset, owner_class_kernel_offset,
+kernel_offset, signature_hash), so a key-permuted-but-same-index-set .ddid is reported "bound"
+even though `--compute_dd_slot_mapping` on it produces a different result. Traced the source
+myself before dispatch (not left for the subagent to rediscover): `~/dart-3122/sdk/runtime/vm/shorebird/dd_voting.{h,cc}`
+defines `FunctionKey::FromFunction`/`ForAllocStub` and the signature_hash formula
+(base-31 Horner: num_fixed*29791 + num_optional_positional*961 + num_optional_named*31 + num_type_params,
+reverse-engineered from Shorebird's disassembly); `analyze_snapshot_api_impl.cc` lines ~2552-2609
+(our `--compute_dd_slot_mapping` reimplementation) parses FunctionKey straight out of the .ddid
+bytes and never independently recomputes it -- confirmed there is no second code path in this
+SDK fork that derives FunctionKey other than the one that wrote the .ddid in the first place, so
+a naive "fix" that calls back into the SDK's own FunctionKey computation would be circular
+(comparing the .ddid to itself), the exact self-referential-check shape this project's CLAUDE.md
+has flagged repeatedly as something that cannot fail.
+
+Dispatched one fresh Opus subagent (general-purpose, background, agentId internal) with the full
+trace above pre-supplied (file paths, line numbers, the exact formula) so it does not re-derive
+it, per dispatch discipline point 2. Gave it two honest paths and told it to pick one, not
+half-do both: (A) build a genuinely independent second source for FunctionKey content by parsing
+the kernel .dill's own binary structure directly (checking first whether `dart`/`package:kernel`
+are available as a shortcut), independent of any VM code path that also produced the .ddid; or
+(B) if that is disproportionate, fix the actual overclaim instead of the missing check --
+narrow `ddid_binding_check.py`'s docstring/claim to only what it verifies, and change
+`nc_f165_ddid_key_permutation.sh` to document the blind spot as a permanent, honest limitation
+rather than a perpetually-failing pending item. Explicitly told it: do not touch
+`parity_matrix.sh`'s/`dd_slot_chain.sh`'s byte-identical ddsm gate (unaffected, must keep
+matching 105 cells / 53 na / 3 structural / 49 unknown / 0 blocked before and after); only touch
+`~/dart-3122/sdk` if genuinely required by path A, and if so rebuild ProductSimIosARM64 and
+confirm `ninja -n` pending == 0 before trusting it; do not touch `memo.md`/`.loop/`; do not run
+any `shorebird` CLI release/publish path; leave F165 `cards.tsv` status `built`, not `closed` --
+append findings to F165's existing row, do not open a new card. Bounded to ~40-60 tool calls.
+Did not touch `sdk_phase_checklist.py`/`verify_all.sh` this round myself (no SDK-tree change
+made by me). Round ends per contract step 4, awaiting subagent's completion notification before
+recording any further verdict or doing more work on F165.
+
+**Next whoever picks up**: check the dispatched subagent's completion; if it finished, record
+which path it took in this memo entry's continuation and in `cards.tsv`'s F165 row (it was told
+to do the cards.tsv append itself, but confirm), then this new work on F165 is itself `built`
+not `closed` and needs its OWN fresh falsification pass before F165 can close (a fix does not
+inherit the review of the thing it fixed, LOOP_CONTRACT 五之四). Independently, F167/F168/F169/F176
+remain open with no dependency blockers; F161/F174 remain correctly `built`/blocked on F175,
+not independently actionable until F175 resolves.
