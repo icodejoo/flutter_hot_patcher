@@ -19829,3 +19829,19 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 - [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
 - [ ] **F172：G4 负向补丁集**（`open`）改 ELF 魔数的那个必须被证明能加载，不算负控制。判据见 `cards.tsv`。
 - [ ] **F173：`--base_ft_link_data` 在我们这侧不起作用**（`open`，deps=F166）链接器核心输入上的真能力缺口。判据见 `cards.tsv`。
+
+### 2026-10-01T11:17Z 心跳（round PID 16375）：F162 第二次修复（ab20455635b）独立证伪 pass 已派出
+
+上一轮心跳收到自报后写明「派发留给下一轮」——本轮执行它。核对 `~/dart-3122/sdk` 现状：
+`agent/sdk-phase-c1` tip 已前移到 `252c31c45f6`（含 F164 的 dd 四选项工作），`ab20455635b` 仍是其祖先，树干净。
+
+派出一个全新 Opus 子代理（agentId 内部跟踪，异步后台，与此前任何 F162 实现/证伪子代理都无共享上下文）
+专门审 `simulator_arm64.cc` 的 `DecodeSimulatorToNativeTransition` 处那个 guard 的地板选择
+（`OSThread::Current()->overflow_stack_limit()`，claim 是它对、`dart_entry.cc` 那处用 `Simulator` 地板是因为
+前提相反）以及 `ab20455635b` 的提交信息是否与代码一致。要求逐项亲手复现：① 自己插桩确认测试真的打到这条路径
+（不采信自报的「临时计数器」）；② 自己构建复现负控制（guard 关→depth=20000 真实 SIGSEGV）与正控制（guard 开→
+FATAL）；③ 亲手在同一处换成另一个地板试一遍（depth 500/2000/20000），这是 claim 的要害，必须实测不能靠推理；
+④ 自己跑 p1-p8 两种模式；⑤ 用 `sdk_phase_checklist.py` 自己的目标名查 E3 三个钉住构建目录的 `ninja -n` 待办，
+判断是否由本任务引入；⑥ 核对提交信息现在是否与代码一致。完整提示词见本轮会话（未落盘到仓库，按需从这条心跳
+向上文重建）。本轮到此结束，等待完成通知；收到后若 SURVIVES 则关 F162、把 STILL OPEN 原文抄进 memo；
+若仍 PARTIAL/FALSIFIED 则记录新发现，不关卡。
