@@ -21662,3 +21662,56 @@ not `closed` and needs its OWN fresh falsification pass before F165 can close (a
 inherit the review of the thing it fixed, LOOP_CONTRACT 五之四). Independently, F167/F168/F169/F176
 remain open with no dependency blockers; F161/F174 remain correctly `built`/blocked on F175,
 not independently actionable until F175 resolves.
+
+### 2026-10-02 round (PID 93615, continued): F165 fix completed (Path A), independently re-verified before recording
+
+The dispatched subagent completed (Opus, background, 165 tool calls, ~25 min). It took **Path A**:
+built a genuinely independent second source for FunctionKey content rather than a circular
+re-check or a weakened claim. New file `spikes/shorebird_linkinfo_oracle/dill_kernel_oracle.py`
+(research tree) parses the public Dart kernel (`.dill`) binary format from scratch (spec read
+read-only from a sparse clone of `dart-lang/sdk` at tag 3.13.2, no code imported from it or from
+`package:kernel`) and independently recovers `library_ordinal` / `owner_class_offset` /
+`kernel_offset` for procedure-backed functions and classes by walking the library/class trailing
+offset index tables -- a path that never touches this SDK fork's own `kernel_loader.cc` or
+`dd_voting.cc`, so it is not circular the way the earlier (rejected) idea of calling back into the
+SDK's own `FunctionKey::FromFunction` would have been. `dill_kernel_oracle_selftest.py` cross-checked
+its numbers against 5 known functions/alloc-stub rows via `--shorebird` on both toolchains before
+being trusted (per CLAUDE.md rule 4 -- a new tool must reproduce a known-good reading before being
+relied on). `ddid_binding_check.py` now takes an optional `[dill]` arg and cross-checks
+`kernel_offset`/`owner_class_offset`/`library_ordinal` for identity-bearing rows restricted to
+`kind in {RegularFunction, GetterFunction, SetterFunction}` (the only kinds backed by an actual
+kernel Procedure record); Field-backed rows (implicit accessors, dispatchers, closures,
+constructors) are reported `unresolved`, not silently passed as bound. `signature_hash` remains
+unverified by any second source (would require skip-parsing arbitrary Expression/FunctionType
+nodes) -- explicitly documented, not hidden, and `kernel_offset` alone (a unique byte position per
+function) already defeats the permutation attack this fix targets.
+
+**Independently re-verified myself before trusting the report** (not the agent that wrote the fix,
+so this counts as a first check, not the falsification pass itself -- a fresh subagent still owes
+that): (1) `git diff 40bc3fb7 HEAD --stat -- cards.tsv` confirms only F165's row changed across all
+three commits (`df1c6387`, `ae1300a8`, `596cc94a` -- the last one fixing a CRLF-flattening bug the
+middle commit introduced, confirmed by diffing `df1c6387..596cc94a` showing only the F165 line
+changed, not file-wide corruption); the file's 32 single-column lines are a pre-existing header
+comment block, unrelated and untouched. (2) Confirmed build freshness myself independent of the
+agent's claim: `ninja -n -C ~/dart-3122/sdk/xcodebuild/ProductSimIosARM64 clang_arm64/gen_snapshot
+clang_arm64/analyze_snapshot` reports `no work to do` (0 pending). (3) Ran both reproducers myself
+fresh: `./nc_f165_ddid_key_permutation.sh` -> `caught`, exit 0; `./nc_f165_wrong_ddid.sh` -> `caught`,
+exit 0 -- both match the agent's reported outcome. (4) `git diff 40bc3fb7 HEAD -- parity_matrix.tsv`
+shows exactly 3 lines changed (the `compute_dd_slot_mapping` cells for hello/prog/base_dd), and in
+each the classification columns (`yes yes na`) are byte-identical before and after -- only the note
+text grew to include `key-content ok resolved=N unresolved=M`. No other cell moved. Did not re-derive
+the kernel-offset-table-walking logic myself byte-for-byte (that would be redundant with the
+selftest the agent already ran and reported) -- that correctness claim, and the signature_hash /
+Field-backed-kind blind spot the agent flagged as the next attack surface, are exactly what a fresh
+falsification pass still needs to attack.
+
+F165 left `built`, not `closed`, correctly (a fix never inherits review of what it fixed,
+LOOP_CONTRACT 五之四). **Next whoever picks this up**: dispatch a fresh falsification pass
+(tools/loop/prompts/falsify.md) on commits `df1c6387`/`ae1300a8`/`596cc94a` together, pointed first
+at the two things the implementing agent itself flagged as unverified: (a) whether
+`dill_kernel_oracle.py`'s kernel-binary-format parsing is actually correct beyond the 5 spot-checked
+functions (the selftest sample is small relative to ~1266-3040 identity rows per fixture), and
+(b) whether an attacker can target only Field-backed/synthetic-kind rows to stay inside the
+documented blind spot while still changing the slot mapping -- the agent named this as the weakest
+remaining point but did not attempt it. Independently, F167/F168/F169/F176 remain open with no
+dependency blockers; F161/F174 remain correctly `built`/blocked on F175.
