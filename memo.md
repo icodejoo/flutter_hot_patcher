@@ -20473,3 +20473,18 @@ fix, no card work this round. Next round should resume normal card-priority orde
 `tools/loop/phase_scope.txt`: built cards needing falsification passes first (F161/F162/F164 are
 still `built`, not `closed`; F161 stays `built`/FALSIFIED pending F174's fix per phase_scope.txt),
 then open cards (F165/F167/F168/F169/F170/F172/F174), skipping F171 (G3, needs the operator).
+
+- 2026-10-01 round (PID 58931, run_round.sh): start-of-round read. Confirmed scope file
+  (`tools/loop/phase_scope.txt`) and card states via research-tree `cards.tsv`: F163/F166/F173
+  closed; F161 built/FALSIFIED (blocked on F174, the heavy fix, not a quick falsification retry);
+  F164 built/PARTIAL (needs a pass to narrow or widen the corrected NC1 claim before it can
+  re-attempt SURVIVES); F165/F167/F168/F169/F170/F172/F174 open. Per the ordering the previous
+  round left (real gaps before cleanup, F165 ranks with F173) and per LOOP_CONTRACT 1.5 (F161's
+  fix, F174, needs a new invariant design + repro program + negative control -- too heavy for a
+  single round to both implement and self-falsify), dispatching a fresh background Opus subagent
+  to implement **F165**: unblock the three `compute_dd_slot_mapping` matrix cells that currently
+  read `blocked` with the false justification "dd_caller_links producible only by closed-source
+  aot-tools.dill" -- F164's 2026-10-01 pass already showed our own `analyze_snapshot` produces
+  `--dd_caller_links` output byte-identical to theirs in one invocation, so the blocked branch is
+  stale. Round ends here per contract step 4, awaiting completion notification before recording
+  a result.
