@@ -21000,3 +21000,20 @@ F167-F170/F172 still waiting.
   deferred PARTIAL passes already. Not re-litigating either this round. Picking **F170** (G2 test
   plan, open, no deps, explicitly "suitable for agy", no multi-hour build required -- its own negative
   control is just one small suite actually run once on each side) instead. Dispatching a subagent now.
+
+- 2026-10-02 round (PID 74211, heartbeat): round started. `.loop/PAUSE` absent. Checked all three
+  trees: `~/dart-3122/sdk` clean, `flutter_hot_patcher` only pre-existing untracked block (unchanged).
+  `~/Documents/fhp-research` had one uncommitted file left by the prior round (PID 28248, killed by
+  `ROUND_TIMEOUT` mid-dispatch per `.loop/last_round.out`'s `Terminated: 15`): `G2_TEST_PLAN.md` for
+  card F170, substantively complete (build matrix, suite-applicability table, invocation details,
+  order-of-work) but its own required negative control -- actually running one small suite on stock
+  vs ours and recording counts -- was never executed. Rescued it per contract 六之二 (not redone):
+  committed as-is (`0e0fbe7c`). F170's card criterion is unmet without the negative control, so this
+  round continues F170 rather than picking a new card. Confirmed `~/dart-3122/sdk/xcodebuild/DebugSIMARM64`
+  `run_vm_tests` build is current (`ninja -n ... | grep -vc '^ninja: '` = 0). Dispatching a fresh
+  background subagent (fhp-research tree) to build the stock-vs-ours negative control the prior round
+  never reached: run one small suite (cc Assembler, 652 cases) on both ~/dart-3122/sdk and the partial
+  stock tree at ~/dart-3122/G2stock/sdk, compare counts, and prove the counting mechanism itself can go
+  red (deliberate break + revert) before recording a result on F170's card. Time-boxed to ~20 min for
+  any remaining stock build step; corelib/language suites stay out of scope for this round per the
+  plan's own hour-scale wall-time estimates. Round continues, awaiting subagent completion.
