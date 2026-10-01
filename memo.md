@@ -20590,3 +20590,47 @@ commit anything beyond its own script. **This needs operator attention before an
   Explicitly told not to touch the 56 pre-existing staged files in the research tree, not to fix the
   hello/base_dd fixture-overcount wording, and not to touch CLAUDE.md/memo.md wording. Round ends
   here awaiting completion notification.
+
+### F165 ddid-binding fix round: subagent reports STATUS: fixed (commit 52ba9d69)
+
+**Summary from subagent** (Opus, 72 tool calls, 1279s): chose approach B (reject approach A because
+moving the cell off the matrix's standard `.so` would change what the cell compares), implemented
+two gates before step 3 runs: (1) a byte check that step 2's `gen_snapshot --print_dd_function_identity_to`
+`.so` output is byte-identical to the analyzed `.so` (verified identical gen_snapshot output is
+deterministic across 6 fixture/side pairs); (2) a content check (`ddid_binding_check.py`, new) that
+the `.ddid`'s function index set and allocation-stub rows match that side's own
+`analyze_snapshot --shorebird` output on the analyzed `.so` (matched exactly: 1266 rows/87 stubs
+hello+base_dd, 3040/226 prog, all 6 pairs). Either gate failing -> no slot mapping written, cell
+becomes `ran=no/unknown` with the reason, `parity_matrix.sh` exits 1, `phase_gate` counts it unrun
+(fail loud, not silent misclassify). New shared script `dd_slot_chain.sh` runs the chain for both
+the matrix and the reproducer (closing the risk that they could drift).
+
+**Verification reported**: build confirmed current first (0 pending, verified real by erroring on a
+made-up target); original positive case unchanged (67 slots/25263 B hello+base_dd, 357/91685 B prog,
+output files byte-identical to pre-fix); re-pin shows all 105 cells keep the same classification
+(53 na/3 structural/49 unknown unchanged), only the 3 cells' notes changed, `phase_gate` exits 0;
+both ORIGINAL negative controls (ddsm byte flip, old-blocked-branch restore) still behave as before,
+no other cell moved; NEW control -- feeding hello the prog `.ddid` now makes the cell "not bound" and
+the script exits 1 (was: silently "identical") -- `nc_f165_wrong_ddid.sh` now exits 0 (was 1).
+**Crash-vs-reject item also addressed**: exit codes 129-192 now labeled "CRASH <side> <step>
+(signal N)"; exit 255 correctly treated as clean reject (subagent caught and fixed its own first
+version, which wrongly called 255 a crash); truncated `.ddcl` now reads "CRASH theirs step3
+(signal 10)" on their side vs plain exit 255 (not labeled crash) on ours.
+
+**STILL OPEN, subagent's own list**: (a) the content check validates against each side's OWN
+`--shorebird` output -- their `analyze_snapshot` refuses our `.so` (exit 255), so our side's check is
+self-referential (can't cross-validate against their tool); (b) neither gate can distinguish hello
+from base_dd (same compile, so this is expected, not a new bug -- consistent with the existing
+"2 independent observations not 3" note); (c) the byte check assumes `gen_snapshot` output is
+deterministic run-to-run -- if that assumption ever breaks the cell fails loudly rather than
+silently, but it remains an assumption, not a proof; (d) noted in passing, not touched: the
+`dd_max_bytes/zero` cell's evidence NOTE text (not its classification) varies by scratch work
+directory -- pre-existing, unrelated to this fix.
+
+**F165 remains `built`** -- this is a fix round, not a falsification pass; per LOOP_CONTRACT 五之四
+a fix never inherits the review of what it fixed. Dispatching a fresh independent falsification pass
+next, targeting: re-derive the byte-check and content-check results independently; attack (a)-(c)
+above; try constructing a case where the byte check passes (gen_snapshot `.so` matches) but the
+content check should still have caught a mismatch (or vice versa) to see if the two gates are
+actually independent or redundant; confirm `dd_slot_chain.sh` really is shared by both the matrix and
+the reproducer (not just claimed) by diffing how each invokes it.
