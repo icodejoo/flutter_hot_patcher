@@ -20926,3 +20926,15 @@ since the finding sharpened rather than resolved); F165's continue-or-move decis
 F167-F170/F172 still waiting.
 
 **Subagent's own proposed verdict**: "Likely closable as 'claim confirmed: two separate mechanisms'. F174's finding is real but only affects the standalone harness's way of loading patches, not the engine's restart-based one... Shorebird has no equivalent [of `Dart_ShorebirdLoadVmcode`/the link table], so rule 1 suggests removing them." **Not acted on** -- per E5/LOOP_CONTRACT 五之四, this is `built`/partial, not closed, and the subagent explicitly asked for an independent pass before closing. Dispatching a fresh, independent falsification pass now, per falsify.md, before any checkbox moves or F161/F174's blocked status is revisited. Round ends here awaiting completion notification.
+
+- 2026-10-02 round (PID 34449): picked up from round PID 89977's F175 PARTIAL verdict (neither
+  known patch mechanism demonstrated under true CPU-shape; D3's milestone ran entirely inside the
+  Simulator). F161/F174/F165 remain `built` per cards.tsv, all blocked on or deferred pending this.
+  Dispatched a fresh background subagent (fhp-research tree, agentId internal) to resolve F175's two
+  STILL OPEN sub-questions named by the prior falsifier: (1) static check of `elf_loader.cc`'s patch
+  mapping permissions (PROT_READ-only vs PROT_READ+EXEC) on the real engine's `Dart_LoadELF` path;
+  (2) attempt a minimal runtime repro of mechanism (b) under `--no-use_simulator` reusing this
+  project's existing `native_build`/p1..p8 harness convention (NOT a fresh Flutter engine rebuild),
+  time-boxed to ~25-30 tool calls with an explicit instruction to bail into a scoped split-card
+  proposal rather than force an infeasible multi-hour build. No checkbox moved, no card closed this
+  round. Round ends here awaiting completion notification.
