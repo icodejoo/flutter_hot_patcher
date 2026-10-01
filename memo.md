@@ -20378,3 +20378,21 @@ matrix) is reading against a tool hash that no longer matches the SDK's HEAD. Th
 thing a round should do before reporting any G1 matrix numbers -- it is itself a `干净重建`/
 `全量重跑`-shaped task per LOOP_CONTRACT 1.5 (parity_matrix.sh touches the whole matrix) and
 should be dispatched as its own scoped task, not folded into whatever card runs next.
+
+- 2026-10-01 round (PID 23281, ralph.sh): start-of-round checklist read confirmed the
+  above prediction -- `python3 sdk_phase_checklist.py` in `~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle`
+  returns `REFUSED: STALE: .../out_pm/as.hello.ours.so was produced by 473c7cac2ca96cbd..., the
+  pinned tool is eebcedf558f8d044... -- run ./parity_matrix.sh first` (rc=0, refusal not crash).
+  SDK tree confirmed clean at the expected commit (`~/dart-3122/sdk`, branch `agent/sdk-phase-c1`,
+  HEAD `f5d9e96e231`, the F173 fix). Per the note left by the previous round and LOOP_CONTRACT 1.5
+  (this is a `全量重跑`-shaped task, touches the whole 105-cell matrix, not a quick re-check),
+  dispatched a fresh background subagent (agentId `afebd56d70e1c1dd6`) to: (1) confirm/bring to 0
+  pending ninja steps the specific build targets `parity_matrix.sh` actually invokes (not a full
+  rebuild), (2) run `./parity_matrix.sh` to regenerate `out_pm/` and re-pin `parity_matrix.tsv`
+  against the post-F173 `gen_snapshot`/`analyze_snapshot` binaries, (3) confirm
+  `sdk_phase_checklist.py` gives a real reading afterward instead of `REFUSED: STALE`, (4) report
+  the new matrix cell counts vs the pre-run baseline (105 cells: 53 na / 3 structural / 49 unknown
+  / 3 blocked, pinned SDK `252c31c45f6`) and flag any cells that moved, especially ones touching
+  `--base_ft_link_data` or the DD options (F164/F165/F166/F173's subject). No cards/checkboxes
+  touched this round (this is baseline re-pinning infrastructure, not a card verdict). Round ends
+  here awaiting completion notification.
