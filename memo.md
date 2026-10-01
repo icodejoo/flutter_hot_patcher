@@ -19995,3 +19995,19 @@ save_obfuscation_map/gen_snapshot help/dd_max_bytes 这几格实际读取内容�
 ④只在研究树提交，不碰 SDK 树，不推送。明确要求它不下判决——证伪 pass 必须由另一个新鲜子代理做。
 
 本轮到此结束，等待完成通知。
+
+### 2026-10-01 F166 修复落地回收（子代理完成，未自审，等新鲜证伪 pass）
+
+子代理报告已提交研究树 `581869b2`（未独立核验，按契约不采信）：新增
+`negative_control_f166.sh`（真实可复现负控制：翻转的是 21 新格各自比对的**产物文件**字节，不是工具二进制——
+这正是上次翻转零效果的根因，`dd_max_bytes` 读的是 `OUR_AS` 不是 `OUR_GS`，单独扰动一个工具二进制
+原本就不可能命中声称的格；脚本把 `gen_snapshot/help/log` 与 `hello/save_obfuscation_map/map.json`
+各翻转末字节，na→unknown→na 可复现，且证明不碰已提交的 `parity_matrix.tsv`——sha256 跑前跑后不变）；
+`cards.tsv` F166 负控制字段改指向新脚本；`parity_matrix.sh:975` 的 note 生成源头文字订正（原「Attribution
+not computed」改为引用 `structural_evidence.tsv` 的 `EXAMINED 36/UNEXPLAINED 0` LOCUS_OK 行），
+只改文字不改分类；`parity_matrix.tsv` 全量重跑后 breakdown 不变（105/53/3/49），`phase_gate.sh` rc 0、
+`structural_evidence_check.sh` rc 0。未碰 SDK 树，未构建。`git status --porcelain` 干净（仅既有杂物）。
+
+**未自审，不得当结论引用**：下一轮需派一个与前两个子代理都不同的全新子代理，专门核验这个修复
+（负控制脚本是否真的命中声称的扰动点、note 文字订正是否影响分类、矩阵 breakdown 重跑后确实不变），
+SURVIVES 才能关 F166。
