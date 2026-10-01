@@ -21203,3 +21203,19 @@ DebugSIMARM64/ReleaseARM64/ProductSimIosARM64）复核为与改前逐字节相�
   While reconciling, ran `cards_check.sh` and found it reporting 3 pre-existing failures (as PID 63757's round had already noted but not fixed): the open/closed set disagreement traced to two root causes, both now fixed in this round's `memo.md` edit -- (a) **F164** was `closed` in `cards.tsv` (2026-10-02 third falsification pass, SURVIVES, read in full before trusting it) but its `memo.md` line still had an unchecked `- [ ]` box; flipped to `- [x]` with a note. (b) **F175** (and now F176/F177) had no `- [ ] **F17x：...**` line in `memo.md` at all, which is what made the open-set disagree even before I added the two new cards; added all three lines in the F174/F163 block. Re-ran `cards_check.sh`: open set now agrees (66 cards), closed set now agrees (81 cards) -- both flipped from FAIL to `ok`. One failure remains and is left alone: `commits-not-sha` fires on essentially every card from F36 onward (including cards closed over a month ago), which is an instrument bug in the check itself, not a card-content problem, and predates this round -- out of this round's scope (F160-F175) to fix unless it blocks one of those cards, which it does not (it fires uniformly regardless of content). Did not touch `sdk_phase_checklist.py` this round (no SDK-tree changes made). Did not run `verify_all.sh` host checks (no runtime claim made or touched this round). Committing this `memo.md` entry now; round ends here per contract step 4.
 
   **Next unfinished item for whoever picks this up**: F176 (build the harness; this is the "heavy" half and should get its own round, ideally with nothing else scheduled against the `~/shorebird_engine` tree per LOOP_CONTRACT 八's one-writer-per-tree rule), or independently F167/F168/F169/F172 (open, no dependency blockers, smaller scope).
+
+- 2026-10-02 round (PID 614, run_round.sh): heartbeat/round start. `.loop/round.lock` holds this
+  PID (own lock, not a competing writer). `.loop/PAUSE` absent. Checked all three trees: `~/dart-3122/sdk`
+  on `agent/sdk-phase-c1` clean; `~/Documents/fhp-research` only pre-existing untracked `scratchpad/`;
+  `~/Documents/flutter_hot_patcher` only pre-existing untracked block. No `.loop/RESCUED` stash pending
+  beyond what prior rounds already handled (round-58931's stash landed as `0e0fbe7c`). Reviewed
+  cards.tsv (fhp-research): F160/F167/F168/F169/F170/F172/F175/F176/F177 open; F161/F165/F174 built;
+  F163/F164/F166/F173 closed. Per prior round's (PID 19812) suggested next item and contract 2.5's
+  dependency rule (④: dependencies must be `closed`, not `built`), picked **F172** -- it is `open`,
+  has no unmet dependencies, and this round's injected scope note confirms its negative-control script
+  (`nc_f172_broken_patches.sh`, committed `3ab4707a`) is a "build-and-run round, closing needs a
+  separate falsification pass" -- i.e. the next unit of work is exactly a falsification pass, not new
+  implementation. Dispatching one fresh Opus subagent (general-purpose, background) per
+  `tools/loop/prompts/falsify.md` against F172's claim and its 10-case negative-control set. Not
+  self-certifying; explicitly instructed not to touch cards.tsv status. Round continues, awaiting
+  the subagent's completion notification before recording any verdict.
