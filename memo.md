@@ -22729,3 +22729,10 @@ ProductSimIosARM64 still has pending steps, so the checklist would refuse to rea
 （`ReadClassTableLinkInfo_AbsurdCountIsRejected`、`ShorebirdSimToCpu_DeepRecursion_ToFloor`）还没人碰；
 `ProductSimIosARM64` 落后 2 步 ninja，C4 读数拿不到，需要先弄清是否该在循环里重建它（历史先例：构建共享钉住产物时循环要停，
 这次是否适用需要先确认 `ProductSimIosARM64` 是不是被其他卡的判据钉住引用）。
+
+**已派第三个 Opus 子代理（background，长跑）** 跑完整 3349 条 `g2_run_cc.sh` 两侧对拍（仅用 `DebugSIMARM64`，不碰 `ProductSimIosARM64`，
+不影响矩阵钉值）：从各自仓库根目录跑（避开已知的「不在仓库根跑会让文件类测试两侧一起假崩」的坑）、自己写聚合脚本只打印分类计数与
+OURS-WORSE/OURS-BETTER 的名字列表（不把两份 ~3349 行 TSV 读进上下文）、把聚合脚本（不含原始 TSV）提交进研究树、不碰 `cards.tsv`/`memo.md`。
+预计耗时较长（3349×2 次进程调用）。`ProductSimIosARM64` 是否该在循环里重建留给下一轮先查它是否被别的卡判据钉住引用再决定，本轮不碰。
+
+**本轮到此结束**，等这个长跑子代理的完成通知。
