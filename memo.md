@@ -23048,3 +23048,30 @@ SIGABRT/rc 134 本是设计内行为，但该测试用普通 `ISOLATE_UNIT_TEST_
 F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁仍排在 F179 全量跑之后；③若有余力，
 field_table/dispatch_table 读取器的同类边界检查（上面派发 2 点出的 STILL OPEN）值得顺手补一个
 对抗测试，但不是本阶段判据要求的，不要为此另开新卡。
+### 2026-10-02 round (PID 94644, run_round.sh): heartbeat, resume F179 full-suite after scratchpad data loss
+
+开工核实：锁 PID 94644 即本轮自己，无 `.loop/PAUSE`。核对上一轮（PID 93834 续）记的 F179 后台全量对拍
+（`run_both.sh` PID 99594，13:04 用 `nohup+disown` 起）——**现已确认彻底消失**：`ps -p 99594` 无此进程，
+`~/Documents/fhp-research/scratchpad/f179_fullsuite/` 整个目录不存在（`scratchpad/` 下只剩
+`f160_fp`，时间戳 10-02 15:20），未留任何 `.tsv`/`driver.log`/`.listcount` 残片。`disk_slim.sh` 的 DENY
+清单含 `fhp-research` 整棵树，不是它干的；真因未查（契约不要求排查到底，只要求换更可靠的办法），
+不再重试同一种失败方式——这是**第二次**用 scratchpad 存全量对拍产物就整个消失，换地方存。
+
+`df -g ~`：460G 总量，65G 可用（85% 占用）。按契约门槛（可用 − 预计用量 < 35GB 就不起整套），
+65 − 30 ≈ 35，刚好卡在边界，本轮改为**把产物写进 `fhp-research` 里被 git 跟踪、不在 scratchpad
+也不在 DENY 清单外任何位置的目录**，并让启动脚本自己在每个文件跑完后立即 `git add+commit` 落一个
+检查点，这样哪怕进程再次消失，至少已完成的那一侧全量结果不会跟着丢。
+
+派了一个新鲜子代理（agentId 内部记录，非 background Agent 模式——上两次教训里 background Agent
+的生存期一样绑定父会话，这次让它自己在真实 shell 里跑 `nohup ... & disown` 后就返回，由 OS 托管
+而不是由 Agent 工具托管）：定位 ours/stock 两个 `run_vm_tests` 二进制、确认磁盘门槛、写
+`run_both_v2.sh`（`ulimit -c 0` 防核心转储吃盘、输出写进
+`spikes/shorebird_linkinfo_oracle/g2_fullsuite_{ours,stock}.tsv`、每个文件跑完立即提交一次）、
+用 `nohup+disown` 启动并用 `ps -o ppid` 核实 PPID=1。要求严格返回格式（STATUS/二进制路径/脚本路径/
+PID/PPID 确认/磁盘读数），不贴日志正文。
+
+**本轮到此结束**，等这个子代理的完成通知。下一轮先核：①它是否真的以 PPID=1 启动成功（ps 复核，
+不只信它的回复）；②若磁盘门槛不足或找不到 stock 二进制，改按子代理报的理由处置（切片或先解决
+二进制缺失）；③若已启动，继续等，定期只看 `driver.log` 的 `rc=` 行与两个 tsv 行数，不要重跑。
+F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 仍排在 F179 全量结果之后，
+本轮未碰。
