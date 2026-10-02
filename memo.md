@@ -23140,3 +23140,40 @@ F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 都排在 F17
 `@{6}` 09-26 `evidence_disassemble_residual.sh` 旧稿 · `@{7}`–`@{9}` 09-25 主仓库 memo 改动。
 **结论：没有一笔是丢了找不回的正经工作，但也没逐笔证明已被后续提交覆盖 ⇒ 先不弹、不删**（删 stash 不可逆）。
 下次循环停下时逐笔对当前文件 diff，证明冗余后再清。
+
+### 2026-10-02 round (PID 58971, run_round.sh): heartbeat, F179 still running in background, dispatched F178 (WrapCode wrapping)
+
+开工核实：锁 PID 58971 即本轮自己，无 `.loop/PAUSE`。磁盘 `df -g ~`：460G 总量，67G 可用（低于历史读数，
+但仍远高于 35GB 门槛，未触发磁盘地板）。
+
+核实 F179 的全量套件后台进程（上一轮 16:47:45 起，PID 25306）：`ps -p 25306` 复核 `PPID 1，ELAPSED 05:19，
+STAT SN，command bash run_both_v2.sh`，确认仍在正常跑（预计 20:20-20:50 完）。`driver.log` 里出现的若干
+`Abort trap: 6` 是 Crash 预期测试的正常退出（与上一轮测量结果一致），不是异常。**本轮不碰它，不重跑**。
+
+按契约「真缺口优先于整理」排序（F179 > F178 > 待审修补丁），F179 正在后台跑、这一轮插不进手，
+于是转向范围内另一个真缺口 **F178**（`WrapCode` 的 Sim→CPU/CPU→Sim 包装，deps=F175，2026-10-02 新开，此前未派发过）。
+
+开工读 `~/dart-3122/sdk` 源码核实（`git status --porcelain` 空，HEAD `3b366e3f4fc`）：
+`app_snapshot.cc:10025-10115` 的 `Deserializer::WrapCode` 有 4 条 `identity` 返回路径，其中第 4 条
+（已链接/未变化函数的命中分支，:10061 算出了真实 `wrapper` 却在 :10114 扔掉不用）是本卡的疑点所在。
+顺带读了 `WrapperForRunTarget`（:9670-9697，分配真实 trampoline，不是死代码）与
+`Simulator::DecodeSimulatorToNativeTransition`（`simulator_arm64.cc:2041-2229`）—— 后者已经完整实现了
+`kRunDartOnCPUCode` 这条 Sim→CPU 跨越，含 F162 的栈底守卫，**看起来是已经被充分加固过的真实机制**，
+不是卡面原引用的那条旧注释（写于 B6 之前）所暗示的"未实现的危险跨越"。这让"包装套错了对象"这个
+疑点显得更可能成立：命中分支包装的是 `base_entry`（基础镜像里的可执行内存），不是
+`!IsLinkingEnabled()` 分支里那个 PROT_READ 补丁 payload——B6 撞的可能是后者，不是前者。
+
+派了一个新鲜子代理（Agent 工具，async/后台，无共享上下文）去做这件事：先独立读代码形成判断、
+再在 host 模拟器构建上（不碰真机）做最小改动（只动命中分支的一行返回值，把 `identity` 换成已算出
+的 `wrapper`）、增量重建、跑 `sdk_phase_checklist.py` 核对 C4 不回退、用热循环测时间（有/无 wrapper
+对照）、做负控制（还原改动确认读数也跟着回去），全部用严格返回格式（STATUS/JUDGMENT/BASELINE/
+CHANGE/C4_BEFORE/C4_AFTER/TIMING/NEGATIVE_CONTROL/COMMIT/STILL_OPEN），不贴日志正文。
+明确要求：若发现 C4 回退或崩溃就不提交、把树还原干净，如实报告崩溃细节（这本身就是有价值的发现）。
+
+**本轮到此结束**，等这个子代理的完成通知。不手动等待/轮询它（按契约："无人值守时后台派发会被腰斩，
+但这件事你管不了，也不用管——它由环境变量解决，不是你该在提示词里遵守的纪律"）。下一轮开工：
+①先查 `~/dart-3122/sdk` 的 `git status --porcelain` 与 `git log -3` 看子代理是否已落地改动或确认已还原；
+②若报了 STATUS: committed，按契约对这个修补丁跑一次独立证伪 pass（新鲜子代理，不是做事的那个）才能
+关卡；③若报了 build-too-slow / build-ambiguous / dirty-tree，按它给的具体理由处置，不要重新整段重做；
+④F179 后台进程大概率仍未跑完（预计 20:20-20:50），先 `ps -p 25306` 复核再决定下一步，不要在它跑完前
+去读两份 tsv 正文或重跑；⑤F167 的 STILL OPEN（重建 `ProductSimIosARM64`）排在后面，本轮未碰。
