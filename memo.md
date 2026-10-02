@@ -22577,3 +22577,44 @@ still true: F161/F174 remain correctly `built`/blocked on F175; F167/F168/F170/F
 with no dependency blockers; F172 has an existing green fix-pass already, waiting on an operator
 drain (F113, not this loop's job); F176 still needs its own dedicated multi-hour round, nothing
 else scheduled on `~/shorebird_engine`.
+
+## 2026-10-02 F175 答案：Shorebird 的基础代码原生跑在 CPU 上，我们的全在模拟器里 ⇒ D3 要重读
+
+**F175 判据已答（静态，只读 subagent，报告与中间文件 scratchpad `f175_static/`）**：
+Shorebird 发布版 iOS 引擎（c2515c46 ios-release，`LC_UUID` 与 dSYM 一致）**保持 `use_simulator=true`**——注册处 `mov w2,#0x1`，
+全二进制 97 处读、0 处写，release 版 `switches.cc` 只放行 `--enable-isolate-groups`，二进制里没有 `no-use_simulator` 字样——
+**但 `WrapCode` 给每个 app 函数套包装**：不链接时（`:944`）装 `WrapperForRunTarget` 的 `lambda0` = **Sim→CPU**；
+链接时（`:951`）未改动的函数指向基础镜像地址并用 Sim→CPU，改动过的用 **CPU→Sim**。
+⇒ **基础代码进函数就切回 CPU 原生执行，只有补丁在模拟器里解释。** 模拟器自己没有「看地址切 CPU」的机制，切回只靠包装体里的 `brk #0xb12d`。
+三条证据各带已知为好的核对（读 `sim_buffer_memory` 得 `#0` 与上游默认相符；写检测器在两个已知被写的 flag 上各报 1 处写；
+`0x73ad74` 查出的 `:951` 与此前独立推出的行号表一致）。它自己最可能错的是包装方向，已用两个 vtable 的对应关系核过。
+**没有判别力、未引用的**：快照里的 brk 计数两侧完全相同。
+
+**我们这侧（主会话读源码核过）**：`app_snapshot.cc:10046-10054` 不链接时返回 identity，`:10067-10071` 链接未命中时返回 identity；
+注释（`:10041-10045`）写明当初换成 Sim→CPU 包装，模拟器解释包装体、撞到 `brk #kRunDartOnCPUCode`、把 PROT_READ 的补丁字节当原生代码调，**B6 崩溃**，于是退回 identity。
+**这个退回一直留到今天。**
+
+🔴 **订正 D3（第二阶段）**：`PATCHED_V2` 是真的，但它证明的是「补丁在**全模拟器**模式下生效」——引擎 `dart_force_simulator=true`
+加上 `WrapCode` 不包装 ⇒ 整个程序都在模拟器里。**没有证明「补丁在 Shorebird 的执行模式下生效」。**
+性能上是数量级差别（F160 证伪 pass：同一热循环模拟器 89,283 ms、原生 3,442 ms）。`docs/DEVICE_VERIFICATION.md` §0 已加订正框。
+
+**连带的决定（操作者 10-02「你定」授权）**：
+- **F161、F174 移出循环范围**，卡不删、状态不动：它们修的是 `--no-use_simulator` 与 `shorebird_link_table_`，**Shorebird 发布路径不走这两样**。
+- **新开 F178**：在 `WrapCode` `:944`/`:951` 实现 Sim→CPU / CPU→Sim 包装，让基础代码原生跑。
+  🔑 关键疑点：B6 崩在「把 PROT_READ 的**补丁**字节当原生代码调」——而**基础代码本来就可执行**，包装基础代码按理不该撞上它。先查清当初是不是把包装套错了对象。
+
+## 2026-10-02 F160 证伪 pass：PARTIAL（不关卡）
+
+立住的：负控制在当前 HEAD 上会红（lldb 在 `SimulatedStubFor` 命中分支 `0x10024112c` 上撤一次替换，五个窗口都 `brk #0x0`，计数 undone=1，未改源码）；
+覆盖缺口补上——带浮点（含第 9、10 个上栈参数）/结构体传参与返回的 C→Dart 回调、`NativeCallable.listener` 跨线程与同线程各 5 次，
+都与原版 Dart 3.12.2 AOT 逐字节相同，并有敏感性对照（`s7` 8→80，`f10` 392.0→968.0）。清单 4 of 4，`--self-test` 0 失败。
+
+🔴 **新缺陷：负控制对判据 (2) 的 run_vm_tests 那一半是瞎的**。`SimulatedStubFor` 的函数体在 `#if DART_PRECOMPILED_RUNTIME` 里，
+JIT 构建（DebugSIMARM64）里编译成 `mov x0,x1; ret`。⇒ **8/28 → 26/28 到底是哪段改动起的作用，没人知道**；卡面那句因果归属没有依据。
+
+⚠️ **两条方法学**：① lldb `GetSelectedThread()` 只数到 8 次命中，真实 88 次——**回调计数必须遍历所有线程**（我派单里建议的写法会中这个坑）；
+② 派给它的卡面（我 09:48 抽的）比 `cards.tsv`（循环 10:10 写过）旧 ⇒ **我把过期前提塞进了派单**。派单前要重抽卡面。
+
+**决定（操作者授权）：F160 判据 (1) 改成在 HEAD 上判**——照字面要求在 `de660deeae5` 上满足，而那个提交早于修复，字面上永远满足不了。
+STILL OPEN（原文）：DebugSIMARM64 8/28→26/28 起作用的改动与其负控制；`de660deeae5` 的 8/28 需自建构建并证明 `--dfe` 生效；
+28 条子集要落成脚本（现在只写在卡面上，违反铁律 8）；`fs.dart`/`ls.dart`/`libcb.dylib` 并入 C4。
