@@ -22460,3 +22460,50 @@ contract step 4 -- no further dispatch this round. Independently, F167/F168/F170
 with no dependency blockers; F160 still owes its two follow-up tasks (`--dfe` doc + criterion-(1)
 rerun on `de660deeae5`); F176 needs its own dedicated multi-hour round, nothing else scheduled on
 `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 70470): dispatched F160's two owed follow-ups to a fresh background agent
+
+Read the loop contract and this file's tail per steps 1/1.5. Locked onto **F160** (`open`, not
+blocked, explicitly flagged in the prior round's handoff as still owing two follow-up tasks after
+its PARTIAL falsification pass): (a) the card's negative control names the wrong hunk (revert
+`thread.cc:252-253` EnterSafepoint/ExitSafepoint does not reproduce the claimed break; the pass
+identified `Simulator::SimulatedStubFor` in `simulator_arm64.cc` as the actually load-bearing
+function, but never independently verified that correction) and (b) criterion (1) -- the
+DebugSIMARM64 FFI/deopt/exception `run_vm_tests` subset -- was only ever measured at current HEAD
+(`51d6b791205`), never at the commit the card's criterion actually names (`de660deeae5`).
+
+Per 1.5: this is a heavy task (two from-scratch builds at two different commits) that does not fit
+cleanly in a bounded round, and per the "what's left on disk when cut off" rule the heavier half
+(the builds + measurements) should run as its own unit rather than inside this round's own
+context. Decided to dispatch rather than do it inline, consistent with contract 1/2/3.
+
+Checked first: `~/dart-3122/sdk` is a worktree of the bare repo `~/dart/sdk`, so new worktrees for
+the two commits under test (`51d6b791205` for the negative-control rebuild, `de660deeae5` for the
+criterion-1 rerun) can be created without touching the shared, currently-pinned tree (clean,
+`51d6b791205`, `agent/sdk-phase-c1`) -- satisfies contract 2.5 rule (1) "one tree one writer" by
+giving the dispatched agent its own trees instead of writing into the shared one. Confirmed 40GB
+free on `/` first; instructed the agent to check disk before/during and to remove every worktree
+it creates when done.
+
+Dispatched one fresh `general-purpose` Opus-tier background agent (agentId withheld, not
+user-facing) with a fully self-contained prompt covering: Task A (verify the `SimulatedStubFor`
+negative control by disabling it in a `51d6b791205` worktree, rebuilding `ProductSimARM64`, and
+confirming the existing AOT FFI-callback probe program now traps, then reverting and confirming it
+passes again), Task B (rerun the FFI/deopt/exception `run_vm_tests` subset in a fresh
+`de660deeae5` worktree's `DebugSIMARM64` build, using the now-documented `--dfe=<dir>/gen/
+kernel_service.dill` flag, and compare failure names against the two already-known HEAD residuals
+-- `FfiCallbackMetadata_TrampolineRecycling`, `SafepointOperation_NonDeoptAndDeoptNesting`), and
+Task C (append the `--dfe` documentation plus both tasks' exact findings to F160's notes column in
+`cards.tsv`, `||`-separated per the file's existing convention). Told it explicitly: do not change
+F160's `status` column, do not mark it `built`/`closed` (that is this project's job, after its own
+fresh falsification pass, not the implementing agent's); strict bounded return format; no
+`shorebird` CLI subcommands.
+
+Round ends here per contract step 4, awaiting the dispatched agent's completion notification.
+**Next round picks up**: record what the agent found for Task A/B/C, confirm `~/dart-3122/sdk` is
+still untouched (clean, `51d6b791205`), and -- separately, not by the same agent -- dispatch a
+fresh falsification pass on whatever it changed before considering F160 for `built`. Independently
+still true: F161/F174 remain correctly `built`/blocked on F175; F167/F168/F170/F172 remain open
+with no dependency blockers; F172 has an existing green fix-pass already and is only waiting on an
+operator drain (not something this loop can do per F113); F176 still needs its own dedicated
+multi-hour round, nothing else scheduled on `~/shorebird_engine`.
