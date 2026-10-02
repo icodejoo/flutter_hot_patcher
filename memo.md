@@ -22927,3 +22927,31 @@ F179 后台任务（`run_both.sh` PID 99594）进度是否已到 3349 行。
 再派一次新鲜证伪 pass 核实「相同最大 index 下一致」这个订正后的表述；②F179 的全量套件对拍需要重新起一次，
 且要换一种真正能跨会话存活的后台方式，而不是 `nohup ... & disown`（本轮证明这也不够）；③按真缺口优先排序，
 F178（WrapCode 包装）与 F179（4 个 vm/cc 测试只在我们这侧崩溃）仍是本阶段最大的未知面。
+
+### 2026-10-02 round (PID 75709, run_round.sh): heartbeat + dispatched falsification pass on F179 fix 379ca8aa65a
+
+开工核实：`.loop/UNREVIEWED_FIX` 仍点名多项 phase-scope 内的修补丁欠审查（F163 F164 F165 F166 F169 F170
+F173 F175 F179，F167 为 PARTIAL 非"欠审"、F168/F172 已有绿色 pass 按契约跳过）。F179 的修补丁
+（SDK 提交 `379ca8aa65a`，`~/dart-3122/sdk` 分支 `agent/sdk-phase-c1`，9 行改动，只动
+`runtime/vm/compiler/stub_code_compiler.cc`）是本阶段最大未知面 G2 的真实回归修复，判据明确、
+范围小（单文件、单提交），选它作为本轮的审查对象。
+
+开工前核实两棵相关树干净：`~/dart-3122/sdk` 与 `~/dart-3122/G2stock/sdk` 均 `git status --porcelain` 空；
+`g2_run_cc.sh` 与 `G2_TEST_PLAN.md`（F170 产出的测试 harness）确认存在于
+`~/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/`；两侧 `DebugSIMARM64/run_vm_tests` 二进制均存在。
+
+派了一个新鲜 general-purpose 子代理（无共享上下文，background）跑 falsify.md 七问，重点：①四个命名测试
+（`DartAPI_InjectNativeFields2`/`DartAPI_Multiroot_FailWhenUriIsWrong`/`IsolateSpawn_FileUri`/
+`IsolateSpawn_PackageUri`）是否真的在 `379ca8aa65a` 之后 rc 0、且真负控制（只回退这一个提交、重建、
+确认 `brk #0x0` 复现、再还原重建回 HEAD，不许把 SDK 树留在回退状态）；②卡片原文点名 6 个"仅我们这侧崩溃"
+的测试，提交说明只claim修了 4 个，要求核实另外 2 个（`ReadClassTableLinkInfo_AbsurdCountIsRejected`、
+`ShorebirdSimToCpu_DeepRecursion_ToFloor`）现状，并查是否有任何地方夸大成"6 个全修"；③双侧构建新鲜度
+（`ninja -n` 0 待办）；④stock 3.12.2 树上同 4 个测试确实通过，确认这是"仅我们侧回归"而非上游预期失败。
+要求结尾给出 `F179 VERDICT: <SURVIVES|FALSIFIED|PARTIAL> -- <一句>` 单行判决。
+
+**本轮到此结束**，等待该子代理的完成通知。下一轮：①收到判决后，SURVIVES 就把 STILL OPEN 原文抄进
+memo 并关卡（card 仍需记录"4/6 已验证修复"与另外 2 个测试的真实现状，不要笼统写"F179 已解决"）；
+PARTIAL/FALSIFIED 就当场修、不开新卡（除非挡住范围内别的项）；②F167 的 STILL OPEN 项（重建
+`ProductSimIosARM64` 后重新核"相同最大 index 下一致"）与 F163/F164/F165/F166/F169/F170/F173/F175 的
+待审修补丁仍排在后面，一次只派一项；③F179 的 3349 行全量套件对拍（此前两次被会话结束收走）本轮未碰，
+仍需要一种真正跨会话存活的后台方式才能重新起。
