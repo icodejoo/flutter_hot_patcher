@@ -23117,3 +23117,17 @@ fhp-research log --oneline -3` 看有没有新的 "F179: full g2_run_cc.sh run" 
 提前去读两份 tsv 正文；③跑完后用 F170 的 `compare.py`（或等价聚合脚本）对两份全量 tsv 做逐测试 diff
 得出 ours-worse 名单，据此判断 F179 卡面判据「0 ours-worse」是否满足，再决定能否关卡。
 F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 仍排在后面，本轮未碰。
+
+### 2026-10-02 round (PID 94644, continued): 启动确认 PPID=1，本轮结束，等全量跑完
+
+子代理回报 `STATUS: launched`，`run_both_v2.sh` PID 25306，PPID=1，16:47:45 启动，预计 20:20-20:50
+完成。本轮自己又独立 `ps -p 25306` 复核一遍（不只信回复，按契约要求）：`PPID 1，ELAPSED 00:30，
+command bash run_both_v2.sh`，确认属实。
+
+**本轮到此结束，不再派新任务**——这次全量跑预计 3.5-4 小时，期间没有可做的下一步（F163/F164/F165/
+F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 都排在 F179 全量结果之后，依赖关系不清
+楚在它跑完之前就动它们是否有意义，先不碰，留给下一轮判断）。下一轮开工：
+①先 `ps -p 25306` 看进程是否还活着；②看 `driver.log` 是否已出现 `DONE ours rc=... stock rc=...`；
+③`git -C ~/Documents/fhp-research log --oneline -3 -- spikes/shorebird_linkinfo_oracle/` 看有没有
+"F179: full g2_run_cc.sh run" 的新提交（ours 侧应先出现，stock 侧随后）；④没跑完就不要重跑、不要去
+读两份 tsv 正文，继续等；跑完了再决定是否要本轮里跑 compare.py 还是派给子代理跑。
