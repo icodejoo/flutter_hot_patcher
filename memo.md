@@ -22070,3 +22070,67 @@ turns out inadequate, fix it further in that round rather than stacking another 
 Independently, F167/F168/F170/F172 remain open with no dependency blockers; F160 still owes its own
 two follow-up tasks; F161/F174 remain correctly `built`/blocked on F175; F176 needs its own
 dedicated multi-hour round.
+
+### 2026-10-02 round (PID 5987, continued): F169 fix landed (9aab1133/459d3450), independently re-verified
+
+The dispatched fix completed (Opus, 51 tool calls, 861s). Took the scoped approach: added a second
+functional registration witness (W2) that invokes each option with a real argument set (`--out=`
++ a real `.so` for analyze_snapshot; `--snapshot_kind=app-aot-elf --elf=o.so` + a nonexistent
+kernel path for gen_snapshot, deliberately chosen so the flag-parse check fires before any compile
+attempt) and checks for "Unrecognized flags: NAME" vs acceptance -- independent of any error-string
+text. An option now counts as registered if either the old string test (W1) or W2 says so. Guarded
+W2 itself with a made-up-name negative check (must read "Unrecognized" on every binary) and pinned
+per-binary VM-flag exclusion lists (names the VM itself also accepts via `--print_flags`, which
+would otherwise make W2 falsely call them "registered tool options"). Audited `DEFINE_CB_OPTION`
+call sites reachable from the two binaries: `gen_snapshot.cc:151` (`-D`/`--define=`) and
+`main_options.h:87` (analyze_snapshot's define/enable-vm-service/observe/dds, two of which return
+false in product builds and are correctly read as absent by W2) -- corrected total 89 -> 92.
+
+**Independently re-verified myself** (not trusting the report): (1) `ninja -n` on the pinned
+`ProductSimIosARM64` targets: 0 pending. (2) `git log` confirms real commits `9aab1133`/`459d3450`
+on top of the original `6b842ac1`/`67b0b0cf`. (3) Ran `./g1_denominator.sh` fresh myself: rc 0,
+total 92 both sides (W1-alone still 89, confirming the three CB-options are exactly the delta),
+gap/extra unchanged at 1/1, matrix 30/92 now vs 9 declared/8 ran at `975c640e` -- all matches the
+report. Critically, **the disguised-string control (D) now shows gap rise = 0** (W1 alone would
+still wrongly show +1, and the script keeps that comparison visible precisely so the fix's effect
+is checkable, not hidden) while **the true-removal control (E, parser match string actually
+altered) still correctly shows gap rise = 1** with the right new entry name
+(`analyze_snapshot:dd_caller_links`) and W2 reporting "Unrecognized" on it -- exactly the two
+outcomes the falsification pass's FLAW 1 demanded be distinguishable. (4) `cards_check.sh`: same
+pre-existing 16-card `commits-not-sha` list, no new failures.
+
+**STILL OPEN** (from the fix's own report, not altered by my re-check): the two analyze_snapshot
+binaries accept different VM-flag sets (171 each side, 11 different per side) -- these are VM
+flags, not tool options, so correctly excluded from the 92, but recorded on the card unassigned to
+any further action. Where W2 cannot distinguish a tool option from a VM flag of the same name
+(`deterministic`, `disassemble`, `load_obfuscation_map`, `print_class_table_link_info_to`), W1
+(string) is the only check covering those four. Full `verify_all.sh` still not run (pre-existing,
+unrelated `ReleaseARM64` staleness blocks the whole run, not this card's concern).
+
+F169 left `built`, not `closed` (this fix is itself new, unreviewed work). Per LOOP_CONTRACT,
+dispatching a fresh independent falsification pass now on `9aab1133`/`459d3450` before F169 can be
+considered for closing.
+
+### 2026-10-02 round (PID 5987, continued): dispatched falsification pass on F169's fix (9aab1133/459d3450)
+
+Dispatched one fresh Opus subagent (general-purpose, background) per falsify.md, CLAIM/CRITERION/
+EVIDENCE/WHERE-TO-LOOK filled in describing W2's design and the corrected 92-option total. Weighted
+two attacks as mandatory, since nobody has attempted them yet: (a) can W2 itself be fooled the
+*opposite* direction -- construct a case where a name is genuinely unregistered but the binary's
+flag parser still proceeds past it without an "Unrecognized flags" error for some unrelated reason
+(e.g. the dummy value happens to look like a valid positional argument, or an earlier flag in the
+same invocation already satisfied whatever gate the parser checks), making W2 wrongly call it
+registered; (b) independently re-derive the `DEFINE_CB_OPTION` audit from the SDK source directly
+(not trusting the fix's own citations of `gen_snapshot.cc:151`/`main_options.h:87`) to confirm 92
+is actually complete and not missing a fourth callback option somewhere. Told it the same
+constraints (no `~/.shorebird` cache mutation, no `shorebird` CLI publish/release, no SDK rebuild,
+leave F169 status at `built`, don't touch memo.md), use the standard `F169 VERDICT: ...` line.
+Bounded to ~50-70 tool calls.
+
+Round ends here per contract step 4, awaiting the subagent's completion notification before
+recording any verdict. **Next item for whoever picks this up**: record the verdict on
+`9aab1133`/`459d3450`; if PARTIAL/FALSIFIED, fix in the same round. If SURVIVES, fold the full fix
+chain (`6b842ac1` build -> PARTIAL verdict -> `9aab1133`/`459d3450` fix -> this pass) into
+cards.tsv's F169 row and only then consider closing. Independently, F167/F168/F170/F172 remain
+open with no dependency blockers; F160 still owes its own two follow-up tasks; F161/F174 remain
+correctly `built`/blocked on F175; F176 needs its own dedicated multi-hour round.
