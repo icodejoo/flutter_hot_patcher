@@ -22777,3 +22777,35 @@ F168（44 个 not-comparable 里 41 个复核存活、3 个移进矩阵，`f168_
 
 **本轮到此结束**，等这个证伪 pass 的完成通知；下一轮先读判决：SURVIVES 就把 STILL OPEN 原文抄进 memo 并关卡，
 PARTIAL/FALSIFIED 就当场修、不开新卡（除非挡住范围内别的项）。同时继续核 F179 后台任务是否已跑完 3349 行。
+
+### 2026-10-02 round (PID 31723, continued): F167 VERDICT: PARTIAL / F168 VERDICT: PARTIAL -- 当场修回去，不关卡
+
+新鲜 Opus 子代理（无共享上下文）跑七问，两张都判 PARTIAL（不是 SURVIVES），不关卡。发现与已修复
+（详见 `~/Documents/fhp-research` 提交 `22a100e9`，卡面本体已更新，这里不复述全文）：
+
+**F167**：① `716a3cec` 自己没跑矩阵、在默认 `WORK=out_pm` 下是坏的（`m21_run` 先 `cd` 再执行，相对路径断
+掉，13/23 格 `ran=no rc 255`）——真正产出 23 行活数据的是后来的 `a5da292d`（`WORK_ABS` 修复），卡面原文
+引用错了提交号，已订正。② 「ours does not consume --dd_table_data at all」是假的：`--compute_dd_slot_mapping`
+不带 `--dd_table_data` 在我们这侧同样 rc 255「--dd_table_data is required」（审查者复现）——ours 确实要求它
+存在，只是拿到之后不读内容，这个更窄的说法才是真的且未核实。③「load_vm_snapshot_instructions 无可观测效
+果」是假的：缺路径两侧都 rc 255「Failed to open」；原先用来下结论的「可生产的输入」是一个 0 字节占位文件、
+内容从未被任何一侧读过，所以「无效果」是未验证不是证伪。④ 卡片自己的判据（「不给输入必须失败」）对
+`dd_caller_links`/`dd_table_data` **确实成立**（审查者复现两侧 rc 255），只是提交里从没演示过。
+
+**F168**：① `hot_reload_test_mode`/`hot_reload_rollback_test_mode` **不是**「让注入的 VM product 构建崩溃」——
+两侧都打印一模一样的 `Unrecognized flags: identity_reload, reload_every_optimized, reload_every_back_off,
+check_reloaded`，rc 255，完全相同；`base_snapshot` 那条原文是对的（审查者复现：ours 同样是
+`Unrecognized flags: base_snapshot`，确认 ours 不注册它）。② 探针的「死选项」判定规则有盲区：只试了合法
+枚举值，`--snapshot_kind`/`--verbosity` 能survive「无效果」只是因为没人喂过非法值——两侧对非法值都打印一
+样的 `Unrecognized value for ...` stderr、rc 0，这正是规则本该识别的「依值而定的行为」；未修，留给下次碰探针
+的人。③ 审查者自己把 40/41 幸存项全部跑过 `--disassemble`/`--dump_blobs`/`--dump_class_table`/
+`--dump_object_pool`/`--compute_dd_table` 五种模式两侧对拍，0 分歧——「只有 3/41 跑过 5 模式」的局限因此
+基本不再成立（新发现、未开卡：`--disassemble=v` 在 ours 是 rc 255、theirs 是 rc 0，矩阵里已有这个选项的解
+析分歧，值得看一眼）。④ `blobs_container_filename`「1 次写 0 次读」的静态断言，探针从未真正静态核实过
+（探针只测行为）——仍未验证，不是被推翻。
+
+**两卡均不关闭**，STILL OPEN：F167 按①②③订正后需要重新过一遍证伪 pass；F168 留②（探针盲区未修）、
+④（静态断言未核）。F179 后台任务（13:04 nohup 起的 `run_both.sh`）本轮未碰，继续跑。
+
+**本轮到此结束**，不再派新任务。下一轮：先确认 F179 后台 `ours.tsv`/`stock.tsv` 是否已到 3349 行；
+若 F167/F168 要继续，先处理 STILL OPEN 里列的具体项，再派新一轮证伪 pass，不要重派一模一样的七问。
