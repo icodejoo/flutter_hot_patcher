@@ -19831,7 +19831,7 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 - [x] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`closed`，研究树 `581869b2`）顺带修了 `WORK=` 不隔离 TSV 的缺陷；负控制修复后经独立证伪 pass SURVIVES (fix)。判据见 `cards.tsv`。
 - [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
 - [ ] **F168：复核 44 个 not-comparable 判定**（`open`）那是 agy 未经审的交付，每条要跑二进制核。判据见 `cards.tsv`。
-- [ ] **F169：G1 分母脚本进仓库、接闸门**（`open`）判据见 `cards.tsv`。
+- [x] **F169：G1 分母脚本进仓库、接闸门**（`closed`，2026-10-02，六轮 fix-and-pass 后 SURVIVES）判据见 `cards.tsv`。
 - [ ] **F170：G2 测试套方案**（`open`）判据见 `cards.tsv`。
 - [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
 - [ ] **F172：G4 负向补丁集**（`open`）改 ELF 魔数的那个必须被证明能加载，不算负控制。判据见 `cards.tsv`。
