@@ -22955,3 +22955,35 @@ PARTIAL/FALSIFIED 就当场修、不开新卡（除非挡住范围内别的项�
 `ProductSimIosARM64` 后重新核"相同最大 index 下一致"）与 F163/F164/F165/F166/F169/F170/F173/F175 的
 待审修补丁仍排在后面，一次只派一项；③F179 的 3349 行全量套件对拍（此前两次被会话结束收走）本轮未碰，
 仍需要一种真正跨会话存活的后台方式才能重新起。
+
+### 2026-10-02 round (PID 75709, continued): F179 fix 379ca8aa65a VERDICT: SURVIVES -- card stays open
+
+子代理返回：`F179 VERDICT: SURVIVES`（92351 tokens，42 工具调用，454s）。全部七问走完，摘要：
+① **真负控制**：`git revert --no-commit 379ca8aa65a` 后重建、重跑，4 个命名测试全部 rc 0 → 134
+（`Simulator hit brk #0x0`），还原重建后转回 rc 0 —— 判据可能报红且真的报了红。
+② 双侧 `ninja -n run_vm_tests` 均 0 待办；两棵树路径不同（`~/dart-3122/sdk` vs
+`~/dart-3122/G2stock/sdk`，后者无 `.git`）、同构建模式。
+③ 静态读 `GenerateResumeStub`：三条直跳出口已各自清槽，`call_runtime` 是唯一未覆盖的出口，
+这条补丁刚好补的就是它——**但仅静态追踪，未做针对性的模糊/压力测试**。
+④ 另外 2 个"仅我们侧崩溃"的测试（`ReadClassTableLinkInfo_AbsurdCountIsRejected`、
+`ShorebirdSimToCpu_DeepRecursion_ToFloor`）现状核实：**仍崩溃，确认已执行，rc 134，brk 在与本
+stub 无关的另一个位置**——不是被静默遮盖，也没有被这个补丁意外修好。
+⑤ `git merge-base --is-ancestor 379ca8aa65a HEAD` 为真（HEAD 就是该提交）。
+⑥ 子代理自曝一次真实失误：第一次跑漏了 `--dfe=<kernel_service.dill>`，导致 3/4 测试在**我们这侧**
+出现假性 rc=255「Kernel isolate task」失败；**随即在 stock 侧复现同样的假失败**，确认是 harness
+调用缺陷（缺 `--dfe`）而非真回归，按 `g2_run_cc.sh` 文档订正后两侧都正常——**这正是七问第 2/7 条
+要防的"可比性"与"问题被偷换"陷阱，而这次是子代理自己先踩中又自己抓出来的**。
+cards.tsv 搜索确认：没有任何地方把这个提交夸大成"修好全部 6 个"。
+
+**card 不关闭**（F179 自己的判据是"整套 vm/cc 比对 0 ours-worse"，还差 2 个测试未解决）。已把判决
+与 STILL OPEN 原文写入 `fhp-research` 的 `cards.tsv`（提交 `34d1d5f4`）：
+"dynamic/fuzzed coverage of every path into call_runtime (only statically traced, not exercised
+by a targeted stress test); the full-suite '0 ours-worse' card-closure criterion for F179 (not
+this commit's narrower claim) remains unverified."`cards_check.sh` 复核：剩余 3 项失败
+（F84/F136/F143 缺提交、十余张卡 commits-not-sha 格式）与本次改动无关，本轮不碰。
+
+**本轮到此结束**。下一轮：①F179 还差 2 个测试（`ReadClassTableLinkInfo_AbsurdCountIsRejected`、
+`ShorebirdSimToCpu_DeepRecursion_ToFloor`）未解决，是继续 F179 的下一步，需要先找到各自的 brk 位置
+（同样是"CPU-shape 下的模拟器状态假设"这一类问题，但不是同一个 stub）；②F167 的 STILL OPEN
+（重建 `ProductSimIosARM64`）与 F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁仍排在后面；
+③F179 全量套件对拍（3349 行）仍需要真正跨会话存活的后台方式。
