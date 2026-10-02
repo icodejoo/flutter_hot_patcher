@@ -23333,3 +23333,46 @@ F179 后台进程复核：`ps -p 25306` → `PPID 1，ELAPSED 01:22:34，STAT SN
 错误这类小改动）、重跑证伪，不许直接关卡；②F179 后台大概率仍未跑完（预计 20:20-20:50），
 `ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③F167 的 STILL OPEN
 （重建 `ProductSimIosARM64`）与其余待审修补丁排在后面，本轮未碰。
+
+### 2026-10-02 round (PID 17711, continued): F178 证伪 pass 回报 SURVIVES -- 已关卡；扫过其余范围内卡，F167 可继续、已派；F172 已有绿色 pass 不碰；F175 需要多小时 engine 构建先不碰
+
+证伪子代理回报 **`F178 VERDICT: SURVIVES`**：独立确认 `DART_HOST_OS_IOS` 只在 `TARGET_OS_IPHONE` 下为真
+（`globals.h:123-125`），host/模拟器构建（即便是 `ProductSimIosARM64` 目标）仍是 macOS 工具链，走的是
+`wrapper` 分支；独立重跑 C4（0 of 14，与实现者一致）、独立确认完整清单确实被 `parity_matrix.sh` 陈旧挡住
+（rc 2 REFUSED: STALE）；独立重做预处理器探针（用真实 clang++ 配真实 SDK sysroot），`arm64-apple-macos13`
+→ wrapper、`arm64-apple-ios13` → identity，一致。**新负控制**（实现者没做过的）：`arm64-apple-ios13-simulator`
+与 `x86_64-apple-ios13-simulator`（Apple 的 iOS 模拟器三元组，不同于 Dart VM 自己的 simulator）都选 identity——
+正确，但 commit message 里"simulator"一词有歧义，已记作措辞问题（非功能 bug）。**发现的缺口**：iOS 目标的
+`app_snapshot.o` 此前从未真正为 iOS 编译过（C4 的三个构建全是 macOS host），证伪子代理用真实 iOS 编译命令
+加 `-fsyntax-only` 补测，`-Werror` 下 rc 0；C4 改动前后一致是"按构造必然相同"（`#else` 分支代码未变），
+不是对这次改动的测量。**STILL OPEN**（原文）：「Device behaviour is untested. The iOS branch had never even
+been compiled before this pass (now syntax-checked only, not linked/run). C4 being identical before and after
+is guaranteed by construction rather than measured. The commit puts device behaviour back on the identity path
+it had before 0ae8fc7d1c8; whether the 09-03 crash claim is true is still unknown.」—— 与已记录的「阻塞于 G3」
+是同一个问题，不是新的循环内缺口。
+
+判决与 STILL OPEN 已写进研究树 `cards.tsv`，**F178 状态改为 `closed`**（研究树提交 `494f1900`）。
+
+F179 后台复核：`ps -p 25306` → `PPID 1，ELAPSED 01:30:27，STAT SN`，仍在正常跑（16:47:45 起，预计 20:20-20:50
+完），磁盘 348GB 可用，充裕。
+
+扫了一遍本阶段范围内（`tools/loop/phase_scope.txt`）其余卡片的当前状态（不是记忆，是直接读
+`cards.tsv`）：**F163 F164 F165 F166 F169 F173 已经是 `closed`**（早于本轮，具体哪一轮关的未深究，
+不在本轮待办范围）；F168 F172 是 `built` 且已有独立绿色 pass，按契约「已有绿色 pass 不要再派，等操作者
+出队」不碰；F160、F170、F180 依赖链条清楚但本身需要的下一步要么是多小时构建（F175 的 SPLIT PROPOSAL 明确
+要求"a background/dedicated round with no other work scheduled"去预构建 `shell_unittests`（3516 pending
+steps），要么直接是 F179 正在跑的同一件事（F170/F180 的 G2 全量结果）——两者都不在本轮插得进手；F160 依赖
+F155-F159（均已完成，deps 清但本卡本身是让"size-parity stubs 真的跑起来"这类大判据，未细读是否有可独立
+拆出的小步，留给下一轮）。
+
+**F167** 的上一次证伪 pass（482154b6 的证伪，`PARTIAL`）留了两条具体 STILL OPEN：①卡片文字需要把
+"content-independent"的错误表述订正为"largest-index dependency"；②要把 `ProductSimIosARM64` 重建到
+0 待办步、在新鲜二进制上重验四条子论断。这是本轮能做、且不与 F179（用的是 `DebugSIMARM64`/`ReleaseARM64`，
+不同构建目录）冲突的有界任务，派了一个新鲜子代理去做（只重建 `ProductSimIosARM64`、不碰
+`DebugSIMARM64`/`ReleaseARM64`、不碰 `~/dart-3122/sdk` 的 git 提交，只改研究树 `cards.tsv`）。
+
+**本轮到此结束**，等 F167 子代理的完成通知。下一轮：①按它的 STATUS 处置——`done` 就看四条子论断是否都
+`holds`，若有 `diverged` 就如实记录、不强行标 `built`；`build-too-slow`/`blocked` 就按理由处置；
+②F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③F175 的 SPLIT
+PROPOSAL（预构建 `shell_unittests`）需要一整轮专门排期，不要顺手代做；④F172/F168 已有绿色 pass，
+等操作者用队列脚本手动出队处理，不要再派。
