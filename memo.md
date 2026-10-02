@@ -23095,3 +23095,25 @@ cwd 有没有残留 core 文件以确认 `ulimit -c 0` 真的压住了转储，�
 （同样要求 git-tracked 输出路径 + 每个文件跑完即提交 + `nohup+disown` 并核 PPID=1）；若仍超门槛，
 改成按测得的耗时/磁盘比率切片跑（例如分 3-4 批，每批跑完提交、删中间产物再跑下一批）。
 F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 仍排在后面，本轮未碰。
+
+### 2026-10-02 round (PID 94644, continued): 测量结果否定旧估算——`ulimit -c 0` 后磁盘仅 ~7GB，已派真正整套跑
+
+测量子代理实测（245 条样本，ours 151 / stock 94，其中 9 条 Crash 预期）：耗时 484 秒、磁盘增量
+263MB；`/cores`、`/tmp`、两个构建目录顶层、cwd 全部核过无 core 文件残留，确认 9 个 Crash 预期测试
+全部正常 `SIGABRT` 退出且**没有**写转储——`ulimit -c 0` 确实压住了旧估算怀疑的成因。按比例外推到
+3349×2 次调用：磁盘 ≈ **7.0GB**（不是旧文写的「二三十GB」），耗时 ≈ **220 分钟**。63GB 可用对 7GB
+预计消耗留有极宽裕量 ⇒ **旧的「二三十GB」估算已作废，不再引用**，本轮按测得的数字直接起整套。
+
+派了第三个子代理（同样不用 Agent 工具的 background 模式，自己在真实 shell 里 `nohup+disown` 后
+返回）：写 `run_both_v2.sh`，输出写进 `spikes/shorebird_linkinfo_oracle/g2_fullsuite_{ours,stock}.tsv`
+（git 跟踪、非 scratchpad），ours 跑完立即 `git commit` 一次、stock 跑完再 `git commit` 一次（两个
+独立检查点，不是等两边都完才提交——这样哪怕后半程再被杀，ours 那 3349 行已经进了 git 历史不会丢），
+`ulimit -c 0` 子 shell 内生效，过滤器 `.*` 跑全部测试（不是上次测量用的子集）。用 `nohup+disown` 启动，
+要求 `ps -o ppid` 核实 PPID=1（不是 1 就改用 `setsid` 重来），预计耗时约 3.5-4 小时，不等它跑完就返回。
+
+**本轮到此结束**。下一轮：①先核这次是否真的 PPID=1（自己 `ps` 复核，不只信回复）；②若已启动，
+只看 `driver.log` 是否已出现 `DONE ours rc=... stock rc=...` 或先出现的那行 `git commit`（`git -C
+fhp-research log --oneline -3` 看有没有新的 "F179: full g2_run_cc.sh run" 提交），不要重跑、不要
+提前去读两份 tsv 正文；③跑完后用 F170 的 `compare.py`（或等价聚合脚本）对两份全量 tsv 做逐测试 diff
+得出 ours-worse 名单，据此判断 F179 卡面判据「0 ours-worse」是否满足，再决定能否关卡。
+F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 仍排在后面，本轮未碰。
