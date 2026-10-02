@@ -22213,3 +22213,77 @@ F167/F168/F170/F172 remain open with no dependency blockers; F160 still owes its
 tasks (`--dfe` doc + criterion-(1) rerun on `de660deeae5`); F161/F174 remain correctly
 `built`/blocked on F175; F176 needs its own dedicated multi-hour round, nothing else scheduled
 on `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 52412, continued): F169 third falsification pass VERDICT PARTIAL, fixed in round, fourth pass dispatched
+
+Third falsification pass (fresh Opus, background, 26 tool calls, 426s) on `15421794`/`bc87dde7`
+completed. **F169 VERDICT: PARTIAL.** Real new-class defect found (not a repeat of the two
+already-documented residual shapes): the script pins gen_snapshot's VM-flag set at 263/263/263
+(identical both sides) but had no equivalent comparison for analyze_snapshot's VM-flag set, and
+that set is NOT identical -- theirs has a 9-name disassembler family (`disassemble`,
+`disassemble_optimized`, `disassemble_relative`, `disassemble_stubs`,
+`include_inlining_info_in_disassembly`, `load_obfuscation_map`, `print_flow_graph_filter`,
+`support_disassembler`, `trace_source_positions`) ours lacks, ours has a 9-name
+`print_*_link_info_to` family (our own link-info debug dumps) theirs lacks. Neither family is a
+tool option (already correctly read absent there via the existing VM-ambiguous filter), so this
+sits outside G1's declared tool-option scope by definition -- but not outside what a real command
+line can do: `--disassemble_stubs` runs on their analyze_snapshot and fails fatally
+("Unrecognized flags") on ours, and this asymmetry was previously invisible in the script's output.
+Other six attacks held (comparable binaries confirmed via lipo/shasum/cmp, gap/extra pins proven
+exhaustive via exact set-difference, no pattern collision found, sources/line-numbers re-verified
+not stale, disguise control for the 3 existing VM-ambiguous names reconfirmed real and loud, scope
+question answered correctly for the existing tool-option count).
+
+**Fixed directly in round** (per contract, do not defer a PARTIAL): added "control F" to
+`g1_denominator.sh` -- measures and pins the 171-name VM-flag set on each side, the 162-name
+common subset, the exact 9-name theirs-only and ours-only lists by name, plus two live functional
+probes (`disassemble_stubs` fatal-on-ours/accepted-on-theirs, `print_class_table_link_info_to`
+fatal-on-theirs/accepted-on-ours) confirming the behavior directly rather than inferring it from
+`--print_flags` listing alone. While building this, caught and fixed a self-inflicted bug: an
+initial version piped the probe straight into `grep -q` under `set -o pipefail`, so the probe's
+own exit status (observed 255, from SIGPIPE when `grep -q` exits after its first match) decided
+the pipeline's exit code before the match was read -- all four new functional-probe pins read 0
+when they should have read 1, on every invocation. This is the exact pitfall the script's own
+pre-existing `unrec()`/`fprobe()` comments already warn about; fixed by routing through a temp
+file first (`as_vm_rejected` reading `$WORK/fp.vm.out`), matching `unrec()`'s pattern. Verified
+myself: `./g1_denominator.sh` rc 0, `./g1_denominator.sh --self-test` rc 0 (one expected,
+intentionally-induced-then-netted-out FAIL line inside the self-test block, not a real failure --
+confirmed this is pre-existing self-test design by reading the surrounding code, not assumed).
+Also separately caught and reverted my own mistake while updating `cards.tsv`: used Python's `csv`
+module to append a note, which silently re-quoted all 180 unrelated lines (QUOTE_MINIMAL differs
+from the file's actual raw tab-delimited format) -- `cards_check.sh` briefly showed a second,
+new failure (`closed commits not exist in tree`) that was not present before my edit. Reverted
+with `git checkout --`, re-confirmed `cards_check.sh` back to the single pre-existing
+`commits-not-sha` failure (same 17-card list, `F169` already a member before my changes --
+confirmed via the revert, not assumed), then redid the edit as a byte-for-byte single-line
+append (Python reading/writing only that one line, not a full CSV round-trip). `cards_check.sh`
+after the correct edit: same single pre-existing failure only, confirmed via file read (not the
+Bash tool, whose output for this command is being silently compressed/deduplicated in this
+environment -- `cat`/`tail` on cards_check.sh's own output showed garbled `[↑NL same as msg...]`
+placeholders instead of real content more than once this round; switched to the Read tool on a
+redirected-to-file copy whenever that happened).
+
+Committed in `fhp-research`: `bb3bcfd8` (script fix), `08168a79` (cards.tsv fix note, single-line
+diff only). F169 left `built`, not `closed` (a fix never inherits review of what it fixed --
+LOOP_CONTRACT 五之四).
+
+Dispatched a fourth fresh Opus subagent (general-purpose, background) per `tools/loop/prompts/
+falsify.md`, CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK filled in from the current script state and
+this round's fix. Told it explicitly that the three now-documented residual shapes (4
+VM-ambiguous disguise-blind names, demoted `-D` pin, the two 9-name VM-flag asymmetric lists) are
+accepted as measured limitations and are NOT grounds for a fifth fix-and-pass cycle if it finds
+only more of the same shape -- but IS grounds to close F169 with all residuals folded into the
+card text. Standard constraints: read-only on `~/dart-3122/sdk` and `~/.shorebird` caches, no
+`shorebird` CLI subcommand, 0 pending ninja steps confirmed before trusting the binaries, bounded
+~50-70 tool calls, standard `F169 VERDICT: [SURVIVES|FALSIFIED|PARTIAL]` line format (F116/F117).
+
+Round ends per contract step 4, awaiting the fourth pass's completion notification. **Next round
+picks up**: record the fourth pass's verdict; if SURVIVES, close F169 (fold all documented
+residuals into the card text per the standing decision from the third pass) and copy its STILL
+OPEN line verbatim; if PARTIAL/FALSIFIED again, this is the fourth consecutive pass finding
+something on this card and the operator-decision bar from the contract's house style (same
+judgment as F165's closure) should probably be invoked rather than a fifth cycle -- flag this
+explicitly rather than silently continuing. Independently, F167/F168/F170/F172 remain open with
+no dependency blockers; F160 still owes its two follow-up tasks; F161/F174 remain correctly
+`built`/blocked on F175; F176 needs its own dedicated multi-hour round, nothing else scheduled on
+`~/shorebird_engine`.
