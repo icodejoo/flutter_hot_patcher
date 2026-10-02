@@ -23405,3 +23405,31 @@ F179 后台复核：`ps -p 25306` → `PPID 1，ELAPSED 01:39:24，STAT SN`，�
 ②F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③`cards_check.sh`
 的 5 个已知失败与 F167 无关，不在本轮处理范围（不开新卡，除非挡住了本阶段范围内某一项）；
 ④F175 的多小时 engine 构建、F172/F168 的操作者出队，继续不碰。
+
+### 2026-10-02 round (PID 17711, continued): F167 证伪 pass 回报 PARTIAL（真发现：theirs 在空表上不确定、1 字节截断不崩）；已派修补+重验；F179 ours 侧已提交，stock 侧仍在跑
+
+证伪子代理回报 **`F167 VERDICT: PARTIAL`**：A/C/D 三条子论断（包括"构建指的是对的二进制"这条排查）复现
+无误；但 B 条有两处真问题：①卡片把"空表上 theirs 给 length_error/bad_alloc"写成确定性规则，证伪子代理各
+跑 12 次发现其实是**不确定的**（带 `--dd_function_identity`：rc 0×2、bad_alloc×7、length_error×3；不带：
+rc 0×1、bad_alloc×8、length_error×2、rc 138×1），原表述只基于各一次运行；②"theirs 对畸形表会崩"不是
+普遍成立——`hello.ddt` 删掉最后 1 字节后 ours 干净拒绝（rc 255），theirs 却 **rc 0 正常输出**（不崩），
+只有更大幅度截断（2000 字节）才稳定复现 theirs 的 rc 138。另外发现 `out_pm` 已因 SDK 多个提交（含 F179
+的 Resume-stub 改动）陈旧，当前二进制拒绝旧 `as.hello.ours.so`（"Wrong full snapshot version"），而探针
+脚本只检查文件存在、不检查版本——这正是本仓库反复栽过的"测错/陈旧二进制"同类坑，照原样跑探针现在每条
+ours 行都会假性 rc 255。
+
+已派第三个子代理修这三处（不是重新质疑 A/C/D，那三条已独立确认）：①重新生成 `out_pm` 相关产物（在
+`clang_arm64/` 构建上，不碰 F179 正在用的 `DebugSIMARM64`/`ReleaseARM64`）；②给探针脚本加一道版本/陈旧
+校验（参照同目录下 `parity_matrix.sh` 等脚本已有的 provenance 校验写法，不要发明新模式）；③在新鲜产物上
+重跑四条子论断，B 条按"不确定性"与"截断幅度相关"两条订正后的准确说法重新表述；④清理此前两轮遗留的
+`/tmp/f167fresh.*`、`/tmp/rv167.*` 残留。明确不要求它自己关卡，只能标 `built`。
+
+F179 进展：ours 侧已完成并提交（研究树 `165341d1791a`，`g2_fullsuite_ours.tsv` 3349 行），stock 侧仍在跑
+（`ps -p 25306` → `ELAPSED 01:44:47，PPID 1，STAT SN`，`driver.log` 最新行是 `STOCK ... 开始`）。按契约
+"不要提前读 tsv 正文"，本轮未读 ours 侧内容，只核了提交确实发生。
+
+**本轮到此结束**，等 F167 修补子代理与 F179 stock 侧完成的通知。下一轮：①F167 子代理若 `STATUS: done`，
+按契约派第四个独立证伪 pass（不能自己审）；②F179 若 stock 侧也提交了（`git log --oneline -1 -- ...
+g2_fullsuite_stock.tsv`），才去跑 F170 提到的 compare.py 聚合出 ours-worse 名单，之前不要提前读两份 tsv
+正文；③`cards_check.sh` 当前 5 个已知失败与本阶段无关，不开新卡；④F175 多小时 engine 构建、F172/F168
+操作者出队，继续不碰。
