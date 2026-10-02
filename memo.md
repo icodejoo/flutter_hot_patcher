@@ -23131,3 +23131,12 @@ F166/F169/F170/F173/F175 的待审修补丁与 F167 的 STILL OPEN 都排在 F17
 ③`git -C ~/Documents/fhp-research log --oneline -3 -- spikes/shorebird_linkinfo_oracle/` 看有没有
 "F179: full g2_run_cc.sh run" 的新提交（ours 侧应先出现，stock 侧随后）；④没跑完就不要重跑、不要去
 读两份 tsv 正文，继续等；跑完了再决定是否要本轮里跑 compare.py 还是派给子代理跑。
+
+## 2026-10-02 研究树 stash 清点（只读，一笔未动）
+
+`git stash list` 实为 **10 笔**（循环报的「7 un-popped」只数了研究树分支名下的；`@{7}`–`@{9}` 标 `v1`，是**主仓库的 stash**——研究树是它的 linked worktree，共用 stash store）。
+`@{0}` 10-02 15:20 `cards.tsv` 2 行 = 被额度打断那一轮的半成品，**已备份** `.loop/rescue-20261002-quota-round/` ·
+`@{1}`、`@{3}`–`@{5}` `cards.tsv` 各 1–144 行（09-27～10-02 的旧卡片改动）· `@{2}` 10-02 00:54 **54 个 `test_work/` 测试产物** + `f69_check_v3_ceiling_test.sh` + `.serena` 配置 ·
+`@{6}` 09-26 `evidence_disassemble_residual.sh` 旧稿 · `@{7}`–`@{9}` 09-25 主仓库 memo 改动。
+**结论：没有一笔是丢了找不回的正经工作，但也没逐笔证明已被后续提交覆盖 ⇒ 先不弹、不删**（删 stash 不可逆）。
+下次循环停下时逐笔对当前文件 diff，证明冗余后再清。
