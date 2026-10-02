@@ -23298,3 +23298,38 @@ PROBE_RESULT/NEGATIVE_CONTROL/STILL_OPEN），不贴日志正文；⑥不碰真�
 `git status --porcelain` 与 `git log -3` 看是否已落地（不要只信回复）；②若已提交，按契约派独立证伪 pass
 （新鲜子代理）才能把 F178 从 `built` 改判；③F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、
 不要提前读两份 tsv 正文；④F167 的 STILL OPEN（重建 `ProductSimIosARM64`）与其余待审修补丁排在后面，本轮未碰。
+
+### 2026-10-02 round (PID 17711, continued): F178 DART_HOST_OS_IOS 门控已落地（SDK 8367f9e0ca6），已派独立证伪 pass
+
+子代理完成通知：`STATUS: committed`，提交 `8367f9e0ca6`（在 `0ae8fc7d1c8` 之上，+6 行）。
+`Deserializer::WrapCode` 的 linked/is_cpu 命中分支现按 `DART_HOST_OS_IOS`（已是标准 Dart SDK 宏，
+`platform/globals.h:121-124` 由 `TARGET_OS_IPHONE` 派生，非新定义）分叉：iOS 退回
+`EntryPoints(payload_start, identity, payload_info)`（0ae8fc7d1c8 之前的安全行为），
+host/模拟器/其他平台维持 `EntryPoints(base_entry, wrapper, payload_info)` 不变。
+
+子代理自报验证：①C4 改动前后一致（0 of 14 live checks failed，16 行输出逐字节相同）；
+②用构建自己的 `buildtools/mac-arm64/clang/bin/clang++` 把真实门控代码行接到
+`platform/globals.h` 后面单独预处理，三种目标（`arm64-apple-macos13` 选 wrapper、
+`arm64-apple-ios13` 选 identity、macOS+`-DDART_HOST_OS_IOS=1` 选 identity）全部符合预期，
+未做任何 iOS 构建或碰真机；③负控制：反转 `#if` 后探针结果随之翻转，还原后 `cmp` 确认逐字节相同；
+④全部增量构建（9–18 ninja 步）。**自报 STILL OPEN**：`sdk_phase_checklist.py` 完整 "N of 4" 读数
+因 `ProductSimIosARM64` 的 `gen_snapshot` 陈旧（需要跑写进研究树的 `parity_matrix.sh`，本任务范围外）
+而读不出来，本次只比对了 C4；真实 iOS/真机行为仍未验证，这个改动只决定两种行为各编译进哪个目标。
+
+已把这段落地细节写进研究树 `cards.tsv`（提交 `0500f872`），F178 保持 `built`（不是 `closed`）。
+按契约「做完一件事就要派新鲜子代理审它」，派了第二个独立子代理（无共享上下文）跑证伪 pass，
+重点要求：①核实 `DART_HOST_OS_IOS` 是否也对 iOS Simulator host 为真（若是，"模拟器维持新行为"这条
+可能是错的，这是子代理没查过、也是最可能藏 bug 的地方）；②独立重跑 C4（不只信实现者的读数）；
+③独立重现预处理器探针（不是照抄）；④独立设计一个新负控制（尤其是 `arm64-apple-ios13-simulator`
+三元组，而不是重复实现者做过的那次）；⑤查这个改动有没有影响到代码里其他用到 `DART_HOST_OS_IOS`
+的地方；⑥评估实现者自报的 STILL OPEN 是否准确。要求单行判决
+`F178 VERDICT: <SURVIVES|FALSIFIED|PARTIAL> -- <一句>`。
+
+F179 后台进程复核：`ps -p 25306` → `PPID 1，ELAPSED 01:22:34，STAT SN`，仍在正常跑，
+两份全量 tsv 仍无新提交。
+
+**本轮到此结束**，等这个证伪 pass 的完成通知。下一轮：①按判决处置——SURVIVES 就把 STILL OPEN
+原文抄进 `cards.tsv` 并把 F178 标 `closed`；PARTIAL/FALSIFIED 就当场修（若是 iOS Simulator 分类
+错误这类小改动）、重跑证伪，不许直接关卡；②F179 后台大概率仍未跑完（预计 20:20-20:50），
+`ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③F167 的 STILL OPEN
+（重建 `ProductSimIosARM64`）与其余待审修补丁排在后面，本轮未碰。
