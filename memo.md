@@ -22681,4 +22681,26 @@ F161/F174 已被操作者 10-02 决定移出范围（它们修的路径 Shorebir
 
 **清单读数已回来（本轮开工读数）**：`SDK PHASE: 4 of 4 criteria met -- COMPLETE`，read against SDK `51d6b791205`
 （`agent/sdk-phase-c1`，0 未提交路径），C4 当场跑 14/14（gen_snapshot/analyze_snapshot 哈希已记），rc=0，与 10-02 早前读数一致、无变化。
-子代理（F179 `DartAPI_InjectNativeFields2`）仍在后台跑，本轮到此结束。
+
+### 2026-10-02 round (PID 85628, continued): F179 子任务 STATUS: FIXED (commit 379ca8aa65a)，独立证伪 pass 已派发
+
+子代理返回（非证伪、做事者自报，未独立核验）：根因是我们 fork 给 Resume stub 加的每线程槽 `Thread::simulator_async_resume_pc_`——
+直跳路径会清空它，但 `call_runtime` 路径（带异常恢复 / 恢复进已禁用代码 / 恢复断点，三条）不清，槽位带着旧值进下一次 resume 就撞
+`__ Breakpoint()`（裸 `brk #0`，不是我们编号的哨兵）。此测试里 kernel service 报编译错误、异常被扔进一个挂起帧（经
+`_SuspendState._createAsyncCallbacks.errorCallback`），下一次 resume（`sync*` getter `FormattedMessage.plainTextFormatted`）撞上。
+Stock 3.12.2 没有这个槽，不受影响。
+**修复**：`runtime/vm/compiler/stub_code_compiler.cc`，Resume stub 的 `__ Bind(&call_runtime);` 之后加一行 ARM64-only 清零该槽，commit `379ca8aa65a`。
+**它自报的读数**：4 个目标测试（`DartAPI_InjectNativeFields2`、`DartAPI_Multiroot_FailWhenUriIsWrong`、`IsolateSpawn_FileUri`、`IsolateSpawn_PackageUri`）
+修复后单次重跑均 rc 0；负控制只在其中 2 个（`InjectNativeFields2`、`IsolateSpawn_FileUri`）上做了撤回重建复现 rc 134/`brk #0x0`；
+另外两个低优先级崩溃测试（`ReadClassTableLinkInfo_AbsurdCountIsRejected`、`ShorebirdSimToCpu_DeepRecursion_ToFloor`）修复前后都崩但不带 `brk`，判定与此修复无关、本次不碰。
+🔴 **它自己点出的缺口**：只单测跑了一次，不是全量 `run_vm_tests` 回归；`sdk_phase_checklist.py` 这次跑不了——
+`xcodebuild/ProductSimIosARM64` 落后 2 步 ninja（`rc=2 REFUSED: STALE`），C4 没法在这次改动上重跑。
+
+**已派第二个新鲜 Opus 子代理**（按 `tools/loop/prompts/falsify.md` 七问模板）对 `379ca8aa65a` 本身做独立证伪 pass，
+明确要求：自己做至少两个测试（`Multiroot_FailWhenUriIsWrong`、`IsolateSpawn_PackageUri`）的撤回-重建-复现（做事者没做这两个的负控制）、
+核对两侧 `ninja -n` 都是 0 待办再信任任何 rc、独立用 lldb 核实该测试真的走 `call_runtime` 路径摸到这个槽（不是单信它的叙述）、
+核实 stock 树里确实没有这个槽、以及点出「4 个单测各跑一次」是否够格满足卡面「整套 vm/cc 对拍 0 ours-worse」这条判据（大概率不够，
+需要留 STILL OPEN）。要求回复带 `F179 VERDICT: ... (fix)` 行。
+
+**本轮到此结束**，不关 F179（还有另外 2 个崩溃测试完全没碰、`ProductSimIosARM64` 陈旧、C4 没法重跑、证伪 pass 待回）。
+下一轮先读证伪 pass 结果：SURVIVES 则记录 STILL OPEN 原文、不关卡（F179 本身还差太多）；PARTIAL/FALSIFIED 则在同轮修回去、不新开卡。
