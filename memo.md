@@ -22507,3 +22507,73 @@ still true: F161/F174 remain correctly `built`/blocked on F175; F167/F168/F170/F
 with no dependency blockers; F172 has an existing green fix-pass already and is only waiting on an
 operator drain (not something this loop can do per F113); F176 still needs its own dedicated
 multi-hour round, nothing else scheduled on `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 70470, continued): F160 agent returned -- Task A confirms corrected negative control, Task B finds criterion (1) genuinely FAILS at de660deeae5; independent falsification pass dispatched
+
+Background agent (124 tool calls, ~45.8 min) completed. Verified myself, cheaply, before trusting
+its self-report: `~/dart-3122/sdk` is still `51d6b791205` / `agent/sdk-phase-c1`, clean
+(`git status --porcelain` empty); `git worktree list` shows only the original 3 entries (both
+scratch worktrees it created are gone); `fhp-research` has the commit it claims
+(`f515f7ec`, "F160: document --dfe requirement; independently verify negative control and rerun
+criterion (1) at de660deeae5"), landed on top of the F169-closure commits.
+
+**Task A (negative control, fresh worktree at `51d6b791205`)**: independently reproduced. Built
+`ProductSimARM64` from scratch there, wrote a new self-contained FFI-callback probe (`q2.dart`,
+no external packages, to dodge a `gen_kernel_aot --packages=/dev/null` hang it hit and worked
+around) covering libc `qsort` via both `Pointer.fromFunction` and `NativeCallable.isolateLocal`,
+30-frame throw/catch, 100k-element alloc. Baseline: runs clean. Forcing
+`Simulator::SimulatedStubFor` to unconditionally `return dest;` and rebuilding: same binary now
+dies with **`Simulator hit brk #0x0`**. Revert + rebuild: clean again. This independently confirms
+the prior PARTIAL pass's correction (the load-bearing function is `SimulatedStubFor`, not the
+`thread.cc:252-253` safepoint hunk) -- the negative control documented in F160's column 6 can now
+be trusted.
+
+**Task B (criterion (1) rerun at the commit the card actually names)**: 🔴 **genuinely fails, not
+a harness artifact.** `de660deeae5` confirmed via `git merge-base --is-ancestor` to *predate* the
+F160 runtime fix entirely (14 commits before `f5b94e5b439`/`b468884fa7d`) -- i.e. this is exactly
+the commit criterion (1) requires testing at, and it has never been load-bearing-fix-equipped.
+Built `DebugSIMARM64` from scratch there; ran the same 28-name FFI/deopt/exception subset the
+09-30 HEAD measurement used (`run_vm_tests --list | grep -iE 'Ffi|Deopt|Exception'`), this time
+WITH the now-documented `--dfe=<builddir>/gen/kernel_service.dill` flag (without it, the whole run
+fails at the harness level with "Error while starting Kernel isolate task", which looks like a VM
+regression but isn't -- that confusion is exactly why Task C's documentation matters). Result:
+**8 pass / 20 fail**, all 20 at `rc=134` (SIGABRT inside
+`Simulator::DecodeSimulatorToNativeTransition`/`DecodeExceptionGen` -- the kernel-service isolate
+itself traps under the simulator at this commit, not just the test program's isolate). The two
+previously-known HEAD residuals (`FfiCallbackMetadata_TrampolineRecycling`,
+`SafepointOperation_NonDeoptAndDeoptNesting`) are among the 20, but **18 more fail here that pass
+at HEAD** (HEAD measured 26/28). ⇒ **F160 criterion (1), read literally against the commit it
+names, is not met.** The 09-30/10-01 progress notes that said "26/28" or "3/10 -> 9/4" were always
+measured at HEAD (`51d6b791205` or earlier HEADs on the same branch), never at `de660deeae5` --
+this is a scope mismatch in the card's own wording, not a newly broken test, and it was flagged as
+such rather than silently resolved.
+
+**No new silent defect found beyond what the card already documented** (the `--packages=/dev/null`
+`gen_kernel_aot` hang was a build-tooling snag worked around in-round, not a finding about the
+SDK). Commit `f515f7ec` appended Task A/B/C findings to F160's notes column (col 5, `||`-separated
+per the file's existing convention); `status` column left `open`, consistent with what was asked.
+
+**Dispatched a fresh, independent falsification pass** (separate agent, has not seen the
+implementing agent's reasoning) on this round's two central claims: (1) that
+`Simulator::SimulatedStubFor`, not the `thread.cc` safepoint hunk, is the correct negative control
+for F160's broader claim; (2) that criterion (1) genuinely fails (20/28, SIGABRT in
+`DecodeSimulatorToNativeTransition`/`DecodeExceptionGen`) at `de660deeae5`, and that this is a
+scope/wording mismatch in the card rather than evidence the SDK regressed. Told it to independently
+rebuild at least one of the two worktree commits itself (not trust the prior agent's artifacts,
+which are gone anyway since both scratch worktrees were cleaned up) and to flag if either finding
+does not reproduce, or if there is a third explanation neither agent considered (e.g. a
+`DebugSIMARM64`-only build-config defect at the older commit, not an SDK behavior gap). `F160
+VERDICT:` line format required (F116/F117); this is a pass over *this round's new findings*, not
+over the whole card, so it should not re-litigate Task A/B's already-settled predecessor claims
+unless it finds a reason to.
+
+Round ends here per contract step 4, awaiting that pass's completion notification. **Next round
+picks up**: record the verdict; if SURVIVES, fold F160's notes forward with a clear statement that
+criterion (1) as literally written is unmet at the pinned commit and needs either a wording fix
+(point it at a commit where the fix is present) or a dedicated follow-on card -- do not silently
+close F160 off this round's work, it still has an open, named gap. If FALSIFIED/PARTIAL, treat
+per contract 5-4 (fix what's fixable in-round, re-pass, no silent carry-forward). Independently
+still true: F161/F174 remain correctly `built`/blocked on F175; F167/F168/F170/F172 remain open
+with no dependency blockers; F172 has an existing green fix-pass already, waiting on an operator
+drain (F113, not this loop's job); F176 still needs its own dedicated multi-hour round, nothing
+else scheduled on `~/shorebird_engine`.
