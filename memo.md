@@ -22657,3 +22657,28 @@ F170 按规则 4 装了官方 3.12.2 到 `~/.local/dart-stock-3.12.2/dart-sdk`�
 
 - [ ] **F179：G2 首读 FAIL 的 4+2 个只在我们这侧崩的 vm/cc 测试**（`open`，2026-10-02，deps=F170）判据见 `cards.tsv`。
 - [ ] **F180：G2 测试套脚本进仓库，oracle 换成真原版 3.12.2**（`open`，2026-10-02，deps=F170）`~/.shorebird` 那份是 fork；此前用它当原版的比较要重做。判据见 `cards.tsv`。
+
+### 2026-10-02 round (PID 85628, run_round.sh): dispatched on F179 (first of 4 crashers)
+
+开工核过：`~/dart-3122/sdk` HEAD `51d6b791205` 干净；两棵 DebugSIMARM64 树（ours 与 `~/dart-3122/G2stock/sdk` stock 3.12.2）
+`ninja -n run_vm_tests` 均 0 待办。救援 stash（`fhp-research` `loop-rescue 2026-10-02T08:24:36 round-5987`）核过是冗余——
+内容已在 HEAD（`a5da292d`）里，F166 那行逐字匹配，未 pop、未丢弃，留着不动（非破坏性，不阻挡本轮）。
+
+卡面现状（`cards.tsv` 直接读）：`open` 的只有 F160 F167 F168 F170 F172 F175 F178 F179 F180；F172 已有绿色 pass 等操作者出队，不碰；
+F161/F174 已被操作者 10-02 决定移出范围（它们修的路径 Shorebird 发布版不走）；F167/F168 的实现（`716a3cec`）已落地但卡仍 `open`（未经独立证伪，不动）。
+按「真缺口优先」排序，挑 **F179** 里最小的一个子任务：`DartAPI_InjectNativeFields2`（4 个崩溃测试之一，其余 3 个本轮不动，一个假设一个脚本原则）。
+
+派了一个新鲜 Opus 子代理（background，agent id 见本轮工具调用，不入 memo）：定位 `runtime/vm/dart_api_impl_test.cc` 里的该测试、
+用 lldb 读 `brk` 立即数区分「我们自己的哨兵」与「真实未实现指令陷阱」、对比 `simulator_arm64.cc`/`stub_code_arm64.cc` 等文件在我们 fork 上的改动、
+单一假设修复、负控制（撤回修复必须复现 `brk #0x0`）。明确告知：这不是证伪 pass，不许它自己下 `F179 VERDICT`；
+只读 `~/dart-3122/G2stock/sdk` 与 `~/.shorebird`、不跑任何 `shorebird` CLI 子命令。
+
+同时在后台跑 `sdk_phase_checklist.py` 取本轮开工读数（命令超时转后台，等待中）。
+
+**本轮到此结束，等两个后台任务的完成通知**：子代理的 FINDING/FIX/NEGATIVE CONTROL/STATUS，以及清单读数。
+下一轮先读这两个通知，F179 子任务若 FIXED 则记录发现、不关卡（需要独立证伪 pass 才能关 F179 本身，而且 F179 还有另外 3 个崩溃测试没碰）；
+若 COULD-NOT-REPRODUCE/BLOCKED，按该子代理的 STILL OPEN 另起假设。
+
+**清单读数已回来（本轮开工读数）**：`SDK PHASE: 4 of 4 criteria met -- COMPLETE`，read against SDK `51d6b791205`
+（`agent/sdk-phase-c1`，0 未提交路径），C4 当场跑 14/14（gen_snapshot/analyze_snapshot 哈希已记），rc=0，与 10-02 早前读数一致、无变化。
+子代理（F179 `DartAPI_InjectNativeFields2`）仍在后台跑，本轮到此结束。
