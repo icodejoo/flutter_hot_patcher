@@ -22417,3 +22417,46 @@ only re-enter the fix-pass cycle if it is a genuinely new *silent* misrepresenta
 the first four passes found. Independently, F167/F168/F170/F172 remain open with no dependency
 blockers; F160 still owes its two follow-up tasks; F161/F174 remain correctly `built`/blocked on
 F175; F176 needs its own dedicated multi-hour round, nothing else scheduled on `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 52412, continued): F169 sixth falsification pass VERDICT SURVIVES -- closed
+
+Sixth, terminal falsification pass (fresh Opus, background, 18 tool calls, 233s) on
+`4d3d3621`/`c9ecf871` completed. **F169 VERDICT: SURVIVES.** No hidden misrepresentation found.
+It independently reproduced the two new spelling pins (`--no_disassemble`, `--disassemble=true`
+both genuinely fatal on ours, both accepted on theirs), re-verified the source citation and found
+it off by 3 lines (cited `analyze_snapshot_api_impl.cc:2905`, the function start; the `#if` guard
+is actually at `:2908`), confirmed no regression in the rest of the script or `cards_check.sh`,
+and named two small residuals worth closing: (a) `as_vm_disasm_count` was fail-open -- a crash,
+rejected `--shorebird`, or bad JSON all silently read as 0, indistinguishable from "genuinely
+empty" (not live today, confirmed by direct reproduction that ours really does exit 0 with 1380
+well-formed empty entries); (b) the final summary line overstated the shadow ("fatal except the
+shadowed one" when 2 of 3 spellings of that name are themselves fatal).
+
+Fixed both directly in round (`c953fad5`): `as_vm_disasm_count` now requires rc 0 (else prints
+`ERROR rc=<n>`) and reports `nonempty/total` instead of a bare count; corrected the stale summary
+wording and the 2905->2908 citation. Verified: `./g1_denominator.sh` and `--self-test` both rc 0,
+`cards_check.sh` output 0 bytes different from the long-standing baseline.
+
+**Closed F169** in the same round per contract (`ac28d543` cards.tsv, `8a76bcd8` memo.md
+checklist), folding every STILL OPEN item from the sixth pass into the card text verbatim,
+including the explicitly-flagged real SDK finding (analyze_snapshot's disassembler is fully
+non-functional in our PRODUCT build -- `FORCE_INCLUDE_DISASSEMBLER` is undefined anywhere in this
+SDK's GN files) as a separate, not-yet-decided item for the operator, independent of this card's
+closure. `cards_check.sh` confirms `memo.md`/`cards.tsv` agree: open 64, closed 83 (shifted by
+exactly 1 from the pre-closure 65/82); the only remaining failure is the long-standing
+pre-existing `commits-not-sha` data-quality list, unrelated to this closure.
+
+**Full chain for the record**: build (`6b842ac1`/`67b0b0cf`) -> PARTIAL -> fix (`9aab1133`/
+`459d3450`) -> PARTIAL -> fix (`15421794`/`bc87dde7`) -> PARTIAL -> fix (`bb3bcfd8`/`08168a79`) ->
+PARTIAL -> fix (`5d1b59e7`/`cd339b86`) -> PARTIAL -> fix (`4d3d3621`/`c9ecf871`) -> PARTIAL -> fix
+(`c953fad5`) -> SURVIVES -> closed (`ac28d543`/`8a76bcd8`). Six falsification passes, five fixed
+in-round each time, one real SDK capability gap discovered and disclosed along the way
+(analyze_snapshot's disassembler compiled out in PRODUCT builds) that is independent of this
+card's own completion and is flagged above for a separate decision.
+
+This was the last built card from this round's starting state (F161/F174 remain correctly
+`built`/blocked on F175, which needs its own dedicated multi-hour round). Round ends here per
+contract step 4 -- no further dispatch this round. Independently, F167/F168/F170/F172 remain open
+with no dependency blockers; F160 still owes its two follow-up tasks (`--dfe` doc + criterion-(1)
+rerun on `de660deeae5`); F176 needs its own dedicated multi-hour round, nothing else scheduled on
+`~/shorebird_engine`.
