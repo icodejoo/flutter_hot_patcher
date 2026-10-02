@@ -22354,3 +22354,66 @@ the current measured state with documented gaps -- do not silently start a sixth
 that flag. Independently, F167/F168/F170/F172 remain open with no dependency blockers; F160 still
 owes its two follow-up tasks; F161/F174 remain correctly `built`/blocked on F175; F176 needs its
 own dedicated multi-hour round, nothing else scheduled on `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 52412, continued): F169 fifth falsification pass VERDICT PARTIAL (real SDK gap found), fixed+disclosed in round, sixth (terminal) pass dispatched
+
+Fifth falsification pass (fresh Opus, background, 33 tool calls, 357s) on `5d1b59e7`/`cd339b86`
+completed. **F169 VERDICT: PARTIAL.** This pass found something qualitatively different from the
+prior four: not a measurement-script bug, but a **real SDK capability gap** that the script's own
+claim was overstating. Two findings: (1) the "disassemble shadowed by a tool option on ours"
+claim only holds for the bare `--disassemble` spelling; `--no_disassemble` and
+`--disassemble=<value>` are genuinely fatal on ours (confirmed live by the pass: `rc=255
+Unrecognized flags: disassemble`, while theirs accepts both). (2) Even the one spelling that *is*
+accepted on ours produces an empty result: `--shorebird --disassemble` gives 0 functions with a
+non-empty disassembly array on ours vs >0 (1380 populated) on theirs. The pass traced this to a
+real, confirmed root cause in the SDK source: `runtime/vm/analyze_snapshot_api_impl.cc:2905`
+(`ShorebirdDisassembleEntry`) is guarded by `#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)`;
+our pinned build (`ProductSimIosARM64`) is a PRODUCT build, and `FORCE_INCLUDE_DISASSEMBLER`
+appears nowhere in this SDK's GN build files -- so **our analyze_snapshot's disassembler is fully
+non-functional in every build this harness can currently exercise**, not merely untested. I
+independently re-verified both findings myself (reran the exact probe commands, read the cited
+source lines and confirmed the `#if` guard text matches, grepped the GN tree for
+`FORCE_INCLUDE_DISASSEMBLER` and got 0 hits) before accepting the pass's conclusion.
+
+**Fixed/disclosed directly in round** (`4d3d3621`): added explicit fatal/accepted pins for the two
+additional `disassemble` spellings (so "shadowed" is now scoped correctly to the bare spelling
+only, not overclaimed for all three), and added a new INFO pin (`as_vm_disasm_count`) that
+discloses the disassembly-emptiness gap numerically (0 vs >0) without attempting to fix it --
+changing SDK build configuration is out of this measurement harness's scope and out of this
+round's card list. Verified: `./g1_denominator.sh` and `--self-test` both rc 0,
+`cards_check.sh` output byte-diffed at 0 bytes of difference against the long-standing baseline.
+
+🔴 **Flagging explicitly, as planned**: this is the fifth consecutive falsification pass to find
+something real on one script, and the finding is now a genuine SDK-level fact rather than a script
+defect -- analyze_snapshot's disassembler does not work at all in our current build
+configuration. This may matter beyond F169/G1 (e.g. for any future work depending on disassembly
+output, or for G2/G4 if disassembly-based testing is ever needed) and is worth a deliberate
+decision, independent of whether F169 itself closes: either accept it as a known, documented SDK
+gap (parallel to the other already-accepted structural limitations in this project, e.g. the
+Thread/Isolate append-only constraint), or open dedicated SDK work to enable
+`FORCE_INCLUDE_DISASSEMBLER` in a non-PRODUCT-but-still-representative build config. Not deciding
+this now -- out of this round's and this card's scope -- just surfacing it since it was found here.
+
+Committed in `fhp-research`: `4d3d3621` (script fix+disclosure), `c9ecf871` (cards.tsv note,
+single-line diff, confirmed via `git diff --numstat`).
+
+Dispatched a sixth, explicitly-framed-as-likely-terminal Opus subagent per `tools/loop/prompts/
+falsify.md`. Told it directly: per this project's own established precedent (F165), once a
+fix-and-pass chain converges to *disclosing* real facts rather than *hiding* defects, that is
+grounds to accept and close, not grounds to keep demanding a fully airtight detector; calibrated
+its bar for PARTIAL to "something currently hidden/misrepresented today", not "more complexity
+exists in the world than the script discusses" -- and told it explicitly not to manufacture new
+scope (further flag spellings, hypothetical future SDK changes, theoretical race conditions in a
+single-shot CLI probe) without concrete present reason. Five lighter attacks, ~30-45 tool calls.
+
+**Decision for next round, stated now rather than left implicit**: regardless of the sixth pass's
+outcome, this round is ending the F169 cycle here -- if SURVIVES, close F169 next round with every
+STILL OPEN residual it names folded into the card text verbatim (there will likely be several:
+the 4 disguise-blind names, the demoted `-D` pin, the disassembler PRODUCT-build gap, possibly
+others). If it reports PARTIAL/FALSIFIED again, do **not** auto-dispatch a seventh pass in the
+same mechanical way -- read what it found, and if it is once again a real disclosed fact rather
+than a hidden defect, apply the same closing judgment directly rather than re-entering the cycle;
+only re-enter the fix-pass cycle if it is a genuinely new *silent* misrepresentation of the kind
+the first four passes found. Independently, F167/F168/F170/F172 remain open with no dependency
+blockers; F160 still owes its two follow-up tasks; F161/F174 remain correctly `built`/blocked on
+F175; F176 needs its own dedicated multi-hour round, nothing else scheduled on `~/shorebird_engine`.
