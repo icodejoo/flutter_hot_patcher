@@ -23269,3 +23269,32 @@ F179 后台复核：`ps -p 25306` → `ELAPSED 01:00:35，PPID 1，STAT SN`，�
 `reverted-problem`/`build-too-slow`/其它非正常状态，按它给的具体理由处置，不要重新整段重做；
 ③F179 大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读 tsv 正文；④F167 的 STILL OPEN
 与其余待审项排在后面。
+
+### 2026-10-02 round (PID 17711, run_round.sh): heartbeat, F179 still running, dispatching F178 DART_HOST_OS_IOS gate
+
+开工核实：锁 PID 17711 即本轮自己，无 `.loop/PAUSE`。磁盘 `df -g ~`：460G 总量，347G 可用，远高于 35GB 门槛。
+
+F179 后台进程复核：`ps -p 25306` → `PPID 1，ELAPSED 01:07:20，STAT SN`，仍在正常跑（16:47:45 起，预计 20:20-20:50 完），
+`driver.log` 无新 `DONE` 行，两份全量 tsv 仍无新提交（`git -C ~/Documents/fhp-research log --oneline -1 -- spikes/shorebird_linkinfo_oracle/` 仍是 `52c615c7`）。本轮不碰它，不重跑。
+
+核实上一轮（PID 58971）派的第四个子代理（DART_HOST_OS_IOS 门控实现）是否已落地：`~/dart-3122/sdk`
+`git status --porcelain` 空，`git log --oneline -3` 顶部仍是 `0ae8fc7d1c8`（F178 WrapCode 修补丁本身），
+**没有新的门控提交**；`git stash list` 只有 3 笔旧 stash，其中 `stash@{0}` 标 "F178 negative wrapper->identity"，
+`stash show -p` 核实其内容与已提交的 `0ae8fc7d1c8` 逐字节相同（是负控制测试留下的冗余副本，不是新工作）。
+⇒ 上一轮派的那个门控子代理没有留下任何痕迹——按契约，后台 Agent 任务绑定在派它的那个会话里，
+会话结束后若未落盘到 git，其产出即丢失（不是救援范围，`.loop/RESCUED` 记的是另一笔不相关的研究树 stash）。
+**不是重做，是第一次真正落地**：上一轮只确认了"门控是对的方案"并派发，从未见过它的产出存在过。
+
+确认 `DART_HOST_OS_IOS` 已是标准 Dart SDK 构建宏（`runtime/bin/process.cc`、`process_macos.cc` 等多处使用），
+不需要新定义。按 `cards.tsv` F178 的建议重新派一个新鲜子代理（Agent 工具，async/后台）实现该门控：
+iOS 分支退回 identity（待真机验证），host/模拟器/其他平台维持 `0ae8fc7d1c8` 的 wrapper 行为。
+要求：①只改 `app_snapshot.cc:10114` 附近那一个返回语句，用 `#if defined(DART_HOST_OS_IOS)` 分支；
+②增量重建 host 模拟器构建验证 `sdk_phase_checklist.py` C4 不回退（host 不是 iOS，门控应为 no-op）；
+③用临时 `-DDART_HOST_OS_IOS=1` 做一次纯编译期探针（不是真机构建）确认 iOS 分支确实被选中；
+④自带负控制（反转门控，确认探针真的敏感）；⑤严格返回格式（STATUS/COMMIT/C4_BEFORE/C4_AFTER/
+PROBE_RESULT/NEGATIVE_CONTROL/STILL_OPEN），不贴日志正文；⑥不碰真机，不改除 `~/dart-3122/sdk` 外的文件。
+
+**本轮到此结束**，等这个门控实现子代理的完成通知。下一轮：①先查 `~/dart-3122/sdk` 的
+`git status --porcelain` 与 `git log -3` 看是否已落地（不要只信回复）；②若已提交，按契约派独立证伪 pass
+（新鲜子代理）才能把 F178 从 `built` 改判；③F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、
+不要提前读两份 tsv 正文；④F167 的 STILL OPEN（重建 `ProductSimIosARM64`）与其余待审修补丁排在后面，本轮未碰。
