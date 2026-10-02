@@ -22134,3 +22134,51 @@ chain (`6b842ac1` build -> PARTIAL verdict -> `9aab1133`/`459d3450` fix -> this 
 cards.tsv's F169 row and only then consider closing. Independently, F167/F168/F170/F172 remain
 open with no dependency blockers; F160 still owes its own two follow-up tasks; F161/F174 remain
 correctly `built`/blocked on F175; F176 needs its own dedicated multi-hour round.
+
+### 2026-10-02 round (PID 5987, continued): F169's second verdict PARTIAL -- fixed directly (not via subagent) to conserve budget
+
+The second falsification pass (dispatched on `9aab1133`/`459d3450`) completed (Opus, 28 tool calls,
+441s). **F169 VERDICT: PARTIAL** again, two more real defects found: (1) VM-ambiguous tool options
+-- names the VM's own `--print_flags` also accepts (`deterministic`, `disassemble`,
+`load_obfuscation_map`, `print_class_table_link_info_to`) -- are deliberately withheld from W2 by
+the fix's own design (W2 cannot tell "tool option consumed it" from "VM flag consumed it"), so a
+disguised copy of one of these still misreads as lost -- the same false-positive shape as the
+original FLAW 1, narrowed to this specific set rather than eliminated. Confirmed live by the pass:
+patching "Non-empty value for option deterministic" -> "Xon-empty" in a copy and showing the gap
+rises by 1 even though `--deterministic=` still works on that copy. (2) the "-Df169a=b accepted"
+control can never fail: `flags.cc:494-499` truncates argument scanning at the first non-"--"-
+prefixed token and drops everything after it, independent of whether `-D` is actually a registered
+processor -- demonstrated by constructing `-Zf169bogus=1` (a made-up single-dash name) and finding
+it "accepted" identically. Also flagged a non-live fragility: the VM-flag ambiguity filter compares
+candidate names directly, without stripping a possible `no_` prefix, so a hypothetical future
+`no_X` tool option matching VM flag `X` would dodge the filter (not hit by any current candidate).
+
+**Given this is the second consecutive PARTIAL on the same script**, and to conserve the session's
+remaining budget, I fixed this one directly myself in the main round (not via another subagent
+dispatch) rather than spin up a third large implementer: (1) the VM-ambiguous disguise gap is not
+independently fixable with this harness's current witnesses (would need a way to tell tool-option
+consumption apart from VM-flag consumption for a name both register) -- made *visible* instead of
+hidden, per this project's own precedent for undFixable residuals (F165's Field-backed-kind gap was
+documented, not forced closed): added an `INFO disguise-blind (VM-ambiguous, W1-only) registered
+tool options = N: <names>` line that counts and names them (currently 3: `analyze_snapshot:
+deterministic`, `analyze_snapshot:disassemble`, `gen_snapshot:load_obfuscation_map`). (2) demoted
+the vacuous `-D` pin to an `INFO` line stating only what it actually shows (uniform truncation
+behavior across all 4 binaries, both `-D` and the made-up `-Z` name) rather than claiming it proves
+`-D`'s registration (that remains a source-only claim, `gen_snapshot.cc:151`, not independently
+probed). (3) added defensive `no_`-prefix stripping to the VM-flag ambiguity match (not live today,
+guards the hypothetical future case the pass named). Ran `./g1_denominator.sh` and `--self-test`
+myself: both rc 0; `cards_check.sh`: same pre-existing 16-card `commits-not-sha` list only, no new
+failures. Committed in `fhp-research`: `15421794` (script), `bc87dde7` (cards.tsv note).
+
+**Decision for whoever picks this up next**: this script has now gone through build -> PARTIAL ->
+fix -> PARTIAL -> fix (this round) -- a pattern this project's own house style treats as a signal
+to accept the current state with documented residuals rather than keep chasing a fully airtight
+detector (same judgment call as F165's closure). The disguise-blind gap (4 VM-ambiguous names,
+documented and counted) and the -D source-only claim (documented and counted) are now honest,
+measured limitations, not silent false positives. A third falsification pass on `15421794`/
+`bc87dde7` is still owed before F169 can be considered for closing (a fix never inherits review of
+what it fixed) -- dispatch one, but if it again finds only residuals of the same already-documented
+shape (not a new silent false-positive), that is grounds to close F169 with those residuals folded
+into the card text, not grounds for a fourth fix-and-pass cycle. Independently, F167/F168/F170/F172
+remain open with no dependency blockers; F160 still owes its own two follow-up tasks; F161/F174
+remain correctly `built`/blocked on F175; F176 needs its own dedicated multi-hour round.
