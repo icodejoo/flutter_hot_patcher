@@ -23376,3 +23376,32 @@ F155-F159（均已完成，deps 清但本卡本身是让"size-parity stubs 真�
 ②F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③F175 的 SPLIT
 PROPOSAL（预构建 `shell_unittests`）需要一整轮专门排期，不要顺手代做；④F172/F168 已有绿色 pass，
 等操作者用队列脚本手动出队处理，不要再派。
+
+### 2026-10-02 round (PID 17711, continued): F167 重建+重验完成（研究树 824dcf01），已派独立证伪 pass
+
+子代理完成通知：`STATUS: done`，四条子论断全部 `holds`（但订正了前一轮的一处表述错误——"largest index
+dependency"准确说法是 `min(largest index, 66)`，到 hello fixture 自己的 67 个槽位就不再变化；上一轮
+误以为三张表"恰好共享同一个最大 index"，实际是 66/356/243 都 ≥ 66 所以表现一致）。重建发现一个新的、
+之前没人记录的小问题：`ProductSimIosARM64` 的裸 `gen_snapshot`/`analyze_snapshot` target 实际指向一个
+**与探针脚本真正跑的 `clang_arm64/gen_snapshot`/`clang_arm64/analyze_snapshot` 不同的 iOS 工具链构建**，
+前者的 `analyze_snapshot` 现在**链接失败**（`ld64.lld: cannot use both -exported_symbol* and
+-unexported_symbol*`），但这条不影响探针（探针用的是 `clang_arm64/` 那份，已重建到 0 待办）。
+子代理把输入也整个从零重新生成（而不是复用旧 `out_pm` 产物），新生成的 `as.hello.ours.so` 哈希变了但
+尺寸不变，派生的全部 DD 输入逐字节与旧的相同。
+
+已把结果写进研究树 `cards.tsv`（提交 `824dcf01`），**F167 状态改为 `built`**（不是 `closed`，按契约需要
+独立证伪 pass）。子代理同时如实报告：`cards_check.sh` 当前是红的（5 个失败，均为已存在、与本次无关的
+drift，不是这次改动引入的）。
+
+按契约派了独立证伪 pass（新鲜子代理，重点核实①裸 target vs `clang_arm64/` 的说法是否真实、是否测的是
+对的二进制——这正是本仓库反复栽过的"构建陈旧/测错二进制"那类坑；②独立重现至少 2 条子论断；③自己设计
+一个新负控制，尤其是精确核实"66/67 边界"是不是真的在 67 处就不再变化；④"base snapshot 哈希变了但派生
+DD 输入逐字节不变"是否合理而非可疑；⑤两个仓库的 `git status` 是否干净；⑥TSV 结构是否完好）。
+
+F179 后台复核：`ps -p 25306` → `PPID 1，ELAPSED 01:39:24，STAT SN`，仍在正常跑，两份全量 tsv 仍无新提交。
+
+**本轮到此结束**，等 F167 证伪 pass 的完成通知。下一轮：①按判决处置——SURVIVES 就把 STILL OPEN 原文
+抄进 `cards.tsv` 并把 F167 标 `closed`；PARTIAL/FALSIFIED 就当场修、重跑证伪，不许直接关卡；
+②F179 后台大概率仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读两份 tsv 正文；③`cards_check.sh`
+的 5 个已知失败与 F167 无关，不在本轮处理范围（不开新卡，除非挡住了本阶段范围内某一项）；
+④F175 的多小时 engine 构建、F172/F168 的操作者出队，继续不碰。
