@@ -74,5 +74,22 @@ out=$(run "$T/other.txt")
 q=$(printf '%s' "$out" | sed -n '/^==QUEUE==$/,/^==LOG==$/p')
 expect "scope with no queued card: queue empty"    "$q"   "- F" 0
 
+# 2026-10-02: the phase block is a double-quoted string, so an unescaped
+# backtick in it is command substitution. A line saying never to run
+# `shorebird release` ran it on every tick (118 times, all failing only
+# because no --platforms was given). Every PROMPT block must be free of
+# unescaped backticks, and building the phase block must execute nothing.
+bare=$(perl -ne '$in=1 if /^\s*PROMPT="/; if($in){ $c += () = /(?<!\\)`/g } $in=0 if $in && /"\s*$/ && !/^\s*PROMPT="\$PROMPT\s*$/; END{print $c+0}' "$RR")
+if [ "$bare" = 0 ]; then echo "ok   no unescaped backtick inside any PROMPT block"; else echo "FAIL $bare unescaped backtick(s) inside PROMPT blocks of run_round.sh"; fails=$((fails+1)); fi
+mkdir -p "$T/trip"
+for c in shorebird git df ninja dart python3 flutter; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s/trip.log"\n' "$c" "$T" > "$T/trip/$c"; chmod +x "$T/trip/$c"
+done
+: > "$T/trip.log"
+( PATH=$T/trip:/usr/bin:/bin; REPO=$T/repo; PROMPT=BASE; FHP_LOOP_PHASE_SCOPE=$T/none; say() { :; }; . "$T/scope.sh" ) >/dev/null 2>&1
+( PATH=$T/trip:/usr/bin:/bin; REPO=$T/repo; PROMPT=BASE; printf 'F1\n' > "$T/s1"; FHP_LOOP_PHASE_SCOPE=$T/s1; say() { :; }; . "$T/scope.sh" ) >/dev/null 2>&1
+n=$(wc -l < "$T/trip.log" | tr -d ' ')
+if [ "$n" = 0 ]; then echo "ok   building the phase block executes no command"; else echo "FAIL building the phase block executed $n command(s): $(sort -u "$T/trip.log" | tr '\n' ';')"; fails=$((fails+1)); fi
+
 echo "$fails failure(s)"
 [ "$fails" -eq 0 ]
