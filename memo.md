@@ -22287,3 +22287,70 @@ explicitly rather than silently continuing. Independently, F167/F168/F170/F172 r
 no dependency blockers; F160 still owes its two follow-up tasks; F161/F174 remain correctly
 `built`/blocked on F175; F176 needs its own dedicated multi-hour round, nothing else scheduled on
 `~/shorebird_engine`.
+
+### 2026-10-02 round (PID 52412, continued): F169 fourth falsification pass VERDICT PARTIAL, fixed in round, fifth pass dispatched
+
+Fourth falsification pass (fresh Opus, background, 13 tool calls, 359s) on `bb3bcfd8`/`08168a79`
+completed. **F169 VERDICT: PARTIAL.** Real, concrete, new-class defect in control F itself (the
+section added two rounds ago): it probed only ONE of the 9 names per direction
+(`disassemble_stubs` / `print_class_table_link_info_to`) and claimed the result for all 9. False
+for `disassemble`: it is ALSO a registered analyze_snapshot tool option on both sides (unlike the
+other 8 theirs-only names), so `--disassemble` succeeds on ours via the tool-option processor and
+never reaches the VM-flag check at all -- it is shadowed, not fatal (confirmed live by the pass:
+`--disassemble` gives rc 0 and an 878700-byte `o.json` on ours). Also found `as_vm_rejected`'s
+"accepted" branch had no rc/output check -- any non-rejection output read as accepted, so a
+crashing binary (rc 139) or a nonexistent path both read "0" = accepted. Other six attacks held
+(162/9/9 partition arithmetic exact and matching the script's own pins independently re-derived;
+binaries comparable, 0 ninja pending; no double-counting between the VM-flag gap and the
+tool-option gap=1/extra=1; `git merge-base` confirmed not stale; the "fatal" direction of the
+control can fail, confirmed by reverting the pipe-into-file fix and by patching a name; scope
+exclusion fairly stated). One stale/wrong claim corrected in the chain's own comments: the pass
+showed the binary's own process exit status for "Setting VM flags failed" is already non-zero
+(255) with no pipe involved at all -- not SIGPIPE from `grep -q` closing the pipe early, as the
+prior two rounds' comments (and the older pre-existing `unrec()` comment) claimed.
+
+**Fixed directly in round** (`5d1b59e7`): every one of the 17 genuinely-VM-only names (8
+theirs-only + 9 ours-only) is now probed on both binaries via `as_vm_check_all`/`as_vm_classify`,
+cross-referenced against the already-computed tool-option registration (`as_tool_names`) to split
+each 9-name list into "shadowed" (1: `disassemble`) vs "genuinely VM-only and fatal" (8
+theirs-only, 9 ours-only), and the classifier requires rc 0 AND a non-empty output file for
+"accepted" (returning "error" for anything else, never silently folded into either bucket).
+Verified myself, independent of the script: extracted `as_vm_classify` standalone and confirmed a
+crashing binary and a nonexistent path both correctly classify "error", not "accepted" (the exact
+hole the pass found). Corrected the SIGPIPE/255 comment to state the real cause. Ran
+`./g1_denominator.sh` (rc 0, all new pins "ok", 8/8 and 9/9 fatal+accepted counts) and
+`./g1_denominator.sh --self-test` (rc 0, same one expected netted-out FAIL as always) myself.
+`cards_check.sh` output diffed byte-identical against the pre-fix baseline file (not just rc) --
+no regression.
+
+Also avoided repeating last round's Python-csv-module mistake: used a raw-bytes
+split-by-`b"\n"`/join approach to append the cards.tsv note to exactly the F169 line, after
+discovering mid-round that Python's `readlines()` in universal-newline mode did not behave as
+expected on this file (an `AssertionError` on `line.endswith("\n")` that did not reproduce with a
+plain raw-byte split) -- diagnosed and worked around rather than forcing the same tool that had
+already caused a problem two rounds ago. `git diff --numstat` confirmed a clean 1-line change
+before committing.
+
+Committed in `fhp-research`: `5d1b59e7` (script fix), `cd339b86` (cards.tsv note, single-line
+diff only, confirmed via `git diff --numstat`). F169 left `built`, not `closed`.
+
+Dispatched a fifth fresh Opus subagent (general-purpose, background) per `tools/loop/prompts/
+falsify.md`. Told it explicitly, up front, that this round's fix addressed a genuinely new defect
+(not a repeat), so the "accept documented residuals" convention (F165 precedent) does not yet
+apply to it -- but if this fifth pass finds only the already-documented residual shapes (4
+VM-ambiguous disguise-blind names, demoted `-D` pin, or something of clearly the same accepted
+character), it should say so explicitly and recommend closing with residuals folded into the card
+text, rather than demanding a fully airtight detector. Standard constraints: read-only SDK/
+`.shorebird`, no `shorebird` CLI subcommand, 0 pending ninja steps confirmed first, bounded
+~50-70 tool calls, `F169 VERDICT:` line format (F116/F117).
+
+Round ends per contract step 4, awaiting the fifth pass's completion notification. **Next round
+picks up**: record the fifth pass's verdict. If SURVIVES or "residuals accepted", close F169 and
+fold every documented residual (4 disguise-blind names, demoted `-D` pin, the shadowed-name
+exclusion) into the card text verbatim, copying the STILL OPEN line. If this is yet another new,
+genuinely silent defect, fix it, but also explicitly flag to the operator that this is the fifth
+consecutive pass turning up something on one script and ask whether to keep iterating or to accept
+the current measured state with documented gaps -- do not silently start a sixth cycle without
+that flag. Independently, F167/F168/F170/F172 remain open with no dependency blockers; F160 still
+owes its two follow-up tasks; F161/F174 remain correctly `built`/blocked on F175; F176 needs its
+own dedicated multi-hour round, nothing else scheduled on `~/shorebird_engine`.
