@@ -22762,3 +22762,18 @@ OURS-WORSE/OURS-BETTER 的名字列表（不把两份 ~3349 行 TSV 读进上下
 得出 ours-worse 名单，据此判断 F179 判据「0 ours-worse」是否满足。
 
 **本轮到此结束**，不再派新任务，只是把断掉的长跑任务用更可靠的方式重新接上。
+
+### 2026-10-02 round (PID 31723, run_round.sh): F179 后台长跑核实存活，派 F167/F168 证伪 pass
+
+开工核实：13:04 那轮重新用 `nohup+disown` 起的 F179 全量 3349-test 对拍后台任务仍活着
+（`run_both.sh` PID 99594，`ps -o ppid` 确认 PPID=1，不挂在本轮进程组上；`ours.tsv`/`stock.tsv`
+分别已到 352/182 行，持续增长，未卡死）。**本轮不碰它、不碰 `ProductSimIosARM64`**，只读了一眼就离开。
+
+`phase_scope.txt` 头部点名 F167/F168（10-02 已落地 `716a3cec`，待证伪）是本轮范围内「已 built、欠一次证伪 pass」
+的项。派了一个新鲜 Opus 子代理（background）跑 `tools/loop/prompts/falsify.md` 七问，对象是 `716a3cec` 对两张卡的落地：
+F167（12 个 needs-input-first 选项补齐输入、真缺口 `--dd_table_data`）、
+F168（44 个 not-comparable 里 41 个复核存活、3 个移进矩阵，`f168_dead_option_probe.sh` 新增）。
+要求按 F116/F117 格式逐卡给判决行，只测了的卡给行，没测的卡不给。agentId 内部记录，等完成通知。
+
+**本轮到此结束**，等这个证伪 pass 的完成通知；下一轮先读判决：SURVIVES 就把 STILL OPEN 原文抄进 memo 并关卡，
+PARTIAL/FALSIFIED 就当场修、不开新卡（除非挡住范围内别的项）。同时继续核 F179 后台任务是否已跑完 3349 行。
