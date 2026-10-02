@@ -23206,3 +23206,36 @@ F179 后台进程开工前复核：`ps -p 25306` → `PPID 1，ELAPSED 37:53，S
 `cards.tsv` 并把 F178 标 `closed`；PARTIAL/FALSIFIED 就当场修、重跑证伪，不许直接关卡；②F179 后台大概率
 仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读 tsv 正文；③F167 的 STILL OPEN（重建
 `ProductSimIosARM64`）与其余待审项排在后面。
+
+### 2026-10-02 round (PID 58971, continued): F178 证伪 pass 回报 PARTIAL -- 发现 09-03 旧撤销理由从未被重新核过，卡不关
+
+证伪子代理回报 **`F178 VERDICT: PARTIAL`**：①确认 C4 对这条命中分支真的零覆盖（`IsLinkingEnabled()`
+要求 `LinkOracle::shared()` 非空且 base-instructions 表非空，C4 的纯 standalone 快照程序从不满足）；
+②独立复现负控制（自己 revert→重建→重测→还原→重建→重测，两次都 14/14，与实现者读数一致）；
+③确认 `EntryPoints`/`wrapper` 插线无害（`payload_start` 换成 `base_entry` 后没有下游还读旧值）。
+
+🔴 **真发现，实现者没注意到**：命中分支这次改的这个返回值（`EntryPoints(base_entry, wrapper, ...)`）
+**此前已经试过一次，并在 2026-09-03 提交 `1f1e51ad16e`（"fix(elf_loader,app_snapshot): iOS PROT_EXEC +
+WrapCode identity wrapper"）里被撤回**——这次改动正上方未被动过的注释（`app_snapshot.cc` 约
+10089-10097 行）写的正是撤回原因：**不是** B6 那个 PROT_READ 补丁字节的问题，而是一个更具体、从未被
+重新核实或撤回的说法——"Sim→CPU 包装的 InvokeWithTHR 在 iOS 上会崩，因为模拟器的调用约定适配器与
+mixed-ownership（App.framework + patch）二进制里的 Dart AOT ARM64 入口点不兼容"。09-03 提交说明自己
+写的是"设备验证待定（B8 round 2）"，此后在研究树里找不到任何后续验证记录。实现者确实修好并验证了
+同一条 09-03 提交里的另一个、更通用的隐患（BRK 落到调试器导致 SIGABRT，已被 F160/F162 的加固工作解决），
+但完全没碰到、也没提到这第二个、更具体、专指这次改动所做的那次跨越的说法。
+
+**card 不关闭**，status 保持 `built`；判决与 STILL OPEN 原文已写进研究树 `cards.tsv`（提交 `c65e72d8`）。
+F179 后台进程复核：`ps -p 25306` → `ELAPSED 53:32，PPID 1，STAT SN`，仍在正常跑，两份全量 tsv 仍无新提交。
+
+**下一步判断**：这个具体疑点（InvokeWithTHR 跨越到另一个"mixed-ownership"镜像是否真的在 iOS 上独有）
+此前从未被人试图在真机之外验证过，是关卡前最有价值的单一动作，但也可能本质上只能靠真机判定（G3，
+操作者在场，不在本循环范围）。派了第三个子代理做**纯调查**（不是实现）：读 `InvokeWithTHR`
+（`simulator_arm64.cc:1760+`）与相关跨镜像机制，判断这个具体隐患在 host/模拟器构建上是否可被复现或证伪，
+如果可以就最小化构造一次试跑，如果本质上只能在真机上判定就如实说清楚需要什么样的真机测试（留给未来的
+G3 阶段，不在本次任务范围内尝试）。严格返回格式，不许动除 `~/dart-3122/sdk` 外的任何文件，不许接触真机。
+
+**本轮到此结束**，等这个调查子代理的完成通知。下一轮：①按它的 HOST_TESTABILITY/RECOMMENDATION 字段
+处置——如果答案是"host 可测"且已给出确定结果，按结果决定是否需要再修一轮并再证伪；如果是"本质上只能
+靠真机"，把这条结论写进 `cards.tsv`，F178 保持 `built` 并显式标注"blocked pending G3"，不要在本循环
+继续徒劳尝试；②F179 后台大概率仍未跑完（预计 20:20-20:50），`ps -p 25306` 复核即可；③F167 的 STILL OPEN
+与其余待审项排在后面，本轮未碰。
