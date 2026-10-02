@@ -22182,3 +22182,34 @@ shape (not a new silent false-positive), that is grounds to close F169 with thos
 into the card text, not grounds for a fourth fix-and-pass cycle. Independently, F167/F168/F170/F172
 remain open with no dependency blockers; F160 still owes its own two follow-up tasks; F161/F174
 remain correctly `built`/blocked on F175; F176 needs its own dedicated multi-hour round.
+
+### 2026-10-02 round (PID 52412): dispatched third falsification pass on F169's fix (15421794/bc87dde7)
+
+Read LOOP_CONTRACT.md fully, inspected rescued stash from round-5987 (already handled by
+round PID 5987 per intervening memo entries -- fhp-research tree is clean, only untracked
+`scratchpad/`). Confirmed via `git log`/`cards.tsv` that F169 has gone through
+build(6b842ac1/67b0b0cf) -> PARTIAL -> fix(9aab1133/459d3450) -> PARTIAL -> fix(15421794/bc87dde7),
+and a third falsification pass on the latest fix was the explicitly recorded next step (owed per
+prior round's note, and matches this round's prompt instruction naming F169 as a built card owing
+a pass). F161/F174 remain correctly `built`/blocked on F175 (needs its own dedicated multi-hour
+split-proposal round, not appropriate for a single-task round) -- did not touch them.
+
+Dispatched one fresh Opus subagent (general-purpose, background, agent id not logged here per
+instructions) per `tools/loop/prompts/falsify.md`, CLAIM/CRITERION/EVIDENCE/WHERE-TO-LOOK filled
+in from `g1_denominator.sh`'s current state and cards.tsv's F169 row. Told it: criterion is
+whether this fix's two disclosed residuals (3 VM-ambiguous disguise-blind names, demoted vacuous
+`-D` pin) are honestly represented and whether a *new* silent defect exists; if only the same
+already-documented residual shape turns up, that's grounds to settle, not grounds for a fourth
+fix-and-pass cycle. Standard constraints: read-only on `~/dart-3122/sdk` and `~/.shorebird`
+caches, no `shorebird` CLI subcommand, don't touch `memo.md`/flip `cards.tsv` status itself,
+confirm 0 pending ninja steps on the pinned `ProductSimIosARM64` build before trusting it, bounded
+~50-70 tool calls, standard `F169 VERDICT: [SURVIVES|FALSIFIED|PARTIAL]` line format (F116/F117).
+
+Round ends per contract step 4, awaiting subagent's completion notification before recording the
+verdict. **Next round picks up**: record F169's third-pass verdict; if SURVIVES, close F169 and
+copy its STILL OPEN line verbatim; if PARTIAL/FALSIFIED, fix in-round per guidance (fix never
+inherits review) then dispatch a fourth pass only if the fix is non-trivial. Independently,
+F167/F168/F170/F172 remain open with no dependency blockers; F160 still owes its two follow-up
+tasks (`--dfe` doc + criterion-(1) rerun on `de660deeae5`); F161/F174 remain correctly
+`built`/blocked on F175; F176 needs its own dedicated multi-hour round, nothing else scheduled
+on `~/shorebird_engine`.
