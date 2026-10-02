@@ -22736,3 +22736,29 @@ OURS-WORSE/OURS-BETTER 的名字列表（不把两份 ~3349 行 TSV 读进上下
 预计耗时较长（3349×2 次进程调用）。`ProductSimIosARM64` 是否该在循环里重建留给下一轮先查它是否被别的卡判据钉住引用再决定，本轮不碰。
 
 **本轮到此结束**，等这个长跑子代理的完成通知。
+
+### 2026-10-02 13:04 心跳（round PID 66801，ralph.sh 无人值守）：上一轮的后台长跑进程已死，重新以 nohup+disown 方式起
+
+开工核过三棵树 `git status` 干净（除已知的 `fhp-research` 冗余 stash `loop-rescue 2026-10-02T08:24:36 round-5987`，内容已在 HEAD 不阻挡）；
+`fix_queue.py --self-test` 0 失败；无 `.loop/PAUSE`；锁 PID 66801 就是本轮自己。
+
+**发现**：上一轮派的「第三个 Opus 子代理（background，长跑）」跑 3349-test 全量对拍已经死掉——`ps` 查无 `run_vm_tests`/`g2_run_cc.sh`/`run_both.sh` 进程，
+`scratchpad/f179_fullsuite/{ours,stock}.tsv` 只有 368/198 行（预期各 3349），脚本第 8-9 行的 `*.listcount` 文件不存在 ⇒ **`wait` 都没跑完，脚本没有正常收尾**。
+`ours.log`/`stock.log` 里全是单个测试的 `Abort trap: 6`（这是预期内的——被测的崩溃测试本来就会 abort，脚本用 `set +e` 接住），没有真正的报错行，
+判断是**上一轮（run_round.sh PID 85628）作为后台 Agent 派发的那个子代理，在自己的会话随本轮结束时被一并收走**（与本文件「后台子代理被孤儿化」的已知模式一致）——
+不是磁盘满、不是脚本 bug。
+
+**处置**：这不是「脏树待救援」（scratchpad 下的部分数据不是不可恢复的产物，只是不完整，覆盖重跑没有损失）。
+把局部产物移成 `*.partial.bak` 保留痕迹，然后**用 `nohup bash run_both.sh > driver.log 2>&1 < /dev/null & disown` 在真正的 shell 里重新起**，
+并核实 `ps -o pid,ppid,command` 显示 `run_both.sh` 的 **PPID=1**（已脱离本轮进程组，不会再随本轮或本会话结束被杀）。启动时间 13:04。
+
+🔑 **教训**：Agent 工具派的「background」子代理，其生存期绑定着派它的那个主会话/轮次——轮次结束时后台 Agent 可能被一并终止，
+且不会留下任何错误痕迹（跟正常完成长得一样：都是「没有新消息」）。**真正需要跨轮存活的长跑任务，必须用操作系统级别的 `nohup ... & disown`
+直接起进程，并用 `ps -o ppid` 核实父进程是 1，不能信任 Agent 工具的 background 模式能撑过本轮结束。**
+
+**下一轮先做**：检查 `~/Documents/fhp-research/scratchpad/f179_fullsuite/{ours,stock}.tsv` 行数是否已到 3349、
+`driver.log` 是否打出了两行 `rc=0`（`run_both.sh` 收尾标记）与 `*.listcount` 两个文件是否已生成；
+没到就不要重跑，继续等（`ps -p <pid>` 确认还活着）；到了就跑 F170 的 `compare.py`（或重写一份等价聚合脚本）对两份 TSV 做逐测试 diff，
+得出 ours-worse 名单，据此判断 F179 判据「0 ours-worse」是否满足。
+
+**本轮到此结束**，不再派新任务，只是把断掉的长跑任务用更可靠的方式重新接上。
