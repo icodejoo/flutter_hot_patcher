@@ -19829,8 +19829,9 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 - [x] **F164：analyze_snapshot 的 dd 四个选项**（`closed`，2026-10-01，SDK `252c31c45f6`）九组逐字节相同；三处未复现项写在卡上。判据见 `cards.tsv`。（2026-10-02 订正：卡片本体已是 `closed`，这里的复选框此前一直是 `[ ]`，cards_check.sh 的 open/closed 漂移里点名的就是这一处，现同步。F164 VERDICT: SURVIVES——引用的是 PID 83995 那一轮派的独立新鲜 Opus 子代理证伪 pass（45 次调用、362 秒，与此前两次 PARTIAL 的实现者无关），已记在 memo.md 本文件更早处（`cards.tsv` 第三次证伪 pass 行）；本行只是把卡号与判决词在同一处 diff 里对齐，补的是记账格式，不是新开一次 pass。）
 - [x] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`closed`，2026-10-02，研究树 `df1c6387`/`75183c80`）三轮证伪 pass 各挑出一处真缺口（wrong-fixture .ddid 绑定、FunctionKey 内容未核、Field-backed 行种类未核）均当轮修复；第四轮对最后一处修补丁（`75183c80`/`8f567d2b`）独立证伪，F165 修补丁 VERDICT: SURVIVES，STILL OPEN 两条已原文抄进 `cards.tsv` 的收尾记录（`--require-full-coverage` 的 rc=3 与 dd_slot_chain.sh 自身 "exit 3=not bound" 语义的潜在冲突；closures/constructors/implicit accessors 的 20–24% 行仍未被独立核验，按设计留白）。3 个真实矩阵格（hello/base_dd/prog）全程未变，每一步都附空 diff 证明。判据见 `cards.tsv`。
 - [x] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`closed`，研究树 `581869b2`）顺带修了 `WORK=` 不隔离 TSV 的缺陷；负控制修复后经独立证伪 pass SURVIVES (fix)。判据见 `cards.tsv`。
-- [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
-- [x] **F168：复核 44 个 not-comparable 判定**（`closed`，2026-10-02，研究树 `482154b6`）41 存活/3 moved；两轮证伪 pass 后 F168 VERDICT: SURVIVES——`blobs_container_filename`「1 写 0 读」在双侧二进制独立复核（指令级逐条扫描，非只看第一处命中），枚举选项补了非法取值拼写仍不影响判决。STILL OPEN：字符串字面量交叉引用地址与 `__LINKEDIT` 命中数这两个支撑数字还没有可重跑的落盘命令（铁律第 8 条），指令级读写分类本身已独立复现、不受影响。判据见 `cards.tsv`。
+- [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166，2026-10-02 订正 `95c755db`）独立证伪 pass 判 **F167 VERDICT: PARTIAL**——「`--dd_table_data` 的 slot-mapping 输出与内容无关、三张不同表字节相同」这句话是错的：输出实际只依赖表里最大的条目 index（源码 `analyze_snapshot_api_impl.cc:2504-2520,:2621` 只读 `max(index)+1` 当槽位循环上界），探针原来挑的三张表恰好最大 index 相同才看着「无关」。审查者另造两张不同最大 index 的表，两侧输出都变了（1037B/5ba7068f、2300B/e9268b9f，对照原来的 25263B/7c7a83c1）——正确表述应为「两侧在最大 index 相同的函数下一致」，不是「内容无关」，已改写进卡面。坏表崩溃分歧与 `--shorebird --out` 的内容缺口两条独立复现、不受影响；`--load_vm_snapshot_instructions` 结论也复现，但诚实限定在 app-jit 模式（本配置没有非空 VM 指令镜像的模式可测）。同样受 `ProductSimIosARM64` 落后 5 步 ninja 影响，卡不关闭。判据见 `cards.tsv`。
+- [x] **F168：复核 44 个 not-comparable 判定**（`closed`，2026-10-02，研究树 `482154b6`，收尾 `95c755db`）41 存活/3 moved；**两轮独立证伪 pass**（互不共享上下文）**均判 F168 VERDICT: SURVIVES**——`blobs_container_filename`「1 写 0 读」在双侧二进制独立复核两次（第二次额外扫了相邻变量的 ldp/stp 寄存器偏移访问，0 命中），枚举选项补了非法取值拼写仍不影响判决，第二次 pass 另外独立核验了 3 种探针未覆盖的产物类型（绝对路径 bcf + strip/save-debugging-info/loading_unit_manifest、macho-dylib、slot-mapping 模式下的 trace_loading/snapshot_kind=kernel|none/packages/write_service_info），全部两侧字节相同。**本轮同时修复了 cards.tsv 与 memo.md 之间的 open/closed 漂移**（`cards_check.sh` 此前报 F168 在 cards.tsv 仍是 open）。STILL OPEN（第二次 pass 原文）：(i) 某个「无效果」选项可能在这些跑法之外的模式下写到 cwd 外或表现不同；(ii) **本轮与 `482154b6` 落地时两次读数用的 `ProductSimIosARM64` 都落后源码树 5 步 ninja**（`stub_code_compiler`/`simulator_arm64`/`thread` 待办）——在把这些读数用在别处之前先重建一次干净产物重新核验。判据见 `cards.tsv`。
+- [ ] **F167 订正**（`open`，2026-10-02，`95c755db`）独立证伪 pass 判 **F167 VERDICT: PARTIAL**——「`--dd_table_data` 的 slot-mapping 输出与内容无关、三张不同表字节相同」这句话是错的：输出实际只依赖表里最大的条目 index（源码 `analyze_snapshot_api_impl.cc:2504-2520,:2621` 只读 `max(index)+1` 当槽位循环上界），探针原来挑的三张表恰好最大 index 相同才看着「无关」。审查者另造两张不同最大 index 的表，两侧输出都变了（1037B/5ba7068f、2300B/e9268b9f，对照原来的 25263B/7c7a83c1）——正确表述应为「两侧在最大 index 相同的函数下一致」，不是「内容无关」，已改写进卡面。坏表崩溃分歧与 `--shorebird --out` 的内容缺口两条独立复现、不受影响；`--load_vm_snapshot_instructions` 结论也复现，但诚实限定在 app-jit 模式（本配置没有非空 VM 指令镜像的模式可测）。同样受 `ProductSimIosARM64` 落后 5 步 ninja 影响，卡不关闭。判据见 `cards.tsv`。
 - [x] **F169：G1 分母脚本进仓库、接闸门**（`closed`，2026-10-02，六轮 fix-and-pass 后 SURVIVES）判据见 `cards.tsv`。
 - [ ] **F170：G2 测试套方案**（`open`）判据见 `cards.tsv`。
 - [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
@@ -22890,3 +22891,39 @@ F179 后台任务（`run_both.sh` PID 99594）进度是否已到 3349 行。
 
 **连带**：被额度打断的那一轮在 `memo.md` 里留了未提交的日志（F167/F168 证伪回收与 F168 关卡记录——F168 的关卡在研究树 `482154b6` 已提交）。
 它与本节一起提交；原 diff 另存 `.loop/rescue-20261002-quota-round/memo_round.diff`。研究树那边的未提交工作（`cards.tsv` 2 行 + 两个脚本）同目录有备份，留给循环自己的 auto-stash。
+
+### 2026-10-02 round (PID 23808, run_round.sh): F167/F168 独立证伪 pass，F168 关卡，F167 订正不关卡
+
+开工核实：F179 后台全量对拍（之前几轮记的 `run_both.sh` PID 99594，声称 PPID=1）**已彻底消失**——
+`ps -p 99594` 无此进程，`scratchpad/f179_fullsuite/{ours,stock}.tsv` 全机搜索（`find /Users/Cruz/Documents /tmp /var/folders`）
+不存在任何痕迹。**它没有在某个磁盘地板或软 kill 下优雅收尾，是彻底消失的**，与此前「后台子代理随会话结束被孤儿化」同一种模式，
+只是这次连 `nohup ... & disown` 也没能让它活过会话（或者活过了某次机器/会话重置）。本轮未重新起它（排序上先处理已到期的证伪 pass，
+且起一次 3349 测试的全量跑在预算/时间上不便宜）；下一轮若要继续 F179/F170 的大套件工作，先决定要不要换成真正脱离进程组的方式
+（systemd/launchd 式，而不是 shell 内 `& disown`），并在 memo 里记录 PID 与输出目录。
+
+正事：`cards.tsv` 当时 `open` 的范围内卡是 F160 F167 F168 F170 F172 F175 F178 F179 F180（F172 已有绿色 pass 等操作者出队，跳过）。
+上一轮已派发一个「对 `482154b6`（F167/F168 的实现提交）跑 falsify.md」的 background 子代理，但那个会话随上一轮结束而终止，
+从未产出判决（没有新提交、没有完成通知留痕）——**同样是 F179 那种「背景任务被会话收走」的模式，这次是证伪 pass 而不是长跑脚本**。
+🔑 **教训**：`run_round.sh` 的背景派发（Agent `run_in_background: true`）的生存期绑定本轮会话，不是真正脱离的 OS 进程；
+已经在 F179 上记录过一次，这次在证伪 pass 上又撞了一次——**凡是需要跨轮存活的派发，要么前台等完、要么用 nohup+disown 这种真正脱离 shell/会话的方式**。
+
+本轮重新派发（前台、同步等待），新鲜 Opus 子代理、无共享上下文，针对 `482154b6` 跑 falsify.md 七问，F167/F168 各给一行判决：
+
+- **F168 VERDICT: SURVIVES (fix)**——与此前某轮已经做过的独立 pass（记在 `cards.tsv`/`memo.md` 里但从未把 `cards.tsv` 的
+  status 字段从 `open` 翻成 `closed`）结论一致，这是**第二次**独立确认。顺手发现并修复了 `cards_check.sh` 一直在报的
+  open/closed 漂移（`memo.md` 的复选框写着 `[x] closed`，`cards.tsv` 列 2 还是 `open`）——翻成 `closed`，追加本次 pass 的
+  STILL OPEN（两条：某选项可能在未测模式下有效果；`ProductSimIosARM64` 落后 5 步 ninja，读数待重建后复核）。
+  关卡，研究树提交 `95c755db`。
+- **F167 VERDICT: PARTIAL**——真缺陷：card 原文「`--dd_table_data` 的 slot-mapping 输出内容无关」是假的，
+  实为「只依赖表里最大条目 index」（`analyze_snapshot_api_impl.cc:2504-2520,:2621`），探针选的三张表恰好最大 index
+  相同才显得「无关」。已把卡面文本改写为正确表述（两侧在相同最大 index 下一致），**不关卡**，同一份提交 `95c755db`。
+  坏表崩溃分歧、`--out` 内容缺口、`load_vm_snapshot_instructions` 三条结论独立复现，未受影响。
+
+`cards_check.sh` 复核：open/closed 两个集合从「FAIL: F168 漂移」变成 `ok: open set agrees (66 cards)` /
+`ok: closed set agrees (84 cards)`；剩余 2 项失败（`F84/F136/F143` 的 commits、十余张卡的 commits-not-sha 格式）
+与本轮改动无关，本轮不碰。
+
+**本轮到此结束**。下一轮：①若要继续 F167，先重建 `ProductSimIosARM64`（`gen_snapshot`/`analyze_snapshot` 到 0 待办 ninja），
+再派一次新鲜证伪 pass 核实「相同最大 index 下一致」这个订正后的表述；②F179 的全量套件对拍需要重新起一次，
+且要换一种真正能跨会话存活的后台方式，而不是 `nohup ... & disown`（本轮证明这也不够）；③按真缺口优先排序，
+F178（WrapCode 包装）与 F179（4 个 vm/cc 测试只在我们这侧崩溃）仍是本阶段最大的未知面。
