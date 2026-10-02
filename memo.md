@@ -19830,7 +19830,7 @@ C4 13 项全过。钉住的三个构建全部归零（ProductSimARM64 517→0 ·
 - [x] **F165：`compute_dd_slot_mapping` ×3 不再是 blocked，三处错注释改掉**（`closed`，2026-10-02，研究树 `df1c6387`/`75183c80`）三轮证伪 pass 各挑出一处真缺口（wrong-fixture .ddid 绑定、FunctionKey 内容未核、Field-backed 行种类未核）均当轮修复；第四轮对最后一处修补丁（`75183c80`/`8f567d2b`）独立证伪，F165 修补丁 VERDICT: SURVIVES，STILL OPEN 两条已原文抄进 `cards.tsv` 的收尾记录（`--require-full-coverage` 的 rc=3 与 dd_slot_chain.sh 自身 "exit 3=not bound" 语义的潜在冲突；closures/constructors/implicit accessors 的 20–24% 行仍未被独立核验，按设计留白）。3 个真实矩阵格（hello/base_dd/prog）全程未变，每一步都附空 diff 证明。判据见 `cards.tsv`。
 - [x] **F166：21 个 compare-now 选项进矩阵，59→105 格**（`closed`，研究树 `581869b2`）顺带修了 `WORK=` 不隔离 TSV 的缺陷；负控制修复后经独立证伪 pass SURVIVES (fix)。判据见 `cards.tsv`。
 - [ ] **F167：12 个 needs-input-first 选项补前置**（`open`，deps=F166）判据见 `cards.tsv`。
-- [ ] **F168：复核 44 个 not-comparable 判定**（`open`）那是 agy 未经审的交付，每条要跑二进制核。判据见 `cards.tsv`。
+- [x] **F168：复核 44 个 not-comparable 判定**（`closed`，2026-10-02，研究树 `482154b6`）41 存活/3 moved；两轮证伪 pass 后 F168 VERDICT: SURVIVES——`blobs_container_filename`「1 写 0 读」在双侧二进制独立复核（指令级逐条扫描，非只看第一处命中），枚举选项补了非法取值拼写仍不影响判决。STILL OPEN：字符串字面量交叉引用地址与 `__LINKEDIT` 命中数这两个支撑数字还没有可重跑的落盘命令（铁律第 8 条），指令级读写分类本身已独立复现、不受影响。判据见 `cards.tsv`。
 - [x] **F169：G1 分母脚本进仓库、接闸门**（`closed`，2026-10-02，六轮 fix-and-pass 后 SURVIVES）判据见 `cards.tsv`。
 - [ ] **F170：G2 测试套方案**（`open`）判据见 `cards.tsv`。
 - [ ] **F171：G3 第一个真实 app：bingoplus_native**（`open`，**不进循环，需操作者在场**）只本地构建、绝不发布；只能做到 N=1。判据见 `cards.tsv`。
@@ -22809,3 +22809,84 @@ check_reloaded`，rc 255，完全相同；`base_snapshot` 那条原文是对的�
 
 **本轮到此结束**，不再派新任务。下一轮：先确认 F179 后台 `ours.tsv`/`stock.tsv` 是否已到 3349 行；
 若 F167/F168 要继续，先处理 STILL OPEN 里列的具体项，再派新一轮证伪 pass，不要重派一模一样的七问。
+
+### 2026-10-02 round (PID 93834, run_round.sh): rescue check + dispatched F167/F168 STILL OPEN fixes
+
+开工先查 `.loop/RESCUED`：上一轮（round-5987，08:24:36）被额度中断时救援进 stash 的改动是
+`fhp-research` 那个 stash 的第 0 项，内容只是 cards.tsv 里 F169 一行描述文字的单行编辑，且
+F169 此后已经历六轮证伪 pass 并在 `PID 52412` 续那几轮里正式关闭（见本文件更早记录）——
+**该救援项已被后续真实提交完全取代，不是未完成的工作，无需重做**。尝试清掉它被
+pre-push/destructive-op 钩子拦下（预期行为，不绕过），原样留在 reflog 里，无害。
+
+F179 后台全量对拍（`run_both.sh` PID 99594，PPID=1）核实仍在跑：`ours.tsv` 622 行、
+`stock.tsv` 456 行（目标 3349 行），持续增长、未卡死，本轮未碰。
+
+按上一轮交代，F167/F168 的 STILL OPEN 项需要先处理再派新一轮证伪 pass。派了一个新鲜
+Opus 子代理（background，agentId 内部记录）只在 `fhp-research` 树里工作：
+- F167 (1)(2)(3)：订正矩阵数字引用到 `a5da292d`；用真实（非占位）内容测试
+  `--dd_table_data` 是否只认存在性不认内容；用真实 `vm_instr.bin` 测试
+  `--load_vm_snapshot_instructions` 两侧是否有可观察效果。
+- F168 (2)(4)：给 `f168_dead_option_probe.sh` 的 ENUMS 分支加非法值拼写
+  （`--snapshot_kind=not_a_real_kind` / `--verbosity=not_a_real_level`）并入现有判决逻辑；
+  对 `blobs_container_filename` 做静态核实（他们的二进制用 `otool -tV` 追字符串引用，
+  我们的用 `grep` 读源码），订正「1 写 0 读」这个从未被核实过的断言。
+
+要求它更新 cards.tsv、跑 `cards_check.sh` 确认 rc=0、提交到 `fhp-research`，只返回
+STATUS/FILES CHANGED/COMMIT/F167/F168/cards_check.sh rc 六行，不许贴长输出。
+
+**本轮到此结束**，等完成通知。下一轮：若子代理报 built/partial，先核实它的改动（尤其
+cards_check.sh 是否真的 rc=0），再派一个**新鲜**子代理对这次修复跑一遍 falsify.md
+证伪 pass（F167/F168 各一行判决，格式按 F116/F117），SURVIVES 才能关卡，PARTIAL/FALSIFIED
+就照契约当场再修。同时继续确认 F179 后台任务进度。
+
+### 2026-10-02 round (PID 93834, continued): F167/F168 fix landed (482154b6)，独立证伪 pass 已派发
+
+子代理返回 `fhp-research` 提交 `482154b6`："F167/F168: resolve STILL OPEN items with real-content
+runs and static xref"。摘要：F167 矩阵引用已订正到 `a5da292d`；用三份真实内容不同的
+`--dd_table_data`（hello 3969B / prog 21245B / hello@dd_max_bytes=1000 14387B）喂
+`--compute_dd_slot_mapping`，我们一侧对所有内容输出相同（只认存在性不认内容，坏表给 rc 255
+干净报错），他们一侧 `--shorebird --out` 输出随内容变化（704596/727508/720431B），
+且坏表让他们一侧崩溃（SIGBUS/length_error）——这一条新发现的坏输入处置分歧只记在卡上，
+不开新卡（属于 G4 范畴）。`--load_vm_snapshot_instructions` 换成真实 4.2MB 指令镜像后两侧
+app-jit 输出仍无变化，缺路径两侧都 rc 255。F168：枚举选项加了非法值拼写后仍 41 存活、moved
+集合不变（两侧对非法值行为一致，只是多打一行相同的 stderr）；`blobs_container_filename`
+静态核验「1 写 0 读」在双侧二进制都成立（他们：`otool -tV` 定位引用点；我们：
+`gen_snapshot.cc:113/141`），正控制（`elf_filename`/`assembly_filename`）确实能扫出读取。
+`cards_check.sh` 仍 rc=1，但失败列表里**不再点名 F167/F168**（现场重跑核实：剩下的失败是
+F84/F136/F143 缺提交与 F49/F69 等十余张卡的 commits-not-sha，与本次改动无关、不在本任务范围）。
+
+按契约「修补丁不会继承被修对象的审查结论」，立即派了第二个新鲜 Opus 子代理（background）
+对 `482154b6` 本身跑 `falsify.md` 七问，重点盯三处：① 新脚本 `f167_content_probe.sh` /
+`f168_bcf_static_xref.py` 的判据是否真的可能报红（负控制）；② 静态交叉引用扫描会不会只看第
+一处引用、漏掉间接读取；③ `cards_check.sh` 的 rc=1 是否真的与 F167/F168 无关、不是靠换列
+（第 5/7 列互换）把信息藏起来逃过了检查模式。要求 F167/F168 各给一行 `F<id> VERDICT:` 判决。
+
+**本轮到此结束**，等这个证伪 pass 的完成通知。下一轮：SURVIVES 就把 STILL OPEN 原文抄进
+memo 并关卡；PARTIAL/FALSIFIED 就当场修、不开新卡（除非挡住范围内别的项）。同时继续确认
+F179 后台任务（`run_both.sh` PID 99594）进度是否已到 3349 行。
+
+## 2026-10-02 15:xx 🔴 循环提示词里的反引号在执行命令（主会话自己写进去的）——没有发布任何东西
+
+**事件**：`run_round.sh` 的阶段提示词是**双引号**包住的 bash 字符串。我 10-01、10-02 加进去的十行用了**未转义的反引号**写行内代码，
+在双引号里那是**命令替换**。于是每次构造提示词——**包括 PAUSE 在位、随后马上退出的那些 tick**——bash 都在执行其中的命令，
+其中有 **`shorebird release` 和 `shorebird patch`**。触发它的正是「绝不对外发布：不跑 shorebird release / shorebird patch」那一行。
+发现经过：`test_phase_scope.sh` 平时 <1 s，这次挂住；子进程是 `dartvm … shorebird.snapshot patch`，正在对 `github.com/shorebirdtech/shorebird.git` 做 `git remote prune`。
+
+**实际发生了什么（证据：Shorebird 自己每次调用写的日志 `~/Library/Application Support/shorebird/logs/`）**：
+10-01 19:00 以来 **`shorebird release` 59 次、`shorebird patch` 59 次，118 次全部在第一步失败：`No platforms were provided`**；
+**0 份日志含上传 / POST / 创建 release 或 patch**；CLI **未被升级**（仍 `3c301e47`，1.6.116）。
+每次都跑了 Shorebird 的只读自更新检查（`git fetch --tags`）。另外还执行了 `git status`、`df -g ~`、一个不存在的 `WrapCode`。
+⚠️ **没发布是因为恰好没带平台参数，不是因为有防护。** 本机登录着 Shorebird（`credentials.json` 在）。
+
+**修复**：`fbf8d954` 把那十行的反引号转义（与原提示词已有的 `\`` 写法一致）；**tripwire 验证**：把 shorebird/git/df/WrapCode 换成记录调用的桩，
+旧阶段块触发 **5** 个命令、新的 **0** 个；全文件 PROMPT 块内未转义反引号 **0**。
+**回归闸门** `af89933f`：`test_phase_scope.sh` 新增两项——静态数 PROMPT 块内未转义反引号、用桩 PATH 构造阶段块必须不执行任何命令。
+负控制：对修复前的文件（真 shorebird 不在 PATH 上）两项都红（30 个反引号；执行了命令）。
+⚠️ **负控制第一次做错了**：对旧文件跑测试时用的是正常 PATH，测试原有的 `run()` 又真跑了一次 `shorebird`（日志同样 `No platforms were provided`，未发布）。改用桩 PATH 重做。
+⚠️ 我自己排查时还手动跑了一次 `shorebird release --help`，同样触发网络自更新检查并挂住——**排查期间就不该再碰这个二进制**。
+
+🔑 **教训**：往**会被 shell 求值的字符串**里写文档文字，等于往 shell 里写代码。这个仓库的提示词写在 bash 双引号里——
+**写「不许跑 X」时用反引号包住 X，就是在跑 X。** 规矩落在闸门里，不靠记性。
+
+**连带**：被额度打断的那一轮在 `memo.md` 里留了未提交的日志（F167/F168 证伪回收与 F168 关卡记录——F168 的关卡在研究树 `482154b6` 已提交）。
+它与本节一起提交；原 diff 另存 `.loop/rescue-20261002-quota-round/memo_round.diff`。研究树那边的未提交工作（`cards.tsv` 2 行 + 两个脚本）同目录有备份，留给循环自己的 auto-stash。
