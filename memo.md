@@ -22704,3 +22704,28 @@ Stock 3.12.2 没有这个槽，不受影响。
 
 **本轮到此结束**，不关 F179（还有另外 2 个崩溃测试完全没碰、`ProductSimIosARM64` 陈旧、C4 没法重跑、证伪 pass 待回）。
 下一轮先读证伪 pass 结果：SURVIVES 则记录 STILL OPEN 原文、不关卡（F179 本身还差太多）；PARTIAL/FALSIFIED 则在同轮修回去、不新开卡。
+
+### 2026-10-02 round (PID 85628, continued): F179 fix 379ca8aa65a 证伪 pass VERDICT: SURVIVES（fix）——F179 本身不关
+
+独立新鲜 Opus 子代理（`tools/loop/prompts/falsify.md` 七问）核过：读了实际 diff（`#if TARGET_ARCH_ARM64` 下 `StoreZero`，
+在 `call_runtime` 之后，SIMARM64 确实命中这段宏，没被编译掉）；两侧 `ninja -n` 均 0 待办；自己用 lldb 核过 `brk` 现场的栈
+（`sync*` getter 下面是 `_SuspendState._createAsyncCallbacks.errorCallback` 的异常恢复路径，走 `call_runtime`，与叙述吻合，
+但承认没能把 PC 精确对到反汇编字节）；槽位只有 5 个读写点，没找到第 6 条遗漏路径；`379ca8aa65a` 确实在 HEAD 祖先链上、树干净，
+stock 树里 `grep -rn simulator_async_resume_pc_` 0 命中；**自己独立做了另外两个测试（`Multiroot_FailWhenUriIsWrong`、`IsolateSpawn_PackageUri`）
+的撤回-重建-复现**——还原后二进制 sha256 `3bb70f75` 与 F170 记的修复前哈希逐字相同（证明撤回是真撤回不是空操作），
+四个测试全部变回 rc 134 `brk`；重新应用后 sha256 `606913f2`、四个测试全部回到 rc 0。
+
+🔴 **它自己点出的缺口（留 STILL OPEN 原文）**：
+「the full 3349-test `g2_run_cc.sh` run on both sides at `606913f2`, diffed per test the way F170's `compare.py` does.
+If any test outside my 420-test subset is ours-worse and gets fixed by reverting this commit, the claim is overturned.
+Separately, the pinned-build C4 reading (`sdk_phase_checklist.py`) has not been taken since this commit.
+ProductSimIosARM64 still has pending steps, so the checklist would refuse to read it.」
+它自己跑了 420/3349 条（挑的是与 Resume stub 最相关的几类名字前缀），0 ours-worse、0 ours-better，其余 2929 条未比过；
+两个低优先级崩溃测试 stock 侧不存在（`No tests matched`），仍待处置。
+
+**不关 F179**：按卡面判据（整套 vm/cc 对拍、不是子集）与它自己 STILL OPEN 的说法，证据还不够格。
+下一步（留给下一轮/下一个派发）：跑完整 3349 条的 `g2_run_cc.sh` 两侧对拍（工具已在仓库，`g2_run_cc.sh` 自带 NO-RUN/MATCH/UNEXPECTED 分类，
+之前的 `mkroot.sh`/`compare.py` 是前一个代理 scratchpad 里的临时脚本、未落盘，需要重写或找回）；另外两个崩溃测试
+（`ReadClassTableLinkInfo_AbsurdCountIsRejected`、`ShorebirdSimToCpu_DeepRecursion_ToFloor`）还没人碰；
+`ProductSimIosARM64` 落后 2 步 ninja，C4 读数拿不到，需要先弄清是否该在循环里重建它（历史先例：构建共享钉住产物时循环要停，
+这次是否适用需要先确认 `ProductSimIosARM64` 是不是被其他卡的判据钉住引用）。
