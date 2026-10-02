@@ -23177,3 +23177,32 @@ CHANGE/C4_BEFORE/C4_AFTER/TIMING/NEGATIVE_CONTROL/COMMIT/STILL_OPEN），不贴�
 关卡；③若报了 build-too-slow / build-ambiguous / dirty-tree，按它给的具体理由处置，不要重新整段重做；
 ④F179 后台进程大概率仍未跑完（预计 20:20-20:50），先 `ps -p 25306` 复核再决定下一步，不要在它跑完前
 去读两份 tsv 正文或重跑；⑤F167 的 STILL OPEN（重建 `ProductSimIosARM64`）排在后面，本轮未碰。
+
+### 2026-10-02 round (PID 58971, continued): F178 实现落地（SDK 0ae8fc7d1c8），card 标 `built`，已派独立证伪 pass
+
+子代理完成通知：`STATUS: committed`，提交 `0ae8fc7d1c8`，只动 `app_snapshot.cc:10114`（`WrapCode` 命中分支，
+把 `identity` 换成已算出但一直被扔掉的 `wrapper`，目标从 `payload_start` 改成 `base_entry`）。自报的独立判断：
+`base_entry` 是基础镜像可执行内存，不是撞 B6 的那个 PROT_READ 补丁 payload，而 `kRunDartOnCPUCode` 在
+`simulator_arm64.cc:2041-2229` 看起来是已加固过的完整实现（栈底守卫、setjmp/longjmp 异常路径）。
+
+🔴 **但负控制没有确认真实效果**：`sdk_phase_checklist.py` 的 C4（9 程序+5 FFI 测试，14/14）改动前后读数一致，
+子代理自己承认 C4 从不走这条命中分支（没有程序经过真实的 patch+base+link-table 流水线）——
+所以"改前改后 C4 不变"只证明没有破坏现有东西，**不证明这条包装路径真的被执行过、真的工作**。
+热循环计时（33869ms 解释 vs 351ms 原生，~96x）是不经过这条包装机制的旁证，不是对这次改动的直接测量。
+这是子代理自己在 STILL_OPEN 里诚实标出的缺口，不是我事后发现的。
+
+已把 `cards.tsv` F178 状态从 `open` 改成 `built`（不是 `closed`），把上述现状整段写进去（研究树提交 `a7075db9`）。
+按契约「做完一件事就要派新鲜子代理审它，不能自己审」，派了第二个独立子代理（无共享上下文）跑证伪 pass，
+重点要求：①核实 C4 是否真的从不走这条分支（不只信实现者的说法）；②尝试真正构造一次 patch+base-snapshot+
+link-table 流水线去实际驱动这条命中分支（这是关卡前最有价值的单一动作）；③独立做负控制（自己 revert、
+重建、重测，不照抄实现者的读数）；④查 `EntryPoints`/`wrapper` 的下游消费者，确认 `base_entry` 替换
+`payload_start` 没有破坏其他读者的假设；⑤查 `run_vm_tests` 里有没有名字带 link/shorebird 的测试覆盖这条路径；
+⑥评估实现者自报的 STILL_OPEN 是否准确（有没有被低估或高估）。要求单行判决
+`F178 VERDICT: <SURVIVES|FALSIFIED|PARTIAL> -- <一句>`。
+
+F179 后台进程开工前复核：`ps -p 25306` → `PPID 1，ELAPSED 37:53，STAT SN`，仍在正常跑，两份全量 tsv 尚无新提交。
+
+**本轮到此结束**，等这个证伪 pass 的完成通知。下一轮：①按判决处置——SURVIVES 就把 STILL OPEN 原文抄进
+`cards.tsv` 并把 F178 标 `closed`；PARTIAL/FALSIFIED 就当场修、重跑证伪，不许直接关卡；②F179 后台大概率
+仍未跑完，`ps -p 25306` 复核即可，不要重跑、不要提前读 tsv 正文；③F167 的 STILL OPEN（重建
+`ProductSimIosARM64`）与其余待审项排在后面。
