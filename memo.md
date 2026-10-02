@@ -22618,3 +22618,42 @@ JIT 构建（DebugSIMARM64）里编译成 `mov x0,x1; ret`。⇒ **8/28 → 26/2
 **决定（操作者授权）：F160 判据 (1) 改成在 HEAD 上判**——照字面要求在 `de660deeae5` 上满足，而那个提交早于修复，字面上永远满足不了。
 STILL OPEN（原文）：DebugSIMARM64 8/28→26/28 起作用的改动与其负控制；`de660deeae5` 的 8/28 需自建构建并证明 `--dfe` 生效；
 28 条子集要落成脚本（现在只写在卡面上，违反铁律 8）；`fs.dart`/`ls.dart`/`libcb.dylib` 并入 C4。
+
+- [ ] **F178：`WrapCode` 的 Sim→CPU / CPU→Sim 包装，让基础代码原生跑**（`open`，2026-10-02，deps=F175）Shorebird 发布版的基础代码原生执行、只有补丁走模拟器；我们两处都返回 identity。🔑 先答：B6 崩在执行**补丁**的只读字节，而基础代码本就可执行——当初是不是包装套错了对象。判据见 `cards.tsv`。
+
+**2026-10-02 F167+F168 落地（研究树 `716a3cec`）**：F168 的 44 条「不可对拍」里 **41 条成立、3 条移入矩阵**（其中 `base_snapshot` 是真分歧：他们注册并忽略，我们 rc 255 拒收）；
+F167 的 12 条「需先造输入」**全部用我们的工具链造出并入矩阵**（triage 说「我们没注册」三个 dd 选项是错的——F164 已经注册了）。
+真缺口：`--dd_table_data` 会改他们的 `--shorebird` 输出（hello 698828→704596 B），我们不消费它。
+矩阵 105→**128 格**（新 23 格：11 na / 12 unknown）。负控制：3 个新格各改坏 1 字节 → 都从 na 变 unknown，其余 125 格不动。
+⚠️ 做事者自报的局限：41 条里只有 3 条跑过全部 5 种 analyze 模式，其余 38 条只比了 `--shorebird` 输出。
+
+## 2026-10-02 G2 第一次有读数：FAIL（F170）；矩阵 128 格；两张新卡
+
+**F170（G2 测试套方案）落地，第一次真跑，判定 FAIL**（报告与脚本 scratchpad `f170_g2/`）：
+`corelib/string` AOT 54/54 PASS（两侧同一个失败项）· `ffi/function_callbacks*` AOT 71/71 PASS · `vm/cc/Assembler*` 652/652 PASS ·
+**`vm/cc` 全量 DebugSIM：4 个测试只在我们这侧崩**——`DartAPI_InjectNativeFields2`、`DartAPI_Multiroot_FailWhenUriIsWrong`、
+`IsolateSpawn_FileUri`、`IsolateSpawn_PackageUri`，全部 `Simulator hit brk #0x0`，各重跑 2 次 rc 134，原版 rc 0。
+它自标最可能错的是「`run_vm_tests` 是否与 HEAD 同步」——**主会话核过：`ninja -n` 待办 0，sha256 `3bb70f75` 正是它跑的那份** ⇒ 是当前代码上的真回归。
+🔑 **13 个手挑程序全绿、上游测试套一跑就红——这正是 G2 存在的理由。** → **F179**
+
+🔴 **订正我派单里的一条错误：`~/.shorebird/.../dart-sdk` 的「3.12.2」不是原版**，revision `db98bdaa9d8` 不在上游树里，
+`gen_snapshot` 带 `print_shorebird_info` ⇒ **它是 Shorebird 的 fork，拿它当 oracle 等于拿被测一方去验另一方。**
+F170 按规则 4 装了官方 3.12.2 到 `~/.local/dart-stock-3.12.2/dart-sdk`（revision `d684a576a6a`，sha256 与官方校验一致；主会话核了版本号）。
+⇒ **今天 F160 证伪 pass 说的「与原版 3.12.2 AOT 逐字节相同」用的是 fork，oracle 不独立，要用真原版重做。** → 写进 **F180**
+另：研究树原有的 `G2_TEST_PLAN.md` 有三处错（3.12.2 的 test_runner 没有 `--build-directory`；错说 ffi 不适用；不在仓库根目录跑会让 7 个文件类 cc 测试两侧一起假崩）。
+最大风险：JIT 那一格从未跑过（两棵 DebugSIM 树都没有 `dart`；旧的那份跑 JIT 报 `hypercall CallLeafRuntimeOnCPUCode ... not implemented`）。
+
+**矩阵 105 → 128 格，`0 unrun, 0 blocked`**（53→64 na / 3 structural / 49→61 unknown）。`compute_dd_slot_mapping` 那 3 格不再 blocked（循环关 F165 时改的）。
+🔴 **`716a3cec` 的路径缺陷（主会话修）**：新加的那段在默认 `WORK=out_pm` 下有 **13 格跑不起来**——`m21_run` 先 `cd` 进格子目录再执行，
+传进去的相对路径全部落空（日志 `Failed to open: out_pm/m21/ours/vm_platform/core/vm_data.bin`）。
+**subagent 的隔离测试用的是绝对路径 `WORK=`，恰好没测到默认配置**——又一个「测试环境不具备关键条件」的实例。
+修法只动新加的那一段（`WORK_ABS` 给传给工具的路径用，`prov_record` 把它剥回去，来历键保持 `out_pm/...` 不变）。
+三道检查：0 格未跑 · 分类与隔离运行逐格一致 · 来历记录里绝对路径键 0 个。
+`phase_gate.expected` 重钉到 128 格（负控制：改一格 → rc 1）；新增 23 格的分类与 subagent 交的钉值逐行相同。
+`negative_control_f166.sh` 里写死的 `105 cells, 0 unrun, 3 blocked` 改成 `128 cells, 0 unrun, 0 blocked`。
+
+⚠️ **我的探针今天第四次失灵**：在 zsh 里 `set -- $spec` 不分词，整串被当成目录名，ninja 没进去；错误行不以 `ninja: error` 开头 ⇒ 数成 **pending=0**。
+**是退出码（rc=1）救了我。** 🔑 陈旧探针要：用判据自己的目标名、查退出码、并先拿一个不存在的目标自测一次（必须报 rc≠0）。
+
+- [ ] **F179：G2 首读 FAIL 的 4+2 个只在我们这侧崩的 vm/cc 测试**（`open`，2026-10-02，deps=F170）判据见 `cards.tsv`。
+- [ ] **F180：G2 测试套脚本进仓库，oracle 换成真原版 3.12.2**（`open`，2026-10-02，deps=F170）`~/.shorebird` 那份是 fork；此前用它当原版的比较要重做。判据见 `cards.tsv`。

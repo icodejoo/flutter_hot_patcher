@@ -20,6 +20,9 @@
 # F175, not just F174.
 #
 # Deliberately NOT here:
+#   F161, F174  (2026-10-02, operator-authorised) fix --no-use_simulator and
+#         shorebird_link_table_, neither of which Shorebird's release path uses
+#         (F175). Not wrong, just not on the path that matters. See F178.
 #   F171  G3, the first real app -- needs the operator present (device
 #         unlock, trust prompts) and has hard constraints about never
 #         publishing to Shorebird's servers. Done interactively.
@@ -33,7 +36,6 @@
 #
 # One card id per line. Edit this file (and commit why) to change the scope.
 F160
-F161
 F163
 F164
 F165
@@ -44,5 +46,7 @@ F169
 F170
 F172
 F173
-F174
 F175
+F178
+F179
+F180
