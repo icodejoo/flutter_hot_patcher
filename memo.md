@@ -22987,3 +22987,64 @@ this commit's narrower claim) remains unverified."`cards_check.sh` 复核：剩�
 （同样是"CPU-shape 下的模拟器状态假设"这一类问题，但不是同一个 stub）；②F167 的 STILL OPEN
 （重建 `ProductSimIosARM64`）与 F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁仍排在后面；
 ③F179 全量套件对拍（3349 行）仍需要真正跨会话存活的后台方式。
+
+### 2026-10-02 round (PID 13927, run_round.sh): F179 剩余 2 个测试定位+修复，各自独立证伪 SURVIVES
+
+开工核实：`~/dart-3122/sdk`（HEAD `379ca8aa65a`）、`~/dart-3122/G2stock/sdk`（无 `.git`，只读）均干净。
+按上一轮排好的顺序，继续 F179 的下一步：定位 `ReadClassTableLinkInfo_AbsurdCountIsRejected` 与
+`ShorebirdSimToCpu_DeepRecursion_ToFloor` 各自的崩溃位点。
+
+**派发 1（investigate+fix，前台，Opus）**：两个测试的"brk #0x0"前提本身就是错的——**都不是模拟器 brk**。
+① `ReadClassTableLinkInfo_AbsurdCountIsRejected`：真 bug，与模拟器无关。崩在 `datastream.h:318`
+的 Debug 断言 `current_ < end_`，经 `runtime/vm/shorebird/linker.cc` 的 `TryReadUnsigned`/`TryReadString`
+触发——一个全是延续字节的 4 字节畸形 varint 读穿了分配的 padding（Release 下断言编译掉，侥幸不炸）。
+修复：`00ebb88ef5f`（仅 `linker.cc`，+18/-5），在两个读取点（`TryReadUnsigned` 10 字节上限、
+`TryReadString` 字符循环 5 字节上限）加 `VarintFits(stream, max)` 边界检查，取代只检查"能不能开始读"
+不检查"能不能读完"的旧 `AtEnd()`。
+② `ShorebirdSimToCpu_DeepRecursion_ToFloor`：不是模拟器 bug，是**故意探针**——递归到深度 20000
+触发 `simulator_arm64.cc:2203` 的受控 FATAL 栈底守卫（"F162: CPU-shape native-call escape..."），
+SIGABRT/rc 134 本是设计内行为，但该测试用普通 `ISOLATE_UNIT_TEST_CASE` 注册，默认期望态 `"Pass"`。
+
+**派发 2（证伪 `00ebb88ef5f`，前台、新鲜、无共享上下文，Opus）**：`F179 VERDICT: PARTIAL`——
+① 对 ① 的判定：复现真负控制（只还原该文件→重建→同一断言 rc 134，且顺带发现旧代码还有第二个
+真 bug——会**悄悄接受**一个畸形 6 字节字符串字符而不是拒绝，修复同时关掉了它；还原→重建→rc 0），
+`linker_test.cc` 全部 34 个测试实测 pass=34 fail=0，自造 6 组边界输入零溢出零假接受。STILL OPEN：
+"field_table/dispatch_table 读取器用了同一套 helper，但只对 class-table 读取器喂过对抗输入——
+给 `ReadDispatchTableLinkInfo` 发一个截断最后字节的输入仍可能推翻这条结论"。
+② 对 ② 的判定：**抓到真缺陷**——"rc 134 是设计内 PASS"这句话本身是假的，因为 `--list` 的权威期望列
+写的是 `Pass` 不是 `Crash`，任何按期望态比对的 harness（含 F170 的 `g2_run_cc.sh` 与上游
+`pkg/test_runner`）仍会把它计为意外失败——判定是对的，表述是假的。
+
+**派发 3（fix，前台，Opus）**：把注册宏改成 `ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(name, "Crash")`
+（与代码库里已有 4 处同类用法同一字符串），只动这一行元数据，测试体与 `simulator_arm64.cc` 不动。
+提交 `3b366e3f4fc`。
+
+**派发 4（证伪 `3b366e3f4fc`，前台、新鲜、无共享上下文，Opus）**：`F179 VERDICT: SURVIVES`——
+复现真负控制（还原该文件→重建→`--list` 吐 `Pass`、`run_vm_tests` 二进制 md5 与修复前字节相同；
+复原→重建→`Crash`、md5 与已提交状态字节相同），确认 `g2_run_cc.sh` 的判决真的从 `UNEXPECTED` 翻成
+`MATCH`（不只是打印的标签变了），并查清 `"Crash"` 真的被上游 `pkg/test_runner`（`VMTestSuite`）
+强制执行（加 `Crash`/去 `Pass`/加 `--suppress-core-dump`），`run_vm_tests.cc:68` 本身只打印标签、
+不强制。STILL OPEN（原文）："`Crash` 接受任意非零退出——`g2_run_cc.sh`（`rc -ne 0` ⇒ MATCH）和
+`test_runner` 的 `Crash` 期望都不检查崩在哪里，未来若从预期的受控 SIGABRT 退化成一个无关的 SIGSEGV
+仍会读成通过；更强的未来测试要求匹配具体的 F162 FATAL 行 + SIGABRT，并验证故意注入的 SIGSEGV
+（例如临时移除守卫）会被 `g2_run_cc.sh` 与 `test_runner` 两边都报成失败。"
+
+**副产品（不开新卡，记一行）**：派发 1 的子代理顺手发现 `g2_run_cc.sh` 的 `--list | grep -E "$FILTER"`
+在过滤器零匹配时，`pipefail` 下整条流水线静默吐空输出而不报错——用 `'^Name$'` 这种没锚住期望态列的
+过滤器会复现这个"假阴性空结果"；派发 2 的子代理独立确认了同一个坑，并给出了正确写法
+（锚到期望态列前的空格，如 `'^ExactName '`）。不挡本阶段任何一项，按契约不开卡。
+
+**账面**：F179 原卡点名的 6 个"仅我们侧崩溃"测试现在**全部 6 个**都有经独立证伪确认的处置
+（4 个 stub bug 已修 + 1 个 linker bug 已修 + 1 个测试元数据已修）。**F179 卡本身仍不关闭**——
+它自己的判据是"整套 vm/cc 比对（F170 的 `compare.py`）报 0 ours-worse"，这需要一次完整的 3349 个
+测试全量跑，本阶段还没有一次真正跑完过（此前两次都被所在轮次的会话结束悄悄收走）。两处 STILL OPEN
+已原文写入 `cards.tsv`（研究树提交 `c7adfd86`）。`cards_check.sh` 复核：仍是此前就存在、与本轮无关的
+3 项失败（`F84`/`F136`/`F143` 缺提交、十余张卡 `commits-not-sha` 格式），未引入新失败。
+
+**本轮到此结束**。下一轮：①F179 要真正关卡，唯一剩的动作是跑一次全量 vm/cc 套件对拍，需要先决定
+一种真正跨会话存活的后台机制（不是 shell 内 `& disown`），并遵守磁盘规矩（起跑前 `df -g ~`，
+剩余 − 预计用量 < 35GB 就改跑切片，跑完当轮删中间产物只留结果 JSON，PID/输出目录写进 memo）；
+②F167 的 STILL OPEN（重建 `ProductSimIosARM64` 后重新核"相同最大 index 下一致"）与
+F163/F164/F165/F166/F169/F170/F173/F175 的待审修补丁仍排在 F179 全量跑之后；③若有余力，
+field_table/dispatch_table 读取器的同类边界检查（上面派发 2 点出的 STILL OPEN）值得顺手补一个
+对抗测试，但不是本阶段判据要求的，不要为此另开新卡。
