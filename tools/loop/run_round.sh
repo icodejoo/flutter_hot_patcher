@@ -239,14 +239,19 @@ if [ -n "$PHASE_SCOPE" ]; then
 G1 接口面（他们的工具注册的每个选项我们都有、且产物有分类）· G2 行为面（上游测试套在模拟器构建上跑）·
 G3 端到端（≥3 个真实 app × ≥2 个 iOS 版本）· G4 负向（一组坏补丁两边处置相同）。**本循环只做 G1 与 G2/G4 的第一步**；
 G3（F171）要操作者在场，**不在范围内，不许做**。
-第三阶段还欠证伪 pass：F160、F161、F163（F162 已被自己的 pass 改过、10-01 人工重验 9/9）。
-第四阶段的卡：F164 dd 四个选项（built，待证伪）· F165 compute_dd_slot_mapping ×3 去掉 blocked · F166 21 格进矩阵（built，待证伪）·
-F167 12 个 needs-input-first · F168 复核 44 个 not-comparable · F169 G1 分母脚本进仓库 · F170 G2 测试套方案 ·
-F172 G4 负向补丁集 · F173 `--base_ft_link_data` 在我们这侧不起作用（链接器核心输入上的真缺口）。
-**排序**：先把 built 卡（F164、F166）和第三阶段欠账过证伪 pass，再做 open 卡；open 卡里 F173 与 F165 排前面（真缺口优先于整理）。
-2026-10-01 现状：清单读 SDK PHASE: 4 of 4 criteria met -- COMPLETE，
-read against SDK agent/sdk-phase-c1 **252c31c45f6**（C4 当场跑 **8 个 AOT 程序**（p1-p8，p8 是 C→Dart 回调）**+ 5 个 FFI callback 测试 = 13 项**）。
-矩阵 **105 格**（53 na / 3 structural / 49 unknown，3 blocked），`phase_gate.expected` 已钉到 105 格——**改矩阵就要在同一提交里重钉它**。
+**以 tools/loop/phase_scope.txt 为准，下面是 10-02 的快照，引用前先读 cards.tsv 看真值。**
+🔴 **10-02 最重要的一条（F175）**：Shorebird 发布版的**基础代码原生跑在 CPU 上、只有补丁走模拟器**——`use_simulator` 恒 true，
+但 `WrapCode` 给每个 app 函数套 Sim→CPU / CPU→Sim 包装。**我们两处都返回 identity，整个程序都在模拟器里**（D3 因此要重读，已订正）。
+⇒ **F161、F174 已移出范围**（它们修的 `--no-use_simulator` 与 `shorebird_link_table_` 不在 Shorebird 发布路径上）；真缺口是 **F178**。
+范围内的卡：F160（PARTIAL，判据 (1) 已改在 HEAD 上判）· F167/F168（10-02 已落地 716a3cec，待证伪）· F170（G2 方案，已交）·
+F172 G4 负向补丁集 · F175 · **F178 WrapCode 包装**（先答：B6 崩在执行**补丁**只读字节，基础代码本就可执行——当初是否套错了对象）·
+**F179 G2 首读 FAIL：4 个上游 vm/cc 测试只在我们这侧 `brk #0x0`** · **F180 G2 脚本进仓库，oracle 换真原版 3.12.2**。
+🔴 **oracle 警告**：`~/.shorebird/.../dart-sdk` 的「3.12.2」是 **Shorebird 的 fork**（revision `db98bdaa9d8` 不在上游），**不许当原版**。
+真原版在 `~/.local/dart-stock-3.12.2/dart-sdk`（revision `d684a576a6a`，sha256 与官方一致）。
+**排序**：真缺口（F179、F178）优先于整理；有 built/待证伪的先过证伪 pass。
+2026-10-02 现状：清单读 SDK PHASE: 4 of 4 criteria met -- COMPLETE，
+read against SDK agent/sdk-phase-c1 **51d6b791205**（C4 当场跑 **14 项**）。
+矩阵 **128 格，0 unrun，0 blocked**（64 na / 3 structural / 61 unknown），`phase_gate.expected` 已钉到 128 格——**改矩阵就要在同一提交里重钉它**。
 开工前先跑一次它，把读数记进 memo.md；收工前再跑一次，写明前后变化。清单跑一次约 2 分钟；
 任何改动之后清单必须仍是 rc 0，变红就先修回来。
 ⚠️ **陈旧探针要用判据自己那串目标名去跑，并查退出码**——10-01 同一个坑栽了三次：构建落后 202 步被当成证据、
