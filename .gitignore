@@ -54,6 +54,9 @@ spikes/shorebird_linkinfo_oracle/decompiled/
 spikes/shorebird_linkinfo_oracle/out/
 spikes/shorebird_linkinfo_oracle/out_dd/
 spikes/shorebird_linkinfo_oracle/out_ours/
+# 会话临时目录：混有他们二进制的运行产物、崩溃报告与反汇编，整目录挡。
+# 要留存的结论先摘到 docs/device_evidence/ 再跟踪。
+/scratchpad/
 
 # 二进制切片与快照备份（*.S.bak2 这类后缀会绕过上面的 *.S）
 *.arm64
