@@ -23763,3 +23763,24 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - **`g1_acceptance_20261019/SHA256SUMS` 对 `docs/G1_ACCEPTANCE_20261019.md` 不符**。已证实只是追加：记录的哈希等于今天文件的前 3022/4013 字节，后面 9 行是 10-19 追加的「## 2026-10-19 操作者决定」一节。
 - **`g1_rc11_20261016/SHA256SUMS` 对 `docs/G1_RESOLUTION_20261016.md` 不符，而且不是追加**：任何前缀都对不上。该文档是 10-16 记哈希之后、10-19 11:54 被原地改过的进度文档；10-16 的版本从未进 git，**无法恢复**。因此 RC11 那份哈希清单对这份文档只证明「它在 10-16 存在过」，不能证明今天的内容就是当时的内容。RC11 自己的产物（verify.py、verification.json、source_state.json）都能核对上。
 - 处置：旧哈希清单不改写（它们记录的是当时的状态），只在这里登记。教训：被哈希清单引用的文档，要先提交再改。
+
+### 2026-10-20 晚：只改格式时补丁有多大（Wonderous，参考链对我方链）
+
+操作者问：Shorebird 只改格式（换行、重排），也会产生大补丁；两条链产生的补丁一样大吗？
+脚本是 `scratchpad/fmt_patch_20261020/run.py`，结果在 `wonderous/summary.json` 和 `table.txt`。做法：以 G3 base 源码（BASE_V1）为起点，在原路径上改 lib 下 192 个 dart 文件（harness 不动），每个变体做完都按哈希逐个恢复。参考链按 shorebird_cli 的方式跑 `build ipa`，并把 release 的 supplement 放在 release App 旁边；我方链用 frontend_server、gen_snapshot、linker.py，对比的是 G3 的我方 base。
+
+| 变体 | 参考增量 | 我方增量 |
+|---|---:|---:|
+| nochange ×3（确定性） | 0（底噪 2,305,096） | 0（底噪 1,130,275） |
+| comment_eof（文件末尾加注释，代码位置不动） | +7,708 | 0 |
+| trailing_space、crlf（行号不变） | +82 | +27 |
+| blank_top_one（main.dart 顶部加空行） | −933 | +13,638 |
+| blank_top_all（192 个文件顶部各加空行） | +3,478 | +18,508 |
+| fmt_w40（dart format 页宽 40，189 个文件） | **+29,779** | +39,200 |
+| logic（G3 真逻辑补丁） | +14,340 | +109,400 |
+
+- **两条链的补丁大小不一致**，绝对值和增量都不一致。
+- **两边都对行号敏感、对换行符不敏感。** CRLF 和行尾空格两边增量都接近 0，而且两种变体产物相同。在参考链上，整体格式化的增量是一次小逻辑补丁的 2.1 倍，操作者说的「格式化产生大补丁」在参考上成立；在 Wonderous 上，量级是几十 KB。
+- **差异的来源已定位**：参考的 aot_tools link 会读 kernel，再做一轮 DD 重新优化（preDdOptimized → ddOnly → optimized），我方流水线没有这一步。comment_eof 在参考侧，`out.aot` 和全部 link 表都与 nochange 逐字节相同，只在 `ddOnly`/`optimized`/`vmcode` 上分叉。这和 G3 链接率差异是同一个缺口，都在链接器层（aot_tools 闭源，`tools/linker.py` 是我们的替代）。
+- **订正 G3 的读法**：参考的链接率在源码零改动时也是 23.27%，所以它不反映改了多少代码。G3 里「我们 100% 对参考 15–32%」不能读成「我们比参考多链接了 77%」，两边量的不是同一种东西。
+- 限定：只测了 Wonderous 一个 app。
