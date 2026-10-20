@@ -23804,3 +23804,11 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - **参考链开 split 后，行号类变体降到 ≤1 KB，但只要 kernel 变了（comment_eof、fmt_w40），补丁反而涨到 +102 KB**。它的 logic 补丁比 nochange 还小，说明参考补丁的大小主要由 aot_tools 读 kernel 后的再优化决定，不由改动内容决定。参考链接率从 23% 变成 56.8%（nochange）/ 56.1%（kernel 有变的变体）。⇒ **Shorebird 自己开 split-debug-info 也不能消除格式化带来的补丁**，我方链在这一点上与参考不同，原因仍是缺的那一轮链接期再优化。
 - 我方 logic 补丁在 split 下链接率 37.34%，默认是 100%，未解释。
 - **未核验**：split 模式构建的 base 和补丁在真机上能否启动、能否生效；崩溃栈要用 `.symbols` 还原。
+
+### 2026-10-20 晚：split-debug-info 修法在真机上通过（我方链，Wonderous，QA-iPhone-YPVYHY2D90 / iOS 26.6）
+
+脚本 `scratchpad/fmt_patch_20261020/device_split.py`，签名和送达沿用 G3 的 `stage_device.py` 与 `run_device.py`：G3 参考构建出的原生壳，加上我方 Flutter 运行时和 split 模式的我方 base App，loopback 送达，每个补丁各做一次全新安装，测完卸载。报告在 `wonderous_split/device/{fmt_w40,logic}/report.json`。
+- **fmt_w40（只改格式）：PASS**。base 显示 `BASE_V1 logic=23`；下载返回 status=1；补丁启动后仍显示 `BASE_V1 logic=23`，即行为未变。`pointers.json` 中 `last_booted_patch: 1`，`patches/1/state.json` 为 `Installed`，说明这次启动确实用的是补丁、没有回落。三个阶段各观察 30 秒，进程存活。
+- **logic（真逻辑改动）：PASS**。补丁启动后显示 `PATCH_V2 logic=33`，`Installed`，`last_booted_patch: 1`。
+- 卸载 rc 均为 0。
+- 限定：只测了我方链；参考链的 split 模式没上真机。崩溃栈要靠 `.symbols` 还原，这一点没测。只测了 Wonderous 一个 app。
