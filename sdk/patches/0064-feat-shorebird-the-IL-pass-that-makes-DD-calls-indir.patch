@@ -1,0 +1,307 @@
+From b13e2a0d54e317ba1b7977958a13f888ab4f3a66 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 18:48:50 +0800
+Subject: [PATCH 064/206] feat(shorebird): the IL pass that makes DD calls
+ indirect
+
+DD core's other half. Their pass leaves no symbol -- it is inlined away
+completely -- so this is reconstructed from what it does to their output
+rather than from their code. Running their gen_snapshot over one kernel
+twice, with and without --dd_slot_mapping (dd_pipeline.sh, out_dd), pins
+every part of it:
+
+  * The mapping is the gate. Without it, zero loads of Thread+0x978; with
+    it, three. Same gate as FinalizeIndirectStaticCallTable.
+  * The rule is total. patch.so makes three direct calls to DD-slot
+    targets (2x Expando.[], 1x _FinalizerImpl._runFinalizers); patch_dd.so
+    makes none and has exactly three indirect sites. The five resolved
+    slots without call sites produced none.
+  * Nothing else moves. A normalised diff of _NativeFinalizer._removeEntries
+    across the two builds is one `bl <Expando.[]>` against the three
+    instruction indirect sequence, and 76 identical instructions.
+
+That third point also corrects what the dd_resolution `rewritten` column
+means. It is per *slot* -- slots 3 and 4 report 1 each -- not per call
+site, of which there are three. It was previously recorded as a
+counting-level judge for this pass; it is a coarser one than that.
+
+The emitted sequence is transcribed from those sites and is a word shorter
+than what was here before, which computed the slot address and called
+through it:
+
+    ldr x16, [x26, #0x978]   ; table base out of Thread
+    ldr x16, [x16, #0x20]    ; table[dd_slot], slot folded into the immediate
+    blr x16
+
+The second load is also what the table *is*: the loaded word is branched
+to directly, so entries are bare entry points. A tagged Array of Code
+would need the data offset and an untag, and there is neither.
+
+Verified against our own gen_snapshot on their fixture. No mapping: 0
+indirect sites. A mapping over all 1272 usable functions: 1724 sites,
+across 539 distinct slots. Single-function mappings land exactly:
+
+    kernel_offset 215094 -> 103 sites, 103 direct calls lost, one name
+                            (_StringBase._interpolate)
+    kernel_offset  18339 ->  79 / 79   (RangeError.checkValidRange)
+    kernel_offset  54623 ->  73 / 73   (StringBuffer.write)
+
+Nothing but the mapped function is ever touched. Our sequence differs
+from theirs in two immediate fields only -- the Thread offset (ours is
+appended at 0xf78) and the slot index -- and `blr x16` is byte-identical.
+
+81 of 81 shorebird tests pass; verify_reproduction.sh is clean at 24
+artifacts and 14 stubs, so the ct/dt/ddid reproductions did not move.
+
+Still unverified: how the table reaches Thread::indirect_static_call_table_
+at runtime, and whether any of this executes on a device.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/aot_call_specializer.cc b/runtime/vm/compiler/aot/aot_call_specializer.cc
+index 6f3f550905e..d542aa35457 100644
+--- a/runtime/vm/compiler/aot/aot_call_specializer.cc
++++ b/runtime/vm/compiler/aot/aot_call_specializer.cc
+@@ -28,6 +28,8 @@
+ #include "vm/parser.h"
+ #include "vm/resolver.h"
+ #include "vm/scopes.h"
++#include "vm/shorebird/dd_voting.h"
++#include "vm/shorebird/linker.h"
+ #include "vm/stack_frame.h"
+ #include "vm/symbols.h"
+ 
+@@ -1162,6 +1164,68 @@ void AotCallSpecializer::ReplaceInstanceCallsWithDispatchTableCalls() {
+   }
+ }
+ 
++// Shorebird: send every static call whose target owns a DD slot through the
++// indirect static call table instead of straight at the target.
++//
++// Their own pass leaves no symbol -- it is inlined away completely -- so this
++// is reconstructed from what it does to the output. Driving their gen_snapshot
++// over the same kernel twice, once with --dd_slot_mapping and once without
++// (spikes/shorebird_linkinfo_oracle/dd_pipeline.sh, out_dd/patch{,_dd}.so),
++// establishes all of it:
++//
++//   * The mapping is the gate. Without it their build has zero loads of
++//     Thread+0x978; with it, three. Same gate as the table build itself.
++//   * The rule is total, not heuristic. Their patch.so makes three direct calls
++//     to DD-slot targets (two to Expando.[], one to _FinalizerImpl.
++//     _runFinalizers); patch_dd.so makes none, and has exactly three indirect
++//     sites. Nothing was left behind and nothing else was rewritten -- the five
++//     resolved slots with no call sites produced no sites either.
++//   * Nothing else about the function changes. _NativeFinalizer._removeEntries
++//     is 77 instructions in the unmapped build and 79 in the mapped one, and a
++//     normalised diff of the two bodies is exactly one `bl <Expando.[]>`
++//     against the three-instruction indirect sequence.
++//
++// That last point is why this runs here, immediately after UseTableDispatch and
++// after the final TypePropagation: it is late enough that no earlier decision
++// can move. ⚠️ It does not prove they run it here. An earlier position that
++// happened to leave every other decision untouched would look identical in this
++// fixture, and the fixture cannot separate the two -- all three sites were
++// already un-inlined calls before the rewrite, so a pass running before the
++// inliner would have produced the same output. Running late is the position
++// consistent with the evidence, not the position the evidence forces.
++void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
++  const DDSlotMapping* mapping = ShorebirdLinker::shared()->dd_slot_mapping();
++  if (mapping == nullptr) return;
++
++  ASSERT(current_iterator_ == nullptr);
++  for (BlockIterator block_it = flow_graph()->reverse_postorder_iterator();
++       !block_it.Done(); block_it.Advance()) {
++    ForwardInstructionIterator it(block_it.Current());
++    current_iterator_ = &it;
++    while (!it.Done()) {
++      Instruction* instr = it.Current();
++      it.Advance();
++
++      StaticCallInstr* call = instr->AsStaticCall();
++      if (call == nullptr) continue;
++
++      const Function& target = call->function();
++      if (target.IsNull()) continue;
++
++      // kernel_offset_ is the key their DDTableBuilder::VisitCode uses on this
++      // same map, so a call site and the table entry it dispatches to agree by
++      // construction. It is also the only per-function identity that survives
++      // recompilation of the same source, which is the whole point.
++      const long slot = mapping->SlotForKernelOffset(target.kernel_offset());
++      if (slot < 0) continue;
++
++      call->ReplaceWith(IndirectStaticCallInstr::FromCall(Z, call, slot),
++                        current_iterator());
++    }
++    current_iterator_ = nullptr;
++  }
++}
++
+ const Function& AotCallSpecializer::InterfaceTargetForTableDispatch(
+     InstanceCallBaseInstr* call) {
+   const Function& interface_target = call->interface_target();
+diff --git a/runtime/vm/compiler/aot/aot_call_specializer.h b/runtime/vm/compiler/aot/aot_call_specializer.h
+index 5daa93fea84..8f9e1dc8775 100644
+--- a/runtime/vm/compiler/aot/aot_call_specializer.h
++++ b/runtime/vm/compiler/aot/aot_call_specializer.h
+@@ -84,6 +84,8 @@ class AotCallSpecializer : public CallSpecializer {
+ 
+   virtual void ReplaceInstanceCallsWithDispatchTableCalls();
+ 
++  virtual void ReplaceStaticCallsWithIndirectStaticCalls();
++
+   Precompiler* precompiler_;
+ 
+   bool has_unique_no_such_method_;
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index 530b035c7c1..c17349f8358 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -639,9 +639,24 @@ void FlowGraphCompiler::EmitDispatchTableCall(
+   });
+ }
+ 
+-// Shorebird. Their sequence, from IndirectStaticCallInstr::EmitNativeCode at
+-// 0x1002a3e28: load the table base out of Thread, scale dd_slot by the word
+-// size, add, and call through the resulting address.
++// Shorebird. Three instructions, transcribed from call sites their own
++// gen_snapshot emitted (out_dd/patch_dd.so, the only build in that pipeline
++// given a --dd_slot_mapping):
++//
++//     ldr x16, [x26, #0x978]   ; TMP = indirect_static_call_table_
++//     ldr x16, [x16, #0x20]    ; TMP = table[dd_slot]
++//     blr x16
++//
++// Note what the second load says about the table: the slot index is folded
++// into the load's immediate, and the loaded word is branched to directly. So
++// the table is a bare array of entry points, not a Dart Array of Code -- a
++// tagged Array would need the 0x17 data offset and an untag, and there is
++// none. dd_slot 4 lands at 0x20, which is what identified the two slots that
++// pipeline reported as rewritten.
++//
++// The scale-and-add lives at compile time, in the immediate, because dd_slot
++// is a constant here. An out-of-range slot is still correct: PrepareLargeOffset
++// falls back through TMP2, which this sequence does not use.
+ //
+ // ⚠️ Thread::indirect_static_call_table_offset() rather than their literal
+ // 0x978. Their Shorebird block sits mid-Thread and ours is appended, so 0x978
+@@ -664,8 +679,8 @@ void FlowGraphCompiler::EmitIndirectStaticCall(
+     // dart::Thread::simulator_execute_offset().
+     __ LoadFromOffset(TMP, THR,
+                       dart::Thread::indirect_static_call_table_offset());
+-    __ AddImmediate(LR, TMP, dd_slot * compiler::target::kWordSize);
+-    __ Call(compiler::Address(LR, 0));
++    __ LoadFromOffset(TMP, TMP, dd_slot * compiler::target::kWordSize);
++    __ blr(TMP);
+   });
+ 
+   // Record the original target even though the branch went through the table.
+diff --git a/runtime/vm/compiler/backend/il.h b/runtime/vm/compiler/backend/il.h
+index 7be9f2896a2..b74aafa732f 100644
+--- a/runtime/vm/compiler/backend/il.h
++++ b/runtime/vm/compiler/backend/il.h
+@@ -5784,6 +5784,33 @@ class IndirectStaticCallInstr : public TemplateDartCall<0> {
+ 
+   DECLARE_INSTRUCTION(IndirectStaticCall)
+ 
++  // Builds the replacement for a direct static call whose target owns a DD
++  // slot. Everything except the dispatch is carried across unchanged, which is
++  // what makes the substitution invisible in the emitted code: in their
++  // out_dd/patch_dd.so the rewritten functions differ from the unrewritten
++  // build by exactly the three-instruction call sequence and nothing else.
++  //
++  // entry_kind is deliberately not carried. A table slot holds one entry point,
++  // and their EmitNativeCode records the call site with a hardcoded normal
++  // entry kind, so an unchecked-entry static call becomes a normal-entry
++  // indirect one. That is slower, never wrong.
++  static IndirectStaticCallInstr* FromCall(Zone* zone,
++                                           const StaticCallInstr* call,
++                                           intptr_t dd_slot) {
++    ASSERT(!call->HasMoveArguments());
++    InputsArray args(zone, call->ArgumentCount());
++    for (intptr_t i = 0; i < call->ArgumentCount(); i++) {
++      args.Add(call->ArgumentValueAt(i)->CopyWithType());
++    }
++    IndirectStaticCallInstr* new_call = new (zone) IndirectStaticCallInstr(
++        call->source(), call->function(), dd_slot, call->type_args_len(),
++        call->argument_names(), std::move(args), call->deopt_id());
++    if (call->result_type() != nullptr) {
++      new_call->result_type_ = call->result_type();
++    }
++    return new_call;
++  }
++
+   const Function& function() const { return function_; }
+ 
+   // Index into Thread::indirect_static_call_table_. The name is theirs: their
+diff --git a/runtime/vm/compiler/call_specializer.cc b/runtime/vm/compiler/call_specializer.cc
+index ff48b84b163..def1147399e 100644
+--- a/runtime/vm/compiler/call_specializer.cc
++++ b/runtime/vm/compiler/call_specializer.cc
+@@ -1708,6 +1708,10 @@ void CallSpecializer::ReplaceInstanceCallsWithDispatchTableCalls() {
+   // Only implemented for AOT.
+ }
+ 
++void CallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
++  // Only implemented for AOT.
++}
++
+ // Test and obtain Smi value.
+ static bool IsSmiValue(Value* val, intptr_t* int_val) {
+   if (val->BindsToConstant() && val->BoundConstant().IsSmi()) {
+diff --git a/runtime/vm/compiler/call_specializer.h b/runtime/vm/compiler/call_specializer.h
+index 881d502a76d..2b747bc4d01 100644
+--- a/runtime/vm/compiler/call_specializer.h
++++ b/runtime/vm/compiler/call_specializer.h
+@@ -55,6 +55,10 @@ class CallSpecializer : public FlowGraphVisitor {
+ 
+   virtual void ReplaceInstanceCallsWithDispatchTableCalls();
+ 
++  // Shorebird: route static calls to DD-slot targets through the indirect
++  // static call table. AOT only, like the dispatch-table pass above it.
++  virtual void ReplaceStaticCallsWithIndirectStaticCalls();
++
+   void InsertBefore(Instruction* next,
+                     Instruction* instr,
+                     Environment* env,
+diff --git a/runtime/vm/compiler/compiler_pass.cc b/runtime/vm/compiler/compiler_pass.cc
+index 4f0a8c7214e..dfe184f5404 100644
+--- a/runtime/vm/compiler/compiler_pass.cc
++++ b/runtime/vm/compiler/compiler_pass.cc
+@@ -342,6 +342,7 @@ FlowGraph* CompilerPass::RunPipeline(PipelineMode mode,
+   INVOKE_PASS(TypePropagation);
+   INVOKE_PASS(SelectRepresentations_Final);
+   INVOKE_PASS(UseTableDispatch);
++  INVOKE_PASS(UseIndirectStaticCalls);
+   INVOKE_PASS(EliminateStackOverflowChecks);
+   INVOKE_PASS(Canonicalize);
+   INVOKE_PASS(AllocationSinking_DetachMaterializations);
+@@ -435,6 +436,13 @@ COMPILER_PASS(UseTableDispatch, {
+   state->call_specializer->ReplaceInstanceCallsWithDispatchTableCalls();
+ });
+ 
++// Shorebird. Sited immediately after UseTableDispatch because the two do the
++// same kind of thing -- turn a resolved call into a table dispatch -- at the
++// point where every optimisation that reads the call has already run.
++COMPILER_PASS(UseIndirectStaticCalls, {
++  state->call_specializer->ReplaceStaticCallsWithIndirectStaticCalls();
++});
++
+ COMPILER_PASS_REPEAT(CSE, { return DominatorBasedCSE::Optimize(flow_graph); });
+ 
+ COMPILER_PASS(LICM, {
+diff --git a/runtime/vm/compiler/compiler_pass.h b/runtime/vm/compiler/compiler_pass.h
+index 7c1e09d41e0..bccf2f1448e 100644
+--- a/runtime/vm/compiler/compiler_pass.h
++++ b/runtime/vm/compiler/compiler_pass.h
+@@ -52,6 +52,7 @@ namespace dart {
+   V(TryOptimizePatterns)                                                       \
+   V(TypePropagation)                                                           \
+   V(UseTableDispatch)                                                          \
++  V(UseIndirectStaticCalls)                                                    \
+   V(EliminateWriteBarriers)                                                    \
+   V(TestILSerialization)                                                       \
+   V(LoweringAfterCodeMotionDisabled)                                           \
+-- 
+2.53.0
+

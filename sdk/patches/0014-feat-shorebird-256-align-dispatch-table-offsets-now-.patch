@@ -1,0 +1,70 @@
+From cd4aeecd189d9b1b6aee93fa7738ddfb820dff98 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 19 Aug 2026 18:42:35 +0800
+Subject: [PATCH 014/206] feat(shorebird): 256-align dispatch table offsets --
+ now byte-identical
+
+Their print_dispatch_table_link_info_to emitted offsets that are all multiples
+of 256 where ours were RowFitter's compact values. This was recorded as one of
+the "three differences that require the two VMs to be identical", but it turned
+out to be an ordinary algorithm change, not an emergent property.
+
+Evidence it is only the fitter that differs: the 21 selectors that land on
+kOriginElement (4096) were already the exact same set in both binaries, so
+pass 1 and all three sorts match upstream unmodified. Restricting the
+candidate offsets in FitAndAllocate to a 256 grid is the whole change.
+
+Verified against their own gen_snapshot on six fixtures -- hello plus the five
+differential variants -- regenerating both sides from a freshly compiled dill
+rather than comparing stale captures:
+
+  hello b_shift c_body d_sig e_minimal f_heavy  ->  6/6 byte-identical
+  (e_minimal is 3182 B vs 3214 B for the rest, so the content genuinely
+   differs between fixtures and still matches)
+
+The _debug_ JSON twin is byte-identical too. Closes difference #3 and takes
+print_dispatch_table_link_info_to from "ranges exact, offsets diverge" to
+byte-identical.
+
+Not yet verified: that a snapshot carrying the sparser table executes
+correctly. It serialises to ELF without error, and offsets past
+kLargestSmallOffset use the slow path upstream already implements, but no
+snapshot has been run.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/dispatch_table_generator.cc b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+index 0cb4325e430..e76ddb00c26 100644
+--- a/runtime/vm/compiler/aot/dispatch_table_generator.cc
++++ b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+@@ -142,6 +142,13 @@ class SelectorRow {
+ 
+ class RowFitter {
+  public:
++  // Selector offsets are only ever handed out on this grid. Upstream packs
++  // rows as tightly as the free list allows, which makes an offset a function
++  // of every other row in the program: adding one selector shifts the rest.
++  // A patch build has to agree with its base build on where each selector
++  // lives, so density is traded for stability. Costs a larger table.
++  static constexpr int32_t kOffsetAlignment = 256;
++
+   RowFitter() : first_slot_index_(0) { free_slots_.Add(Interval(0, INT_MAX)); }
+ 
+   // Try to fit a row at the specified offset and return whether it was
+@@ -274,9 +281,11 @@ void RowFitter::FitAndAllocate(SelectorRow* row,
+ 
+   int32_t next_offset;
+ 
+-  int32_t offset = min_offset;
++  int32_t offset = Utils::RoundUp(min_offset, kOffsetAlignment);
+   while (offset <= max_offset && !TryFit(row, offset, &next_offset)) {
+-    offset = next_offset;
++    // next_offset is strictly greater than offset, so rounding it up keeps the
++    // scan monotonic and the loop terminating.
++    offset = Utils::RoundUp(next_offset, kOffsetAlignment);
+   }
+   if (offset <= max_offset) {
+     row->AllocateAt(offset);
+-- 
+2.53.0
+

@@ -1,0 +1,226 @@
+From a53dc02b0f4f9a7f1a585645c01a0214d07b17f1 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 12:46:17 +0800
+Subject: [PATCH 051/206] feat(shorebird): the three SimulatorCall*Native stubs
+
+Bootstrap, AutoScope and NoScope are the same 34 instructions with a different
+hypercall immediate, so they share a generator. All three come out at their
+size, 136 bytes, with 27 of 34 words byte-identical; the other seven encode a
+Thread offset and differ only in the displacement, as everywhere else.
+
+Every displacement resolved to an upstream field first, so the code uses the
+ordinary accessors rather than their raw numbers: top_exit_frame_info_,
+exit_through_ffi_, vm_tag_, write_barrier_mask_, object_null_,
+global_object_pool_, dispatch_table_array_. The deltas against theirs are not
+uniform -- 0x10 for some fields, 0x20 for others -- which is consistent with
+their Thread carrying extra members interspersed, not just appended.
+
+Two guesses were confirmed by the comparison rather than assumed: the literal 2
+stored into exit_through_ffi_ is kExitThroughRuntimeCall and the literal 8 into
+vm_tag_ is VMTag::kDartTagId, and both instructions landed in the identical set.
+
+Incidental confirmation worth recording: the hypercall immediates line up with
+the constants already in constants_arm64.h -- SimulatorCallBootstrapNative uses
+kCallBootstrapNativeOnCPUCode, AutoScope uses kCallAutoScopeNativeOnCPUCode,
+NoScope uses kCallNoScopeNativeOnCPUCode. WRAPPER_STUBS.md had those names down
+as our invention; the stub names are theirs and they agree.
+
+Verified: 84 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures. Negative control: changing the HEAP_BITS
+shift from 32 to 31 makes the new test exit 255, reverting returns it to 0.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index e98ed805b7a..98bce8fa407 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -936,6 +936,82 @@ void StubCodeCompiler::GenerateCallSimulatorFromFfiTrampolineStub() {
+   __ ret();
+ }
+ 
++// Shorebird. The three SimulatorCall*Native stubs are the same 34 instructions
++// with a different hypercall immediate, so they share a generator. Transcribed
++// from their emitted stubs (136 bytes each); every Thread displacement in them
++// resolves to an upstream field, so this uses the ordinary accessors.
++//
++// Shape: build an exit frame, park vm_tag/exit_through_ffi/top_exit_frame_info,
++// lay the four native-call arguments out on a 16-aligned stack, swap CSP to it,
++// trap into the simulator, then restore CSP and the Dart global registers
++// (HEAP_BITS, NULL_REG, PP, DISPATCH_TABLE_REG) the C side is allowed to clobber.
++//
++// The immediates line up with the constants already in constants_arm64.h --
++// SimulatorCallBootstrapNative uses kCallBootstrapNativeOnCPUCode and so on --
++// which is independent confirmation of names WRAPPER_STUBS.md had recorded as
++// ours rather than observed.
++static void GenerateSimulatorCallNativeStub(Assembler* assembler,
++                                            int32_t hypercall) {
++  __ stp(FP, R30, Address::Pair(SPREG, -16, Address::PairPreIndex));
++  __ mov(FP, SPREG);
++  __ str(FP, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ LoadImmediate(R6, target::Thread::exit_through_runtime_call());
++  __ str(R6, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ str(R5, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++
++  __ sub(SPREG, SPREG, Operand(0x20));
++  __ andi(SPREG, SPREG, Immediate(~static_cast<int64_t>(15)));
++  __ mov(R0, THR);
++  __ AddImmediate(R3, FP, 16);
++  __ str(R0, Address(SPREG, 0), kEightBytes);
++  __ str(R1, Address(SPREG, 8), kEightBytes);
++  __ str(R2, Address(SPREG, 16), kEightBytes);
++  __ str(R3, Address(SPREG, 24), kEightBytes);
++  __ mov(R0, SPREG);
++  __ mov(R25, CSP);
++  __ mov(CSP, SPREG);
++  __ mov(R1, R5);
++  __ brk(hypercall);
++  __ mov(SPREG, CSP);
++  __ mov(CSP, R25);
++
++  __ ldr(HEAP_BITS, Address(THR, target::Thread::write_barrier_mask_offset()),
++         kEightBytes);
++  __ LslImmediate(HEAP_BITS, HEAP_BITS, 32);
++  __ ldr(NULL_REG, Address(THR, target::Thread::object_null_offset()),
++         kEightBytes);
++  __ LoadImmediate(R2, VMTag::kDartTagId);
++  __ str(R2, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++  __ str(ZR, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ str(ZR, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ ldr(PP, Address(THR, target::Thread::global_object_pool_offset()),
++         kEightBytes);
++  __ sub(PP, PP, Operand(kHeapObjectTag));
++  __ ldr(DISPATCH_TABLE_REG,
++         Address(THR, target::Thread::dispatch_table_array_offset()),
++         kEightBytes);
++
++  __ mov(SPREG, FP);
++  __ ldp(FP, R30, Address::Pair(SPREG, 16, Address::PairPostIndex));
++  __ ret();
++}
++
++void StubCodeCompiler::GenerateSimulatorCallBootstrapNativeStub() {
++  GenerateSimulatorCallNativeStub(assembler, Instr::kCallBootstrapNativeOnCPUCode);
++}
++
++void StubCodeCompiler::GenerateSimulatorCallAutoScopeNativeStub() {
++  GenerateSimulatorCallNativeStub(assembler, Instr::kCallAutoScopeNativeOnCPUCode);
++}
++
++void StubCodeCompiler::GenerateSimulatorCallNoScopeNativeStub() {
++  GenerateSimulatorCallNativeStub(assembler, Instr::kCallNoScopeNativeOnCPUCode);
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 2081f0f0353..543a245a38d 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -322,6 +322,84 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallSimFromFfiMatchesTheirBytes) {
+   }
+ }
+ 
++// The three SimulatorCall*Native stubs: 34 instructions each, identical apart
++// from the hypercall immediate, so one checker serves all three. 27 words are
++// position independent; seven encode a Thread offset and are re-derived, and
++// the brk carries the per-stub code.
++static void CheckSimulatorCallNativeStub(const Code& stub, int32_t hypercall) {
++  EXPECT_EQ(static_cast<intptr_t>(136), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[34] = {
++      0xa9bf79fdu,  // [0]
++      0xaa0f03fdu,  // [1]
++      0u,  // [2]  derived
++      0xd2800046u,  // [3]
++      0u,  // [4]  derived
++      0u,  // [5]  derived
++      0xd10081efu,  // [6]
++      0x927cedefu,  // [7]
++      0xaa1a03e0u,  // [8]
++      0x910043a3u,  // [9]
++      0xf90001e0u,  // [10]
++      0xf90005e1u,  // [11]
++      0xf90009e2u,  // [12]
++      0xf9000de3u,  // [13]
++      0xaa0f03e0u,  // [14]
++      0x910003f9u,  // [15]
++      0x910001ffu,  // [16]
++      0xaa0503e1u,  // [17]
++      0u,  // [18]  brk, per stub
++      0x910003efu,  // [19]
++      0x9100033fu,  // [20]
++      0xf9402b5cu,  // [21]
++      0xd3607f9cu,  // [22]
++      0xf9404356u,  // [23]
++      0xd2800102u,  // [24]
++      0u,  // [25]  derived
++      0u,  // [26]  derived
++      0u,  // [27]  derived
++      0u,  // [28]  derived
++      0xd100077bu,  // [29]
++      0xf9403755u,  // [30]
++      0xaa1d03efu,  // [31]
++      0xa8c179fdu,  // [32]
++      0xd65f03c0u,  // [33]
++  };
++
++  auto st_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  using T = compiler::target::Thread;
++  EXPECT_EQ(st_thr(kStr, T::top_exit_frame_info_offset(), 29), w[2]);
++  EXPECT_EQ(st_thr(kStr, T::exit_through_ffi_offset(), 6), w[4]);
++  EXPECT_EQ(st_thr(kStr, T::vm_tag_offset(), 5), w[5]);
++  EXPECT_EQ(st_thr(kStr, T::vm_tag_offset(), 2), w[25]);
++  EXPECT_EQ(st_thr(kStr, T::exit_through_ffi_offset(), 31), w[26]);
++  EXPECT_EQ(st_thr(kStr, T::top_exit_frame_info_offset(), 31), w[27]);
++  EXPECT_EQ(st_thr(kLdr, T::global_object_pool_offset(), 27), w[28]);
++
++  // brk #imm: 0xd4200000 | imm16 << 5.
++  EXPECT_EQ(0xd4200000u | (static_cast<uint32_t>(hypercall) << 5), w[18]);
++
++  for (intptr_t i = 0; i < 34; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimulatorCallNativeStubsMatchTheirBytes) {
++  CheckSimulatorCallNativeStub(StubCode::SimulatorCallBootstrapNative(),
++                               Instr::kCallBootstrapNativeOnCPUCode);
++  CheckSimulatorCallNativeStub(StubCode::SimulatorCallAutoScopeNative(),
++                               Instr::kCallAutoScopeNativeOnCPUCode);
++  CheckSimulatorCallNativeStub(StubCode::SimulatorCallNoScopeNative(),
++                               Instr::kCallNoScopeNativeOnCPUCode);
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 50077fb8a4a..25d55e0313f 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -160,6 +160,9 @@ namespace dart {
+   V(TransitionDartToCpuIfNeeded)                                               \
+   V(ResumeOnCPU)                                                               \
+   V(CallSimulatorFromFfiTrampoline)                                            \
++  V(SimulatorCallBootstrapNative)                                              \
++  V(SimulatorCallAutoScopeNative)                                              \
++  V(SimulatorCallNoScopeNative)                                                \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

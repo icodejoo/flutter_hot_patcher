@@ -1,0 +1,60 @@
+From 0ae8fc7d1c8242da2e47589bfc85c7529723aef5 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 17:20:18 +0800
+Subject: [PATCH 201/206] [vm] F178: wrap base_entry instead of returning
+ identity for linked (cpu) Shorebird entries
+
+Deserializer::WrapCode's fourth return path (resolved.target == cpu, i.e. a
+patch function the linker proved byte-identical to its base counterpart) was
+unconditionally returning identity on payload_start, same as the two genuine
+miss paths above it. That meant every unchanged function in a patch was still
+interpreted by the Simulator instead of running natively, even though the
+code already computes a real Sim->CPU wrapper trampoline for this case
+(WrapperForRunTarget(resolved.target)) and just discarded it.
+
+The B6 PROT_READ-execution hazard documented on the two miss paths does not
+apply here: base_entry resolves into the base app image (normally-executable
+memory), not the PROT_READ-only patch payload. The hit path already
+RELEASE_ASSERTs payload bytes == base bytes before reaching this return, and
+Simulator::DecodeSimulatorToNativeTransition's kRunDartOnCPUCode arm (hardened
+since F160/F162, including the stack-floor guard) implements the Sim->CPU
+escape this wrapper trampoline would hit.
+
+Changed the final return from EntryPoints(payload_start, identity,
+payload_info) to EntryPoints(base_entry, wrapper, payload_info), so a linked
+entry's offsets resolve against the base image and its entry points go
+through the Sim->CPU wrapper instead of staying interpreted.
+
+Measured (host/simulator build only, no device test): sdk_phase_checklist.py
+C4 unaffected before/after (14/14 both ways) -- none of its p1..p9 programs
+load through the link-table path, so C4 gives zero coverage of this change;
+this is a real gap, not a claim the change is validated end-to-end. A direct
+proxy measurement of the effect this unlocks (identical bytecode, simulated
+vs native) on this sim build: a 200M-iteration arithmetic loop runs in
+33869ms under --use_simulator vs 351ms under --no-use_simulator (~96x),
+same result value both ways.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 6cc1262865e..ce5bb36ca5c 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10111,7 +10111,13 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+                reinterpret_cast<const void*>(base_entry),
+                static_cast<size_t>(length)) == 0);
+ #endif
+-  return EntryPoints(payload_start, identity, payload_info);
++  // base_entry lives in the base app image, which is normally-executable
++  // memory -- not the PROT_READ-only patch payload that made identity the
++  // right call on the two misses above. So the B6 hazard (Sim->CPU wrapper
++  // handing the Simulator a PROT_READ address to execute natively) does not
++  // apply here; wrap base_entry instead of defaulting to identity on
++  // payload_start, so an unchanged function actually runs on the CPU.
++  return EntryPoints(base_entry, wrapper, payload_info);
+ }
+ 
+ // Shorebird. Their :941. Linking needs both halves: a table saying which patch
+-- 
+2.53.0
+

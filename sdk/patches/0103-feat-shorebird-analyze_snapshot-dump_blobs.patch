@@ -1,0 +1,158 @@
+From b8fd30973c63a53e934467b703ad08bbf82f5e47 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 20:04:32 +0800
+Subject: [PATCH 103/206] feat(shorebird): analyze_snapshot --dump_blobs
+
+The four snapshot regions concatenated, which their help describes as being for
+avoiding Mach-O/ELF differences. On our own snapshot: 504742 bytes, and slicing
+it back at each region's declared length reproduces the ELF's bytes exactly with
+nothing left over.
+
+The lengths are the ones the VM knows, and that was measured before writing
+anything rather than assumed. On their base.so the blob is 669622 bytes while
+.rodata plus .text is 669760 -- the 138-byte difference is section alignment
+padding. Using the ELF section sizes would have produced a blob that looks right
+and is wrong.
+
+Neither length is in Dart_SnapshotAnalyzerInformation, which is why this was
+recorded as blocked. They were found instead in the headers the regions carry:
+Snapshot::length() for data, and Image's own size field for instructions.
+
+An independent cross-check fell out: the isolate instructions region measures
+295248 bytes, which is exactly where the last function ends according to the
+InstructionsTable walk that --shorebird does. Two unrelated sources agreeing.
+
+The withheld flag count drops from four to three. The two dump_object_pool
+flags need op_subgraph_hash; --disassemble remains reverted over the VM flag
+name collision.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index ccdf11fc609..ecfbc9c9a35 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -26,7 +26,8 @@ namespace bin {
+   V(help, help)                                                                \
+   V(sdk_version, sdk_version)                                                  \
+   V(shorebird, shorebird_mode)                                                 \
+-  V(dump_class_table, dump_class_table)
++  V(dump_class_table, dump_class_table)                                        \
++  V(dump_blobs, dump_blobs)
+ 
+ #define STRING_OPTION_DEFINITION(flag, variable)                               \
+   static const char* variable = nullptr;                                       \
+@@ -75,6 +76,9 @@ static void PrintUsage() {
+ // least declared, and this one is help text with nothing behind it.
+ "--no_pp_hash                                                                \n"
+ "  Ignore PP offsets when computing subgraph hashes.                         \n"
++"--dump_blobs                                                                \n"
++"  Dump the four snapshot regions as a single concatenated blob.             \n"
++"  Used by Shorebird's patch tool for avoiding Mach-O/ELF differences.       \n"
+ "--dump_class_table                                                          \n"
+ "  Dump the class table as JSON for debugging.                               \n"
+ // Shorebird lists four more flags at this point, in this order:
+@@ -271,7 +275,9 @@ int RunAnalyzer(int argc, char** argv) {
+   intptr_t out_len = 0;
+ 
+   Dart_EnterScope();
+-  if (dump_class_table) {
++  if (dump_blobs) {
++    Dart_DumpBlobs(info, &out, &out_len);
++  } else if (dump_class_table) {
+     Dart_DumpClassTableAsJson(info, &out, &out_len);
+   } else if (shorebird_mode) {
+     Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index cc82282027c..17b6faeb65c 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -38,6 +38,12 @@ void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
+                                char** out,
+                                intptr_t* out_len);
+ 
++// flutter_hot_patcher: Shorebird's --dump_blobs. The four regions concatenated
++// at the lengths the VM knows, not the ELF section sizes.
++void Dart_DumpBlobs(const Dart_SnapshotAnalyzerInformation& info,
++                    char** out,
++                    intptr_t* out_len);
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 03da6546950..4f9b50069ed 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -22,6 +22,8 @@
+ #include "vm/object.h"
+ #include "vm/object_store.h"
+ #include "vm/shorebird/link_info.h"
++#include "vm/image_snapshot.h"
++#include "vm/snapshot.h"
+ #include "vm/thread.h"
+ 
+ namespace dart {
+@@ -1159,6 +1161,59 @@ void CollectAllCodes(
+ // isolate's class table and produces exactly {id, name, hash} per class, and
+ // our --print_class_table_link_info_to output is byte-identical to theirs, so
+ // the hashes here are already known to agree with Shorebird's.
++// Shorebird's --dump_blobs: the four snapshot regions concatenated, which their
++// help describes as being for "avoiding Mach-O/ELF differences".
++//
++// ⚠️ The lengths are the ones the VM knows, NOT the ELF section sizes, and that
++// distinction is measured rather than assumed. On their own base.so the blob is
++// 669622 bytes while .rodata plus .text is 669760 -- the 138-byte difference is
++// section alignment padding, and using the section sizes would have produced a
++// blob that looks right and is wrong.
++//
++// Data regions carry their length in the snapshot header; instructions regions
++// carry theirs in the image header. Neither is in
++// Dart_SnapshotAnalyzerInformation, which is why this needed finding.
++//
++// The order -- both data regions, then both instructions regions -- is taken
++// from their output: it begins with the vm data magic and the instructions
++// bytes appear after all of the data.
++static intptr_t DataRegionSize(const uint8_t* region) {
++  if (region == nullptr) return 0;
++  const Snapshot* snapshot = Snapshot::SetupFromBuffer(region);
++  return snapshot == nullptr ? 0 : snapshot->length();
++}
++
++static intptr_t InstructionsRegionSize(const uint8_t* region) {
++  if (region == nullptr) return 0;
++  Image image(region);
++  const uword start = reinterpret_cast<uword>(region);
++  const uword object_start = reinterpret_cast<uword>(image.object_start());
++  return static_cast<intptr_t>((object_start - start) + image.object_size());
++}
++
++void Dart_DumpBlobs(const Dart_SnapshotAnalyzerInformation& info,
++                    char** out,
++                    intptr_t* out_len) {
++  const uint8_t* regions[4] = {
++      info.vm_snapshot_data, info.vm_isolate_data,
++      info.vm_snapshot_instructions, info.vm_isolate_instructions};
++  const intptr_t sizes[4] = {
++      DataRegionSize(regions[0]), DataRegionSize(regions[1]),
++      InstructionsRegionSize(regions[2]), InstructionsRegionSize(regions[3])};
++
++  intptr_t total = 0;
++  for (intptr_t i = 0; i < 4; i++) total += sizes[i];
++
++  char* buffer = reinterpret_cast<char*>(malloc(total));
++  intptr_t cursor = 0;
++  for (intptr_t i = 0; i < 4; i++) {
++    if (sizes[i] > 0) memcpy(buffer + cursor, regions[i], sizes[i]);
++    cursor += sizes[i];
++  }
++  *out = buffer;
++  *out_len = total;
++}
++
+ void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
+                                char** out,
+                                intptr_t* out_len) {
+-- 
+2.53.0
+

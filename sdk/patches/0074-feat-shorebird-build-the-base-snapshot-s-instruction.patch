@@ -1,0 +1,274 @@
+From 60cec3c40c28050afc27edd403dc29e825271eb5 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 22:11:46 +0800
+Subject: [PATCH 074/206] feat(shorebird): build the base snapshot's
+ instructions table
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The last piece of the Deserializer's Shorebird surface that had a name but no
+implementation. A patch replaces the app snapshot, so the base exists only as
+raw mappings -- nothing has deserialized it, and there is no InstructionsTable
+to hand the deserializer.
+
+Everything InstructionsTable::New needs is in the base's own header, and that
+header is five unsigned values at the start of the clustered stream: the same
+five Deserialize reads. Which is what their cut-down Deserializer constructor
+is for -- their DWARF has a second one taking only (Thread*, buffer, size,
+data, instructions, offset), with no Kind, no InstructionsType and no
+base-instruction parameters. A reader for a header and nothing else. That
+constructor was recorded as unexplained two rounds ago.
+
+The Deserializer now takes the pair their long constructor takes, in their
+positions, and ReadProgramSnapshot supplies them. PrintShorebirdStats reports
+the real state instead of a hardcoded "no".
+
+Verified two ways. The "no" path is what every unpatched app takes and it runs
+end to end. The "yes" path has no embedder here -- dartaotruntime never calls
+Shorebird_SetBaseSnapshots, that is the Flutter shell's job -- so it was forced
+once, by handing the app its own snapshot as the base:
+
+    Has shorebird base instructions table: yes
+
+which means SetupFromBuffer, VerifyVersionAndFeatures, the five varints, the
+ImageReader and InstructionsTable::New all ran against a real snapshot, and the
+program still produced the right output.
+
+⚠️ That was an experiment, not a regression test. What is permanently covered
+is the null path. Exercising the other one needs an embedder that sets base
+snapshots, and adding a flag to dartaotruntime for it would be inventing API
+rather than reproducing it.
+
+90 of 90 shorebird tests; dd_runtime_check.sh and verify_reproduction.sh clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index d9d5738af49..5018ba45810 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -701,7 +701,9 @@ class Deserializer : public ThreadStackResource {
+                const uint8_t* instructions_buffer,
+                bool is_non_root_unit,
+                InstructionsType instructions_type,
+-               intptr_t offset = 0);
++               intptr_t offset,
++               const InstructionsTable& base_instructions_table,
++               const uint8_t* base_instructions_buffer);
+   ~Deserializer();
+ 
+   // Shorebird. The four entry points a Code carries, computed from one payload
+@@ -1009,8 +1011,12 @@ class Deserializer : public ThreadStackResource {
+   DeserializationCluster** clusters_;
+   const bool is_non_root_unit_;
+   InstructionsTable& instructions_table_;
+-  // Shorebird, theirs at Deserializer+0xc0 and +0xd8 by name.
++  // Shorebird, theirs at Deserializer+0xc0..0xd8 by name. The two base members
++  // are references and pointers into the base snapshot, which the embedder keeps
++  // mapped for the life of the process.
+   const InstructionsType instructions_type_;
++  const InstructionsTable& shorebird_base_instructions_table_;
++  const uint8_t* const shorebird_base_instructions_buffer_;
+   Stats stats_;
+ };
+ 
+@@ -9299,7 +9305,9 @@ Deserializer::Deserializer(Thread* thread,
+                            const uint8_t* instructions_buffer,
+                            bool is_non_root_unit,
+                            InstructionsType instructions_type,
+-                           intptr_t offset)
++                           intptr_t offset,
++                           const InstructionsTable& base_instructions_table,
++                           const uint8_t* base_instructions_buffer)
+     : ThreadStackResource(thread),
+       heap_(thread->isolate_group()->heap()),
+       old_space_(heap_->old_space()),
+@@ -9313,7 +9321,9 @@ Deserializer::Deserializer(Thread* thread,
+       clusters_(nullptr),
+       is_non_root_unit_(is_non_root_unit),
+       instructions_table_(InstructionsTable::Handle(thread->zone())),
+-      instructions_type_(instructions_type) {
++      instructions_type_(instructions_type),
++      shorebird_base_instructions_table_(base_instructions_table),
++      shorebird_base_instructions_buffer_(base_instructions_buffer) {
+   if (Snapshot::IncludesCode(kind)) {
+     ASSERT(instructions_buffer != nullptr);
+     ASSERT(data_buffer != nullptr);
+@@ -9605,14 +9615,15 @@ DeserializationCluster* Deserializer::ReadCluster() {
+ // wording and their column padding -- the two count lines really do carry three
+ // trailing spaces after the colon so the numbers line up under the lengths.
+ //
+-// The base-instructions line always reports "no" here: that table belongs to
+-// the patch-loading path, which is not built yet. Printing the line anyway is
+-// deliberate -- it is the one place the absence is visible.
++// The base-instructions line reports the real state now that the table is
++// built. It reads "no" for every unpatched app, which is correct rather than a
++// stand-in: there is nothing to link against.
+ void Deserializer::PrintShorebirdStats() {
+   if (!FLAG_print_shorebird_info) return;
+ 
+   OS::PrintErr("Shorebird stats:\n");
+-  OS::PrintErr("  Has shorebird base instructions table: %s\n", "no");
++  OS::PrintErr("  Has shorebird base instructions table: %s\n",
++               shorebird_base_instructions_table_.IsNull() ? "no" : "yes");
+   OS::PrintErr("  Has LinkOracle: %s\n",
+                LinkOracle::shared() != nullptr ? "yes" : "no");
+   OS::PrintErr("  CPU instructions length: %zu\n",
+@@ -10354,6 +10365,78 @@ void FullSnapshotWriter::WriteFullSnapshot(
+ }
+ #endif  // defined(DART_PRECOMPILED_RUNTIME)
+ 
++// Shorebird. Build an InstructionsTable over the base snapshot -- the one the
++// running patch was linked against, handed in by Shorebird_SetBaseSnapshots.
++//
++// A patch replaces the app snapshot, so the base is present only as raw
++// mappings; nothing has deserialized it and there is no InstructionsTable for
++// it. Everything InstructionsTable::New needs is in the base's own header,
++// which is five unsigned values at the start of the clustered stream -- the
++// same five Deserialize reads:
++//
++//   num_base_objects, num_objects, num_clusters,
++//   instructions_table_len, instruction_table_data_offset
++//
++// That is what their cut-down Deserializer constructor is for: their DWARF has
++// a second one taking only (Thread*, buffer, size, data, instructions, offset),
++// with no Kind, no InstructionsType and no base-instruction parameters --
++// exactly a reader for a header and nothing else.
++//
++// Returns a null handle when there is no base, when its header does not verify,
++// or when it carries no instructions table. A null table is the signal that the
++// base cannot be linked against, not an error to propagate.
++InstructionsTablePtr ReadBaseInstructionsTable(Thread* thread) {
++#if defined(DART_PRECOMPILED_RUNTIME)
++  const uint8_t* const data = BaseSnapshotData();
++  const uint8_t* const instructions = BaseSnapshotInstructionsBuffer();
++  if (data == nullptr || instructions == nullptr) {
++    return InstructionsTable::null();
++  }
++
++  const Snapshot* const snapshot = Snapshot::SetupFromBuffer(data);
++  if (snapshot == nullptr) return InstructionsTable::null();
++
++  SnapshotHeaderReader header_reader(snapshot);
++  intptr_t offset = 0;
++  char* error =
++      header_reader.VerifyVersionAndFeatures(thread->isolate_group(), &offset);
++  if (error != nullptr) {
++    // The base is a different build than this VM. Refusing to link is the
++    // right outcome; the caller reports it as "no base instructions table".
++    free(error);
++    return InstructionsTable::null();
++  }
++
++  ReadStream stream(snapshot->Addr(), snapshot->length(), offset);
++  stream.ReadUnsigned();  // num_base_objects
++  stream.ReadUnsigned();  // num_objects
++  stream.ReadUnsigned();  // num_clusters
++  const intptr_t instructions_table_len = stream.ReadUnsigned();
++  const uint32_t instruction_table_data_offset = stream.ReadUnsigned();
++  if (instructions_table_len <= 0) return InstructionsTable::null();
++
++  ImageReader* const reader =
++      new (thread->zone()) ImageReader(snapshot->DataImage(), instructions);
++  const uword start_pc = reader->GetBareInstructionsAt(0);
++  const uword end_pc = reader->GetBareInstructionsEnd();
++
++  uword instruction_table_data = 0;
++  if (instruction_table_data_offset != 0) {
++    // Same NoSafepointScope reasoning as the main deserializer: the data lives
++    // in read-only memory and is immovable, so the pointer outlives the scope.
++    NoSafepointScope no_safepoint;
++    instruction_table_data = reinterpret_cast<uword>(
++        OneByteString::DataStart(String::Handle(static_cast<StringPtr>(
++            reader->GetObjectAt(instruction_table_data_offset)))));
++  }
++
++  return InstructionsTable::New(instructions_table_len, start_pc, end_pc,
++                                instruction_table_data);
++#else
++  return InstructionsTable::null();
++#endif  // defined(DART_PRECOMPILED_RUNTIME)
++}
++
+ FullSnapshotReader::FullSnapshotReader(const Snapshot* snapshot,
+                                        const uint8_t* instructions_buffer,
+                                        Thread* thread)
+@@ -10481,7 +10564,9 @@ ApiErrorPtr FullSnapshotReader::ReadVMSnapshot() {
+ 
+   Deserializer deserializer(thread_, kind_, buffer_, size_, data_image_,
+                             instructions_image_, /*is_non_root_unit=*/false,
+-                            Deserializer::InstructionsType::vm, offset);
++                            Deserializer::InstructionsType::vm, offset,
++                            InstructionsTable::Handle(thread_->zone()),
++                            /*base_instructions_buffer=*/nullptr);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+@@ -10526,9 +10611,18 @@ ApiErrorPtr FullSnapshotReader::ReadProgramSnapshot() {
+   // program lock is held.
+   SafepointWriteRwLocker ml(thread_, isolate_group()->program_lock());
+ 
++  // Shorebird: the base the running patch was linked against, if there is one.
++  // A null table means nothing can be linked, which is every unpatched app.
++  const InstructionsTable& base_instructions_table =
++      InstructionsTable::Handle(thread_->zone(),
++                                ReadBaseInstructionsTable(thread_));
++  const uint8_t* const base_instructions_buffer =
++      BaseSnapshotInstructionsBuffer();
++
+   Deserializer deserializer(thread_, kind_, buffer_, size_, data_image_,
+                             instructions_image_, /*is_non_root_unit=*/false,
+-                            Deserializer::InstructionsType::app, offset);
++                            Deserializer::InstructionsType::app, offset,
++                            base_instructions_table, base_instructions_buffer);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+@@ -10579,7 +10673,9 @@ ApiErrorPtr FullSnapshotReader::ReadUnitSnapshot(const LoadingUnit& unit) {
+   Deserializer deserializer(
+       thread_, kind_, buffer_, size_, data_image_, instructions_image_,
+       /*is_non_root_unit=*/unit.id() != LoadingUnit::kRootId,
+-      Deserializer::InstructionsType::app, offset);
++      Deserializer::InstructionsType::app, offset,
++      InstructionsTable::Handle(thread_->zone()),
++      /*base_instructions_buffer=*/nullptr);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+index e104a662e3b..41dbc0d176f 100644
+--- a/runtime/vm/shorebird.cc
++++ b/runtime/vm/shorebird.cc
+@@ -148,6 +148,15 @@ static const uint8_t* base_app_snapshot_instructions = nullptr;
+ static const uint8_t* base_vm_snapshot_data = nullptr;
+ static const uint8_t* base_vm_snapshot_instructions = nullptr;
+ 
++// The raw mappings Shorebird_SetBaseSnapshots was handed. The isolate ones are
++// the pair a base instructions table has to be built over.
++const uint8_t* BaseSnapshotData() {
++  return base_app_snapshot_data;
++}
++const uint8_t* BaseSnapshotInstructionsBuffer() {
++  return base_app_snapshot_instructions;
++}
++
+ // Their name, from the DWARF (runtime/vm/shorebird.cc:161), returning uword.
+ // The base instructions image starts at its own buffer: upstream's
+ // ImageReader::GetBareInstructionsAt(0) is exactly `instructions_image + 0`.
+diff --git a/runtime/vm/shorebird/shorebird.h b/runtime/vm/shorebird/shorebird.h
+index d5b6fec17bf..73d9194d6a2 100644
+--- a/runtime/vm/shorebird/shorebird.h
++++ b/runtime/vm/shorebird/shorebird.h
+@@ -38,6 +38,8 @@ namespace dart {
+ // these BaseSnapshotInstructions (runtime/vm/shorebird.cc:161).
+ uword BaseSnapshotInstructions();
+ uword BaseSnapshotInstructionsEnd();
++const uint8_t* BaseSnapshotData();
++const uint8_t* BaseSnapshotInstructionsBuffer();
+ 
+ class LinkOracle {                                         // their :27
+  public:
+-- 
+2.53.0
+

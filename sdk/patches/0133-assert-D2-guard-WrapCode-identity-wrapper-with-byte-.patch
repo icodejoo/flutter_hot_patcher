@@ -1,0 +1,49 @@
+From b502748c187e32c0f6de19932e813505121f8f35 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 13:18:14 +0800
+Subject: [PATCH 133/206] assert(D2): guard WrapCode identity wrapper with
+ byte-identity check
+
+In Simulator mode (DART_INCLUDE_SIMULATOR), WrapCode returns an identity
+wrapper for cpu-linked functions because the linker only accepts a patch
+when link%=100% -- meaning every is_cpu() function has bytewise-identical
+instructions to its base counterpart. The previous code stated this as a
+comment but did not verify it.
+
+Add RELEASE_ASSERT(memcmp(payload_start, base_entry, length) == 0) under
+#if DART_INCLUDE_SIMULATOR so the premise is checked at load time rather
+than silently assumed. RELEASE_ASSERT fires in both Release and Product
+builds; ASSERT would be compiled away in either.
+
+Note: this code path requires IsLinkingEnabled() to be true (LinkOracle +
+base instructions table present), which is only the case during iOS device
+patch loading. Host-side verify_all tests do not exercise this path (they
+run without a base snapshot), so the assertion cannot be triggered by a
+host-side negative control. Verified: verify_all 19 ran / 2 failed (same
+pre-existing failures as the D1 baseline).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index dd7a69fdc10..4af2d6fc851 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10091,6 +10091,15 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+   // Identity lets the Simulator interpret the patch's own bytecode directly,
+   // which is safe and correct since patch and base bytes are provably identical
+   // for every is_cpu() function.
++#if defined(DART_INCLUDE_SIMULATOR)
++  // Assert the premise: link%=100% means patch and base bytes are identical
++  // for every is_cpu() function. If this fires, the patch was accepted with
++  // link < 100%, which would give the Simulator wrong bytecode silently.
++  RELEASE_ASSERT(
++      ::memcmp(reinterpret_cast<const void*>(payload_start),
++               reinterpret_cast<const void*>(base_entry),
++               static_cast<size_t>(length)) == 0);
++#endif
+   return EntryPoints(payload_start, identity, payload_info);
+ }
+ 
+-- 
+2.53.0
+

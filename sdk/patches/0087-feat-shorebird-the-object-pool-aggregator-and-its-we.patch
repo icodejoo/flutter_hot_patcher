@@ -1,0 +1,556 @@
+From ab58e28152d7ba21822fce3c47978d6949dc7a72 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 13:50:03 +0800
+Subject: [PATCH 087/206] feat(shorebird): the object pool aggregator, and its
+ weighted votes
+
+ComputeObjectPoolLinkResults was not their algorithm. It dropped any
+op_subgraph_hash_ group holding more than one code object and paired the
+survivors directly, which reproduces their 1121/1113/292/16 on the
+fixture and is wrong everywhere else.
+
+Their InitializeWithObjectPoolLinkInfo keeps ambiguous groups and votes
+on them. Every encoding a `group.size() == 1` test could compile to was
+enumerated against the whole 8184-byte function and none is present: no
+cmp against #0x60, no iterator bump compared to an end, no asr #5
+division followed by cmp #1, and the single cmp #0x1 is a loop-trip
+clamp on an index vector rather than a size test.
+
+So this adds ObjectPoolMappingsAggregator. votes_[patch][base] accrues
+1.0 / (base_group.size() + patch_group.size()) per pairing, and
+GetBestMapping sorts candidates by descending score -- ties going to the
+identity mapping -- then takes the first base index not already handed
+out. used_ is never cleared, so injectivity holds across the whole link
+rather than per call.
+
+The index vector is also conditional, which closes the "self_pp,
+subgraph_pp or their union -- cannot discriminate" note in the header.
+It is subgraph_pp_indices_ while the base subgraph group is non-empty
+and self_pp_indices_ from the first self_hash_ fallback onward, sticky
+for the rest of the group because the inner-loop back edge bypasses the
+only write of 0.
+
+Three deliberate departures, each in a comment at the site: their inner
+loop bound is max(patch.size(), 1) and indexes both vectors, which reads
+out of bounds when the base vector is shorter, so this bounds by the
+shorter of the two; their fourth groupBy map is built and never read, so
+it is not built; their comparator captures the key by reference, which
+has no observable consequence.
+
+shorebird_info_check.sh still matches all eight of their report lines,
+but that is not evidence: on a fixture where every matched group is 1:1
+and every index pair is a bijection, each vote map holds one candidate
+and the greedy never rejects, so voting and the old filter agree. The
+nine unit tests are what actually pin this, and one of them exists only
+because the obvious negative control did not work. Replacing the weight
+with a constant left everything green, since a group contributes
+|base| * |patch| votes of weight 1/(|base| + |patch|) and score and
+event count normally move together. WeightIsNormalisedByGroupSize picks
+two groups where they disagree -- 2x2 at 1/4 scores 1.000 against 1x5 at
+1/6 scoring 0.833, while the event counts say 4 against 5 -- so dropping
+the divisor now flips the answer.
+
+All four negative controls go red and were reverted: constant weight
+(1), no injectivity check (2), inverted tie-break (2), unconditional
+self_pp (2). verify_all.sh is 6 ran / 0 failed / 137 passed.
+
+Still open: the fixture cannot exercise any of this, so the arbitration
+is transcribed rather than behaviourally verified. A synthetic
+ObjectPoolLinkInfo pair -- a subgraph group of size 2, and two patch
+indices whose best candidate is the same base index -- run through their
+gen_snapshot is the only thing that would settle it.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index f0f09499ff0..6442758cc84 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "vm/shorebird/linker.h"
+ 
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -363,33 +364,138 @@ void ShorebirdLinker::InitializeWithObjectPoolLinkInfo(
+   LinkObjectPools(&counts);
+ }
+ 
++void ObjectPoolMappingsAggregator::AddVote(uintptr_t patch_index,
++                                           uintptr_t base_index,
++                                           double weight) {
++  votes_[patch_index][base_index] += weight;
++}
++
++intptr_t ObjectPoolMappingsAggregator::GetBestMapping(uintptr_t patch_index) {
++  // operator[], not find. Their 0x10019ccc8 allocates a 64-byte node and
++  // 0x10019ccec sets the inner map's max_load_factor, so a key that never
++  // received a vote is default-inserted rather than missed.
++  const std::unordered_map<uintptr_t, double>& candidates = votes_[patch_index];
++
++  // A copy, then flattened -- their 0x10019ce88..0x10019d1fc copies the inner
++  // map before range-constructing the vector from it. The copy matters only
++  // when two candidates tie on score and neither is the identity: std::sort is
++  // not stable, so the surviving order depends on the copy's bucket layout.
++  // Nothing here may call reserve() on that copy, for the same reason the dd
++  // identity dump may not: the bucket-width history is the order.
++  std::vector<std::pair<uintptr_t, double>> sorted(candidates.begin(),
++                                                   candidates.end());
++
++  // 0x10019f208-0x10019f238. The `a == b` short-circuit is theirs, not a
++  // compiler artefact -- it is what makes the relation irreflexive.
++  std::sort(sorted.begin(), sorted.end(),
++            [patch_index](const std::pair<uintptr_t, double>& a,
++                          const std::pair<uintptr_t, double>& b) {
++              if (a == b) return false;
++              if (a.second != b.second) return a.second > b.second;
++              return a.first == patch_index;
++            });
++
++  for (const auto& candidate : sorted) {
++    if (std::find(used_.begin(), used_.end(), candidate.first) != used_.end()) {
++      continue;
++    }
++    used_.push_back(candidate.first);
++    return static_cast<intptr_t>(candidate.first);
++  }
++  return kNoMapping;
++}
++
+ std::vector<ShorebirdLinker::PoolIndexPair>
+ ShorebirdLinker::ComputeObjectPoolLinkResults(const ObjectPoolLinkInfo& base,
+                                               const ObjectPoolLinkInfo& patch) {
+-  const auto key = [](const CodeInfo& info) { return info.op_subgraph_hash_; };
+-  const auto base_groups = GroupBy<CodeInfo>(base.codes(), key);
+-  const auto patch_groups = GroupBy<CodeInfo>(patch.codes(), key);
++  const auto subgraph_key = [](const CodeInfo& info) {
++    return info.op_subgraph_hash_;
++  };
++  const auto self_key = [](const CodeInfo& info) { return info.self_hash_; };
++
++  // Three of their four groupBy maps. The fourth, groupBy(patch, self_hash_)
++  // at 0x10019bf1c, is built and never read in their binary; it is not built
++  // here, because carrying dead work for fidelity's sake buys nothing and
++  // invites a reader to hunt for the call site that does not exist.
++  const auto base_subgraph_groups =
++      GroupBy<CodeInfo>(base.codes(), subgraph_key);
++  const auto base_self_groups = GroupBy<CodeInfo>(base.codes(), self_key);
++  const auto patch_subgraph_groups =
++      GroupBy<CodeInfo>(patch.codes(), subgraph_key);
++
++  ObjectPoolMappingsAggregator aggregator;
++
++  // Ascending, and distinct: GetBestMapping runs once per patch index in this
++  // order (their std::set<uword> at 0x10019c6d8, drained at 0x10019cc30).
++  // The ordering is what makes the greedy deterministic, so this must not
++  // become an unordered_set.
++  std::set<uintptr_t> patch_keys;
++
++  for (const auto& entry : patch_subgraph_groups) {
++    const std::vector<CodeInfo>& patch_group = entry.second;
++
++    // operator[] semantics: a subgraph hash the base does not have yields an
++    // empty buffer, not a miss. That empty buffer is precisely what arms the
++    // self_hash_ fallback below.
++    std::vector<CodeInfo> base_buffer;
++    const auto found = base_subgraph_groups.find(entry.first);
++    if (found != base_subgraph_groups.end()) {
++      base_buffer = found->second;
++    }
+ 
+-  // Deduplicated, and ordered, because two code objects can reference the same
+-  // pool slot and their count is of distinct pairs.
+-  std::set<std::pair<intptr_t, intptr_t>> seen;
+-  for (const auto& entry : patch_groups) {
+-    if (entry.second.size() != 1) continue;
+-    const auto found = base_groups.find(entry.first);
+-    if (found == base_groups.end() || found->second.size() != 1) continue;
++    // Sticky for the rest of the group, and that is not a guess: the only
++    // write of 0 is at 0x10019c4d4, which sits above the inner loop, and the
++    // inner-loop back edge 0x10019c4f8 -> 0x10019c50c bypasses it. Once the
++    // fallback fires for one CodeInfo, every later CodeInfo in the same
++    // subgraph group also reads self_pp_indices_, even though the buffer is no
++    // longer empty.
++    bool use_self_pp = false;
++
++    for (const CodeInfo& patch_code : patch_group) {
++      if (base_buffer.empty()) {
++        const auto fallback = base_self_groups.find(patch_code.self_hash_);
++        if (fallback != base_self_groups.end()) {
++          base_buffer.insert(base_buffer.end(), fallback->second.begin(),
++                             fallback->second.end());
++        }
++        use_self_pp = true;
++      }
+ 
+-    const std::vector<uintptr_t>& b = found->second[0].self_pp_indices_;
+-    const std::vector<uintptr_t>& p = entry.second[0].self_pp_indices_;
+-    const size_t n = b.size() < p.size() ? b.size() : p.size();
+-    for (size_t i = 0; i < n; i++) {
+-      seen.insert({static_cast<intptr_t>(b[i]), static_cast<intptr_t>(p[i])});
++      const std::vector<uintptr_t>& patch_indices =
++          use_self_pp ? patch_code.self_pp_indices_
++                      : patch_code.subgraph_pp_indices_;
++      for (uintptr_t index : patch_indices) {
++        patch_keys.insert(index);
++      }
++
++      // Recomputed per patch CodeInfo, because the fallback above can grow the
++      // base buffer mid-group. Both addends are CodeInfo record counts: their
++      // 0x10019c840 divides by 0x60 and 0x10019c84c reloads a slot written by
++      // another /0x60 division. The index-vector count six instructions away
++      // lands in a different register and never reaches the fdiv.
++      const double weight =
++          1.0 / static_cast<double>(base_buffer.size() + patch_group.size());
++
++      for (const CodeInfo& base_code : base_buffer) {
++        const std::vector<uintptr_t>& base_indices =
++            use_self_pp ? base_code.self_pp_indices_
++                        : base_code.subgraph_pp_indices_;
++        const size_t n = base_indices.size() < patch_indices.size()
++                             ? base_indices.size()
++                             : patch_indices.size();
++        for (size_t i = 0; i < n; i++) {
++          aggregator.AddVote(patch_indices[i], base_indices[i], weight);
++        }
++      }
+     }
+   }
+ 
+   std::vector<PoolIndexPair> link_results;
+-  link_results.reserve(seen.size());
+-  for (const auto& pair : seen) {
+-    link_results.push_back(PoolIndexPair{pair.first, pair.second});
++  for (uintptr_t patch_index : patch_keys) {
++    const intptr_t base_index = aggregator.GetBestMapping(patch_index);
++    if (base_index == ObjectPoolMappingsAggregator::kNoMapping) continue;
++    link_results.push_back(
++        PoolIndexPair{base_index, static_cast<intptr_t>(patch_index)});
+   }
+   return link_results;
+ }
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 6483f83c519..2cc52c9964a 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -21,6 +21,68 @@ namespace dart {
+ // readers' signatures only need the declaration and the include could change.
+ class ReadStream;
+ 
++// Their `dart::ObjectPoolMappingsAggregator`, which decides which base pool
++// index each patch pool index maps to when the evidence is ambiguous.
++//
++// GetBestMapping has no symbol of its own -- it is fully inlined, exactly
++// once, into ShorebirdLinker::InitializeWithObjectPoolLinkInfo. The eight nm
++// hits for the name are std::sort's outlined internals, whose mangled names
++// contain `GetBestMapping(unsigned long)::'lambda'(...)` because the
++// comparator is a local class of that member function. Grepping the raw table
++// for the method itself returns nothing. The name and the parameter type are
++// all the symbol table gives; the body below is disassembled.
++//
++// Layout, proven by the inlined constructor at 0x10019be10-0x10019be28, which
++// zero-initialises exactly 64 contiguous bytes:
++//
++//   +0x00, 40B  unordered_map<uword, unordered_map<uword, double>> votes_
++//   +0x28, 24B  vector<uword>                                      used_
++//
++// `used_` is a vector rather than a set: 8-byte stride, a 4x-unrolled *linear*
++// search, and a push_back with a capacity check (0x10019d278-0x10019d382). A
++// set would not disassemble that way.
++//
++// The member names are inferred -- nothing in gen_snapshot names them, and the
++// mapper types are absent from the engine dSYM (ShorebirdLinker has 0 symbols
++// and 0 DWARF hits there), so the trick that recovered link_info.h's field
++// names does not reach here. What is proven is that the 64 bytes are one
++// contiguous zero-initialised block, which is why there are exactly two.
++class ObjectPoolMappingsAggregator {
++ public:
++  // votes_[patch_index][base_index] += weight.
++  //
++  // Read off 0x10019ca3c-0x10019ca58: an emplace into the outer map, `add x0,
++  // x0, #0x18` to reach the node's value, an emplace into the inner map, then
++  // ldr/fadd/str against the inner node's double at +0x18.
++  //
++  // ⚠️ The method's real name is unrecoverable: it is inlined into the caller
++  // and produces no symbol. Only GetBestMapping is named, and only because its
++  // lambda leaked through the sort templates. This name is ours.
++  void AddVote(uintptr_t patch_index, uintptr_t base_index, double weight);
++
++  // Returns the base pool index this patch index should map to, or -1.
++  //
++  // The candidate list is sorted by descending score; ties go to the candidate
++  // whose index equals the key, i.e. the identity mapping. The first candidate
++  // not already handed out wins, and is recorded so that no base index is ever
++  // returned twice -- `used_` is never cleared between calls, so injectivity
++  // is global across the whole link, not per call.
++  intptr_t GetBestMapping(uintptr_t patch_index);
++
++  // Returned when every candidate has already been taken, or there were none.
++  // Their `mov x19, #-1` at 0x10019d340, checked by the caller's `cmn x19,
++  // #0x1` at 0x10019d378. The signedness of the return is inferred from those
++  // two instructions; the Itanium ABI does not encode return types.
++  static constexpr intptr_t kNoMapping = -1;
++
++  // For tests: how many distinct base indices have been handed out.
++  intptr_t used_count() const { return static_cast<intptr_t>(used_.size()); }
++
++ private:
++  std::unordered_map<uintptr_t, std::unordered_map<uintptr_t, double>> votes_;
++  std::vector<uintptr_t> used_;
++};
++
+ // ShorebirdLinker is the central aggregation point for all link-info
+ // structures produced by a base snapshot and consumed by a patch link.
+ // It is a function-local static singleton (not a global) — `shared()` uses
+@@ -202,17 +264,51 @@ class ShorebirdLinker {
+ 
+   // The object pool's link results.
+   //
+-  // Decoded the same way as the class table's, from the first half of
+-  // InitializeWithObjectPoolLinkInfo: both sides are grouped by CodeInfo's
+-  // op_subgraph_hash_ (0x10019bdc4 strides 0x60 = sizeof(CodeInfo) and reads
+-  // the string at +0x18, not self_hash_ at +0x00), a group is usable only when
+-  // it holds exactly one code object, and each surviving pair contributes the
+-  // element-wise pairing of the two sides' pool-index vectors, deduplicated.
++  // Decoded from the first half of InitializeWithObjectPoolLinkInfo
++  // (0x10019bd8c, 8184 bytes). Unlike the class table's producer, this one does
++  // not pair groups directly: it accumulates weighted votes and then resolves
++  // each patch index with ObjectPoolMappingsAggregator::GetBestMapping.
++  //
++  // Their loop, at the addresses that pin each step:
++  //
++  //   for each (subgraph_hash, patch_codes) in groupBy(patch, op_subgraph_hash_)
++  //     base_buffer = groupBy(base, op_subgraph_hash_)[subgraph_hash]
++  //     use_self_pp = false                              // 0x10019c4d4
++  //     for each pC in patch_codes:                      // 0x10019c4f0
++  //       if base_buffer.empty():                        // 0x10019c50c
++  //         base_buffer += groupBy(base, self_hash_)[pC.self_hash_]
++  //         use_self_pp = true                           // 0x10019c688, sticky
++  //       off = use_self_pp ? self_pp_indices_ : subgraph_pp_indices_
++  //       w = 1.0 / (base_buffer.size() + patch_codes.size())     // 0x10019c854
++  //       for each bC in base_buffer:                    // 0x10019c878
++  //         for i in [0, pIdx.size()):                   // 0x10019c8c8
++  //           votes_[pIdx[i]][bIdx[i]] += w              // 0x10019ca50
++  //
++  // Then GetBestMapping is called once per distinct patch index, in ascending
++  // order (their std::set<uword> at 0x10019c6d8), which is what makes the
++  // greedy selection deterministic.
++  //
++  // ⚠️ THREE THINGS THIS DOES NOT COPY, each deliberate:
++  //
++  // 1. There is no "group holds exactly one code object" filter. An earlier
++  //    version of this function had one, and it was wrong: every encoding such
++  //    a test could take was enumerated against the whole function and none is
++  //    present (a cmp against #0x60, an iterator bump compared to the end, an
++  //    asr #5 division followed by cmp #1, or a cmp #0x1 on a precomputed size
++  //    -- the single cmp #0x1 in the function is a loop-trip clamp on an index
++  //    vector). Ambiguous groups are kept and voted on.
++  //
++  // 2. Their inner loop bound is max(patch_indices.size(), 1) and it indexes
++  //    BOTH vectors (0x10019c828-0x10019c834, 0x10019c8c8), which reads out of
++  //    bounds when the base vector is shorter or the patch vector is empty. In
++  //    practice the two are parallel, so the bug is latent. We bound by the
++  //    shorter of the two. Reproducing an out-of-bounds read to stay faithful
++  //    would be trading a real memory bug for a fidelity we cannot even
++  //    observe.
+   //
+-  // ⚠️ The fixture cannot say WHICH index vector: self_pp_indices_,
+-  // subgraph_pp_indices_ and their union all yield the same 1121 pairs on it.
+-  // self_pp_indices_ is used because it is the code's own pool references;
+-  // that choice is unverified and this comment is the record of it.
++  // 3. Their comparator captures the key by reference; ours takes it by value.
++  //    The double load at 0x10019f22c-0x10019f230 proves the capture mode, but
++  //    it has no observable consequence.
+   static std::vector<PoolIndexPair> ComputeObjectPoolLinkResults(
+       const ObjectPoolLinkInfo& base,
+       const ObjectPoolLinkInfo& patch);
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index 12f9a4fb0ff..b0fb8630588 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -590,4 +590,180 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_NoBaseIndexIsUsedTwice) {
+                                            counts.from_backfill);
+ }
+ 
++// ---------------------------------------------------------------------------
++// ObjectPoolMappingsAggregator
++//
++// Their fixture cannot reach any of this: every matched group in it is 1:1 and
++// every index pair is a bijection, so each inner vote map holds exactly one
++// candidate and the greedy never rejects anything. The report stays at
++// 1121/1113/292/16 whether the arbitration is weighted voting or the
++// size==1 filter this replaced. These tests are therefore the only thing
++// standing between the aggregator and a silent reversion to the old
++// behaviour -- shorebird_info_check.sh would not notice.
++// ---------------------------------------------------------------------------
++
++// The whole point of a score: a candidate with more weight behind it wins even
++// though both are legal mappings. A first-past-the-post implementation, or one
++// that dropped the weight and counted votes, passes only by accident here --
++// the two candidates have equal vote *counts* and differ only in weight.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_HigherScoreWins) {
++  ObjectPoolMappingsAggregator aggregator;
++  aggregator.AddVote(100, 7, 0.25);
++  aggregator.AddVote(100, 9, 0.5);
++
++  EXPECT_EQ(static_cast<intptr_t>(9), aggregator.GetBestMapping(100));
++}
++
++// Ties go to the identity mapping -- the comparator's third clause, `a.first ==
++// patch_index`, read off 0x10019f234. Both candidates carry the same score, so
++// only that clause can decide, and the answer must not depend on which one the
++// hash table happened to yield first.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_TiePrefersTheIdentityMapping) {
++  ObjectPoolMappingsAggregator aggregator;
++  aggregator.AddVote(42, 17, 0.5);
++  aggregator.AddVote(42, 42, 0.5);
++
++  EXPECT_EQ(static_cast<intptr_t>(42), aggregator.GetBestMapping(42));
++}
++
++// Votes accumulate rather than overwrite: 0x10019ca50-0x10019ca58 is an
++// ldr/fadd/str, not a plain str. Three small contributions must out-weigh one
++// larger single one.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_VotesAccumulate) {
++  ObjectPoolMappingsAggregator aggregator;
++  aggregator.AddVote(5, 11, 0.2);
++  aggregator.AddVote(5, 11, 0.2);
++  aggregator.AddVote(5, 11, 0.2);
++  aggregator.AddVote(5, 13, 0.5);
++
++  EXPECT_EQ(static_cast<intptr_t>(11), aggregator.GetBestMapping(5));
++}
++
++// used_ is never cleared between calls, so a base index handed to one patch
++// index is unavailable to every later one. The second call here has the same
++// single best candidate as the first and must fall through to its runner-up.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_InjectivityIsGlobalAcrossCalls) {
++  ObjectPoolMappingsAggregator aggregator;
++  aggregator.AddVote(1, 50, 0.9);
++  aggregator.AddVote(2, 50, 0.9);
++  aggregator.AddVote(2, 60, 0.1);
++
++  EXPECT_EQ(static_cast<intptr_t>(50), aggregator.GetBestMapping(1));
++  EXPECT_EQ(static_cast<intptr_t>(60), aggregator.GetBestMapping(2));
++  EXPECT_EQ(static_cast<intptr_t>(2), aggregator.used_count());
++}
++
++// Every candidate already taken, and a key with no votes at all, both yield the
++// sentinel their caller checks with `cmn x19, #0x1`. The second case also pins
++// the operator[] behaviour: an absent key default-inserts an empty map instead
++// of being a miss, so it must not crash or return a stale answer.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_ExhaustedAndUnknownKeysReturnNoMapping) {
++  ObjectPoolMappingsAggregator aggregator;
++  aggregator.AddVote(1, 50, 0.9);
++  aggregator.AddVote(2, 50, 0.9);
++
++  EXPECT_EQ(static_cast<intptr_t>(50), aggregator.GetBestMapping(1));
++  EXPECT_EQ(ObjectPoolMappingsAggregator::kNoMapping,
++            aggregator.GetBestMapping(2));
++  EXPECT_EQ(ObjectPoolMappingsAggregator::kNoMapping,
++            aggregator.GetBestMapping(9999));
++  // The rejected candidate was not recorded a second time.
++  EXPECT_EQ(static_cast<intptr_t>(1), aggregator.used_count());
++}
++
++// An ambiguous group -- two code objects sharing one op_subgraph_hash_ -- is
++// voted on, not dropped. The filter this replaced returned nothing at all for
++// input shaped like this, so a reversion turns the expectation below into an
++// empty vector.
++VM_UNIT_TEST_CASE(ObjectPoolLinkResults_AmbiguousGroupsAreVotedOnNotDropped) {
++  const ObjectPoolLinkInfo base({CodeInfo("selfA", "sub", {8}, {8}),
++                                 CodeInfo("selfB", "sub", {9}, {9})},
++                                {}, 16);
++  const ObjectPoolLinkInfo patch({CodeInfo("selfA", "sub", {8}, {8}),
++                                  CodeInfo("selfB", "sub", {9}, {9})},
++                                 {}, 16);
++
++  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++      ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
++
++  // Two patch indices, each resolved. The old size==1 filter yielded zero.
++  EXPECT_EQ(static_cast<intptr_t>(2),
++            static_cast<intptr_t>(results.size()));
++  for (const auto& pair : results) {
++    EXPECT_EQ(pair.base_index, pair.patch_index);
++  }
++}
++
++// The index vector is subgraph_pp_indices_ while the base subgraph group
++// exists, not self_pp_indices_. The two vectors disagree here, so an
++// implementation reading the wrong one produces the wrong pairs rather than
++// merely a differently-spelled right answer.
++VM_UNIT_TEST_CASE(ObjectPoolLinkResults_UsesSubgraphIndicesWhenBaseGroupExists) {
++  const ObjectPoolLinkInfo base({CodeInfo("self", "sub", {8}, {9})}, {}, 16);
++  const ObjectPoolLinkInfo patch({CodeInfo("self", "sub", {10}, {11})}, {}, 16);
++
++  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++      ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
++
++  EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
++  // subgraph_pp_indices_: base 9 -> patch 11. self_pp_indices_ would say 8/10.
++  EXPECT_EQ(static_cast<intptr_t>(9), results[0].base_index);
++  EXPECT_EQ(static_cast<intptr_t>(11), results[0].patch_index);
++}
++
++// The weight is 1.0/(base_group.size() + patch_group.size()), and this is the
++// only test that can tell that from "one vote per pairing".
++//
++// It exists because the obvious negative control -- replace the weight with a
++// constant -- left every other test in this file green. Score and event count
++// normally move together: a group contributes |base| * |patch| votes of weight
++// 1/(|base| + |patch|), so the score is just the count divided by the sum, and
++// the bigger group usually wins either way. The two groups below are chosen to
++// break that tie:
++//
++//   group A: 2 base x 2 patch = 4 events, weight 1/4 -> 1.000   <- wins
++//   group B: 1 base x 5 patch = 5 events, weight 1/6 -> 0.833
++//
++// Counting events picks B (5 > 4); scoring picks A. An implementation that
++// drops the divisor therefore maps patch index 20 to base 40 instead of 30.
++VM_UNIT_TEST_CASE(ObjectPoolLinkResults_WeightIsNormalisedByGroupSize) {
++  const ObjectPoolLinkInfo base({CodeInfo("b1", "A", {}, {30}),
++                                 CodeInfo("b2", "A", {}, {30}),
++                                 CodeInfo("b3", "B", {}, {40})},
++                                {}, 64);
++  const ObjectPoolLinkInfo patch({CodeInfo("p1", "A", {}, {20}),
++                                  CodeInfo("p2", "A", {}, {20}),
++                                  CodeInfo("p3", "B", {}, {20}),
++                                  CodeInfo("p4", "B", {}, {20}),
++                                  CodeInfo("p5", "B", {}, {20}),
++                                  CodeInfo("p6", "B", {}, {20}),
++                                  CodeInfo("p7", "B", {}, {20})},
++                                 {}, 64);
++
++  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++      ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
++
++  EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
++  EXPECT_EQ(static_cast<intptr_t>(20), results[0].patch_index);
++  EXPECT_EQ(static_cast<intptr_t>(30), results[0].base_index);
++}
++
++// A patch subgraph hash the base does not have falls back to matching by
++// self_hash_, and from that point the group reads self_pp_indices_ instead.
++// The two index vectors disagree so that the switch is observable.
++VM_UNIT_TEST_CASE(ObjectPoolLinkResults_SelfHashFallbackSwitchesIndexVector) {
++  const ObjectPoolLinkInfo base(
++      {CodeInfo("shared", "base_only_sub", {12}, {13})}, {}, 16);
++  const ObjectPoolLinkInfo patch(
++      {CodeInfo("shared", "patch_only_sub", {14}, {15})}, {}, 16);
++
++  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++      ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
++
++  EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
++  // self_pp_indices_ on both sides, because the fallback fired.
++  EXPECT_EQ(static_cast<intptr_t>(12), results[0].base_index);
++  EXPECT_EQ(static_cast<intptr_t>(14), results[0].patch_index);
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

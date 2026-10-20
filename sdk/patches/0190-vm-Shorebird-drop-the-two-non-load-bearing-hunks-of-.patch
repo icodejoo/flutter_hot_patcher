@@ -1,0 +1,75 @@
+From f24498a37408363a17a673b452e0be96f5018a2e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 13:51:00 +0800
+Subject: [PATCH 190/206] [vm] Shorebird: drop the two non-load-bearing hunks
+ of f5b94e5b439
+
+f5b94e5b439 touched five files. Three are load-bearing and stay
+(thread.cc, simulator_arm64.cc, dart_entry.cc). The two reverted here
+were measured not to be:
+
+runtime/vm/isolate.cc -- allocating a Simulator for every isolate in
+Isolate::InitIsolate is dead weight. Ablation (remove the hunk, rebuild,
+re-run) leaves every reading unchanged: hi + p1..p8 are 9 PASS 0 FAIL
+both under --no-use_simulator and in default simulator mode. The path
+that needs the instance, InvokeDartCode in dart_entry.cc, allocates one
+on demand itself ("if (thread->isolate()->simulator() == nullptr)"),
+so the eager allocation is redundant. It is also harmful in two ways:
+it makes the lazy-allocation branch of Simulator::Current() dead code,
+and it allocates a Simulator (and its stack) for the vm-isolate, which
+never runs Dart.
+
+runtime/vm/exceptions.cc -- widening the JumpToFrame guard from
+"FLAG_use_simulator && thread->is_simulating() != 0" to
+"FLAG_use_simulator" changes nothing that was measured. Under
+--no-use_simulator, FLAG_use_simulator is false and the added disjunct
+is short-circuited before is_simulating() is ever read. In simulator
+mode the removed conjunct is always true where it matters: on p4
+(the exception-heavy program) the simulator branch at exceptions.cc:630
+is taken 102 times and the CPU branch at :646 zero times, both before
+and after this revert. Keeping the narrower upstream condition means
+the CPU branch stays reachable for a thread that is genuinely not
+simulating.
+
+Verified on xcodebuild/ProductSimARM64_cpu rebuilt at this commit
+(ninja -n reports 0 pending for dartaotruntime and gen_snapshot before
+every reading quoted above).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/exceptions.cc b/runtime/vm/exceptions.cc
+index a2791991ea9..9adf2ed8e2f 100644
+--- a/runtime/vm/exceptions.cc
++++ b/runtime/vm/exceptions.cc
+@@ -627,7 +627,7 @@ NO_SANITIZE_SAFE_STACK  // This function manipulates the safestack pointer.
+   // exception object in the kExceptionObjectReg register and the stacktrace
+   // object (may be raw null) in the kStackTraceObjectReg register.
+ 
+-  if (FLAG_use_simulator && thread->is_simulating() != 0) {
++  if (FLAG_use_simulator) {
+     Simulator::Current()->JumpToFrame(program_counter, stack_pointer,
+                                       frame_pointer, thread);
+     UNREACHABLE();
+diff --git a/runtime/vm/isolate.cc b/runtime/vm/isolate.cc
+index 95361cfab53..d18015dae1e 100644
+--- a/runtime/vm/isolate.cc
++++ b/runtime/vm/isolate.cc
+@@ -1944,15 +1944,6 @@ Isolate* Isolate::InitIsolate(const char* name_prefix,
+ 
+   ASSERT(result != nullptr);
+ 
+-#if defined(DART_INCLUDE_SIMULATOR)
+-  // Shorebird CPU runtime-call stubs (CallOnClangStack, JumpToFrame) park Dart
+-  // registers in Isolate::simulator_. Ensure a Simulator instance is allocated
+-  // for every isolate even when Dart execution is native on the CPU.
+-  if (result->simulator() == nullptr) {
+-    result->set_simulator(new Simulator());
+-  }
+-#endif
+-
+ #if !defined(PRODUCT)
+ // Initialize metrics.
+ #define ISOLATE_METRIC_INIT(type, variable, name, unit)                        \
+-- 
+2.53.0
+

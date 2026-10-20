@@ -1,0 +1,76 @@
+From efb63a21fdca0a4819ff407c88069633ff2ad689 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 20:22:29 +0800
+Subject: [PATCH 104/206] fix(shorebird): omit the subgraph hashes rather than
+ emit wrong ones
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+subgraph_hash and op_subgraph_hash carried self_hash, which is wrong. A comment
+said so; the output did not.
+
+That is not a documented divergence, it is live bad data, and the consumer is
+ours. tools/linker.py matches patch functions to base functions by
+subgraph_hash and, in its own words, "unmatched functions are silently
+excluded". It takes the analyzer binary as a parameter, so nothing stops it
+being pointed at this one.
+
+Measured both ways rather than argued:
+
+  with the old fake value  build_link_table returns 1589 entries, no error
+  with the keys omitted    build_link_table raises KeyError: 'subgraph_hash'
+
+So the old behaviour would have produced a fully populated, semantically wrong
+link table and no diagnostic anywhere. Omission converts that into a failure on
+the first function.
+
+⚠️ This diverges from their schema, which carries both keys, and the comment
+says so. Rule 3 asks us to reproduce their interface so our output can be
+checked against theirs; emitting a field whose value we know to be wrong
+imitates the shape while breaking the contract, and buys a fidelity nothing can
+observe at the price of a silent failure downstream. The keys come back when the
+callee walk is implemented, not before.
+
+Negative control: re-adding subgraph_hash turns class_table_dump_check red.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 4f9b50069ed..b257f1d2258 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1265,11 +1265,25 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const std::string self_hash =
+         ShorebirdSelfHash(entry.payload, entry.size);
+     js.PrintProperty("self_hash", self_hash.c_str());
+-    // ⚠️ NOT the real subgraph hashes. Those accumulate over the callee walk,
+-    // which is unsolved -- see SUBGRAPH_HASHER_RECON.md. The keys are kept so
+-    // the schema matches theirs; the values are self_hash and are wrong.
+-    js.PrintProperty("subgraph_hash", self_hash.c_str());
+-    js.PrintProperty("op_subgraph_hash", self_hash.c_str());
++    // subgraph_hash and op_subgraph_hash are DELIBERATELY ABSENT. They
++    // accumulate over the callee walk, which is unsolved -- see
++    // SUBGRAPH_HASHER_RECON.md -- and they used to be emitted carrying
++    // self_hash, which is wrong.
++    //
++    // Omitting beats emitting a wrong value here, and the reason is a specific
++    // consumer rather than taste. tools/linker.py matches patch functions to
++    // base functions by subgraph_hash and, in its own words, "unmatched
++    // functions are silently excluded". It takes the analyzer binary as a
++    // parameter, so pointing it at this one would have produced a quietly
++    // degraded patch with no error anywhere. A missing key raises KeyError on
++    // the first function instead.
++    //
++    // ⚠️ This is a deliberate divergence from their schema, which does carry
++    // both keys. Rule 3 asks us to reproduce their interface so our output can
++    // be checked against theirs; emitting a field whose value we know to be
++    // wrong imitates the shape while breaking the contract, and buys a
++    // fidelity nothing can observe at the price of a silent failure
++    // downstream. Restore the keys when the walk is implemented, not before.
+     
+     // PP slot indices
+     std::vector<intptr_t> pp_slots = GetSelfPPIndices(entry.payload, entry.size);
+-- 
+2.53.0
+

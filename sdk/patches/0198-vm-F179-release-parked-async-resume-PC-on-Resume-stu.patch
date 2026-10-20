@@ -1,0 +1,43 @@
+From 379ca8aa65a55cb2e3bec5c5cdf95a99e7897eb6 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 12:06:39 +0800
+Subject: [PATCH 198/206] [vm] F179: release parked async resume PC on Resume
+ stub's runtime path
+
+The ARM64 Resume stub parks the resume PC in
+Thread::simulator_async_resume_pc_ and traps (brk #0) if the slot is
+already occupied. Only the direct-jump paths cleared it; resuming with an
+exception, into disabled code, or at a resumption breakpoint branches to
+call_runtime and left it set, so the next resume on that thread trapped.
+
+Upstream tests hitting this (CFE error reporting in the kernel service
+throws into a suspended frame): DartAPI_InjectNativeFields2,
+DartAPI_Multiroot_FailWhenUriIsWrong, IsolateSpawn_FileUri,
+IsolateSpawn_PackageUri -- all rc 134 before, rc 0 after on
+DebugSIMARM64. Reverting reproduces brk #0x0.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler.cc b/runtime/vm/compiler/stub_code_compiler.cc
+index cf22d177848..1580e7bba68 100644
+--- a/runtime/vm/compiler/stub_code_compiler.cc
++++ b/runtime/vm/compiler/stub_code_compiler.cc
+@@ -2559,6 +2559,15 @@ void StubCodeCompiler::GenerateResumeStub() {
+   __ Comment("Call runtime to throw exception or deopt");
+   __ Bind(&call_runtime);
+ 
++#if defined(TARGET_ARCH_ARM64)
++  // Shorebird: the resume PC parked above is consumed only by the direct jump
++  // paths. Throwing into the suspended frame or lazily deoptimizing goes
++  // through the runtime instead, so release the slot here; otherwise the next
++  // resume on this thread finds it occupied and hits the breakpoint above.
++  __ StoreZero(Address(THR, dart::Thread::simulator_async_resume_pc_offset()),
++               kTemp);
++#endif
++
+   __ LoadFromOffset(kStackTrace, FPREG, param_offset + 1 * target::kWordSize);
+   static_assert((kStackTrace != CODE_REG) && (kStackTrace != PP),
+                 "should not interfere");
+-- 
+2.53.0
+

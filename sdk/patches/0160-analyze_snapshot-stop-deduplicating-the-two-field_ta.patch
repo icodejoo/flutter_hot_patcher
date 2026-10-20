@@ -1,0 +1,218 @@
+From b1111a30e622842d09731de441faba0380463872 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 16 Sep 2026 19:08:09 +0800
+Subject: [PATCH 160/206] analyze_snapshot: stop deduplicating the two
+ field_tables (theirs does not)
+
+The FOURTH and FIFTH one-sided dedups of this collector, found by the F55
+locus round (evidence_shorebird_field_dedup.sh, verify_all.sh check 42) and
+disclosed nowhere before it:
+
+  field_seen           -> facts.field_indices -> self_field_table
+  field_subgraph_seen  -> subgraph_field      -> subgraph_field_table
+
+Same shape as F66's selector_subgraph_seen and F67's pool_seen: our list was a
+sub-multiset of theirs BY CONSTRUCTION, so every containment statement about
+these two fields was a property of the dedup and not of the decode.
+evidence_shorebird_components.sh in fact printed both fields as EQUAL
+(distinct_missing 0) -- the dedup is precisely what made them look closed.
+
+Measured, ProductSimARM64 analyze_snapshot, the same three .so inputs,
+gen_snapshot untouched:
+
+  dedup ON   self_field_table bucket 281  subgraph_field_table bucket 15824
+             diff_units.sh shorebird  UNITS 39425
+  dedup OFF  self_field_table bucket 0    subgraph_field_table bucket 0
+             diff_units.sh shorebird  UNITS 23320
+
+Both fields are now ordered-equal to theirs on every paired function --
+1380/1380 (hello), 1380/1380 (base_dd), 3216/3216 (prog) on BOTH fields, slot
+totals ours == theirs exactly (237/237, 2816/2816, 530/530, 18419/18419), 0
+missing and 0 extra. With the dedup ON the same measurement gave 1349/1380,
+1185/1380, 3155/3216, 2466/3216.
+
+The 16105-unit reduction is shown CAUSAL without a second build: re-applying
+first-occurrence dedup to the two fields of the artifact PRODUCED by the
+dedup-OFF binary returns UNITS to 39425 exactly (F66's method -- a number that
+only appears after a rebuild has not been shown to come from the change).
+
+REAL GAP DOES NOT MOVE, and that is the honest reading. real_gap stays 4
+before and after, because real_gap counts distinct_missing and that was
+ALREADY 0 for these two fields: set containment was perfect while 12897
+element slots were being discarded. What moved is count_gap
+(self_field_table 155 -> 0, subgraph_field_table 12742 -> 0) and the harness
+metric.
+
+Does NOT claim the walk. Only that the VALUES now match, elementwise and in
+order, on every function paired by index_in_entries. F66's "values right, walk
+unproven" caveat carries over verbatim.
+
+COUPLED CHANGE, in the other repo because the two live in different git
+trees: this change makes evidence_shorebird_field_dedup.sh's old relation
+false -- it ASSERTED the defect (first_occurrence_dedup(theirs) == ours) and
+goes rc=1 on an artifact from this binary. It is retargeted to raw ordered
+equality in fhp-research, commit landed alongside this one. Landing this
+without that turns verify_all.sh check 42 red with no owner.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index c269195d1f1..39e3f2d9e71 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1171,6 +1171,104 @@ static constexpr intptr_t kNoSelector = -1;
+ #define F67_POOL_SEEN_DEDUP 0
+ #endif
+ 
++// F55. The FOURTH and FIFTH one-sided dedups of this collector, found by the
++// F55 locus round (evidence_shorebird_field_dedup.sh, verify_all.sh check 42)
++// and disclosed nowhere before it:
++//
++//   field_seen           (declared :1342, used :1393) -> facts.field_indices
++//                                                     -> self_field_table
++//   field_subgraph_seen  (declared :1820, used :1887) -> subgraph_field
++//                                                     -> subgraph_field_table
++//
++// Same shape as F66's selector_subgraph_seen and F67's pool_seen: our list was
++// a sub-multiset of theirs BY CONSTRUCTION, so every containment statement
++// about these two fields was a property of the dedup and not of the decode.
++// evidence_shorebird_components.sh in fact printed both fields as EQUAL
++// (distinct_missing 0) -- the dedup is precisely what made them look closed.
++//
++// What the locus round measured, with the dedup still ON: applying
++// first-occurrence dedup to THEIR side of these two fields makes their lists
++// equal ours element for element and in order, on 1380/1380 (hello),
++// 1380/1380 (base_dd) and 3216/3216 (prog) functions, mismatch 0, on both
++// fields. Their side holds 58/58/97 duplicate slots on self_field_table and
++// 1656/1656/11086 on subgraph_field_table. Theirs plainly does not dedup, so
++// neither do we: both defaults are 0.
++//
++// Measured on this change (fresh ProductSimARM64 analyze_snapshot, same three
++// .so inputs, gen_snapshot untouched):
++//   dedup ON   self_field_table bucket 281   subgraph_field_table bucket 15824
++//              diff_units.sh shorebird  UNITS 39425
++//   dedup OFF  self_field_table bucket 0     subgraph_field_table bucket 0
++//              diff_units.sh shorebird  UNITS 23320
++// The 16105-unit reduction is shown CAUSAL without a second build: re-applying
++// first-occurrence dedup to the two fields of the artifact PRODUCED by the
++// dedup-OFF binary returns UNITS to 39425 exactly (F66's method -- a number
++// that only appears after a rebuild has not been shown to come from the
++// change).
++//
++// Independently of the harness metric, the two fields are now ordered-equal to
++// theirs on every function: 1380/1380 (hello), 1380/1380 (base_dd), 3216/3216
++// (prog) on BOTH fields, slot totals ours == theirs exactly (237/237, 2816/2816,
++// 530/530, 18419/18419), 0 missing and 0 extra. With the dedup ON the same
++// measurement gave 1349/1380, 1185/1380, 3155/3216, 2466/3216.
++//
++// ⚠️ REAL GAP DOES NOT MOVE, and that is the honest reading of this change.
++// evidence_shorebird_components.sh reports real_gap=4 both before and after,
++// because real_gap counts distinct_missing and distinct_missing for these two
++// fields was ALREADY 0 -- set containment was perfect while 12897 element slots
++// were being discarded. That is exactly how the dedup hid: the components
++// script printed both fields as [EQUAL] with the dedup on. What moved is
++// count_gap (self_field_table 155 -> 0, subgraph_field_table 12742 -> 0, via
++// ours_dup 0 -> 155 and 0 -> 12742) and the harness metric. After this change
++// the [EQUAL] is earned rather than manufactured, and that script says so on
++// its own EQUAL-basis line: "same values, same multiplicities, not produced by
++// any one-sided dedup".
++//
++// ⚠️ evidence_shorebird_field_dedup.sh GOES RED on an artifact produced by this
++// binary, rc=1, and that is correct rather than a regression: its central
++// relation is first_occurrence_dedup(theirs) == ours, which asserts the very
++// defect this change removes. With ours == theirs the relation fails on the
++// 31/31/61 and 195/195/750 functions where theirs holds a duplicate, its IFF
++// fails symmetrically (predicted 31, observed 0), and its two named buckets
++// trip the VACUOUS guard at "0 units to explain in the original". The check
++// needs retargeting to assert raw ordered equality; until then its LOCUS grep
++// still passes, because the grep matches the source text of the dedup lines and
++// they survive inside the disabled #if.
++//
++// ⚠️ What this does NOT claim: only that the VALUES now match, elementwise and
++// in order, on every function paired by index_in_entries. It does not prove our
++// traversal takes their path -- F66's "values right, walk unproven" caveat
++// carries over verbatim, and the two fields ride the same DFS whose order F67's
++// notes above still flag.
++//
++// 1 = dedup ON (the historical behaviour). 0 = emit every field reference the
++// classifier fires on, in walk order. The two are separate switches so that a
++// negative control can name WHICH bucket it moved. Measured, one rebuild per
++// state, same three .so inputs:
++//   SELF=1 SUBGRAPH=0  self_field_table 281, subgraph_field_table 0, UNITS 23601
++//   SELF=0 SUBGRAPH=1  self_field_table 0, subgraph_field_table 15824, UNITS 39144
++//   SELF=1 SUBGRAPH=1  both buckets back, UNITS 39425 (the original, restored
++//                      through the build path -- a second, independent
++//                      demonstration of causality alongside the artifact
++//                      re-apply above)
++// 23320 + 281 + 15824 = 39425, so the two buckets are additive and each switch
++// moves exactly and only its own.
++//
++// Confinement of the real change, measured by diffing the artifacts our own two
++// binaries produced: the ONLY per-function fields that differ are the two named
++// ones, on 31/195 (hello), 31/195 (base_dd) and 61/750 (prog) functions -- the
++// counts the locus script predicted. subgraph_hash and op_subgraph_hash are
++// byte-identical across the flip, confirming the dedup fed only the emitted
++// list and never the hash stream. The one top-level difference is
++// snapshot_data, whose four load addresses are ASLR-dependent and differ
++// run-to-run on an unchanged binary; they do not move UNITS.
++#ifndef F55_SELF_FIELD_TABLE_DEDUP
++#define F55_SELF_FIELD_TABLE_DEDUP 0
++#endif
++#ifndef F55_SUBGRAPH_FIELD_TABLE_DEDUP
++#define F55_SUBGRAPH_FIELD_TABLE_DEDUP 0
++#endif
++
+ // `add lr, x0, x17` makes the row index (origin + x17), so whatever was
+ // materialised into IP1 is a selector offset from kOriginElement, exactly like
+ // the #imm12 of the add/sub head below.
+@@ -1339,7 +1437,10 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   for (intptr_t k = 0; k < words; k++) memcpy(&code_words[k], code + k * 4, 4);
+   const uint32_t* w_at = code_words.data();
+ 
+-  std::set<intptr_t> field_seen, external_seen;
++  std::set<intptr_t> external_seen;
++#if F55_SELF_FIELD_TABLE_DEDUP
++  std::set<intptr_t> field_seen;
++#endif
+ #if F67_POOL_SEEN_DEDUP
+   std::set<intptr_t> pool_seen;
+ #endif
+@@ -1390,7 +1491,11 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+     if (DecodeFieldReference(w_at, words, i, &index, &used)) {
+       facts.classified.push_back(
+           {ShorebirdClassifiedStep::kField, used, index});
++#if F55_SELF_FIELD_TABLE_DEDUP
+       if (field_seen.insert(index).second) facts.field_indices.push_back(index);
++#else
++      facts.field_indices.push_back(index);
++#endif
+       i += used;
+       continue;
+     }
+@@ -1817,7 +1922,9 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     intptr_t pool_refs = 0, field_refs = 0;
+     std::vector<intptr_t> self_pp, subgraph_pp;
+     std::vector<intptr_t> subgraph_field;
++#if F55_SUBGRAPH_FIELD_TABLE_DEDUP
+     std::set<intptr_t> field_subgraph_seen;
++#endif
+     std::vector<intptr_t> self_selectors, subgraph_selectors;
+ #if F66_SUBGRAPH_SELECTOR_DEDUP
+     std::set<intptr_t> selector_subgraph_seen;
+@@ -1884,9 +1991,13 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+         }
+         case ShorebirdClassifiedStep::kField: {
+           field_refs++;
++#if F55_SUBGRAPH_FIELD_TABLE_DEDUP
+           if (field_subgraph_seen.insert(step.value).second) {
+             subgraph_field.push_back(step.value);
+           }
++#else
++          subgraph_field.push_back(step.value);
++#endif
+           auto it = field_map.find(step.value);
+           if (it == field_map.end()) {
+             it = field_map.emplace(step.value, field_refs - 1).first;
+-- 
+2.53.0
+

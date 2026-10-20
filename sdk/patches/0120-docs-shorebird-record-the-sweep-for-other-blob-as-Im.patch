@@ -1,0 +1,86 @@
+From 46941917680d27ab63f9607d8b9171d6a16b4114 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 19:57:18 +0800
+Subject: [PATCH 120/206] docs(shorebird): record the sweep for other
+ blob-as-Image uses
+
+Task 75 fixed two tests that were reading a zero-length JIT instructions
+blob as an Image. This records the sweep for anything else of that shape,
+and the verdict on bin_to_assembly.py's `.balign 32`.
+
+runtime/ constructs an Image in 22 places outside the class's own
+definition. Three are ours; the other nineteen are upstream's and every
+one of them sits either inside `#if defined(DART_PRECOMPILED_RUNTIME)` or
+behind Snapshot::IncludesCode(), which a core snapshot fails. So none of
+them can be reached with one of these blobs, and the two tests already
+fixed were the only two. The three tests that still reach into dart::bin
+take vm_snapshot_data, not the instructions blob: that one is real, 13646
+bytes, and is read through Snapshot::SetupFromBuffer, which checks a
+magic number and a version string first.
+
+`.balign 32` stays as it is. bin_to_assembly.py is upstream-pristine,
+every symbol it emits here comes from --snapshot_kind=core, and both
+instructions blobs of a core snapshot are 0 bytes in all three
+configurations we build. Upstream never parses them, and where a
+linked-in blob really can reach a reader it checks rather than trusts the
+assembler -- ImageReader::VerifyAlignment turns a misaligned image into
+an ApiError. Raising the directive to 64 would buy nothing and would put
+us off upstream for no reason.
+
+What catches this class of mistake is the ASSERT in Image's constructor,
+and only a build that compiles ASSERT in can catch it: measured,
+_kDartVmSnapshotInstructions is 0 mod 64 in the Release build and 32 mod
+64 in the Debug simulator one. That is why sim_only_tests_check.sh runs
+the full set in the second.
+
+Negative control for that last claim: misaligning FakeInstructionsImage
+by 32 fails exactly Shorebird_BaseInstructionRangeSpansTheImage and
+Shorebird_PcQueriesAnswerForTheRightImage in the Debug simulator build,
+while Release still reports 151 of 151.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index 591e050b5cf..eadb2922093 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -55,6 +55,36 @@ static std::vector<uint8_t> MakeHeader(
+ // what finally made the ASSERT at image_snapshot.h:47 fire and exposed all of
+ // the above.
+ //
++// Swept the tree for anything else of the same shape. runtime/ constructs an
++// Image in 22 places outside the class's own definition. Three are ours:
++// shorebird.cc:173 (BaseSnapshotInstructionsEnd), shorebird.cc:190 (PcInImage)
++// and analyze_snapshot_api_impl.cc:1769 (InstructionsRegionSize). The other
++// nineteen are upstream's, and every one of them sits either inside
++// `#if defined(DART_PRECOMPILED_RUNTIME)` or behind Snapshot::IncludesCode(),
++// which a core snapshot fails -- so none of them can be reached with one of
++// these blobs. The two tests below were the only two, and they are fixed.
++//
++// The three tests that still reach into dart::bin do not repeat it: they take
++// vm_snapshot_data, not the instructions blob. That one is real -- 13646 bytes
++// -- and is read through Snapshot::SetupFromBuffer, which checks a magic number
++// and a version string before anything is believed. A different contract, and
++// not one that can silently succeed on a random function.
++//
++// So `.balign 32` is a constraint to remember, not a bug to fix.
++// bin_to_assembly.py is upstream-pristine, every symbol it emits here comes
++// from --snapshot_kind=core, and both instructions blobs of a core snapshot are
++// 0 bytes in all three of our configurations. Upstream never parses them; where
++// a linked-in blob really can reach a reader, it checks rather than trusts the
++// assembler -- ImageReader::VerifyAlignment (image_snapshot.cc:2165) turns a
++// misaligned image into an ApiError. Raising the directive to 64 would buy
++// nothing and would put us off upstream for no reason.
++//
++// What catches this class of mistake is the ASSERT at image_snapshot.h:47, and
++// it only catches it in a build that compiles ASSERT in. That is the whole
++// reason sim_only_tests_check.sh runs the full set in the Debug simulator
++// build: measured, _kDartVmSnapshotInstructions is 0 mod 64 in ReleaseARM64 and
++// 32 mod 64 in DebugSIMARM64, so Release alone would never have said a word.
++//
+ // So: build one. The header is two words -- total size, then 0 for "no
+ // InstructionsSection", which is what makes ExtraInfo() return nullptr --
+ // followed by payload starting at Image::kHeaderSize == kObjectStartAlignment.
+-- 
+2.53.0
+

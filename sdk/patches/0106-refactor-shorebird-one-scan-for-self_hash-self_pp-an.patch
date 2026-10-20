@@ -1,0 +1,243 @@
+From 8766b1f9e7ba5c06bd86cf20b29b169d0b13ed31 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 20:41:14 +0800
+Subject: [PATCH 106/206] refactor(shorebird): one scan for self_hash, self_pp
+ and self_field_table
+
+self_field_table comes back, because it was never uncomputable: the field table
+sequences are already recognised by the hash's scan and were part of what took
+the reconstruction from 1082 to 1185. subgraph_field_table stays absent, since
+that one does need the callee walk.
+
+Rather than add a third scan, the existing one now returns all three outputs.
+That is the point of the change. self_pp used to be produced by its own
+independent scan and had silently fallen behind -- it knew one pool access form
+where the hash knew three -- so it under-reported, and nothing in the output
+could show it. Two scans over the same instructions drift; one cannot.
+
+Ordinal() records first-seen order as it assigns, so the ordinal stream and the
+key lists fall out of the same pass with no second traversal.
+
+Verified against probe_subgraph_hash.py, an independent implementation of the
+same reconstruction in another language: self_hash, self_pp and
+self_field_table all agree for 1589 of 1589 functions.
+
+Negative control: disabling the three-instruction field form drops agreement to
+1564 of 1589. Restored.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 700755ed102..aa295703a76 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -885,17 +885,38 @@ static bool DecodeBranchDelta(uint32_t w, int32_t* delta) {
+   return false;
+ }
+ 
+-static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen, intptr_t key) {
++// Assigns each key an ordinal on first sight and records the keys in that
++// order, so the caller gets the ordinal stream and the key list from one pass.
++static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen,
++                        std::vector<intptr_t>* order,
++                        intptr_t key) {
+   auto it = seen->find(key);
+   if (it != seen->end()) return it->second;
+   const intptr_t next = static_cast<intptr_t>(seen->size());
+   (*seen)[key] = next;
++  order->push_back(key);
+   return next;
+ }
+ 
+-std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
++// One scan, three outputs. self_hash, the pool references and the field table
++// references all come from the same walk over the same instructions.
++//
++// ⚠️ This is deliberate rather than tidy-minded. self_pp used to be produced by
++// a second, independent scan, and it had silently fallen behind: it recognised
++// one pool access form while the hash recognised three, so it under-reported.
++// Two scans of the same thing drift, and the drift is invisible from the
++// output. Anything derived from these instructions belongs here.
++struct ShorebirdCodeFacts {
++  std::string self_hash;
++  std::vector<intptr_t> pool_indices;   // first-seen order
++  std::vector<intptr_t> field_indices;  // first-seen order
++};
++
++ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
++                                             intptr_t size) {
+   std::vector<uint8_t> stream;
+   std::map<intptr_t, intptr_t> pool, external, field;
++  std::vector<intptr_t> pool_order, field_order, external_order;
+ 
+   auto emit = [&](int32_t kind, uint32_t value) {
+     for (int i = 0; i < 4; i++) stream.push_back((kind >> (i * 8)) & 0xFF);
+@@ -933,7 +954,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+       if (!ok && DecodePair(tail, &tb, &to)) ok = (tb == dest);
+       if (ok) {
+         emit(kEntryObjectPoolLoadIndex,
+-             Ordinal(&pool, (total + to - 16) / 8));
++             Ordinal(&pool, &pool_order, (total + to - 16) / 8));
+         i += consumed;
+         while (i < words && word_at(i) == kArm64Nop) i++;
+         continue;
+@@ -941,7 +962,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+     }
+ 
+     if (DecodePair(w, &base, &offset) && base == kPPRegister) {
+-      emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, (offset - 16) / 8));
++      emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, &pool_order, (offset - 16) / 8));
+       i++;
+       while (i < words && word_at(i) == kArm64Nop) i++;
+       continue;
+@@ -949,7 +970,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+ 
+     if (DecodeLoadStore(w, &base, &dest, &offset)) {
+       if (base == kPPRegister) {
+-        emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, (offset - 16) / 8));
++        emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, &pool_order, (offset - 16) / 8));
+         // The load owns its whole padded footprint; the NOPs after it are not
+         // entries of their own.
+         i++;
+@@ -961,7 +982,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+         if ((DecodeLoadStore(word_at(i + 1), &nb, &nd, &no) ||
+              DecodeAcquireRelease(word_at(i + 1), &nb, &nd)) &&
+             nb == dest) {
+-          emit(kEntryFieldTableLoadIndex, Ordinal(&field, no / 8));
++          emit(kEntryFieldTableLoadIndex, Ordinal(&field, &field_order, no / 8));
+           i += 2;
+           continue;
+         }
+@@ -972,7 +993,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+           if ((DecodeLoadStore(word_at(i + 2), &tb, &td, &to) ||
+                DecodeAcquireRelease(word_at(i + 2), &tb, &td)) &&
+               tb == ad) {
+-            emit(kEntryFieldTableLoadIndex, Ordinal(&field, (ai + to) / 8));
++            emit(kEntryFieldTableLoadIndex, Ordinal(&field, &field_order, (ai + to) / 8));
+             i += 3;
+             continue;
+           }
+@@ -1000,7 +1021,7 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+         emit(kEntryLocalBranch, 1);
+       } else if ((w & 0x7C000000) == 0x14000000) {
+         emit(kEntryExternalBranchTargetIndex,
+-             Ordinal(&external, static_cast<intptr_t>(target)));
++             Ordinal(&external, &external_order, static_cast<intptr_t>(target)));
+       } else {
+         emit(kEntryRawInstructionBits, w);
+       }
+@@ -1012,72 +1033,13 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+     i++;
+   }
+ 
+-  return Sha1HexOf(stream.data(), stream.size());
++  ShorebirdCodeFacts facts;
++  facts.self_hash = Sha1HexOf(stream.data(), stream.size());
++  facts.pool_indices = std::move(pool_order);
++  facts.field_indices = std::move(field_order);
++  return facts;
+ }
+ 
+-std::vector<intptr_t> GetSelfPPIndices(const uint8_t* code, intptr_t size) {
+-  // Every pool access the function makes, in order of first appearance.
+-  //
+-  // ⚠️ This used to recognise only `ldr xN,[PP,#imm12]` and emit the result as
+-  // though it were the whole list. A partial list that reads as complete is the
+-  // same shape as a wrong hash: the consumer has no way to tell. It now handles
+-  // the forms the object pool emitters actually produce, sharing the decoders
+-  // ShorebirdSelfHash uses so the two cannot drift apart.
+-  std::vector<intptr_t> slots;
+-  const intptr_t words = size / 4;
+-  auto word_at = [&](intptr_t i) {
+-    uint32_t w;
+-    memcpy(&w, code + i * 4, 4);
+-    return w;
+-  };
+-  auto add = [&](intptr_t index) {
+-    for (intptr_t existing : slots) {
+-      if (existing == index) return;
+-    }
+-    slots.push_back(index);
+-  };
+-
+-  intptr_t i = 0;
+-  while (i < words) {
+-    const uint32_t w = word_at(i);
+-    uint32_t base, dest, offset, imm;
+-
+-    // add xN,PP,#imm{,lsl 12} [; add xN,xN,#imm] ; ldr/ldp through xN
+-    if (DecodeAddImmediate(w, &base, &dest, &imm) && base == kPPRegister &&
+-        i + 1 < words) {
+-      uint32_t total = imm, consumed = 2, b2, d2, i2;
+-      if (DecodeAddImmediate(word_at(i + 1), &b2, &d2, &i2) && b2 == dest &&
+-          d2 == dest && i + 2 < words) {
+-        total += i2;
+-        consumed = 3;
+-      }
+-      const uint32_t tail = word_at(i + consumed - 1);
+-      uint32_t tb, td, to;
+-      bool ok = DecodeLoadStore(tail, &tb, &td, &to) && tb == dest;
+-      if (!ok && DecodePair(tail, &tb, &to)) ok = (tb == dest);
+-      if (ok) {
+-        add((total + to - 16) / 8);
+-        i += consumed;
+-        continue;
+-      }
+-    }
+-
+-    if (DecodePair(w, &base, &offset) && base == kPPRegister) {
+-      add((offset - 16) / 8);
+-      i++;
+-      continue;
+-    }
+-
+-    if (DecodeLoadStore(w, &base, &dest, &offset) && base == kPPRegister) {
+-      add((offset - 16) / 8);
+-      i++;
+-      continue;
+-    }
+-
+-    i++;
+-  }
+-  return slots;
+-}
+ 
+ // Enumerate all Code objects in the snapshot in offset order.
+ struct CodeEntry {
+@@ -1305,9 +1267,9 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.PrintProperty64("size", entry.size);
+     
+     // Compute SHA-1 hash of instruction bytes
+-    const std::string self_hash =
+-        ShorebirdSelfHash(entry.payload, entry.size);
+-    js.PrintProperty("self_hash", self_hash.c_str());
++    const ShorebirdCodeFacts facts =
++        ComputeShorebirdCodeFacts(entry.payload, entry.size);
++    js.PrintProperty("self_hash", facts.self_hash.c_str());
+     // subgraph_hash and op_subgraph_hash are DELIBERATELY ABSENT. They
+     // accumulate over the callee walk, which is unsolved -- see
+     // SUBGRAPH_HASHER_RECON.md -- and they used to be emitted carrying
+@@ -1328,12 +1290,16 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     // fidelity nothing can observe at the price of a silent failure
+     // downstream. Restore the keys when the walk is implemented, not before.
+     
+-    // PP slot indices
+-    std::vector<intptr_t> pp_slots = GetSelfPPIndices(entry.payload, entry.size);
+     js.OpenArray("self_pp");
+-    for (intptr_t s : pp_slots) js.PrintValue64(s);
++    for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
++    js.CloseArray();
++    // Computable for the same reason self_pp is: the field table sequences are
++    // already recognised by the scan above. subgraph_field_table stays absent,
++    // because that one needs the callee walk.
++    js.OpenArray("self_field_table");
++    for (intptr_t slot : facts.field_indices) js.PrintValue64(slot);
+     js.CloseArray();
+-    // subgraph_pp, self_selectors, subgraph_selectors, self_field_table,
++    // subgraph_pp, self_selectors, subgraph_selectors,
+     // subgraph_field_table and callees are DELIBERATELY ABSENT, for the same
+     // reason the subgraph hashes are: we cannot compute them, and emitting a
+     // plausible value is worse than emitting nothing.
+-- 
+2.53.0
+

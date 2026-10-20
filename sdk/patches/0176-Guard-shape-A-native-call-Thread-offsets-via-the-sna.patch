@@ -1,0 +1,102 @@
+From ac863d5cd46f197bc35fe57decf5d3d708bad4c9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 28 Sep 2026 01:05:19 +0800
+Subject: [PATCH 176/206] Guard shape-A native-call Thread offsets via the
+ snapshot features string
+
+NativeCallInstr's Shorebird "shape A" dispatch bakes the compiling
+process's dart::Thread::call_{bootstrap,no_scope,auto_scope}_native_entry_
+point_offset() into object-pool Smis, and the running VM indexes its own
+Thread with them. The only guard was a RELEASE_ASSERT comparing
+exit_through_ffi_offset(), an unrelated field that stays at 1792 in every
+configuration tried while the three real fields move (e.g. with
+dart_dynamic_modules=true they shift from 4504/4512/4520 to 4520/4528/4536).
+It could never fire.
+
+Record the three offsets in Dart::FeaturesString for arm64 AOT snapshots.
+SnapshotHeaderReader::VerifyFeatures already refuses to load a snapshot
+whose features string differs from the loading VM's, so a gen_snapshot /
+runtime pair with different Thread layouts now fails at load with
+"Snapshot not compatible with the current VM configuration" naming the
+offsets, instead of crashing (measured: SEGV at pc=0 when the guard is
+bypassed) on the first native call. Remove the vacuous assert and fix the
+comments that still described the slot as an immediate.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index d158ecef29e..c436e81bf7b 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1339,8 +1339,8 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     // The slot holds SmiTag(<Thread offset of call_bootstrap_native_entry_
+     // point_>). Relinking this site (NativeEntry::LinkNativeCall ->
+     // CodePatcher::PatchNativeCallAt -> NativeCallPattern::set_target) rewrites
+-    // that immediate to name the no-scope or auto-scope field instead; that is
+-    // why Thread caches all three and not just the bootstrap one.
++    // that Smi to name the no-scope or auto-scope field instead; that is why
++    // Thread caches all three and not just the bootstrap one.
+     //
+     // F79 reverted F37's first attempt at this shape for two reasons, both now
+     // addressed: (1) it branched through bootstrap_native_wrapper_entry_point_,
+@@ -1348,18 +1348,19 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     // entry point -- 531c5356dda adds the real cached stub entry points;
+     // (2) NativeCallPattern could not decode the shape and produced a garbage
+     // pool index with asserts compiled out -- edce6e25b77 teaches it the shape
+-    // and the immediate-slot contract.
++    // (the slot is now a Smi-tagged kTaggedObject, see below).
+     //
+     // Thread's own offsets are used rather than target::Thread's because these
+     // three fields are not in the checked-in runtime_offsets_extracted.h table
+     // that this machine cannot regenerate (same situation as
+-    // Thread::is_simulating_, see thread.h). That substitution is only valid
+-    // while the host and target Thread layouts agree, so check that against a
+-    // neighbouring field which *is* in the table: a cross-architecture
+-    // gen_snapshot then fails loudly here instead of emitting a wrong
+-    // displacement.
+-    RELEASE_ASSERT(compiler::target::Thread::exit_through_ffi_offset() ==
+-                   dart::Thread::exit_through_ffi_offset());
++    // Thread::is_simulating_, see thread.h). That is only valid while the
++    // compiling and the running Thread layouts agree on these three fields.
++    // A compile-time comparison against a neighbouring field that *is* in the
++    // table cannot establish that (exit_through_ffi_ sits at the same offset in
++    // configurations where these three move), so the guard is instead on the
++    // three offsets themselves: Dart::FeaturesString records them in every
++    // arm64 AOT snapshot and SnapshotHeaderReader::VerifyFeatures refuses to
++    // load a snapshot whose recorded offsets differ from the loading VM's.
+     const intptr_t thr_off =
+         dart::Thread::call_bootstrap_native_entry_point_offset();
+     // The slot is a kTaggedObject holding Smi(thr_off), not a kImmediate
+diff --git a/runtime/vm/dart.cc b/runtime/vm/dart.cc
+index 54f2c7f8b68..868a27de052 100644
+--- a/runtime/vm/dart.cc
++++ b/runtime/vm/dart.cc
+@@ -1140,6 +1140,25 @@ char* Dart::FeaturesString(IsolateGroup* isolate_group,
+ #else
+     buffer.AddString(" no-compressed-pointers");
+ #endif
++
++#if defined(TARGET_ARCH_ARM64)
++    // Shorebird "shape A" native calls (NativeCallInstr::EmitNativeCode in
++    // il_arm64.cc) bake the compiling process's own
++    // dart::Thread::call_*_native_entry_point_offset() into object-pool slots
++    // and the running process indexes its Thread with them. These fields are
++    // not in runtime_offsets_extracted.h, so nothing else ties the compiling
++    // and running Thread layouts together: a build-configuration difference
++    // that moves them (e.g. dart_dynamic_modules) would otherwise make the
++    // first native call load an unrelated Thread field. Recording the three
++    // offsets here makes such a snapshot fail VerifyFeatures instead.
++    if (kind == Snapshot::kFullAOT) {
++      buffer.Printf(
++          " shorebird-native-entry-thr-offsets=%" Pd ",%" Pd ",%" Pd,
++          Thread::call_bootstrap_native_entry_point_offset(),
++          Thread::call_no_scope_native_entry_point_offset(),
++          Thread::call_auto_scope_native_entry_point_offset());
++    }
++#endif
+   }
+ 
+ #undef ADD_ISOLATE_FLAG
+-- 
+2.53.0
+

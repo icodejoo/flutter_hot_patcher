@@ -1,0 +1,56 @@
+From bd86cb31e9446489125f61e0da5bf5e1036a646f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 20:28:22 +0800
+Subject: [PATCH 138/206] fix(shorebird): render mixin-app full names and drop
+ spurious [Stub] prefix for [unknown stub] (F4)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two name rendering fixes in analyze_snapshot --shorebird per-function JSON:
+
+1. kUserVisibleName → kScrubbedName in Code::QualifiedName call.
+   FunctionPrintNameHelper with kUserVisibleName uses mixin.UserVisibleName()
+   for the class prefix of mixin-application owners, returning only the last
+   mixin's name. kScrubbedName uses cls.ScrubbedName() which gives the full
+   &-joined chain (e.g. "__Map&_HashVMBase&MapMixin&_HashBase._hashCode").
+   Function names are identical under both visibilities (both call
+   UserVisibleNameCString); only the class prefix differs.
+
+2. Do not prepend "[Stub] " when code.Name() is already "[unknown stub]".
+   Previously all IsStubCode() entries got the prefix unconditionally,
+   producing "[Stub] [unknown stub]". Their output emits bare "[unknown stub]".
+
+Verified: all 101 theirs mixin-app names now appear in ours (was 0);
+[Stub] [unknown stub] count now 0 (was 4). Both neg-controls go red.
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 4da00d7d257..cc553baac9f 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1359,10 +1359,20 @@ void CollectAllCodes(
+         // Code::QualifiedName is what produces their "[Optimized] X" form; it
+         // is the same function Dart uses everywhere else, so the prefix comes
+         // from upstream rather than being pasted on here.
++        // kScrubbedName (not kUserVisibleName) so that mixin-application classes
++        // render their full &-joined chain (e.g.
++        // "__Map&_HashVMBase&MapMixin&_HashBase._hashCode") rather than only
++        // the last mixin's name. Function names are identical under both
++        // visibilities (both call UserVisibleNameCString); only the class prefix
++        // differs for mixin-application owners.
+         entry.name = code.QualifiedName(
+-            NameFormattingParams(Object::kUserVisibleName));
++            NameFormattingParams(Object::kScrubbedName));
+       } else if (code.IsStubCode()) {
+-        entry.name = std::string("[Stub] ") + code.Name();
++        const char* stub_name = code.Name();
++        // [unknown stub] already starts with "["; don't double-bracket it.
++        entry.name = (strcmp(stub_name, "[unknown stub]") == 0)
++                         ? stub_name
++                         : std::string("[Stub] ") + stub_name;
+       } else {
+         entry.name = code.Name();
+       }
+-- 
+2.53.0
+

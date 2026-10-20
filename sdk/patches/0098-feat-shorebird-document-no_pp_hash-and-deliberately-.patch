@@ -1,0 +1,83 @@
+From 7ca20d214eac2851b8ddafa8543e89f3c86fb181 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 17:26:57 +0800
+Subject: [PATCH 098/206] feat(shorebird): document --no_pp_hash, and
+ deliberately do not register it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Their help lists --no_pp_hash. Their own binary rejects it: the option parser
+does not consume it, so it reaches Dart_SetVMFlags and comes back
+"Unrecognized flags: pp_hash". Of the six Shorebird flags their help documents
+beyond --shorebird, five are consumed by their parser and this one is not.
+
+That was measured behaviourally, one flag at a time, and it had to be. The
+obvious shortcut -- looking for the option name among the binary's strings --
+cannot answer it: sdk_version is certainly registered and has no bare-name
+string either. The control was run first and it came out negative, so the
+string method was discarded rather than trusted.
+
+Our binary already produced exactly their message for exactly that input
+before this change, because neither of us registers it. So --no_pp_hash was
+already reproduced behaviourally and was missing only its two lines of help.
+Adding them completes it, and the withheld count drops from six flags to five.
+
+⚠️ The comment says not to "fix" this by registering it, because a registered
+--no_pp_hash would be a divergence rather than a feature.
+analyze_snapshot_help_check.sh now enforces that: it requires both binaries to
+reject the flag identically, and it fails if theirs ever starts accepting it.
+Negative control: registering it here turns that check red.
+
+This is the same species as print_dispatch_table_debug_info_to, and more
+degenerate -- that flag is at least declared, and this one is help text with
+nothing behind it.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index adf4a13fe0f..15ad4b1b36b 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -58,19 +58,35 @@ static void PrintUsage() {
+ "Shorebird options:                                                          \n"
+ "--shorebird                                                                 \n"
+ "  Produce Shorebird formatted JSON, requires --out.                         \n"
+-// Shorebird lists six more flags at this point, in this order: --no_pp_hash,
++// Documented and deliberately NOT registered, because that is what theirs
++// does. Measured behaviourally rather than inferred: of the six Shorebird
++// flags their help lists beyond --shorebird, five are consumed by their option
++// parser and this one is not -- it falls through to Dart_SetVMFlags, which
++// rejects it with "Unrecognized flags: pp_hash". Our binary already produced
++// that same message for the same input before this line was added, so
++// reproducing --no_pp_hash faithfully means printing it and nothing else.
++//
++// ⚠️ Do not "fix" this by registering it. A registered --no_pp_hash would be a
++// divergence from them, not a feature.
++//
++// This is the same species as print_dispatch_table_debug_info_to, which is a
++// dead flag in their gen_snapshot, though more degenerate: that one is at
++// least declared, and this one is help text with nothing behind it.
++"--no_pp_hash                                                                \n"
++"  Ignore PP offsets when computing subgraph hashes.                         \n"
++// Shorebird lists five more flags at this point, in this order:
+ // --dump_object_pool_link_data, --dump_blobs, --dump_object_pool,
+ // --dump_class_table and --disassemble. They are deliberately NOT listed here,
+ // because this binary does not implement them, and a help text advertising a
+ // flag the parser rejects is worse than one that is short.
+ //
+ // The omission is pinned rather than left to memory:
+-// analyze_snapshot_help_check.sh takes their --help, deletes exactly those six
++// analyze_snapshot_help_check.sh takes their --help, deletes exactly those five
+ // blocks, and requires what is left to equal ours byte for byte. Every line
+ // above is therefore checked against theirs on every run, and what is missing
+ // is a number that has to shrink deliberately.
+ //
+-// None of the six is small. --dump_object_pool_link_data and --no_pp_hash need
++// None of the five is small. --dump_object_pool_link_data needs
+ // op_subgraph_hash, a private subsystem this tree does not have --
+ // ObjectPoolLinkInfo::WriteToStream is already here and byte-verified against
+ // their files, so what is missing is the producer, not the format.
+-- 
+2.53.0
+

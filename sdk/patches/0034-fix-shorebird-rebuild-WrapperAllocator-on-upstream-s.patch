@@ -1,0 +1,1105 @@
+From d14e02430a118e2d797092f80d0906b7133e3626 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 15:53:38 +0800
+Subject: [PATCH 034/206] fix(shorebird): rebuild WrapperAllocator on
+ upstream's trampoline machinery
+
+wrapper.{h,cc} was written from their DWARF alone. It turns out the class has
+an upstream ancestor: runtime/vm/ffi_callback_metadata.{h,cc}, which does the
+same job -- COW-duplicate a stub's code page, slice it into fixed-size landing
+pads, keep metadata in a parallel RW mapping. The correspondence is field for
+field, including the name stub_page_ and the type
+MallocGrowableArray<VirtualMemory*>. Theirs generalizes it to two directions by
+lifting upstream's compile-time constants into a runtime Layout and replacing
+the metadata free list with a bump cursor. Rule 2 says use upstream's, so this
+rewrites against it.
+
+That also re-explains the constants: kPageSize 16384 is upstream's
+macOS+arm64 branch, kLandingPadSize 8 is its arm64 kNativeCallbackTrampolineSize,
+and rx_mapping_size is RXMappingSize() == 2 * kPageSize -- a derivation, which
+is why both directions report 32768 while their shared body sizes differ.
+
+Two bugs, both already solved upstream:
+
+  * Every wrapper page leaked. wrapper_pages_ held bare uwords and the
+    destructor was empty. Upstream's destructor deletes the VirtualMemory
+    objects, which own their mappings. Proven by measurement, not inspection:
+    the new test records the page addresses, destroys the allocator, and asks
+    mach_vm_region whether a region still starts there. Deleting the free loop
+    puts the test back to red.
+  * EnsureStubPage now bounds the stub page tightly and unaligned. The old code
+    remapped a fixed rx_mapping_size from the stub's address however short the
+    stub was; upstream carries a comment about exactly this reading past the end
+    of the code area. The old tests used a stand-in of exactly rx_mapping_size,
+    so they could never see it.
+
+The sizeof(WrapperAllocator) == 0x98 assert passed throughout, including with
+the leaking uword fields. Size asserts constrain widths, not types.
+
+Four methods had the wrong arity against their DW_TAG_subprogram entries, so
+the API is now theirs: AllocateMetadata() (they have no WrapEntryPoint),
+MetadataForWrapper(uword), WrapperOfMetadata(void*), MetadataOffset() with no
+arguments, plus EnsureStubPage/AllocateWrapperPage/EnsureNextWrapperEntry and
+Layout::CodeSize/MappingSize/MappingAlignment. MetadataForWrapper takes no page
+because MappingAlignment() lets the page base be recovered by masking; that is
+why the alignment exists, and it replaces a linear scan.
+
+offset_of_first_wrapper_in_page_ was set to shared_body_size. Upstream's
+identically-named field is code_start - page_start, the stub's offset within
+its own OS page. Restoring the old value fails three tests, 2044 assertions in
+the round-trip.
+
+The duplication is now verified by running it: allocate, convert metadata to an
+entry point, call it, get 246 from a duplicate of testFunction. That covers
+DuplicateRX, executability, the offset landing on the copied code, and
+AllocateMetadata/WrapperOfMetadata being inverse. The stand-in stub is a real
+function, so the source page is genuinely RX -- an RW stand-in only passed
+because DuplicateRX's protection ASSERT is compiled out in release. There is no
+write-through copy-on-write check anymore: the duplicate is RX, so nothing can
+write to it at all.
+
+Not verified: whether landing pads precede or follow the shared body in their
+generated stub, and what ContainsEntryPoint's out-parameter means (target is
+the reading used here). Both are marked INFERRED in the header. wrapper.cc is
+still dead-stripped from gen_snapshot -- 0 symbols, unchanged -- because
+nothing calls it yet.
+
+55/55 shorebird unit tests pass; product gen_snapshot still links.
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 31c9bca46c3..6388fd667a8 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -4,57 +4,91 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
+-#include <mach/mach.h>
+-#include <mach/mach_vm.h>
+-
+ namespace dart {
+ namespace shorebird {
+ 
+ // Their DW_AT_byte_size for WrapperAllocator. A compile-time assert needs no
+ // access to the private fields (which is why the offsetof version won't
+-// compile), costs nothing at runtime, and breaks the build the moment the
+-// layout drifts. Field *ordering* is covered more meaningfully by the
+-// round-trip arithmetic tests than an offset check would be.
++// compile) and breaks the build the moment the layout drifts. Note that it
++// constrains only widths: it passed just as happily when stub_page_ was a bare
++// uword and wrapper_pages_ held uwords, which is precisely the bug that made
++// the destructor unable to free anything.
+ static_assert(sizeof(WrapperAllocator) == 0x98,
+               "WrapperAllocator must match Shorebird's 0x98 layout");
+ 
+ // The real implementations resolve the generated stub's address range. The
+-// stubs do not exist until plan #2, so these report an empty range for now.
+-// Task 3 tests assert that an empty range is rejected rather than remapped.
+-CodeRange CPUToSimConfig::GetStubCodeRange() {
+-  return CodeRange();
++// stubs do not exist until the stub-generator work, so these report an empty
++// range, which EnsureStubPage treats as "no page yet".
++void CPUToSimConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
++  code_start = 0;
++  code_end = 0;
+ }
+ 
+-CodeRange SimToCPUConfig::GetStubCodeRange() {
+-  return CodeRange();
++void SimToCPUConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
++  code_start = 0;
++  code_end = 0;
+ }
+ 
+-WrapperAllocator::WrapperAllocator(const Layout& layout)
+-    : offset_of_first_wrapper_in_page_(layout.shared_body_size),
+-      wrappers_left_in_current_page_(0),
+-      layout_(layout) {}
++uword WrapperAllocator::Layout::CodeSize() const {
++  if (get_stub_code_range == nullptr) {
++    return 0;
++  }
++  uword code_start = 0;
++  uword code_end = 0;
++  get_stub_code_range(code_start, code_end);
++  return code_end - code_start;
++}
+ 
+-WrapperAllocator::~WrapperAllocator() {}
++WrapperAllocator::WrapperAllocator(const Layout& layout) : layout_(layout) {}
+ 
+-intptr_t WrapperAllocator::MetadataOffset(uword page, uword wrapper) const {
++WrapperAllocator::~WrapperAllocator() {
++  // Upstream's ~FfiCallbackMetadata, verbatim: the VirtualMemory objects are
++  // new-allocated and own their mappings, so deleting them unmaps the pages.
++  delete stub_page_;
++  for (intptr_t i = 0; i < wrapper_pages_.length(); i++) {
++    delete wrapper_pages_[i];
++  }
++}
++
++uword WrapperAllocator::MappingStart(uword address) const {
++  return address & ~static_cast<uword>(layout_.MappingAlignment() - 1);
++}
++
++intptr_t WrapperAllocator::MetadataOffset() const {
++  return layout_.rx_mapping_size;
++}
++
++void* WrapperAllocator::MetadataForWrapper(uword wrapper) const {
++  const uword page = MappingStart(wrapper);
+   const intptr_t index = static_cast<intptr_t>(
+       (wrapper - page - offset_of_first_wrapper_in_page_) /
+       layout_.landing_pad_size);
+-  return index * layout_.metadata_size;
+-}
+-
+-uword WrapperAllocator::MetadataForWrapper(uword page, uword wrapper) const {
+-  return page + layout_.rx_mapping_size + MetadataOffset(page, wrapper);
++  return reinterpret_cast<void*>(page + MetadataOffset() +
++                                 index * layout_.metadata_size);
+ }
+ 
+-uword WrapperAllocator::WrapperOfMetadata(uword page, uword metadata) const {
++uword WrapperAllocator::WrapperOfMetadata(void* metadata) const {
++  const uword address = reinterpret_cast<uword>(metadata);
++  const uword page = MappingStart(address);
+   const intptr_t index = static_cast<intptr_t>(
+-      (metadata - page - layout_.rx_mapping_size) / layout_.metadata_size);
++      (address - page - MetadataOffset()) / layout_.metadata_size);
+   return page + offset_of_first_wrapper_in_page_ +
+          index * layout_.landing_pad_size;
+ }
+ 
+-bool WrapperAllocator::ContainsEntryPoint(uword page, uword entry_point) const {
++bool WrapperAllocator::ContainsEntryPoint(uword entry_point, uword* target) {
++  const uword page = MappingStart(entry_point);
++  bool is_ours = false;
++  for (intptr_t i = 0; i < wrapper_pages_.length(); i++) {
++    if (wrapper_pages_[i]->start() == page) {
++      is_ours = true;
++      break;
++    }
++  }
++  if (!is_ours) {
++    return false;
++  }
++
+   const uword first = page + offset_of_first_wrapper_in_page_;
+   if (entry_point < first) {
+     return false;
+@@ -63,97 +97,94 @@ bool WrapperAllocator::ContainsEntryPoint(uword page, uword entry_point) const {
+   if ((delta % layout_.landing_pad_size) != 0) {
+     return false;
+   }
+-  return (delta / layout_.landing_pad_size) <
+-         static_cast<uword>(layout_.num_wrappers_per_page);
+-}
+-
+-bool WrapperAllocator::AllocateWrapperPage(const CodeRange& stub_code,
+-                                           uword* page) {
+-  if (stub_code.size() <= 0) {
++  if ((delta / layout_.landing_pad_size) >=
++      static_cast<uword>(layout_.num_wrappers_per_page)) {
+     return false;
+   }
+ 
+-  const mach_vm_size_t total =
+-      static_cast<mach_vm_size_t>(layout_.rx_mapping_size) +
+-      static_cast<mach_vm_size_t>(layout_.rw_mapping_size);
++  if (target != nullptr) {
++    *target = reinterpret_cast<Metadata*>(MetadataForWrapper(entry_point))
++                  ->target_entry_point;
++  }
++  return true;
++}
+ 
+-  // Reserve both halves as one contiguous region so that the metadata half is
+-  // always exactly rx_mapping_size above the wrapper half, which is the
+-  // invariant MetadataForWrapper relies on.
+-  mach_vm_address_t base = 0;
+-  if (mach_vm_allocate(mach_task_self(), &base, total, VM_FLAGS_ANYWHERE) !=
+-      KERN_SUCCESS) {
+-    return false;
++void WrapperAllocator::EnsureStubPage() {
++  if (stub_page_ != nullptr) {
++    return;
+   }
+ 
+-  // Overwrite the RX half with a COW view of the stub's code. copy=TRUE is what
+-  // makes this copy-on-write rather than shared, so per-page divergence stays
+-  // local to this mapping.
+-  mach_vm_address_t target = base;
+-  vm_prot_t cur_prot = VM_PROT_NONE;
+-  vm_prot_t max_prot = VM_PROT_NONE;
+-  const kern_return_t kr = mach_vm_remap(
+-      mach_task_self(), &target,
+-      static_cast<mach_vm_size_t>(layout_.rx_mapping_size),
+-      /*mask=*/0, VM_FLAGS_OVERWRITE, mach_task_self(),
+-      static_cast<mach_vm_address_t>(stub_code.begin),
+-      /*copy=*/TRUE, &cur_prot, &max_prot, VM_INHERIT_NONE);
+-  if (kr != KERN_SUCCESS) {
+-    mach_vm_deallocate(mach_task_self(), base, total);
+-    return false;
++  uword code_start = 0;
++  uword code_end = 0;
++  layout_.get_stub_code_range(code_start, code_end);
++  if (code_start == 0 || code_end <= code_start) {
++    return;
+   }
+ 
+-  wrapper_pages_.Add(static_cast<uword>(base));
+-  *page = static_cast<uword>(base);
+-  return true;
++  const uword page_start =
++      Utils::RoundDown(code_start, VirtualMemory::PageSize());
++  ASSERT((code_start - page_start) + (code_end - code_start) <=
++         static_cast<uword>(layout_.rx_mapping_size));
++
++  // The end bound is tight and deliberately unaligned. Rounding it up to a page
++  // would make DuplicateRX read past the end of the code area -- upstream's
++  // EnsureStubPageLocked carries the same comment for the same reason. Our
++  // previous version remapped a fixed rx_mapping_size from the stub address
++  // regardless of how long the stub actually was.
++  stub_page_ = VirtualMemory::ForImagePage(
++      reinterpret_cast<void*>(page_start), code_end - page_start);
++  offset_of_first_wrapper_in_page_ = code_start - page_start;
+ }
+ 
+-uword WrapperAllocator::EnsureNextWrapperEntry(const CodeRange& stub_code) {
+-  if (wrappers_left_in_current_page_ <= 0) {
+-    uword page = 0;
+-    if (!AllocateWrapperPage(stub_code, &page)) {
+-      return 0;
+-    }
+-    // AllocateWrapperPage appended the page, so CurrentPage() is now it.
+-    wrappers_left_in_current_page_ = layout_.num_wrappers_per_page;
++VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
++  EnsureStubPage();
++  if (stub_page_ == nullptr) {
++    return nullptr;
+   }
+-  const intptr_t index =
+-      layout_.num_wrappers_per_page - wrappers_left_in_current_page_;
+-  wrappers_left_in_current_page_--;
+-  return CurrentPage() + offset_of_first_wrapper_in_page_ +
+-         index * layout_.landing_pad_size;
+-}
+ 
+-uword WrapperAllocator::WrapEntryPoint(const CodeRange& stub_code,
+-                                       uword target) {
+-  const uword wrapper = EnsureNextWrapperEntry(stub_code);
+-  if (wrapper == 0) {
+-    return 0;
++  // Aligning to MappingAlignment() is what lets MappingStart() recover a page
++  // base by masking, so a wrapper address alone is enough to find its metadata.
++  VirtualMemory* page = VirtualMemory::AllocateAligned(
++      layout_.MappingSize(), layout_.MappingAlignment(),
++      /*is_executable=*/false, /*is_compressed=*/false,
++      layout_.wrapper_page_name);
++  if (page == nullptr) {
++    return nullptr;
+   }
+-  // The only runtime write. No instructions are emitted here -- the landing pad
+-  // and shared body were generated at build time and arrived via the COW remap.
+-  Metadata* metadata =
+-      reinterpret_cast<Metadata*>(MetadataForWrapper(CurrentPage(), wrapper));
+-  metadata->target_entry_point = target;
+-  return wrapper;
++
++  // Copy-on-write duplicate of the stub's code over the RX half. Divergence
++  // stays local to this mapping; nothing writes instructions at runtime.
++  if (!stub_page_->DuplicateRX(page)) {
++    delete page;
++    return nullptr;
++  }
++  return page;
+ }
+ 
+-uword WrapperAllocator::PageOfWrapper(uword wrapper) const {
+-  for (intptr_t i = 0; i < wrapper_pages_.length(); i++) {
+-    if (ContainsEntryPoint(wrapper_pages_[i], wrapper)) {
+-      return wrapper_pages_[i];
+-    }
++void WrapperAllocator::EnsureNextWrapperEntry() {
++  if (wrappers_left_in_current_page_ > 0) {
++    return;
++  }
++  VirtualMemory* page = AllocateWrapperPage();
++  if (page == nullptr) {
++    return;
+   }
+-  return 0;
++  wrapper_pages_.Add(page);
++  wrappers_left_in_current_page_ =
++      static_cast<size_t>(layout_.num_wrappers_per_page);
+ }
+ 
+-uword WrapperAllocator::TargetOfWrapper(uword wrapper) const {
+-  const uword page = PageOfWrapper(wrapper);
+-  if (page == 0) {
+-    return 0;
++void* WrapperAllocator::AllocateMetadata() {
++  EnsureNextWrapperEntry();
++  if (wrappers_left_in_current_page_ == 0) {
++    return nullptr;
+   }
+-  return reinterpret_cast<Metadata*>(MetadataForWrapper(page, wrapper))
+-      ->target_entry_point;
++
++  const intptr_t index = layout_.num_wrappers_per_page -
++                         static_cast<intptr_t>(wrappers_left_in_current_page_);
++  wrappers_left_in_current_page_--;
++  return reinterpret_cast<void*>(CurrentPage()->start() + MetadataOffset() +
++                                 index * layout_.metadata_size);
+ }
+ 
+ }  // namespace shorebird
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index fa68aef95be..2a8ff48953b 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -8,61 +8,44 @@
+ #include <functional>
+ 
+ #include "platform/globals.h"
+-#include "vm/growable_array.h"
++#include "platform/growable_array.h"
++#include "platform/utils.h"
++#include "vm/virtual_memory.h"
+ 
+ namespace dart {
+ namespace shorebird {
+ 
+-// Half-open [begin, end) address range of a stub's own code.
+-struct CodeRange {
+-  uword begin = 0;
+-  uword end = 0;
+-
+-  intptr_t size() const { return static_cast<intptr_t>(end - begin); }
+-};
+-
+-// A wrapper page is two mappings of equal size laid end to end:
+-//   [0, rx_mapping_size)                  COW remap of the stub's code pages
+-//   [rx_mapping_size, rx + rw)            plain RW metadata, one entry per
+-//                                         wrapper, metadata_size bytes each
++// This class is a generalization of the upstream trampoline-page machinery in
++// runtime/vm/ffi_callback_metadata.{h,cc}, and is written against it rather
++// than from scratch. The correspondence is field for field:
+ //
+-// Field order and offsets mirror their DWARF exactly (0x60 bytes total), so
+-// this struct can be compared against their layout directly.
+-struct Layout {
+-  intptr_t page_size = 0;               // 0x00
+-  intptr_t rx_mapping_size = 0;         // 0x08
+-  intptr_t rw_mapping_size = 0;         // 0x10
+-  intptr_t num_wrappers_per_page = 0;   // 0x18
+-  intptr_t metadata_size = 0;           // 0x20
+-  intptr_t landing_pad_size = 0;        // 0x28
+-  intptr_t shared_body_size = 0;        // 0x30
+-  const char* wrapper_page_name = nullptr;               // 0x38
+-  std::function<CodeRange()> get_stub_code_range;        // 0x40
+-
+-  // Builds a Layout from a compile-time configuration. The wrapper count is
+-  // derived, never spelled out: one shared body sits at the front of the page
+-  // and the remainder divides into fixed-size landing pads. Reproduces both of
+-  // their constants -- 2014 for CPUToSim and 2044 for SimToCPU, the latter a
+-  // truncated 2044.5.
+-  template <typename C>
+-  static Layout fromTemplate() {
+-    Layout l;
+-    l.page_size = C::kPageSize;
+-    l.rx_mapping_size = C::kRxMappingSize;
+-    l.rw_mapping_size = C::kRwMappingSize;
+-    l.metadata_size = C::kMetadataSize;
+-    l.landing_pad_size = C::kLandingPadSize;
+-    l.shared_body_size = C::kSharedBodySize;
+-    l.wrapper_page_name = C::kWrapperPageName;
+-    l.num_wrappers_per_page =
+-        (l.page_size - l.shared_body_size) / l.landing_pad_size;
+-    l.get_stub_code_range = C::GetStubCodeRange;
+-    return l;
+-  }
+-};
++//   stub_page_                        stub_page_                    (same name)
++//   wrapper_pages_                    trampoline_pages_
++//   offset_of_first_wrapper_in_page_  offset_of_first_trampoline_in_page_
++//   layout_                           a set of static constexpr functions
++//
++// Upstream serves one direction, so its sizes are compile-time constants.
++// Shorebird needs two (CPU->Sim and Sim->CPU), so the constants are lifted into
++// a runtime Layout, and upstream's metadata free list becomes a bump cursor.
++// Everything else -- the [RX][RW] page pair, the COW duplication of the stub's
++// own code page, recovering a page base by masking an address, and the page
++// ownership that makes the destructor able to unmap -- is upstream's.
++//
++// Consequently the numbers below are not magic constants recovered from their
++// binary; they are upstream values, and upstream shows the derivations:
++//   kPageSize 16384    = upstream's DART_TARGET_OS_MACOS && TARGET_ARCH_ARM64
++//                        branch, 16 * KB
++//   kLandingPadSize 8  = upstream's arm64 kNativeCallbackTrampolineSize
++//   kRxMappingSize     = upstream's RXMappingSize(), 2 * kPageSize -- two pages
++//                        so that a stub landing near a page boundary still fits
++//
++// Signatures come from DW_TAG_subprogram entries in their shipped dSYM, see
++// spikes/shorebird_linkinfo_oracle/dwarf_types/WrapperAllocator.txt. Their
++// wrapper.h line numbers are quoted so each declaration can be checked back
++// against that dump.
+ 
+-// Metadata is a single target address. WrapEntryPoint stores into this and
+-// nothing else -- no instructions are written at runtime.
++// Metadata is a single target address. Allocating a wrapper writes here and
++// nowhere else -- no instructions are emitted at runtime.
+ struct Metadata {
+   uword target_entry_point;
+ };
+@@ -72,7 +55,7 @@ struct Metadata {
+ struct WrapperConfigBase {
+   static constexpr intptr_t kPageSize = 16384;
+   static constexpr intptr_t kLandingPadSize = 8;
+-  static constexpr intptr_t kRxMappingSize = 32768;
++  static constexpr intptr_t kRxMappingSize = 2 * kPageSize;
+   static constexpr intptr_t kRwMappingSize = 32768;
+   static constexpr intptr_t kMetadataSize = sizeof(Metadata);  // 8
+ };
+@@ -81,77 +64,133 @@ struct WrapperConfigBase {
+ struct CPUToSimConfig : public WrapperConfigBase {
+   static constexpr intptr_t kSharedBodySize = 272;
+   static constexpr const char* kWrapperPageName = "cpu-to-sim wrappers";
+-  static CodeRange GetStubCodeRange();
++  static void GetStubCodeRange(uword& code_start, uword& code_end);
+ };
+ 
+ // Simulated code calling out to host CPU code.
+ struct SimToCPUConfig : public WrapperConfigBase {
+   static constexpr intptr_t kSharedBodySize = 28;
+   static constexpr const char* kWrapperPageName = "sim-to-cpu wrappers";
+-  static CodeRange GetStubCodeRange();
++  static void GetStubCodeRange(uword& code_start, uword& code_end);
+ };
+ 
+ // Selects the per-direction configuration. Their DWARF names the two
+-// instantiations WrapperLayout<CPUToSimConfig> and WrapperLayout<SimToCPUConfig>
+-// as the template arguments to Layout::fromTemplate, so this indirection is
+-// theirs, not ours.
++// instantiations as the template arguments to Layout::fromTemplate, so this
++// indirection is theirs, not ours.
+ template <typename Config>
+ struct WrapperLayout : public Config {};
+ 
+-// Hands out fixed-size landing pads from COW-remapped pages. Field order,
+-// offsets and the 0x98 total size mirror their DWARF.
++// Hands out fixed-size landing pads from COW-remapped pages.
++// Their wrapper.h:72; DW_AT_byte_size 0x98.
+ class WrapperAllocator {
+  public:
++  // Their wrapper.h:77; DW_AT_byte_size 0x60. Members are const in their DWARF,
++  // so a Layout is built once and never edited. Keeping it an aggregate (no
++  // user-declared constructor) is what allows const members to be initialized.
++  struct Layout {
++    const intptr_t page_size = 0;              // 0x00
++    const intptr_t rx_mapping_size = 0;        // 0x08
++    const intptr_t rw_mapping_size = 0;        // 0x10
++    const intptr_t num_wrappers_per_page = 0;  // 0x18
++    const intptr_t metadata_size = 0;          // 0x20
++    const intptr_t landing_pad_size = 0;       // 0x28
++    const intptr_t shared_body_size = 0;       // 0x30
++    const char* wrapper_page_name = nullptr;   // 0x38
++    // Their wrapper.h:90, DWARF type void(unsigned long&, unsigned long&).
++    // The two out-parameters are the (code_start, code_end) pair that upstream
++    // EnsureStubPageLocked computes locally; hoisting it into a callback is
++    // what lets one class serve both directions.
++    std::function<void(uword&, uword&)> get_stub_code_range;  // 0x40
++
++    // Their wrapper.h:93. The wrapper count is derived, never spelled out: one
++    // shared body plus a run of fixed-size landing pads fills one page. This
++    // reproduces both of their counts -- 2014 for CPUToSim, and 2044 for
++    // SimToCPU, the latter a truncated 2044.5.
++    template <typename C>
++    static Layout fromTemplate() {
++      return Layout{C::kPageSize,
++                    C::kRxMappingSize,
++                    C::kRwMappingSize,
++                    (C::kPageSize - C::kSharedBodySize) / C::kLandingPadSize,
++                    C::kMetadataSize,
++                    C::kLandingPadSize,
++                    C::kSharedBodySize,
++                    C::kWrapperPageName,
++                    C::GetStubCodeRange};
++    }
++
++    // Their wrapper.h:113, returns uword. Size of the stub's own code, which
++    // only the callback knows. INFERRED: the DWARF gives the name, return type
++    // and constness, not the body; this definition is the one consistent with
++    // upstream's use of trampoline_code.Size().
++    uword CodeSize() const;
++
++    // Their wrapper.h:116 and :117. Upstream's MappingSize() and
++    // MappingAlignment(). The alignment is what makes a page base recoverable
++    // from any address inside it by masking, which is how their one-argument
++    // MetadataForWrapper can work without being told the page.
++    intptr_t MappingSize() const { return rx_mapping_size + rw_mapping_size; }
++    intptr_t MappingAlignment() const {
++      return Utils::RoundUpToPowerOfTwo(MappingSize());
++    }
++  };
++
+   explicit WrapperAllocator(const Layout& layout);
+   ~WrapperAllocator();
+ 
+-  // Byte offset of a wrapper's metadata within the RW half of its page.
+-  intptr_t MetadataOffset(uword page, uword wrapper) const;
+-
+-  // Address of the metadata belonging to a wrapper, and the inverse.
+-  uword MetadataForWrapper(uword page, uword wrapper) const;
+-  uword WrapperOfMetadata(uword page, uword metadata) const;
+-
+-  // Whether an address is a wrapper entry point on the given page: inside the
+-  // landing-pad array, and correctly aligned to a pad boundary.
+-  bool ContainsEntryPoint(uword page, uword entry_point) const;
+-
+-  // Maps one wrapper page: the RX half is a copy-on-write remap of the stub's
+-  // own code pages, the RW half is fresh zeroed metadata. Returns false and
+-  // leaves *page untouched if the range is empty or the kernel refuses.
+-  bool AllocateWrapperPage(const CodeRange& stub_code, uword* page);
+-
+-  // Reserves the next landing pad and stores target into its metadata.
+-  // Returns the wrapper entry point, or 0 if a page could not be mapped.
+-  uword WrapEntryPoint(const CodeRange& stub_code, uword target);
++  // Their wrapper.h:127. Whether an address is one of our wrapper entry points;
++  // on success the out-parameter receives the target stored for it.
++  // INFERRED: the DWARF gives `bool(uword, uword*)` but not what the out
++  // parameter means. Target is the reading that makes this usable as the
++  // "is this PC a wrapper, and what does it stand for" query at a boundary.
++  bool ContainsEntryPoint(uword entry_point, uword* target);
+ 
+-  // Reads back the target stored for a wrapper. Test and diagnostic use.
+-  uword TargetOfWrapper(uword wrapper) const;
++  // Their wrapper.h:130. Reserves the next landing pad and returns its
++  // metadata slot; the caller stores the target there and converts to an entry
++  // point with WrapperOfMetadata. Returns nullptr if no page could be mapped.
++  // They have no WrapEntryPoint -- this pair is the whole allocation API.
++  void* AllocateMetadata();
+ 
+-  // Page that contains a wrapper, or 0 if none does.
+-  uword PageOfWrapper(uword wrapper) const;
++  // Their wrapper.h:131 and :132. Inverses of each other. Neither is told the
++  // page: it is recovered by masking with MappingAlignment().
++  uword WrapperOfMetadata(void* metadata) const;
++  void* MetadataForWrapper(uword wrapper) const;
+ 
+   const Layout& layout() const { return layout_; }
+ 
+  private:
+-  // Ensures a current page with at least one free landing pad, mapping a new
+-  // one if needed. Returns 0 on failure.
+-  uword EnsureNextWrapperEntry(const CodeRange& stub_code);
+-
+-  // The page currently being handed out of. Deliberately *not* a field: their
+-  // DWARF lists exactly five members summing to 0x98, with no current-page
+-  // slot, and the most recently mapped page is already the last element of
+-  // wrapper_pages_. Adding a field would grow the class to 0xA0 and break the
+-  // static_assert in wrapper.cc. Member functions do not affect sizeof.
+-  uword CurrentPage() const {
+-    return wrapper_pages_.is_empty() ? 0 : wrapper_pages_.Last();
++  // Their wrapper.h:135. Wraps the stub's own code page, without owning it, so
++  // that AllocateWrapperPage can duplicate it. No-op once done, and a no-op
++  // while the configs still report an empty range.
++  void EnsureStubPage();
++
++  // Their wrapper.h:136, returns VirtualMemory*. One [RX][RW] mapping: the RX
++  // half is a copy-on-write duplicate of the stub's code, the RW half is fresh
++  // zeroed metadata.
++  VirtualMemory* AllocateWrapperPage();
++
++  // Their wrapper.h:137, returns void -- the cursor fields carry the result.
++  void EnsureNextWrapperEntry();
++
++  // Their wrapper.h:139, const, no arguments: the offset of the metadata array
++  // within a page, which is a constant, not a per-wrapper value.
++  intptr_t MetadataOffset() const;
++
++  // Page base for any address inside a page. Upstream MappingStart().
++  uword MappingStart(uword address) const;
++
++  // The page being handed out of. Deliberately not a field: their DWARF lists
++  // exactly five members summing to 0x98, with no current-page slot, and the
++  // most recently mapped page is already the last element of wrapper_pages_.
++  VirtualMemory* CurrentPage() const {
++    return wrapper_pages_.is_empty() ? nullptr : wrapper_pages_.Last();
+   }
+ 
+-  uword stub_page_ = 0;                            // 0x00
+-  MallocGrowableArray<uword> wrapper_pages_;       // 0x08
+-  intptr_t offset_of_first_wrapper_in_page_ = 0;   // 0x28
+-  intptr_t wrappers_left_in_current_page_ = 0;     // 0x30
+-  Layout layout_;                                  // 0x38
++  VirtualMemory* stub_page_ = nullptr;                // 0x00
++  MallocGrowableArray<VirtualMemory*> wrapper_pages_;  // 0x08
++  uword offset_of_first_wrapper_in_page_ = 0;         // 0x28
++  size_t wrappers_left_in_current_page_ = 0;          // 0x30
++  Layout layout_;                                     // 0x38
+ 
+   DISALLOW_COPY_AND_ASSIGN(WrapperAllocator);
+ };
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index ed51d25783e..b8afdc7903b 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -7,11 +7,63 @@
+ #include <mach/mach.h>
+ #include <mach/mach_vm.h>
+ 
++#include "platform/utils.h"
+ #include "vm/unit_test.h"
++#include "vm/virtual_memory.h"
+ 
+ namespace dart {
+ namespace shorebird {
+ 
++using Layout = WrapperAllocator::Layout;
++
++// Stands in for a generated stub. Using a real function means the stub page is
++// genuinely RX and codesigned, which is what DuplicateRX requires -- an RW
++// stand-in would only pass in builds where its ASSERT is compiled out. This is
++// the same technique as upstream's DuplicateRXVirtualMemory test.
++static int testFunction(int x) {
++  return x * 2;
++}
++
++static constexpr intptr_t kTestStubSize = 64;
++
++static uword TestStubStart() {
++  return reinterpret_cast<uword>(&testFunction);
++}
++
++static void TestStubCodeRange(uword& code_start, uword& code_end) {
++  code_start = TestStubStart();
++  code_end = code_start + kTestStubSize;
++}
++
++// SimToCPUConfig's numbers with a stub range that actually exists. Built by
++// aggregate initialization because Layout's members are const in their DWARF,
++// so there is nothing to assign after the fact.
++static Layout TestLayout() {
++  using C = WrapperLayout<SimToCPUConfig>;
++  return Layout{C::kPageSize,
++                C::kRxMappingSize,
++                C::kRwMappingSize,
++                (C::kPageSize - C::kSharedBodySize) / C::kLandingPadSize,
++                C::kMetadataSize,
++                C::kLandingPadSize,
++                C::kSharedBodySize,
++                "test wrappers",
++                TestStubCodeRange};
++}
++
++// Offset of the stub within its own OS page. This is what
++// offset_of_first_wrapper_in_page_ holds -- upstream's
++// offset_of_first_trampoline_in_page_, computed as code_start - page_start.
++static uword ExpectedFirstWrapperOffset() {
++  const uword start = TestStubStart();
++  return start - Utils::RoundDown(start, VirtualMemory::PageSize());
++}
++
++static uword PageOf(const Layout& l, const void* address) {
++  return reinterpret_cast<uword>(address) &
++         ~static_cast<uword>(l.MappingAlignment() - 1);
++}
++
+ // The constants below are Shorebird's own, read out of the DW_AT_const_value
+ // entries in their shipped dSYM. See
+ // spikes/shorebird_linkinfo_oracle/dwarf_types/{CPUToSimConfig,SimToCPUConfig}.txt
+@@ -35,6 +87,15 @@ VM_UNIT_TEST_CASE(WrapperLayout_DerivedCountsMatchTheirDwarf) {
+   EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
+ }
+ 
++// rx_mapping_size is upstream's RXMappingSize(), which is 2 * kPageSize so that
++// a stub landing near a page boundary is still fully covered. That derivation,
++// not coincidence, is why both directions report 32768 despite having different
++// shared body sizes.
++VM_UNIT_TEST_CASE(WrapperLayout_RxMappingIsTwoPages) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  EXPECT_EQ(2 * l.page_size, l.rx_mapping_size);
++}
++
+ // Guards that num_wrappers_per_page agrees with the three page fields it is
+ // computed from, so a future config change cannot silently desync them. This
+ // does NOT prove the count is derived rather than hardcoded: a config that
+@@ -65,213 +126,210 @@ VM_UNIT_TEST_CASE(WrapperLayout_StructMatchesTheirDwarfSize) {
+   EXPECT_EQ(static_cast<size_t>(0x40), offsetof(Layout, get_stub_code_range));
+ }
+ 
+-// The metadata half sits exactly one rx_mapping_size above the wrapper half,
+-// so a wrapper and its metadata are the same index in two parallel arrays.
+-VM_UNIT_TEST_CASE(WrapperAllocator_MetadataIsOneMappingAbove) {
++// MappingAlignment() is a power of two at least as large as one mapping, which
++// is the property MappingStart() relies on to recover a page base by masking.
++VM_UNIT_TEST_CASE(WrapperLayout_MappingSizeAndAlignment) {
+   const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+-  WrapperAllocator allocator(l);
+-
+-  const uword page = static_cast<uword>(0x100000000);
+-  const uword first = page + l.shared_body_size;
++  EXPECT_EQ(l.rx_mapping_size + l.rw_mapping_size, l.MappingSize());
++  EXPECT_EQ(static_cast<intptr_t>(65536), l.MappingSize());
++  EXPECT_EQ(static_cast<intptr_t>(65536), l.MappingAlignment());
++  EXPECT(Utils::IsPowerOfTwo(l.MappingAlignment()));
++  EXPECT(l.MappingAlignment() >= l.MappingSize());
++}
+ 
+-  EXPECT_EQ(page + l.rx_mapping_size, allocator.MetadataForWrapper(page, first));
+-  EXPECT_EQ(first, allocator.WrapperOfMetadata(page, page + l.rx_mapping_size));
++VM_UNIT_TEST_CASE(WrapperLayout_CodeSizeComesFromTheCallback) {
++  EXPECT_EQ(static_cast<uword>(kTestStubSize), TestLayout().CodeSize());
++  // The production configs report an empty range until the stubs exist.
++  EXPECT_EQ(static_cast<uword>(0),
++            Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>().CodeSize());
+ }
+ 
+-VM_UNIT_TEST_CASE(WrapperAllocator_MetadataOffsetTracksWrapperIndex) {
++// With no stub to duplicate there is nothing to hand out. Failing loudly here
++// rather than returning a pointer into an unmapped page is the whole reason
++// EnsureStubPage tolerates an empty range.
++VM_UNIT_TEST_CASE(WrapperAllocator_RejectsEmptyStubRange) {
+   const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+   WrapperAllocator allocator(l);
+-
+-  const uword page = static_cast<uword>(0x100000000);
+-  // Wrapper i lives at shared_body_size + i * landing_pad_size.
+-  for (intptr_t i : {static_cast<intptr_t>(0), static_cast<intptr_t>(1),
+-                     static_cast<intptr_t>(2013)}) {
+-    const uword wrapper = page + l.shared_body_size + i * l.landing_pad_size;
+-    EXPECT_EQ(i * l.metadata_size, allocator.MetadataOffset(page, wrapper));
+-    EXPECT_EQ(page + l.rx_mapping_size + i * l.metadata_size,
+-              allocator.MetadataForWrapper(page, wrapper));
+-  }
+-}
+-
+-// Round-tripping every wrapper index is what proves the two directions of the
+-// mapping are actually inverse, not merely consistent at index 0.
+-VM_UNIT_TEST_CASE(WrapperAllocator_WrapperMetadataRoundTrips) {
+-  for (const Layout& l : {Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>(),
+-                          Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>()}) {
+-    WrapperAllocator allocator(l);
+-    const uword page = static_cast<uword>(0x200000000);
+-    for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
+-      const uword wrapper = page + l.shared_body_size + i * l.landing_pad_size;
+-      const uword metadata = allocator.MetadataForWrapper(page, wrapper);
+-      EXPECT_EQ(wrapper, allocator.WrapperOfMetadata(page, metadata));
+-    }
+-  }
++  EXPECT(allocator.AllocateMetadata() == nullptr);
+ }
+ 
+-VM_UNIT_TEST_CASE(WrapperAllocator_ContainsEntryPointBoundaries) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++// The strongest check available for the duplication: run the copy. It proves
++// DuplicateRX succeeded, that the RX half is executable, that
++// offset_of_first_wrapper_in_page_ lands on the duplicated code rather than
++// somewhere else in the page, and that AllocateMetadata and WrapperOfMetadata
++// are inverse -- all from one observation.
++//
++// Note there is deliberately no write-through copy-on-write check anymore. The
++// duplicated half is RX, so nothing can write to it at all, which subsumes what
++// such a check asserted.
++NO_SANITIZE_UNDEFINED_FUNCTION  // See https://dartbug.com/52440
++VM_UNIT_TEST_CASE(WrapperAllocator_DuplicatedStubIsExecutable) {
++  const Layout l = TestLayout();
+   WrapperAllocator allocator(l);
+-  const uword page = static_cast<uword>(0x300000000);
+ 
+-  const uword first = page + l.shared_body_size;
+-  const uword last = first + (l.num_wrappers_per_page - 1) * l.landing_pad_size;
++  void* metadata = allocator.AllocateMetadata();
++  EXPECT(metadata != nullptr);
+ 
+-  EXPECT(allocator.ContainsEntryPoint(page, first));
+-  EXPECT(allocator.ContainsEntryPoint(page, last));
+-  // The shared body is not a wrapper entry point.
+-  EXPECT(!allocator.ContainsEntryPoint(page, page));
+-  // One landing pad past the last is off the end.
+-  EXPECT(!allocator.ContainsEntryPoint(page, last + l.landing_pad_size));
+-  // A misaligned address inside the range is not an entry point either.
+-  EXPECT(!allocator.ContainsEntryPoint(page, first + 1));
+-}
++  const uword wrapper = allocator.WrapperOfMetadata(metadata);
++  const uword page = PageOf(l, metadata);
++  EXPECT_EQ(page + ExpectedFirstWrapperOffset(), wrapper);
+ 
+-// AllocateWrapperPage must refuse an empty stub range rather than remap zero
+-// bytes -- the configs report an empty range until plan #2 generates stubs.
+-VM_UNIT_TEST_CASE(WrapperAllocator_RejectsEmptyStubRange) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+-  WrapperAllocator allocator(l);
+-  uword page = 0;
+-  EXPECT(!allocator.AllocateWrapperPage(CodeRange(), &page));
+-  EXPECT_EQ(static_cast<uword>(0), page);
++  auto duplicate = reinterpret_cast<int (*)(int)>(wrapper);
++  EXPECT(reinterpret_cast<uword>(duplicate) != TestStubStart());
++  EXPECT_EQ(246, duplicate(123));
+ }
+ 
+-// The RX half is a copy-on-write remap of the source, so it must start out
+-// reading identical to the source and writes must not propagate back.
+-VM_UNIT_TEST_CASE(WrapperAllocator_RxHalfIsCopyOnWrite) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++// Round-tripping every wrapper index is what proves the two directions of the
++// mapping are actually inverse, not merely consistent at index 0.
++VM_UNIT_TEST_CASE(WrapperAllocator_WrapperMetadataRoundTrips) {
++  const Layout l = TestLayout();
+   WrapperAllocator allocator(l);
+ 
+-  // Stand in for generated stub code with an ordinary RW allocation.
+-  const intptr_t source_size = l.rx_mapping_size;
+-  void* source = nullptr;
+-  EXPECT_EQ(KERN_SUCCESS,
+-            vm_allocate(mach_task_self(),
+-                        reinterpret_cast<vm_address_t*>(&source),
+-                        source_size, VM_FLAGS_ANYWHERE));
+-  uint8_t* src = reinterpret_cast<uint8_t*>(source);
+-  for (intptr_t i = 0; i < source_size; i++) {
+-    src[i] = static_cast<uint8_t>(i & 0xff);
+-  }
+-
+-  CodeRange range;
+-  range.begin = reinterpret_cast<uword>(source);
+-  range.end = range.begin + source_size;
+-
+-  uword page = 0;
+-  EXPECT(allocator.AllocateWrapperPage(range, &page));
+-  EXPECT(page != 0);
+-
+-  uint8_t* mapped = reinterpret_cast<uint8_t*>(page);
+-  // Reads through the remap see the source bytes.
+-  EXPECT_EQ(src[0], mapped[0]);
+-  EXPECT_EQ(src[1234], mapped[1234]);
+-  EXPECT_EQ(src[source_size - 1], mapped[source_size - 1]);
+-
+-  // The RW metadata half is writable and starts zeroed.
+-  uword* metadata = reinterpret_cast<uword*>(page + l.rx_mapping_size);
+-  EXPECT_EQ(static_cast<uword>(0), metadata[0]);
+-  metadata[0] = static_cast<uword>(0xdeadbeef);
+-  EXPECT_EQ(static_cast<uword>(0xdeadbeef), metadata[0]);
+-
+-  // THIS is the assertion that distinguishes copy-on-write from a shared
+-  // mapping, and it is the only one here that does. Write *through the remap*,
+-  // at an offset inside [0, rx_mapping_size), then prove the source did not
+-  // change. Casting to int keeps a byte mismatch readable -- EXPECT_EQ on
+-  // uint8_t renders values as characters.
+-  const uint8_t before = src[1234];
+-  mapped[1234] = static_cast<uint8_t>(before ^ 0xff);
+-  EXPECT_EQ(static_cast<int>(before ^ 0xff), static_cast<int>(mapped[1234]));
+-  EXPECT_EQ(static_cast<int>(before), static_cast<int>(src[1234]));
+-
+-  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(source),
+-                source_size);
+-}
++  void* first = allocator.AllocateMetadata();
++  EXPECT(first != nullptr);
++  const uword page = PageOf(l, first);
++  const uword offset = ExpectedFirstWrapperOffset();
+ 
+-// Allocates a stand-in stub range for tests that need a real mapped page.
+-static CodeRange AllocateFakeStub(intptr_t size, void** out) {
+-  void* p = nullptr;
+-  EXPECT_EQ(KERN_SUCCESS,
+-            vm_allocate(mach_task_self(), reinterpret_cast<vm_address_t*>(&p),
+-                        size, VM_FLAGS_ANYWHERE));
+-  *out = p;
+-  CodeRange r;
+-  r.begin = reinterpret_cast<uword>(p);
+-  r.end = r.begin + size;
+-  return r;
++  for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
++    const uword wrapper = page + offset + i * l.landing_pad_size;
++    void* metadata = allocator.MetadataForWrapper(wrapper);
++    EXPECT_EQ(page + l.rx_mapping_size + i * l.metadata_size,
++              reinterpret_cast<uword>(metadata));
++    EXPECT_EQ(wrapper, allocator.WrapperOfMetadata(metadata));
++  }
+ }
+ 
+-VM_UNIT_TEST_CASE(WrapperAllocator_WrapEntryPointStoresTargetOnly) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++// Distinct allocations must get distinct landing pads, advancing by exactly one
++// pad each time.
++VM_UNIT_TEST_CASE(WrapperAllocator_HandsOutDistinctSequentialPads) {
++  const Layout l = TestLayout();
+   WrapperAllocator allocator(l);
+ 
+-  void* stub = nullptr;
+-  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
+-
+-  const uword target = static_cast<uword>(0xcafef00d);
+-  const uword wrapper = allocator.WrapEntryPoint(range, target);
+-  EXPECT(wrapper != 0);
++  const uword a = allocator.WrapperOfMetadata(allocator.AllocateMetadata());
++  const uword b = allocator.WrapperOfMetadata(allocator.AllocateMetadata());
++  const uword c = allocator.WrapperOfMetadata(allocator.AllocateMetadata());
+ 
+-  // The only effect is an 8-byte store into metadata.
+-  EXPECT_EQ(target, allocator.TargetOfWrapper(wrapper));
+-
+-  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
+-                l.rx_mapping_size);
++  EXPECT_EQ(a + l.landing_pad_size, b);
++  EXPECT_EQ(b + l.landing_pad_size, c);
+ }
+ 
+-// Distinct targets must get distinct landing pads, advancing by exactly one
+-// pad each time, and all within the first page until it is full.
+-VM_UNIT_TEST_CASE(WrapperAllocator_HandsOutDistinctSequentialPads) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++// The target is read back through ContainsEntryPoint, which is the only reader
++// of the metadata we have. Storing into the slot is the caller's job -- theirs
++// has no WrapEntryPoint that does both.
++VM_UNIT_TEST_CASE(WrapperAllocator_ContainsEntryPointReportsStoredTarget) {
++  const Layout l = TestLayout();
+   WrapperAllocator allocator(l);
+ 
+-  void* stub = nullptr;
+-  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
++  void* metadata = allocator.AllocateMetadata();
++  EXPECT(metadata != nullptr);
++  reinterpret_cast<Metadata*>(metadata)->target_entry_point =
++      static_cast<uword>(0xcafef00d);
++  const uword wrapper = allocator.WrapperOfMetadata(metadata);
++
++  uword target = 0;
++  EXPECT(allocator.ContainsEntryPoint(wrapper, &target));
++  EXPECT_EQ(static_cast<uword>(0xcafef00d), target);
++  // The out-parameter is optional.
++  EXPECT(allocator.ContainsEntryPoint(wrapper, nullptr));
++}
+ 
+-  const uword a = allocator.WrapEntryPoint(range, static_cast<uword>(0x1111));
+-  const uword b = allocator.WrapEntryPoint(range, static_cast<uword>(0x2222));
+-  const uword c = allocator.WrapEntryPoint(range, static_cast<uword>(0x3333));
++VM_UNIT_TEST_CASE(WrapperAllocator_ContainsEntryPointBoundaries) {
++  const Layout l = TestLayout();
++  WrapperAllocator allocator(l);
+ 
+-  EXPECT_EQ(a + l.landing_pad_size, b);
+-  EXPECT_EQ(b + l.landing_pad_size, c);
+-  EXPECT_EQ(static_cast<uword>(0x1111), allocator.TargetOfWrapper(a));
+-  EXPECT_EQ(static_cast<uword>(0x2222), allocator.TargetOfWrapper(b));
+-  EXPECT_EQ(static_cast<uword>(0x3333), allocator.TargetOfWrapper(c));
++  void* metadata = allocator.AllocateMetadata();
++  EXPECT(metadata != nullptr);
++  const uword page = PageOf(l, metadata);
++  const uword first = page + ExpectedFirstWrapperOffset();
++  const uword last = first + (l.num_wrappers_per_page - 1) * l.landing_pad_size;
+ 
+-  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
+-                l.rx_mapping_size);
++  EXPECT(allocator.ContainsEntryPoint(first, nullptr));
++  EXPECT(allocator.ContainsEntryPoint(last, nullptr));
++  // One landing pad past the last is off the end, even though it still masks
++  // back to a page we own.
++  EXPECT(!allocator.ContainsEntryPoint(last + l.landing_pad_size, nullptr));
++  // A misaligned address inside the range is not an entry point.
++  EXPECT(!allocator.ContainsEntryPoint(first + 1, nullptr));
++  // Neither is an address on a page we did not allocate. Without the ownership
++  // check, masking alone would accept any address in the address space.
++  EXPECT(!allocator.ContainsEntryPoint(TestStubStart(), nullptr));
+ }
+ 
+ // Exhausting a page must roll onto a fresh one instead of running off the end.
+ VM_UNIT_TEST_CASE(WrapperAllocator_RollsOntoANewPageWhenFull) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  const Layout l = TestLayout();
+   WrapperAllocator allocator(l);
+ 
+-  void* stub = nullptr;
+-  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
+-
+   uword first = 0;
+   uword last_on_first_page = 0;
+   for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
+-    const uword w = allocator.WrapEntryPoint(range, static_cast<uword>(i + 1));
+-    EXPECT(w != 0);
+-    if (i == 0) first = w;
+-    last_on_first_page = w;
++    void* metadata = allocator.AllocateMetadata();
++    EXPECT(metadata != nullptr);
++    const uword wrapper = allocator.WrapperOfMetadata(metadata);
++    if (i == 0) first = wrapper;
++    last_on_first_page = wrapper;
+   }
+   // The whole page was consumed, contiguously.
+   EXPECT_EQ(first + (l.num_wrappers_per_page - 1) * l.landing_pad_size,
+             last_on_first_page);
+ 
+-  // One more must land on a different page. Comparing addresses would be
+-  // flaky -- a fresh mapping can legitimately land adjacent to the old one --
+-  // so compare the owning pages instead.
+-  const uword overflow = allocator.WrapEntryPoint(range, static_cast<uword>(0x9999));
+-  EXPECT(overflow != 0);
+-  EXPECT(allocator.PageOfWrapper(overflow) != allocator.PageOfWrapper(first));
+-  EXPECT_EQ(static_cast<uword>(0x9999), allocator.TargetOfWrapper(overflow));
++  void* overflow_metadata = allocator.AllocateMetadata();
++  EXPECT(overflow_metadata != nullptr);
++  const uword overflow = allocator.WrapperOfMetadata(overflow_metadata);
++  // Comparing addresses would be flaky -- a fresh mapping can legitimately land
++  // adjacent to the old one -- so compare the owning pages.
++  EXPECT(PageOf(l, reinterpret_cast<void*>(overflow)) !=
++         PageOf(l, reinterpret_cast<void*>(first)));
++  EXPECT(allocator.ContainsEntryPoint(overflow, nullptr));
++}
++
++// True if a mapped region begins at exactly this address. mach_vm_region
++// reports the first region at or above the address it is given, so a freed
++// page makes it report the next one up instead, at a higher address.
++static bool RegionStartsAt(uword address) {
++  mach_vm_address_t addr = static_cast<mach_vm_address_t>(address);
++  mach_vm_size_t size = 0;
++  vm_region_basic_info_data_64_t info;
++  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++  mach_port_t object_name = MACH_PORT_NULL;
++  const kern_return_t kr =
++      mach_vm_region(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
++                     reinterpret_cast<vm_region_info_t>(&info), &count,
++                     &object_name);
++  return kr == KERN_SUCCESS && addr == static_cast<mach_vm_address_t>(address);
++}
++
++// Wrapper pages must be unmapped when the allocator dies. The two checks made
++// while the allocator is alive are a positive control: without them a query
++// that could never see any region would report "freed" for a leaked page and
++// this test would pass while the leak persisted.
++VM_UNIT_TEST_CASE(WrapperAllocator_FreesItsPagesOnDestruction) {
++  const Layout l = TestLayout();
++
++  uword page_a = 0;
++  uword page_b = 0;
++  {
++    WrapperAllocator allocator(l);
++
++    void* first = allocator.AllocateMetadata();
++    EXPECT(first != nullptr);
++    page_a = PageOf(l, first);
++
++    // Consume the rest of the first page so the next allocation maps a second.
++    for (intptr_t i = 1; i < l.num_wrappers_per_page; i++) {
++      EXPECT(allocator.AllocateMetadata() != nullptr);
++    }
++    void* second = allocator.AllocateMetadata();
++    EXPECT(second != nullptr);
++    page_b = PageOf(l, second);
++
++    EXPECT(page_a != page_b);
++    EXPECT(RegionStartsAt(page_a));
++    EXPECT(RegionStartsAt(page_b));
++  }
+ 
+-  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
+-                l.rx_mapping_size);
++  EXPECT(!RegionStartsAt(page_a));
++  EXPECT(!RegionStartsAt(page_b));
+ }
+ 
+ }  // namespace shorebird
+-- 
+2.53.0
+

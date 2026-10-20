@@ -1,0 +1,68 @@
+From f174efefd5591399b359107219acd235264a4b71 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 1 Sep 2026 10:47:10 +0800
+Subject: [PATCH 121/206] fix(dd-pass): switch IL pass from kernel_offset to
+ resolution path
+
+Shorebird's DD IL pass is driven by DDSlotResolution (populated from
+voters), not by the DDSlotMapping kernel_offset index. Evidence from A5:
+their gen_snapshot emits 3 indirect sites with voters-only input and 0
+sites with mapping-only input, which matches the resolution path exactly.
+
+Remove the kernel_offset lookup from ReplaceStaticCallsWithIndirectStaticCalls
+and gate the pass on resolution == nullptr. The voters-only oracle produces
+the same 3 sites as Shorebird's binary (dd_pass_check.sh).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/aot_call_specializer.cc b/runtime/vm/compiler/aot/aot_call_specializer.cc
+index b979a43bce0..4e96b75b40f 100644
+--- a/runtime/vm/compiler/aot/aot_call_specializer.cc
++++ b/runtime/vm/compiler/aot/aot_call_specializer.cc
+@@ -1220,9 +1220,12 @@ void AotCallSpecializer::ReplaceInstanceCallsWithDispatchTableCalls() {
+ // mapping first also leaves the production configuration -- voters and mapping
+ // supplied together -- with exactly the behaviour it had before this note.
+ void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
+-  const DDSlotMapping* mapping = ShorebirdLinker::shared()->dd_slot_mapping();
++  // Resolution is the only path Shorebird's IL pass uses (A5): a file with
++  // only a DDSlotMapping section gives 0 rewrite sites for their binary, while
++  // a voters-only file gives the expected sites. The kernel_offset path was
++  // removed once this was confirmed by experiment.
+   const DDSlotResolution* resolution = ShorebirdLinker::shared()->resolution();
+-  if (mapping == nullptr && resolution == nullptr) return;
++  if (resolution == nullptr) return;
+ 
+   ASSERT(current_iterator_ == nullptr);
+   for (BlockIterator block_it = flow_graph()->reverse_postorder_iterator();
+@@ -1239,20 +1242,14 @@ void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
+       const Function& target = call->function();
+       if (target.IsNull()) continue;
+ 
+-      // kernel_offset_ is the key their DDTableBuilder::VisitCode uses on this
+-      // same map, so a call site and the table entry it dispatches to agree by
+-      // construction. It is also the only per-function identity that survives
+-      // recompilation of the same source, which is the whole point.
+-      long slot =
+-          mapping != nullptr
+-              ? mapping->SlotForKernelOffset(target.kernel_offset())
+-              : -1;
+-      if (slot < 0 && resolution != nullptr) {
+-        // The raw FunctionPtr ResolveDDSlots recorded as the slot's winner.
+-        // Raw rather than a handle because that is what it stored -- see the
+-        // note on DDSlotResolution::slot_to_owner_ in dd_voting.h.
+-        slot = resolution->SlotForOwner(static_cast<uword>(target.ptr()));
+-      }
++      // Look up the slot for this call's target via the resolution table.
++      // The resolution path is the only one Shorebird uses (A5): a file with
++      // only a DDSlotMapping section produces 0 rewrite sites for them, while a
++      // voters-only file produces the expected sites. ResolveDDSlots populates
++      // owner_to_slot_ from the voters, so the lookup here uses the same winner
++      // the linker recorded. The raw FunctionPtr is what it stored -- see the
++      // note on DDSlotResolution::slot_to_owner_ in dd_voting.h.
++      long slot = resolution->SlotForOwner(static_cast<uword>(target.ptr()));
+       if (slot < 0) continue;
+ 
+       call->ReplaceWith(IndirectStaticCallInstr::FromCall(Z, call, slot),
+-- 
+2.53.0
+

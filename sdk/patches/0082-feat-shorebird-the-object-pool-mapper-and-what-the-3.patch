@@ -1,0 +1,465 @@
+From bda9d0f74f97c670e11d5a887188b3a720265d08 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 11:07:35 +0800
+Subject: [PATCH 082/206] feat(shorebird): the object pool mapper, and what the
+ 385 indices are for
+
+Disassembling InitializeWithObjectPoolLinkInfo finishes the three-stage mapper
+and settles a question this tree had explicitly recorded as open.
+
+The object pool link info's trailing index list -- 385 entries, carried under a
+descriptive name because three hypotheses about it had been tested and refuted
+-- is the mapper's pair-constraint list. Their code reads that very vector at
+0x10019d7c0 and loads mapping[i] together with mapping[i + 1] at 0x10019d7cc.
+Each index asserts the two pool slots stay adjacent, so a known side fixes the
+unknown one: forwards at 0x10019d7f0, backwards at 0x10019d80c. Skipped when
+both are known and when neither is. 292 of the 385 had exactly one side mapped
+after stage 1, which is the number their report prints.
+
+So the field is renamed from indices_ to pair_constraints_ and retyped to
+int32_t, which is what their `ldrsw ... lsl #2` indexes it as.
+
+Two more details that were not guessable:
+
+Stage 1 skips a pair unless both indices are at least 8 (cmp/ccmp at
+0x10019d72c). The pool's first eight slots are fixed.
+
+Backfill is not simply "lowest free". When both halves of a constraint are
+still unmapped it searches for the first index whose successor is also free,
+takes both, advances the loop an extra step and counts two (w21 = 2 at
+0x10019da68). A lowest-free search would break the pair.
+
+One test failed on the first run and it was the test that was wrong: it paired
+base index 1, which stage 1's own floor discards, so the slot backfilled
+instead. Rewritten to exercise what it claims -- two claimed bases leaving 8
+and 10 free but neither with a free successor, so the pair has to land at 12.
+
+Negative control: flipping the backward derivation from b - 1 to b + 1 turns
+the derivation test red and leaves the other four green, which is right, since
+those four do not exercise that direction.
+
+113 tests pass; verify_all.sh reports 5 ran, 0 failed, 0 skipped.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index a067b97aae9..d7da72eb668 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -450,15 +450,23 @@ std::unique_ptr<ObjectPoolLinkInfo> ObjectPoolLinkInfo::ReadFromStream(
+     codes.push_back(std::move(info));
+   }
+ 
+-  std::vector<uintptr_t> indices;
+-  if (!ReadIndexVector(stream, &indices)) return nullptr;
++  // Their element type is int32_t (the mapper indexes this with
++  // `ldrsw ... lsl #2`), but the wire form is the same unsigned varint list.
++  std::vector<uintptr_t> raw;
++  if (!ReadIndexVector(stream, &raw)) return nullptr;
++  std::vector<int32_t> pair_constraints;
++  pair_constraints.reserve(raw.size());
++  for (uintptr_t v : raw) {
++    if (v > static_cast<uintptr_t>(kMaxInt32)) return nullptr;
++    pair_constraints.push_back(static_cast<int32_t>(v));
++  }
+ 
+   if (stream->PendingBytes() <= 0) return nullptr;
+   const intptr_t num_pool_entries = stream->ReadUnsigned<intptr_t>();
+   if (num_pool_entries < 0) return nullptr;
+ 
+   return std::unique_ptr<ObjectPoolLinkInfo>(new ObjectPoolLinkInfo(
+-      std::move(codes), std::move(indices), num_pool_entries));
++      std::move(codes), std::move(pair_constraints), num_pool_entries));
+ }
+ 
+ void ObjectPoolLinkInfo::WriteToStream(BaseWriteStream* stream) const {
+@@ -469,7 +477,11 @@ void ObjectPoolLinkInfo::WriteToStream(BaseWriteStream* stream) const {
+     WriteIndexVector(stream, info.self_pp_indices_);
+     WriteIndexVector(stream, info.subgraph_pp_indices_);
+   }
+-  WriteIndexVector(stream, indices_);
++  stream->WriteUnsigned<intptr_t>(
++      static_cast<intptr_t>(pair_constraints_.size()));
++  for (int32_t v : pair_constraints_) {
++    stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(v));
++  }
+   // Trailing, like the class and field tables' sizes.
+   stream->WriteUnsigned<intptr_t>(num_pool_entries_);
+ }
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 70cac112337..bad08440793 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -239,23 +239,30 @@ struct CodeInfo {
+ // The trailing count is the whole pool's size, and 1113 + 292 + 16 from their
+ // three-stage report adds up to exactly it.
+ //
+-// What the 385 indices mean is NOT established, so they are carried under a
+-// descriptive name rather than an interpretive one. Measured, not guessed:
+-// they are ascending, identical between base and patch, a strict subset of the
+-// 1126 indices the records reference, and they match none of "all minus
+-// self", "all minus subgraph", or "all minus either". Naming them for a
+-// hypothesis none of those tests support is the mistake `0xd8` already was.
++// The 385 indices are the mapper's pair-constraint list -- established
++// 2026-08-25 by disassembling InitializeWithObjectPoolLinkInfo, which reads
++// this very vector at 0x10019d7c0. Each entry `i` asserts that pool slots `i`
++// and `i + 1` must stay adjacent, so knowing where one of them landed in the
++// base fixes the other. 292 of the 385 had exactly one side already mapped,
++// which is the number their report prints.
++//
++// They were carried under a descriptive name while three hypotheses about them
++// stood refuted; the name is now interpretive because the interpretation was
++// read out of their code rather than guessed at. Their element type is int32_t,
++// from the `ldrsw ... lsl #2` that indexes it.
+ class ObjectPoolLinkInfo {
+  public:
+   ObjectPoolLinkInfo(std::vector<CodeInfo> codes,
+-                     std::vector<uintptr_t> indices,
++                     std::vector<int32_t> pair_constraints,
+                      intptr_t num_pool_entries)
+       : codes_(std::move(codes)),
+-        indices_(std::move(indices)),
++        pair_constraints_(std::move(pair_constraints)),
+         num_pool_entries_(num_pool_entries) {}
+ 
+   const std::vector<CodeInfo>& codes() const { return codes_; }
+-  const std::vector<uintptr_t>& indices() const { return indices_; }
++  const std::vector<int32_t>& pair_constraints() const {
++    return pair_constraints_;
++  }
+   intptr_t num_pool_entries() const { return num_pool_entries_; }
+ 
+   // Returns nullptr on any malformed input rather than aborting: the caller
+@@ -265,7 +272,7 @@ class ObjectPoolLinkInfo {
+ 
+  private:
+   std::vector<CodeInfo> codes_;
+-  std::vector<uintptr_t> indices_;
++  std::vector<int32_t> pair_constraints_;
+   intptr_t num_pool_entries_;
+ };
+ 
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+index 8ef6b2aa0fd..61406454bcd 100644
+--- a/runtime/vm/shorebird/link_info_test.cc
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -47,7 +47,7 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_RoundTrip) {
+   codes.emplace_back(a, a, std::vector<uintptr_t>{1420},
+                      std::vector<uintptr_t>{7, 9});
+ 
+-  const ObjectPoolLinkInfo in(codes, std::vector<uintptr_t>{25, 27, 1405},
++  const ObjectPoolLinkInfo in(codes, std::vector<int32_t>{25, 27, 1405},
+                               /*num_pool_entries=*/1421);
+ 
+   intptr_t bytes = 0;
+@@ -59,8 +59,8 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_RoundTrip) {
+   EXPECT(out->codes()[0] == codes[0]);
+   EXPECT(out->codes()[1] == codes[1]);
+   EXPECT(out->codes()[2] == codes[2]);
+-  EXPECT_EQ(static_cast<size_t>(3), out->indices().size());
+-  EXPECT_EQ(static_cast<uintptr_t>(1405), out->indices()[2]);
++  EXPECT_EQ(static_cast<size_t>(3), out->pair_constraints().size());
++  EXPECT_EQ(static_cast<int32_t>(1405), out->pair_constraints()[2]);
+   EXPECT_EQ(static_cast<intptr_t>(1421), out->num_pool_entries());
+ }
+ 
+@@ -117,7 +117,7 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_DeclinesTruncatedInput) {
+   std::vector<CodeInfo> codes;
+   codes.emplace_back(h, h, std::vector<uintptr_t>{1, 2},
+                      std::vector<uintptr_t>{3});
+-  const ObjectPoolLinkInfo in(codes, std::vector<uintptr_t>{4}, 99);
++  const ObjectPoolLinkInfo in(codes, std::vector<int32_t>{4}, 99);
+ 
+   MallocWriteStream out(/*initial_size=*/256);
+   in.WriteToStream(&out);
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 0d67d6a0fcc..af00324f22a 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -158,6 +158,130 @@ std::vector<intptr_t> ShorebirdLinker::ComputeClassTableMapping(
+   return mapping;
+ }
+ 
++// Shorebird's object pool mapper, transcribed from
++// InitializeWithObjectPoolLinkInfo. Same shape as the class table's, plus the
++// middle stage that one does not have.
++//
++//   0x10019d728  stage 1 reads LinkedValue<uword>: base @+0x00, patch @+0x08,
++//                stride 0x10
++//   0x10019d72c  cmp #8 / ccmp #8 -- a pair is skipped unless BOTH sides are
++//                at least 8. The pool's first eight slots are fixed.
++//   0x10019d7c0  stage 2 walks ObjectPoolLinkInfo's own index list, as int32
++//   0x10019d7cc  it loads mapping[i] AND mapping[i + 1] together
++//   0x10019d7d0  both unmapped -> nothing to derive, skip
++//   0x10019d7dc  both mapped   -> nothing to do, skip
++//   0x10019d7f0  mapping[i] known    -> mapping[i + 1] = mapping[i] + 1
++//   0x10019d80c  mapping[i+1] known  -> mapping[i]     = mapping[i + 1] - 1
++//   0x10019d888  stage 3 over entries still holding -1
++//   0x10019d894  ...but first, is this index part of a constrained pair?
++//   0x10019d930  if so, find two ADJACENT free slots and take both, count 2
++//   0x10019d8c0  otherwise the ordinary lowest-free search
++//
++// This is what the 385 trailing indices in their object pool link info are for,
++// and the count settles it: 292 of them had exactly one side already mapped
++// after stage 1, which is the number their report prints.
++std::vector<intptr_t> ShorebirdLinker::ComputeObjectPoolMapping(
++    const std::vector<PoolIndexPair>& link_results,
++    const std::vector<int32_t>& pair_constraints,
++    intptr_t num_pool_entries,
++    MappingCounts* counts) {
++  ASSERT(counts != nullptr);
++  ASSERT(num_pool_entries >= 0);
++
++  std::vector<intptr_t> mapping(static_cast<size_t>(num_pool_entries), -1);
++  std::vector<bool> taken;
++
++  // Claims `index`, growing the bitmap on demand as both of their sites do.
++  auto claim = [&taken](intptr_t index) {
++    if (index >= static_cast<intptr_t>(taken.size())) {
++      taken.resize(static_cast<size_t>(index) + 1, false);
++    }
++    taken[static_cast<size_t>(index)] = true;
++  };
++  auto is_taken = [&taken](intptr_t index) {
++    return index < static_cast<intptr_t>(taken.size()) &&
++           taken[static_cast<size_t>(index)];
++  };
++
++  counts->link_results = static_cast<intptr_t>(link_results.size());
++
++  // Stage 1.
++  for (const PoolIndexPair& pair : link_results) {
++    if (pair.base_index < kFirstMappablePoolIndex ||
++        pair.patch_index < kFirstMappablePoolIndex) {
++      continue;
++    }
++    if (pair.patch_index >= num_pool_entries) continue;
++    mapping[static_cast<size_t>(pair.patch_index)] = pair.base_index;
++    claim(pair.base_index);
++    counts->from_link_results++;
++  }
++
++  // Stage 2. Each constraint says slots i and i + 1 stay adjacent, so one
++  // known side fixes the other. Nothing is derivable when both are unknown,
++  // and nothing is needed when both are known.
++  for (int32_t raw : pair_constraints) {
++    const intptr_t i = static_cast<intptr_t>(raw);
++    if (i < 0 || i + 1 >= num_pool_entries) continue;
++
++    const intptr_t a = mapping[static_cast<size_t>(i)];
++    const intptr_t b = mapping[static_cast<size_t>(i) + 1];
++    if ((a == -1) == (b == -1)) continue;
++
++    if (a == -1) {
++      mapping[static_cast<size_t>(i)] = b - 1;
++      claim(b - 1);
++    } else {
++      mapping[static_cast<size_t>(i) + 1] = a + 1;
++      claim(a + 1);
++    }
++    counts->from_pair_constraints++;
++  }
++
++  // Which indices participate in a constraint, so stage 3 can tell whether an
++  // unmapped slot needs a neighbour reserved alongside it. Theirs rescans the
++  // list linearly per entry (0x10019d8a4); this is the same predicate.
++  std::vector<bool> constrained(static_cast<size_t>(num_pool_entries), false);
++  for (int32_t raw : pair_constraints) {
++    const intptr_t i = static_cast<intptr_t>(raw);
++    if (i < 0 || i + 1 >= num_pool_entries) continue;
++    constrained[static_cast<size_t>(i)] = true;
++    constrained[static_cast<size_t>(i) + 1] = true;
++  }
++
++  // Stage 3.
++  intptr_t cursor = -1;
++  for (size_t i = 0; i < mapping.size(); i++) {
++    if (mapping[i] != -1) continue;
++
++    if (constrained[i] && i + 1 < mapping.size() && mapping[i + 1] == -1) {
++      // Both halves are still unmapped, so they have to land adjacent. Search
++      // for the first index at or after the cursor whose successor is free too.
++      intptr_t first = cursor + 1;
++      while (is_taken(first) || is_taken(first + 1)) first++;
++      mapping[i] = first;
++      claim(first);
++      mapping[i + 1] = first + 1;
++      claim(first + 1);
++      cursor = first + 1;
++      // Their counter advances by two here (w21 = 2 at 0x10019da68) and the
++      // loop index skips the slot just filled.
++      counts->from_backfill += 2;
++      i++;
++      continue;
++    }
++
++    intptr_t index = cursor + 1;
++    while (is_taken(index)) index++;
++    mapping[i] = index;
++    claim(index);
++    cursor = index;
++    counts->from_backfill++;
++  }
++
++  return mapping;
++}
++
+ void ShorebirdLinker::InitializeWithFieldTableLinkInfo(
+     std::unique_ptr<FieldTableLinkInfo> base) {
+   // ASSERT string from their binary: "base_field_table_ == nullptr"
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index b38123066dc..024e7b54d3a 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -132,6 +132,29 @@ class ShorebirdLinker {
+       intptr_t num_patch_cids,
+       MappingCounts* counts);
+ 
++  // Shorebird's object pool mapper, decoded from
++  // InitializeWithObjectPoolLinkInfo at 0x10019d6e8..0x10019da88. Unlike the
++  // class table's, this one has all three stages: its pair-constraint counter
++  // is written at 0x10019d828 and their report shows it reaching 292.
++  //
++  // `link_results` is their vector<LinkedValue<uword>> -- a base index then a
++  // patch index, 16 bytes -- and `pair_constraints` is ObjectPoolLinkInfo's own
++  // index list, which the mapper reads at 0x10019d7c0.
++  struct PoolIndexPair {
++    intptr_t base_index;
++    intptr_t patch_index;
++  };
++
++  static std::vector<intptr_t> ComputeObjectPoolMapping(
++      const std::vector<PoolIndexPair>& link_results,
++      const std::vector<int32_t>& pair_constraints,
++      intptr_t num_pool_entries,
++      MappingCounts* counts);
++
++  // Pool slots below this are never mapped: their stage 1 skips a pair unless
++  // both sides are >= 8 (0x10019d72c, a cmp/ccmp against 8).
++  static constexpr intptr_t kFirstMappablePoolIndex = 8;
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index 9ed3482d279..12f9a4fb0ff 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -480,4 +480,114 @@ VM_UNIT_TEST_CASE(ClassTableMapping_NoPairsBackfillsEverything) {
+   }
+ }
+ 
++
++// The object pool mapper. Its middle stage is the one the class table mapper
++// does not have, and it is what the 385 trailing indices in their object pool
++// link info are for: each index i asserts that pool slots i and i + 1 stay
++// adjacent, so a known side fixes the unknown one.
++
++VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintDerivesTheMissingSide) {
++  // Slot 10 is paired with base 20 outright. The constraint on (10, 11) then
++  // forces slot 11 to base 21 without any link result mentioning it, and the
++  // constraint on (12, 13) works the other way: 13 is known, 12 follows.
++  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++      {20, 10}, {31, 13},
++  };
++  const std::vector<int32_t> constraints = {10, 12};
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping = ShorebirdLinker::ComputeObjectPoolMapping(
++      pairs, constraints, 16, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(2), counts.from_link_results);
++  EXPECT_EQ(static_cast<intptr_t>(2), counts.from_pair_constraints);
++
++  EXPECT_EQ(static_cast<intptr_t>(20), mapping[10]);
++  EXPECT_EQ(static_cast<intptr_t>(21), mapping[11]);  // derived forwards
++  EXPECT_EQ(static_cast<intptr_t>(30), mapping[12]);  // derived backwards
++  EXPECT_EQ(static_cast<intptr_t>(31), mapping[13]);
++}
++
++// A constraint with neither side known has nothing to derive, and a constraint
++// with both sides known has nothing to do. Both must be skipped without
++// touching the counter -- otherwise the reported 292 would be 385.
++VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintSkipsBothKnownAndBothUnknown) {
++  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++      {20, 10}, {21, 11},           // both sides of the (10, 11) constraint
++  };
++  const std::vector<int32_t> constraints = {10, 12};  // (12, 13) has neither
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping = ShorebirdLinker::ComputeObjectPoolMapping(
++      pairs, constraints, 16, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(0), counts.from_pair_constraints);
++  EXPECT_EQ(static_cast<intptr_t>(20), mapping[10]);
++  EXPECT_EQ(static_cast<intptr_t>(21), mapping[11]);
++}
++
++// Their stage 1 requires both sides to be at least 8 (cmp/ccmp against 8 at
++// 0x10019d72c). The pool's first eight slots are fixed, so a pair naming one
++// is not a mapping to record.
++VM_UNIT_TEST_CASE(ObjectPoolMapping_SkipsPairsBelowTheFixedSlots) {
++  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++      {7, 10},   // base below 8
++      {20, 3},   // patch below 8
++      {21, 11},  // both fine
++  };
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping =
++      ShorebirdLinker::ComputeObjectPoolMapping(pairs, {}, 16, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(3), counts.link_results);
++  EXPECT_EQ(static_cast<intptr_t>(1), counts.from_link_results);
++  EXPECT_EQ(static_cast<intptr_t>(21), mapping[11]);
++  // Slot 10 was not mapped by the skipped pair, so it backfilled instead.
++  EXPECT(mapping[10] != 7);
++}
++
++// When both halves of a constraint reach backfill unmapped they must land
++// adjacent, which needs two consecutive free slots rather than the lowest one.
++// Theirs counts two for that (w21 = 2 at 0x10019da68).
++VM_UNIT_TEST_CASE(ObjectPoolMapping_BackfillKeepsConstrainedPairsAdjacent) {
++  // Bases 9 and 11 are claimed, which leaves 8 and 10 free but neither with a
++  // free successor. A search for "the lowest free index" would take 8 and then
++  // have to break the pair; theirs looks for the first index whose successor is
++  // also free, which is 12.
++  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {{9, 8}, {11, 9}};
++  const std::vector<int32_t> constraints = {10};
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping = ShorebirdLinker::ComputeObjectPoolMapping(
++      pairs, constraints, 13, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(9), mapping[8]);
++  EXPECT_EQ(static_cast<intptr_t>(11), mapping[9]);
++  // Adjacent, and specifically past the two singleton gaps at 8 and 10.
++  EXPECT_EQ(static_cast<intptr_t>(12), mapping[10]);
++  EXPECT_EQ(static_cast<intptr_t>(13), mapping[11]);
++  // Two slots filled by one visit, counted as two.
++  EXPECT_EQ(static_cast<intptr_t>(11), counts.from_backfill);
++}
++
++// Nothing may be handed out twice, across all three stages at once. Every count
++// above can be satisfied by a mapper that aliases, so this is checked directly.
++VM_UNIT_TEST_CASE(ObjectPoolMapping_NoBaseIndexIsUsedTwice) {
++  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++      {20, 10}, {31, 13}, {9, 8},
++  };
++  const std::vector<int32_t> constraints = {10, 12, 14};
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping = ShorebirdLinker::ComputeObjectPoolMapping(
++      pairs, constraints, 20, &counts);
++
++  std::vector<bool> seen;
++  for (intptr_t index : mapping) {
++    EXPECT(index >= 0);
++    if (static_cast<intptr_t>(seen.size()) <= index) seen.resize(index + 1, false);
++    EXPECT(!seen[index]);
++    seen[index] = true;
++  }
++  EXPECT_EQ(static_cast<intptr_t>(20), counts.from_link_results +
++                                           counts.from_pair_constraints +
++                                           counts.from_backfill);
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

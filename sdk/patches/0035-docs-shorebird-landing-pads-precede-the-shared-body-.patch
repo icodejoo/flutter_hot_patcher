@@ -1,0 +1,45 @@
+From f9c1326a99c174224263ec8dd982c0e226cde8e7 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 15:56:23 +0800
+Subject: [PATCH 035/206] docs(shorebird): landing pads precede the shared body
+ -- upstream settles it
+
+One of the two INFERRED notes from the previous commit. Upstream's
+GenerateFfiCallbackTrampolineStub emits NumCallbackTrampolinesPerPage()
+two-instruction pads, asserts the accumulated code size equals
+pads * pad size, and only then binds the shared body. So the pads come first
+and the stub's entry point is the first pad, which is what makes
+offset_of_first_wrapper_in_page_ = code_start - page_start the right
+measurement rather than an approximation.
+
+The pad itself is the whole trick, and it is 8 bytes on arm64 because it is
+exactly two instructions: adr to capture its own PC, then a branch to the
+shared body. That matches kLandingPadSize.
+
+Comment only; 14/14 wrapper tests still pass.
+
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 2a8ff48953b..ef3697c2196 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -102,9 +102,14 @@ class WrapperAllocator {
+     // what lets one class serve both directions.
+     std::function<void(uword&, uword&)> get_stub_code_range;  // 0x40
+ 
+-    // Their wrapper.h:93. The wrapper count is derived, never spelled out: one
+-    // shared body plus a run of fixed-size landing pads fills one page. This
+-    // reproduces both of their counts -- 2014 for CPUToSim, and 2044 for
++    // Their wrapper.h:93. The wrapper count is derived, never spelled out: a
++    // run of fixed-size landing pads followed by one shared body fills a page.
++    // The order is upstream's GenerateFfiCallbackTrampolineStub, which emits
++    // NumCallbackTrampolinesPerPage() two-instruction pads, asserts the code
++    // size is exactly pads * pad size, and only then binds the shared body.
++    // That is also why offset_of_first_wrapper_in_page_ is measured from the
++    // stub's entry point: the entry point is the first pad.
++    // Reproduces both of their counts -- 2014 for CPUToSim, and 2044 for
+     // SimToCPU, the latter a truncated 2044.5.
+     template <typename C>
+     static Layout fromTemplate() {
+-- 
+2.53.0
+

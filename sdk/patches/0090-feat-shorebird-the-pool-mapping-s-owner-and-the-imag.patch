@@ -1,0 +1,207 @@
+From 66a46515eb516ea7517d4b3429213152e92a46de Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 14:45:13 +0800
+Subject: [PATCH 090/206] feat(shorebird): the pool mapping's owner, and the
+ image writer that uses it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two halves of the same hookup.
+
+The mapping table's owner was recon (c)5's open question -- "plainly old
+index to new index, but which object owns it is not established". It is
+this object. Their ImageWriter::Write reaches it through
+[[0x1005214b0] + 0x28], and 0x1005214b0 is the ShorebirdLinker singleton
+pointer that linker.cc already records shared() as guarding. Two
+dereferences before the index mean the slot holds a pointer to something
+whose first word is the array base, which is a vector rather than a bare
+array. So gap1_ -- the 8 bytes at +0x28 our header had been carrying as
+"type unknown, not accessed by any measured function" -- is
+object_pool_mapping_, and InitializeWithObjectPoolLinkInfo now keeps what
+LinkObjectPools computes instead of discarding it. The 0x88 static_assert
+confirms the slot is exactly filled.
+
+The hook itself walks every non-trampoline Instructions payload before
+WriteText serialises it. Placement is forced: the edit is in place, so it
+has to happen while the bytes are still the compiler's.
+
+Measured rather than assumed, because "it built" and "no complaints" are
+the same output as "it never ran". Instrumented temporarily:
+
+  with link data     187 payloads + 1589 payloads, 2324 sites detected
+  without link data  no mapping, hook inert
+
+So the self-check path -- re-assemble an access whose index did not move
+and require it byte for byte -- ran on 2324 real sites and passed. That
+is their free oracle, comparing this decoder and these emitters against
+code the same emitters produced during compilation, and it is the
+strongest evidence object_pool_editor.cc has had.
+
+⚠️ The rewrite path has zero production coverage. nonidentity=0: on this
+fixture base and patch are near-identical programs, so all 1421 entries
+map to themselves. Unit tests cover the rewrite; nothing here does.
+
+The first negative control was inert and worth recording. Inverting
+AssembleReplacement's kind-1 branch changed nothing, because for
+ldr xN,[PP,#imm] both arms emit the same instruction -- LoadFromOffset
+and LoadWordFromPoolIndex agree on the common case. That is the same
+identity-transformation trap as the backfill cursor. Assembling the
+self-check against op.index + 1 instead does move the bytes, and then
+"Expected:" / "Actual:" fire and ok goes false on both images.
+
+verify_all.sh is 7 ran / 0 failed / 137 passed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/image_snapshot.cc b/runtime/vm/image_snapshot.cc
+index b93630789ab..ddd4ded0737 100644
+--- a/runtime/vm/image_snapshot.cc
++++ b/runtime/vm/image_snapshot.cc
+@@ -20,6 +20,9 @@
+ #include "vm/json_writer.h"
+ #include "vm/object.h"
+ #include "vm/object_store.h"
++#include "vm/os.h"
++#include "vm/shorebird/linker.h"
++#include "vm/shorebird/object_pool_editor.h"
+ #include "vm/program_visitor.h"
+ #include "vm/stub_code.h"
+ #include "vm/timeline.h"
+@@ -559,6 +562,8 @@ void ImageWriter::Write(NonStreamingWriteStream* clustered_stream, bool vm) {
+     }
+   }
+ 
++  EditObjectPoolAccesses();
++
+   WriteBss(vm);
+ 
+   offset_space_ = vm ? IdSpace::kVmText : IdSpace::kIsolateText;
+@@ -571,6 +576,48 @@ void ImageWriter::Write(NonStreamingWriteStream* clustered_stream, bool vm) {
+   WriteROData(clustered_stream, vm);
+ }
+ 
++// Shorebird: renumber every object pool access to the index the linker's
++// mapping gives it, in place, before the payload is serialised.
++//
++// This is the driver their ObjectPoolEditor is inlined into -- the whole family
++// has exactly one production caller and it is this function (ten of the
++// thirteen call sites in their whole __text are inside it). The walk itself
++// lives in ObjectPoolEditor::Edit; what belongs here is which payloads to walk
++// and where the mapping comes from.
++//
++// Two reasons this can be a no-op and both are normal: a plain AOT compile has
++// no patch to link against, so there is no mapping at all; and a mapping that
++// leaves every index alone still runs, because Edit's second half re-assembles
++// each untouched access and checks it comes out byte for byte identical. That
++// self-check is theirs, and it is the closest thing this file has to a free
++// oracle -- it compares the editor's decoder and emitters against code the same
++// emitters produced during compilation.
++void ImageWriter::EditObjectPoolAccesses() {
++#if defined(TARGET_ARCH_ARM64)
++  const std::vector<intptr_t>* mapping =
++      ShorebirdLinker::shared()->object_pool_mapping();
++  if (mapping == nullptr || mapping->empty()) return;
++
++  bool ok = true;
++  for (intptr_t i = 0; i < instructions_.length(); i++) {
++    InstructionsData& data = instructions_[i];
++    if (data.trampoline_length != 0) continue;
++    const Instructions& insns = *data.insns_;
++    const uword start = insns.PayloadStart();
++    if (!ObjectPoolEditor::Edit(start, start + insns.Size(), mapping->data(),
++                                static_cast<intptr_t>(mapping->size()))) {
++      ok = false;
++    }
++  }
++  // Their self-check reports through "Expected:\n" / "Actual:\n" and does not
++  // abort; a declined site is not a corrupted one, because the editor only
++  // rewrites what it could decode and re-verify.
++  if (!ok) {
++    OS::PrintErr("Shorebird: some object pool accesses were left alone\n");
++  }
++#endif  // defined(TARGET_ARCH_ARM64)
++}
++
+ void ImageWriter::WriteROData(NonStreamingWriteStream* stream, bool vm) {
+   ASSERT(Utils::IsAligned(stream->Position(), kRODataAlignment));
+   // Heap page starts here.
+diff --git a/runtime/vm/image_snapshot.h b/runtime/vm/image_snapshot.h
+index 4379c8645f6..112f5eafcf2 100644
+--- a/runtime/vm/image_snapshot.h
++++ b/runtime/vm/image_snapshot.h
+@@ -437,6 +437,9 @@ class ImageWriter : public ValueObject {
+   uint32_t AddBytesToData(uint8_t* bytes, intptr_t length);
+ 
+   void Write(NonStreamingWriteStream* clustered_stream, bool vm);
++  // Shorebird: renumber object pool accesses in place before the payload
++  // is serialised. See the definition for why it can be a no-op.
++  void EditObjectPoolAccesses();
+   intptr_t data_size() const { return next_data_offset_; }
+   intptr_t text_size() const { return next_text_offset_; }
+   intptr_t GetTextObjectCount() const;
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index cbd0e882848..c6e5883631e 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -55,7 +55,7 @@ ShorebirdLinker::ShorebirdLinker()
+     : gap0_{},
+       base_object_pool_(nullptr),
+       patch_object_pool_(nullptr),
+-      gap1_{},
++      object_pool_mapping_(nullptr),
+       dd_slot_mapping_(nullptr),
+       dd_slot_voters_(nullptr),
+       resolution_(nullptr),
+@@ -385,7 +385,8 @@ void ShorebirdLinker::InitializeWithObjectPoolLinkInfo(
+   patch_object_pool_ = std::move(patch);
+ 
+   MappingCounts counts;
+-  LinkObjectPools(&counts);
++  object_pool_mapping_ =
++      std::make_unique<std::vector<intptr_t>>(LinkObjectPools(&counts));
+ }
+ 
+ void ObjectPoolMappingsAggregator::AddVote(uintptr_t patch_index,
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 7ca74887397..12762226043 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -341,6 +341,13 @@ class ShorebirdLinker {
+ 
+   std::vector<intptr_t> LinkObjectPools(MappingCounts* counts) const;
+ 
++  // The mapping InitializeWithObjectPoolLinkInfo computed, or nullptr when no
++  // object pool link info was supplied. ImageWriter::Write consults this to
++  // decide whether there is anything to rewrite.
++  const std::vector<intptr_t>* object_pool_mapping() const {
++    return object_pool_mapping_.get();
++  }
++
+   const ObjectPoolLinkInfo* base_object_pool() const {
+     return base_object_pool_.get();
+   }
+@@ -386,8 +393,18 @@ class ShorebirdLinker {
+   std::unique_ptr<ObjectPoolLinkInfo> base_object_pool_;   // +0x18
+   std::unique_ptr<ObjectPoolLinkInfo> patch_object_pool_;  // +0x20
+ 
+-  // +0x28: 8-byte gap. Same situation as gap0_.
+-  uint8_t gap1_[8];
++  // +0x28: the object pool's old-index -> new-index table.
++  //
++  // Recovered from how ImageWriter::Write reaches it: their sp+0x70 comes from
++  // [[0x1005214b0] + 0x28], then [x8], then x8[index]. 0x1005214b0 is the
++  // ShorebirdLinker singleton pointer -- the same address shared() guards --
++  // so the table hangs off this object at +0x28. Two dereferences before the
++  // index means the slot holds a pointer to something whose first word is the
++  // array base, which is what a vector is; a bare array would need one.
++  //
++  // Recon (c)5 recorded this slot as "plainly old index -> new index, but
++  // which object owns it is not established". This is that answer.
++  std::unique_ptr<std::vector<intptr_t>> object_pool_mapping_;
+ 
+   // +0x30 / +0x38
+   std::unique_ptr<FieldTableLinkInfo> base_field_table_;
+-- 
+2.53.0
+

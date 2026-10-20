@@ -1,0 +1,121 @@
+From 531c5356ddae5d61bfbb017abe2b228ba8e95804 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 24 Sep 2026 13:31:15 +0800
+Subject: [PATCH 162/206] F37 (A3): cache the three native-call trampoline stub
+ entry points in Thread
+
+Shorebird's Thread holds call_bootstrap_native_entry_point_ (+0x908),
+call_no_scope_native_entry_point_ (+0x910) and
+call_auto_scope_native_entry_point_ (+0x918) -- a contiguous run written once
+in their Thread::InitVMConstants by dereferencing the StubCode table
+(ldr x9,[x8,#0x4c30]; ldur x9,[x9,#7]; str x9,[x0,#0x908]), i.e. ordinary
+cached stub entry points, not Simulator state.
+
+They exist because their link_lazily() native call sites dispatch through a
+Thread field rather than a Code* pool entry, so re-linking such a site can only
+swap the trampoline by changing *which* Thread field it indexes. That is why
+there are three and not one.
+
+Ours are appended at the tail of the Shorebird block, not added to
+CACHED_VM_STUBS_ADDRESSES_LIST: that list's members are declared in the middle
+of Thread, so appending there would shift every later offset, and CheckOffsets()
+validates those against the checked-in runtime_offsets_extracted.h table which
+this machine cannot regenerate. Offsets therefore differ from theirs by
+construction; generated code must go through the accessors.
+
+Build: ninja -C xcodebuild/ProductARM64 gen_snapshot analyze_snapshot
+dartaotruntime run_vm_tests -> 949/949, rc=0.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/thread.cc b/runtime/vm/thread.cc
+index 908c7af826b..a374e951744 100644
+--- a/runtime/vm/thread.cc
++++ b/runtime/vm/thread.cc
+@@ -226,6 +226,23 @@ void Thread::InitVMConstants() {
+       kPropagateErrorRuntimeEntry.GetEntryPointNoRedirect();
+ #endif
+ 
++  // Shorebird: the three native-call trampoline stub entry points, cached the
++  // same way the CACHED_VM_STUBS_ADDRESSES_LIST entries above are. They are not
++  // in that X-macro list because that list's members are declared in the middle
++  // of Thread; appending there would shift every later offset and CheckOffsets()
++  // validates those against the checked-in runtime_offsets_extracted.h table,
++  // which this machine cannot regenerate (see thread.h). So they are declared at
++  // the tail of the Shorebird block and written here instead.
++  ASSERT(call_bootstrap_native_entry_point_ == 0);
++  ASSERT(call_no_scope_native_entry_point_ == 0);
++  ASSERT(call_auto_scope_native_entry_point_ == 0);
++  call_bootstrap_native_entry_point_ =
++      StubCode::CallBootstrapNative().EntryPoint();
++  call_no_scope_native_entry_point_ =
++      StubCode::CallNoScopeNative().EntryPoint();
++  call_auto_scope_native_entry_point_ =
++      StubCode::CallAutoScopeNative().EntryPoint();
++
+ // Setup the thread specific reusable handles.
+ #define REUSABLE_HANDLE_ALLOCATION(object)                                     \
+   this->object##_handle_ = this->AllocateReusableHandle<object>();
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index 3a738779294..b469bca4ee1 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -665,6 +665,45 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, indirect_static_call_table_);
+   }
+ 
++  // Shorebird: cached entry points of the three native-call trampoline stubs.
++  //
++  // Theirs are a contiguous run at Thread+0x908/0x910/0x918
++  // (call_bootstrap_native_, call_no_scope_native_, call_auto_scope_native_),
++  // each written once in their Thread::InitVMConstants by dereferencing the
++  // StubCode table -- `ldr x9,[x8,#0x4c30]; ldur x9,[x9,#7]; str x9,[x0,#0x908]`
++  // -- i.e. ordinary cached stub entry points, not Simulator-specific state.
++  // Ours are appended, for the reason spelled out at is_simulating() above, so
++  // the offsets differ by construction; generated code must go through these
++  // accessors and never a literal.
++  //
++  // They exist because Shorebird's `link_lazily()` native call sites dispatch
++  // as `ldr x16,[PP,#slot]; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30`, where
++  // the pool slot holds a Smi-tagged *Thread offset*. Linking such a site (see
++  // NativeEntry::LinkNativeCall) has to be able to swap the trampoline between
++  // bootstrap / no-scope / auto-scope, and with this shape the only way to do
++  // that is to rewrite which of these three fields the site indexes. That is
++  // why there are three of them and not just the bootstrap one.
++  uword call_bootstrap_native_entry_point() const {
++    return call_bootstrap_native_entry_point_;
++  }
++  static intptr_t call_bootstrap_native_entry_point_offset() {
++    return OFFSET_OF(Thread, call_bootstrap_native_entry_point_);
++  }
++
++  uword call_no_scope_native_entry_point() const {
++    return call_no_scope_native_entry_point_;
++  }
++  static intptr_t call_no_scope_native_entry_point_offset() {
++    return OFFSET_OF(Thread, call_no_scope_native_entry_point_);
++  }
++
++  uword call_auto_scope_native_entry_point() const {
++    return call_auto_scope_native_entry_point_;
++  }
++  static intptr_t call_auto_scope_native_entry_point_offset() {
++    return OFFSET_OF(Thread, call_auto_scope_native_entry_point_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1838,6 +1877,9 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   uword base_instructions_entry_point_ = 0;
+   uword base_instructions_end_ = 0;
+   const uword* indirect_static_call_table_ = nullptr;
++  uword call_bootstrap_native_entry_point_ = 0;
++  uword call_no_scope_native_entry_point_ = 0;
++  uword call_auto_scope_native_entry_point_ = 0;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,551 @@
+From bf8567eb4bbc6579c747f1d90b27caf37d107d54 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 19:32:55 +0800
+Subject: [PATCH 119/206] fix: the ten failures that only a Debug build could
+ see
+
+All 160 of our tests were only ever run in ReleaseARM64, where NDEBUG deletes
+every ASSERT. Running them in the Debug simulator tree turned up ten failures at
+five assertion sites. The verdicts split both ways -- two are production bugs
+release was silently tolerating, three are tests asserting what only one
+configuration makes true -- so neither answer could have been assumed.
+
+Production, WrapperAllocator::AllocateWrapperPage: it always COW-remapped the
+stub's page and DuplicateRX's whole promise is an RX alias. Page::Allocate drops
+kExecutable whenever FLAG_use_simulator is on, so the source is R-- and vm_remap
+returns VM_PROT_READ; upstream's postcondition then fails. Not a corner case --
+wrappers only exist while simulating, so the remap never delivered what it
+promised in any configuration the production caller runs in. Now decided by
+reading the source mapping's protection, which is the precondition
+virtual_memory.h:122 actually states, and falling back to copying the bytes the
+way upstream's non-remap branch does. Gating on FLAG_use_simulator instead was
+tried and is wrong: it breaks the case where the stub range points into the host
+binary's own __TEXT.
+
+Production, link_info.cc's readers: every bound was PendingBytes() > 0, which
+promises one byte, and a varint is one to ten. Input that ends mid-varint has no
+terminator to stop the decoder, so ReadByte walked off the end -- an ASSERT in
+Debug, an out-of-bounds read in release, which is where these run. Bounded now
+by looking for the terminator first.
+
+Tests: the three FieldHasher cases borrowed a helper from profiler_test.cc whose
+TransitionVMToNative needs kThreadInVM, and TEST_CASE bodies run in
+kThreadNative; they are ISOLATE_UNIT_TEST_CASE now, as their callers there are.
+The serialization round-trip fed the serializer a graph that still allowed LICM
+and, once past that, a graph owned by FlowGraphBuilderHelper's synthetic
+function, which is in nobody's function list -- so no graph from that helper can
+be serialized at all. It builds its own over a real function now.
+
+And the worst of them was not the assert but what it uncovered: the two Image
+range tests were reading dart::bin::vm_snapshot_instructions as an Image. That
+blob is 0 bytes in a JIT build, so the symbol is whatever the linker put next --
+in ReleaseARM64 it resolves to dart::bin::DFE::~DFE(), and the tests were reading
+`stp x20, x19, [sp, #-0x20]!` as ImageSize. They asserted `end > start` about a
+2.6 GB range starting at a random function, and passed. Both now build a real
+64-byte-aligned image and assert the exact end.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_indirect_static_call_test.cc b/runtime/vm/compiler/backend/il_indirect_static_call_test.cc
+index dbe5b554f03..b7dd0d858cc 100644
+--- a/runtime/vm/compiler/backend/il_indirect_static_call_test.cc
++++ b/runtime/vm/compiler/backend/il_indirect_static_call_test.cc
+@@ -220,11 +220,40 @@ ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_ArgumentsSizeAndTypeArgs) {
+   EXPECT_EQ(kTagged, plain->representation());
+ }
+ 
++// FlowGraphBuilderHelper's graph, but owned by a caller-supplied Function
++// instead of the synthetic "dummy" one.
++//
++// 🔴 Not a stylistic preference. The serializer encodes every Function as
++// (owner class id, index within owner) and asserts the index was found
++// (il_serializer.cc:843); a Function::New that was never added to its owner's
++// function array gives -1. FlowGraphBuilderHelper's function is exactly that
++// (il_test_helper.h:407), and BlockBuilder hangs an Environment carrying the
++// graph's function off the block entry unconditionally
++// (block_builder.h:29-32) -- so NO graph built by that helper can be
++// serialized, whatever instructions it holds. Copied from MakeDummyGraph rather
++// than shared with it because that one is private to the helper.
++static FlowGraph* MakeGraphOwnedBy(Thread* thread, const Function& function) {
++  Zone* const zone = thread->zone();
++  auto* const parsed_function = new (zone) ParsedFunction(thread, function);
++  parsed_function->set_scope(new LocalScope(nullptr, 0, 0));
++  auto* const graph_entry =
++      new GraphEntryInstr(*parsed_function, Compiler::kNoOSRDeoptId);
++  const intptr_t block_id = 1;  // 0 is GraphEntry.
++  graph_entry->set_normal_entry(
++      new FunctionEntryInstr(graph_entry, block_id, kInvalidTryIndex,
++                             CompilerState::Current().GetNextDeoptId()));
++  auto* const graph = new FlowGraph(
++      *parsed_function, graph_entry, block_id, PrologueInfo{-1, -1},
++      FlowGraph::CompilationModeFrom(/*is_optimizing=*/true));
++  graph->CreateCommonConstants();
++  return graph;
++}
++
+ // Round-trips the instruction through the IL serializer, which is what
+ // --test_il_serialization runs over every AOT graph. This is the only test here
+-// that needs a real function: WriteTrait<const Function&> encodes a target as
+-// (owner class id, index within owner), and a synthetic Function::New is not in
+-// its owner's function list, so FindFunctionIndex would return -1.
++// that needs a real function -- twice over: WriteTrait<const Function&> encodes
++// both the call's target and the environments' owner as (owner class id, index
++// within owner), and a synthetic Function::New is in nobody's function list.
+ ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_SerializationRoundTrip) {
+   using compiler::BlockBuilder;
+   const char* kScript = R"(
+@@ -237,32 +266,48 @@ ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_SerializationRoundTrip) {
+   CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
+   HierarchyInfo hierarchy_info(thread);
+ 
+-  FlowGraphBuilderHelper H;
++  FlowGraph* const graph = MakeGraphOwnedBy(thread, target);
+   IndirectStaticCallInstr* call;
+   {
+-    BlockBuilder builder(H.flow_graph(),
+-                         H.flow_graph()->graph_entry()->normal_entry());
++    BlockBuilder builder(graph, graph->graph_entry()->normal_entry());
+     InputsArray args(1);
+-    args.Add(new Value(H.IntConstant(1)));
++    args.Add(new Value(graph->GetConstant(
++        Integer::Handle(Integer::NewCanonical(1)))));
+     call = builder.AddDefinition(new IndirectStaticCallInstr(
+         InstructionSource(), target, /*dd_slot=*/13,
+         /*type_args_len=*/0, Array::empty_array(), std::move(args),
+         S.GetNextDeoptId()));
+-    builder.AddReturn(new Value(call));
++    // Spelled out rather than left to ReturnRepresentationOf(function): the
++    // owning function is now a real one whose declared return could be unboxed,
++    // and the representation is not what this test is about.
++    builder.AddReturn(new Value(call), kTagged);
++  }
++  graph->DiscoverBlocks();
++  {
++    GrowableArray<BitVector*> dominance_frontier;
++    graph->ComputeDominators(&dominance_frontier);
+   }
+-  H.FinishGraph();
+ 
+-  Zone* const zone = H.flow_graph()->zone();
++  Zone* const zone = graph->zone();
+   auto* detached_defs = new (zone) ZoneGrowableArray<Definition*>(zone, 0);
+-  H.flow_graph()->CompactSSA(detached_defs);
++  graph->CompactSSA(detached_defs);
++
++  // WriteFlowGraph's precondition (il_serializer.cc:699) is
++  // !is_licm_allowed(). Its only production caller is compiler_pass.cc:563,
++  // which runs after the pass that clears the flag, and the deserializer clears
++  // it again on the graph it rebuilds (il_serializer.cc:792) -- so a graph that
++  // still allows LICM is not a graph this format describes. A hand-built graph
++  // starts with the flag set, so put it in the state the serializer names, the
++  // way constant_propagator_test.cc:82 does. That ASSERT is compiled out of
++  // release, which is why this only ever showed up in a Debug build.
++  graph->disallow_licm();
+ 
+   ZoneWriteStream write_stream(zone, 1024);
+   FlowGraphSerializer serializer(&write_stream);
+-  serializer.WriteFlowGraph(*H.flow_graph(), *detached_defs);
++  serializer.WriteFlowGraph(*graph, *detached_defs);
+ 
+   ReadStream read_stream(write_stream.buffer(), write_stream.bytes_written());
+-  FlowGraphDeserializer deserializer(H.flow_graph()->parsed_function(),
+-                                     &read_stream);
++  FlowGraphDeserializer deserializer(graph->parsed_function(), &read_stream);
+   FlowGraph* const decoded = deserializer.ReadFlowGraph();
+   EXPECT(decoded != nullptr);
+ 
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 798ed72bdaa..47159b412a9 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -374,28 +374,51 @@ namespace {
+ // terminator markers are in play -- 0x80 for unsigned, 0xC0 for signed -- and
+ // mixing them up decodes hex digits into five-figure numbers, which is how
+ // this was got wrong the first time.
++// True iff a whole varint is still in the buffer.
++//
++// Every guard here used to be `PendingBytes() > 0`, which promises exactly ONE
++// byte -- and a varint is one to ten. ReadStream's decoder (datastream.h) keeps
++// consuming while the byte is <= kMaxUnsignedDataPerByte (127) and stops on the
++// first byte >= 128, identically for the signed and the unsigned form, so a
++// buffer that ends mid-varint has no terminator to stop on and ReadByte walks
++// off the end. Its own bound there is an ASSERT: Debug aborts, and Release --
++// where these readers actually run -- reads out of bounds in silence.
++//
++// linker.cc solves the same problem for its own readers by over-allocating and
++// filling the slack with 0xFF terminators, which it can do because it owns the
++// allocation. These readers are handed buffers by their callers, so the bound
++// has to be checked rather than arranged.
++bool HasWholeVarint(const ReadStream* stream) {
++  const uint8_t* const p = stream->AddressOfCurrentPosition();
++  const intptr_t pending = stream->PendingBytes();
++  for (intptr_t i = 0; i < pending; i++) {
++    if (p[i] > kMaxUnsignedDataPerByte) return true;
++  }
++  return false;
++}
++
+ bool ReadString(ReadStream* stream, std::string* out) {
+-  if (stream->PendingBytes() <= 0) return false;
++  if (!HasWholeVarint(stream)) return false;
+   const intptr_t length = stream->ReadUnsigned<intptr_t>();
+   // A length is bounded by what is left: one character costs at least one byte.
+   if (length < 0 || length > stream->PendingBytes()) return false;
+   out->clear();
+   out->reserve(static_cast<size_t>(length));
+   for (intptr_t i = 0; i < length; i++) {
+-    if (stream->PendingBytes() <= 0) return false;
++    if (!HasWholeVarint(stream)) return false;
+     out->push_back(static_cast<char>(stream->Read<int32_t>()));
+   }
+   return true;
+ }
+ 
+ bool ReadIndexVector(ReadStream* stream, std::vector<uintptr_t>* out) {
+-  if (stream->PendingBytes() <= 0) return false;
++  if (!HasWholeVarint(stream)) return false;
+   const intptr_t count = stream->ReadUnsigned<intptr_t>();
+   if (count < 0 || count > stream->PendingBytes()) return false;
+   out->clear();
+   out->reserve(static_cast<size_t>(count));
+   for (intptr_t i = 0; i < count; i++) {
+-    if (stream->PendingBytes() <= 0) return false;
++    if (!HasWholeVarint(stream)) return false;
+     out->push_back(stream->ReadUnsigned<uintptr_t>());
+   }
+   return true;
+@@ -421,7 +444,7 @@ void Sha256Hash::WriteToStream(BaseWriteStream* stream) const {
+ 
+ std::unique_ptr<ObjectPoolLinkInfo> ObjectPoolLinkInfo::ReadFromStream(
+     ReadStream* stream) {
+-  if (stream->PendingBytes() <= 0) return nullptr;
++  if (!HasWholeVarint(stream)) return nullptr;
+   const intptr_t count = stream->ReadUnsigned<intptr_t>();
+   // Each record costs at least four bytes (two empty strings, two empty
+   // vectors), so anything past that is a malformed count and not a big file.
+@@ -451,7 +474,7 @@ std::unique_ptr<ObjectPoolLinkInfo> ObjectPoolLinkInfo::ReadFromStream(
+     pair_constraints.push_back(static_cast<int32_t>(v));
+   }
+ 
+-  if (stream->PendingBytes() <= 0) return nullptr;
++  if (!HasWholeVarint(stream)) return nullptr;
+   const intptr_t num_pool_entries = stream->ReadUnsigned<intptr_t>();
+   if (num_pool_entries < 0) return nullptr;
+ 
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+index ecb57d238b3..9f2c9ff6d76 100644
+--- a/runtime/vm/shorebird/link_info_test.cc
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -184,6 +184,15 @@ VM_UNIT_TEST_CASE(IntervalInfo_LayoutMatchesTheirs) {
+ 
+ // Copied from profiler_test.cc, where these are file-local statics. The three
+ // tests below need one real Field, and this is the shortest way to get one.
++//
++// ⚠️ It carries a precondition with it: TransitionVMToNative requires the
++// thread to be in kThreadInVM, so every caller must be an
++// ISOLATE_UNIT_TEST_CASE, which is what profiler_test.cc's callers are. Under
++// TEST_CASE the body runs in kThreadNative (unit_test.h:70 says so outright,
++// and its expansion ends in a TransitionVMToNative of its own), so the
++// transition here is from a state the thread is not in. safepoint.h:395 asserts
++// exactly that and it is compiled out of release -- which is why these three
++// read as passing everywhere the tests are actually run.
+ static LibraryPtr LoadFieldTestScript(const char* script) {
+   Dart_Handle api_lib;
+   {
+@@ -230,7 +239,7 @@ static const char* kFieldHasherScript =
+ // because their DuplicateAwareHash takes a Field and nothing else -- the
+ // occurrence count has to come from the hasher's own state, so the same field
+ // asked twice must answer differently.
+-TEST_CASE(FieldHasher_DuplicateSuffixRepeatsRatherThanCounts) {
++ISOLATE_UNIT_TEST_CASE(FieldHasher_DuplicateSuffixRepeatsRatherThanCounts) {
+   const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
+   const Field& alpha =
+       Field::Handle(LookupTestField(lib, "Holder", "alpha"));
+@@ -252,7 +261,7 @@ TEST_CASE(FieldHasher_DuplicateSuffixRepeatsRatherThanCounts) {
+ // Two hashers do not share state. Their signature gives no way to reset, so if
+ // the count lived in a function-local static instead of the object, a second
+ // dump in the same process would inherit the first one's suffixes.
+-TEST_CASE(FieldHasher_StateIsPerInstance) {
++ISOLATE_UNIT_TEST_CASE(FieldHasher_StateIsPerInstance) {
+   const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
+   const Field& alpha =
+       Field::Handle(LookupTestField(lib, "Holder", "alpha"));
+@@ -266,7 +275,7 @@ TEST_CASE(FieldHasher_StateIsPerInstance) {
+ // The qualified name is the duplicate key and the hash's prefix, and the
+ // producer also needs the bare field name for its FieldInfo entry. Deriving
+ // both from one place is the point of exposing them.
+-TEST_CASE(FieldHasher_QualifiedNameIsOwnerDotField) {
++ISOLATE_UNIT_TEST_CASE(FieldHasher_QualifiedNameIsOwnerDotField) {
+   const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
+   const Field& alpha =
+       Field::Handle(LookupTestField(lib, "Holder", "alpha"));
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index d6237626581..591e050b5cf 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -31,6 +31,62 @@ static std::vector<uint8_t> MakeHeader(
+   return bytes;
+ }
+ 
++// A real instructions image, built here.
++//
++// 🔴 The two tests further down used to reach for
++// dart::bin::vm_snapshot_instructions and call it "a real Image the reader can
++// measure rather than a fabricated buffer". It is neither real nor an Image in
++// this binary: gen/runtime/bin/vm_snapshot_instructions.bin is 0 bytes (JIT
++// snapshots carry no instructions image), so
++// `extern const uint8_t kDartVmSnapshotInstructions[]` is a zero-length array
++// and its address is whatever the linker put next. Measured in
++// xcodebuild/ReleaseARM64: _kDartVmSnapshotInstructions is 0x10003ec40, which
++// `otool -tV` names dart::bin::DFE::~DFE() -- the tests were reading
++// `stp x20, x19, [sp, #-0x20]!` as the image's ImageSize field. `end > start`
++// then held for a ~2.6 GB range beginning at a random function, and
++// InPatchSnapshot answered yes inside it. Both tests passed on that.
++// isolate_snapshot_instructions.bin is 0 bytes too, so the patch side was the
++// same accident.
++//
++// Image additionally requires kObjectStartAlignment (64) and
++// runtime/tools/bin_to_assembly.py emits only `.balign 32`, so even a non-empty
++// blob would meet the Image contract by luck. It did in ReleaseARM64
++// (64-aligned) and did not in the Debug simulator build (32 mod 64), which is
++// what finally made the ASSERT at image_snapshot.h:47 fire and exposed all of
++// the above.
++//
++// So: build one. The header is two words -- total size, then 0 for "no
++// InstructionsSection", which is what makes ExtraInfo() return nullptr --
++// followed by payload starting at Image::kHeaderSize == kObjectStartAlignment.
++// That is the whole of what BaseSnapshotInstructionsEnd() and PcInImage() read.
++class FakeInstructionsImage {
++ public:
++  static constexpr intptr_t kSize = 4 * kObjectStartAlignment;
++
++  FakeInstructionsImage()
++      : raw_(reinterpret_cast<uint8_t*>(
++            malloc(kSize + kObjectStartAlignment))) {
++    base_ = reinterpret_cast<uint8_t*>(
++        Utils::RoundUp(reinterpret_cast<uword>(raw_), kObjectStartAlignment));
++    memset(base_, 0, kSize);
++    uword* const header = reinterpret_cast<uword*>(base_);
++    header[0] = static_cast<uword>(kSize);  // HeaderField::ImageSize
++    header[1] = 0;  // HeaderField::InstructionsSectionOffset -- none.
++  }
++  ~FakeInstructionsImage() { free(raw_); }
++
++  const uint8_t* base() const { return base_; }
++  uword start() const { return reinterpret_cast<uword>(base_); }
++  // object_start() + object_size(), i.e. what the readers must arrive at.
++  uword end() const { return start() + kSize; }
++
++ private:
++  uint8_t* const raw_;
++  uint8_t* base_;
++
++  DISALLOW_COPY_AND_ASSIGN(FakeInstructionsImage);
++};
++
+ VM_UNIT_TEST_CASE(LinkOracle_RunTargetOffsetLayoutMatchesTheirs) {
+   // Their DWARF: RunTargetOffset is 0x10 bytes, offset @0x00, target @0x08,
+   // and RunTarget is a 4-byte enum with cpu == 0 and sim == 1.
+@@ -387,23 +443,21 @@ VM_UNIT_TEST_CASE(Shorebird_BaseInstructionRangeIsZeroWithoutABase) {
+   EXPECT_EQ(static_cast<uword>(0), BaseSnapshotInstructionsEnd());
+ }
+ 
+-// With a base set, the start is the image itself and the end is past it. The
+-// image here is the running process's own isolate instructions, which is a
+-// real Image the reader can measure rather than a fabricated buffer.
++// With a base set, the start is the image itself and the end is past it, at
++// object_start() + object_size(). See FakeInstructionsImage for why this cannot
++// use the process's own snapshot blobs: they are zero-length in this binary.
+ VM_UNIT_TEST_CASE(Shorebird_BaseInstructionRangeSpansTheImage) {
+-  const uint8_t* const instructions =
+-      dart::bin::vm_snapshot_instructions;
+-  // Asserted rather than skipped: an early return here would pass without
+-  // measuring anything, which is the same as not having the test.
+-  EXPECT(instructions != nullptr);
+-  if (instructions == nullptr) return;
++  FakeInstructionsImage image;
++  const uint8_t* const instructions = image.base();
+   Shorebird_SetBaseSnapshots(instructions, instructions, instructions,
+                              instructions);
+ 
+   const uword start = BaseSnapshotInstructions();
+   const uword end = BaseSnapshotInstructionsEnd();
+-  EXPECT_EQ(reinterpret_cast<uword>(instructions), start);
+-  EXPECT(end > start);
++  EXPECT_EQ(image.start(), start);
++  // Exactly one image away, not merely "greater". The old assertion was
++  // `end > start`, which a garbage ImageSize satisfies just as well.
++  EXPECT_EQ(image.end(), end);
+ 
+   Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
+ }
+@@ -582,14 +636,21 @@ ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderRejectsGarbage) {
+ // wrapper this group handed out.
+ ISOLATE_UNIT_TEST_CASE(Shorebird_PcQueriesAnswerForTheRightImage) {
+   auto* const group = thread->isolate_group();
+-  const uint8_t* const patch_image = group->source()->snapshot_instructions;
+-  const uint8_t* const other_image = dart::bin::vm_snapshot_instructions;
+-  EXPECT(patch_image != nullptr);
+-  EXPECT(other_image != nullptr);
+-  if (patch_image == nullptr || other_image == nullptr) return;
+ 
+-  const uword patch_pc = reinterpret_cast<uword>(patch_image);
++  // Both images are built here. The group's own snapshot_instructions is the
++  // zero-length blob described at FakeInstructionsImage, so it is swapped for
++  // the duration and put back -- InPatchSnapshot reads it out of the group and
++  // takes no image argument, so there is no other way to give it one.
++  FakeInstructionsImage patch;
++  FakeInstructionsImage base;
++  const uint8_t* const saved = group->source()->snapshot_instructions;
++  group->source()->snapshot_instructions = patch.base();
++
++  const uword patch_pc = patch.start();
+   EXPECT(InPatchSnapshot(group, patch_pc));
++  // The bound is the image's end, not somewhere past it.
++  EXPECT(InPatchSnapshot(group, patch.end() - 1));
++  EXPECT(!InPatchSnapshot(group, patch.end()));
+ 
+   // No base set, so nothing is in the base -- including a pc that really is in
+   // the patch. The two queries are about different images, not about each
+@@ -598,15 +659,20 @@ ISOLATE_UNIT_TEST_CASE(Shorebird_PcQueriesAnswerForTheRightImage) {
+   EXPECT(!InBaseSnapshot(group, patch_pc));
+ 
+   // Point the base at a different image and the answers separate.
+-  Shorebird_SetBaseSnapshots(other_image, other_image, other_image,
+-                             other_image);
+-  EXPECT(InBaseSnapshot(group, reinterpret_cast<uword>(other_image)));
++  Shorebird_SetBaseSnapshots(base.base(), base.base(), base.base(),
++                             base.base());
++  EXPECT(InBaseSnapshot(group, base.start()));
++  EXPECT(!InBaseSnapshot(group, base.end()));
++  // ... and neither query answers for the other's image.
++  EXPECT(!InBaseSnapshot(group, patch_pc));
++  EXPECT(!InPatchSnapshot(group, base.start()));
+ 
+   // An address below either image belongs to neither.
+   EXPECT(!InBaseSnapshot(group, 0x1000));
+   EXPECT(!InPatchSnapshot(group, 0x1000));
+ 
+   Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++  group->source()->snapshot_instructions = saved;
+ }
+ 
+ // A real function address to stand in for a wrapped target.
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 4b0ce3578af..d15ecc63655 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -4,6 +4,13 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include <string.h>
++
++#if defined(DART_HOST_OS_MACOS)
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++#endif
++
+ #include "vm/stub_code.h"
+ 
+ namespace dart {
+@@ -185,6 +192,36 @@ void WrapperAllocator::EnsureStubPage() {
+   offset_of_first_wrapper_in_page_ = code_start - page_start;
+ }
+ 
++// Whether the mapping containing `address` is one the CPU may execute.
++//
++// This asks DuplicateRX's own documented precondition -- virtual_memory.h:122,
++// "Assumes `this` has RX protection and is codesigned" -- instead of assuming
++// it. vm_remap can only hand back the protection the source already has; it
++// reports it in current_protection, and upstream then asserts that it includes
++// VM_PROT_EXECUTE (virtual_memory_posix.cc:893). So "may we remap?" is exactly
++// "is the source executable?", which is a fact about the mapping and worth
++// reading rather than deriving from a flag: FLAG_use_simulator is the reason
++// the *generated* stub's page is not executable, but it says nothing about a
++// stub range that points into the host binary's own __TEXT, which is what
++// wrapper_test.cc's TestStubCodeRange does.
++#if defined(DART_HOST_OS_MACOS)
++static bool IsExecutableMapping(uword address) {
++  mach_vm_address_t region = static_cast<mach_vm_address_t>(address);
++  mach_vm_size_t region_size = 0;
++  vm_region_basic_info_data_64_t info;
++  mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++  mach_port_t object_name = MACH_PORT_NULL;
++  const kern_return_t status = mach_vm_region(
++      mach_task_self(), &region, &region_size, VM_REGION_BASIC_INFO_64,
++      reinterpret_cast<vm_region_info_t>(&info), &count, &object_name);
++  if (status != KERN_SUCCESS) return false;
++  // mach_vm_region answers with the first region at or *after* the address, so
++  // a hole below a mapping would otherwise read as that mapping.
++  if (region > static_cast<mach_vm_address_t>(address)) return false;
++  return (info.protection & VM_PROT_EXECUTE) != 0;
++}
++#endif  // defined(DART_HOST_OS_MACOS)
++
+ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+   EnsureStubPage();
+   if (stub_page_ == nullptr) {
+@@ -204,10 +241,59 @@ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+ 
+   // Copy-on-write duplicate of the stub's code over the RX half. Divergence
+   // stays local to this mapping; nothing writes instructions at runtime.
++  //
++  // ...but only when the source really is executable. When the stub range is a
++  // *generated* stub and the simulator is in charge, it is not: Page::Allocate
++  // (heap/page.cc:76) drops kExecutable whenever FLAG_use_simulator is on,
++  // because generated code is interpreted and never branched to. vm_remap then
++  // hands back current_protection == VM_PROT_READ and DuplicateRX's
++  // postcondition (ASSERT_EQUAL(current_protection & read_execute,
++  // read_execute), virtual_memory_posix.cc:893) is false. That ASSERT is
++  // compiled out of release, which is the only reason this went unseen -- the
++  // mapping it produced was never RX in any simulator build, silently.
++  //
++  // Nor is it a corner case: wrappers exist only to cross between host CPU code
++  // and simulated code, so the production caller
++  // (Deserializer::WrapperForRunTarget) runs in a simulating configuration
++  // every time, and the remap could never deliver there what it promised.
++  //
++  // Upstream meets the same wall and answers it by not remapping:
++  // FfiCallbackMetadata::AllocateTrampolinePage's should_remap_stub_page is
++  // false unless DART_HOST_OS_MACOS && DART_PRECOMPILED_RUNTIME, and its other
++  // branch copies the bytes. Copying is what is wanted here too -- the
++  // simulator *reads* the shared body's instructions out of this page, so the
++  // bytes must be present, but nothing executes them natively, so the page need
++  // not be executable, and it is already allocated non-executable just above.
++  //
++  // ⚠️ What this does NOT reproduce: upstream's simulator path avoids the whole
++  // problem by pointing its stub range at a host-native assembly trampoline
++  // (SimulatorFfiCallbackTrampoline, ffi_callback_metadata.cc:35) rather than at
++  // a generated stub, which keeps the source page RX. Shorebird presumably does
++  // something equivalent for the CPU->Sim direction, where host code must be
++  // able to branch to the wrapper. We have no evidence of what, so this does not
++  // invent one; it makes the page hold the right bytes and leaves that open.
++#if defined(DART_HOST_OS_MACOS)
++  const bool can_remap = IsExecutableMapping(stub_page_->start());
++#else
++  const bool can_remap = false;
++#endif
++
++  if (!can_remap) {
++    if (stub_page_->size() > page->size()) {
++      delete page;
++      return nullptr;
++    }
++    memcpy(page->address(), stub_page_->address(),  // NOLINT
++           stub_page_->size());
++    return page;
++  }
++
++#if defined(DART_HOST_OS_MACOS)
+   if (!stub_page_->DuplicateRX(page)) {
+     delete page;
+     return nullptr;
+   }
++#endif
+   return page;
+ }
+ 
+-- 
+2.53.0
+

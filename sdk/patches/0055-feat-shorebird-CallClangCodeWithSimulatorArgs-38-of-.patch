@@ -1,0 +1,201 @@
+From 91af57163e3496b67b7f448b687679fe3435bcc0 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 13:40:26 +0800
+Subject: [PATCH 055/206] feat(shorebird): CallClangCodeWithSimulatorArgs -- 38
+ of 38 words identical
+
+Eleven of sixteen, and the first stub we reproduce with every word matching
+theirs. 152 bytes: rebuild the simulated stack arguments on the real C stack,
+16-align them, load the argument registers out of the Simulator register file,
+call, and write the results back.
+
+It is exact because it is the only Shorebird stub so far that touches no Thread
+field. Everything it reads is either the Simulator register file -- upstream's
+layout, so derivable from ours -- or the C stack. The Thread-layout divergence
+that costs every other stub its last few words simply does not arise here, which
+is a useful confirmation: where nothing structural is in the way, the
+transcription reproduces their output exactly rather than approximately.
+
+Checked for build-dependent words by diffing the stub out of product and release
+before writing the test, per the trap the previous commit hit: the differing set
+is empty, so all 38 are pinned as literals with nothing derived.
+
+Verified: 88 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures. Negative control, PATCH_OK confirmed
+first: changing the alignment mask from 0xf to 0x7 exits 255, reverting
+returns 0.
+
+Not attempted: ResumeInterpreter, though it is only 13 instructions. It calls a
+runtime entry through Thread::ResumeInterpreter_entry_point_, so reproducing it
+means adding a runtime entry and writing its body -- behaviour that cannot be
+derived from the stub's bytes. That is a different kind of work from
+transcription and should not be smuggled in as one.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 61eaf1b9413..704535c0a01 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -1176,6 +1176,79 @@ void StubCodeCompiler::GenerateSimulatorCallNativeThroughSafepointStub() {
+   __ ret(R19);
+ }
+ 
++// Shorebird. Call real ARM64 code from inside the simulator: rebuild the
++// simulated stack arguments on the real C stack, load the argument registers
++// out of the simulator's register file, call, and write the results back.
++//
++// 38 instructions / 152 bytes, transcribed from their emitted stub. This is the
++// only Shorebird stub so far that touches no Thread field at all -- everything
++// it reads is either the Simulator register file or the C stack -- so it can be,
++// and is, byte-identical to theirs throughout.
++//
++// On entry x0 is the target and x1 the Simulator*.
++void StubCodeCompiler::GenerateCallClangCodeWithSimulatorArgsStub() {
++  constexpr intptr_t kSimReg = 8;           // registers_[r]  == r * 8
++  constexpr intptr_t kSimVRegBase = 0x100;  // vregisters_[v] == 0x100 + v * 16
++  constexpr intptr_t kSimVReg = 16;
++
++  __ stp(R29, R30, Address::Pair(CSP, -16, Address::PairPreIndex));
++  __ mov(R29, CSP);
++  // Park the Simulator* below the frame; the result write-back reloads it.
++  __ str(R1, Address(CSP, -16, Address::PreIndex), kEightBytes);
++
++  // The simulated stack arguments run from the simulated SP up to its FP.
++  __ ldr(R3, Address(R1, 15 * kSimReg), kEightBytes);
++  __ ldr(R4, Address(R1, 29 * kSimReg), kEightBytes);
++
++  // Copy them in 16-byte pairs, so an odd-8 span gets one slot of padding
++  // first -- the real stack has to stay 16-aligned.
++  Label copy, check;
++  __ sub(TMP, R4, Operand(R3));
++  __ tsti(TMP, Immediate(0xf));
++  __ b(&check, EQ);
++  __ AddImmediate(R4, 8);
++  __ b(&check);
++  __ Bind(&copy);
++  __ ldp(TMP, TMP2, Address::Pair(R4, -16, Address::PairPreIndex));
++  __ stp(TMP, TMP2, Address::Pair(CSP, -16, Address::PairPreIndex));
++  __ Bind(&check);
++  __ cmp(R4, Operand(R3));
++  __ b(&copy, GT);
++
++  __ fldp(V0, V1, Address::Pair(R1, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fldp(V2, V3, Address::Pair(R1, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fldp(V4, V5, Address::Pair(R1, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fldp(V6, V7, Address::Pair(R1, kSimVRegBase + 6 * kSimVReg), kQWord);
++
++  // x0 holds the target, and x0/x1 are about to be overwritten with arguments.
++  __ mov(R10, R0);
++  __ ldp(R8, R9, Address::Pair(R1, 8 * kSimReg));
++  __ ldp(R6, R7, Address::Pair(R1, 6 * kSimReg));
++  __ ldp(R4, R5, Address::Pair(R1, 4 * kSimReg));
++  __ ldp(R2, R3, Address::Pair(R1, 2 * kSimReg));
++  __ ldp(R0, R1, Address::Pair(R1, 0 * kSimReg));
++  __ set_lr_state(compiler::LRState::Clobbered());
++  __ blr(R10);
++
++  __ ldr(R8, Address(R29, -16), kEightBytes);
++  __ fstp(V0, V1, Address::Pair(R8, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fstp(V2, V3, Address::Pair(R8, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fstp(V4, V5, Address::Pair(R8, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fstp(V6, V7, Address::Pair(R8, kSimVRegBase + 6 * kSimVReg), kQWord);
++  __ stp(R0, R1, Address::Pair(R8, 0 * kSimReg));
++  __ stp(R2, R3, Address::Pair(R8, 2 * kSimReg));
++  __ stp(R4, R5, Address::Pair(R8, 4 * kSimReg));
++  __ stp(R6, R7, Address::Pair(R8, 6 * kSimReg));
++  // Stores x8 through x8 -- theirs does the same, and the base is consumed
++  // before the value matters.
++  __ stp(R8, R9, Address::Pair(R8, 8 * kSimReg));
++
++  __ mov(CSP, R29);
++  __ ldp(R29, R30, Address::Pair(CSP, 16, Address::PairPostIndex));
++  __ set_lr_state(compiler::LRState::OnEntry());
++  __ ret();
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 120628148a4..7d3ec8dc9bd 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -673,6 +673,62 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallNativeThroughSafepointMatchesTheirB
+   }
+ }
+ 
++// Shorebird CallClangCodeWithSimulatorArgs, 38 instructions / 152 bytes, and the
++// first of their stubs we reproduce with **every** word identical. It touches no
++// Thread field -- only the Simulator register file and the C stack -- so the
++// Thread-layout divergence that costs the other stubs their last few words does
++// not apply, and nothing here needs deriving. Product and release emit the same
++// bytes, checked by diffing the stub out of both builds.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallClangCodeMatchesTheirBytesExactly) {
++  const Code& stub = StubCode::CallClangCodeWithSimulatorArgs();
++  EXPECT_EQ(static_cast<intptr_t>(152), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[38] = {
++      0xa9bf7bfdu,  // [0]
++      0x910003fdu,  // [1]
++      0xf81f0fe1u,  // [2]
++      0xf9403c23u,  // [3]
++      0xf9407424u,  // [4]
++      0xcb030090u,  // [5]
++      0xf2400e1fu,  // [6]
++      0x540000a0u,  // [7]
++      0x91002084u,  // [8]
++      0x14000003u,  // [9]
++      0xa9ff4490u,  // [10]
++      0xa9bf47f0u,  // [11]
++      0xeb03009fu,  // [12]
++      0x54ffffacu,  // [13]
++      0xad480420u,  // [14]
++      0xad490c22u,  // [15]
++      0xad4a1424u,  // [16]
++      0xad4b1c26u,  // [17]
++      0xaa0003eau,  // [18]
++      0xa9442428u,  // [19]
++      0xa9431c26u,  // [20]
++      0xa9421424u,  // [21]
++      0xa9410c22u,  // [22]
++      0xa9400420u,  // [23]
++      0xd63f0140u,  // [24]
++      0xf85f03a8u,  // [25]
++      0xad080500u,  // [26]
++      0xad090d02u,  // [27]
++      0xad0a1504u,  // [28]
++      0xad0b1d06u,  // [29]
++      0xa9000500u,  // [30]
++      0xa9010d02u,  // [31]
++      0xa9021504u,  // [32]
++      0xa9031d06u,  // [33]
++      0xa9042508u,  // [34]
++      0x910003bfu,  // [35]
++      0xa8c17bfdu,  // [36]
++      0xd65f03c0u,  // [37]
++  };
++  for (intptr_t i = 0; i < 38; i++) {
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index afbb7fbd79c..6f48fe682f3 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -166,6 +166,7 @@ namespace dart {
+   V(SimulatorCallToRuntime)                                                    \
+   V(ResumeOnSimulator)                                                         \
+   V(SimulatorCallNativeThroughSafepoint)                                       \
++  V(CallClangCodeWithSimulatorArgs)                                            \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

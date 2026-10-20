@@ -1,0 +1,30 @@
+From d11f3dd76ffb5e6471af4b38dec51bf112f03a96 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 1 Sep 2026 21:34:57 +0800
+Subject: [PATCH 124/206] fix(shorebird-api): use Snapshot::SetupFromBuffer and
+ check_magic in Dart_SnapshotDataSize
+
+SetupFromAddress does not exist in this dart-sdk; the correct API is
+SetupFromBuffer.  IsValid() likewise does not exist; check_magic() is
+the predicate that tests the 0xdcdcf5f5 magic word.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index 85e321c3c17..732d4789894 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7305,8 +7305,8 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+ }  // namespace dart
+ 
+ DART_EXPORT size_t Dart_SnapshotDataSize(const uint8_t* snapshot) {
+-  const dart::Snapshot* s = dart::Snapshot::SetupFromAddress(snapshot);
+-  if (s == nullptr || !s->IsValid()) return 0;
++  const dart::Snapshot* s = dart::Snapshot::SetupFromBuffer(snapshot);
++  if (s == nullptr || !s->check_magic()) return 0;
+   return static_cast<size_t>(s->length());
+ }
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,251 @@
+From 0dfe634b44e9ca68c24b213b23f5a493fbc4c56f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 15:55:41 +0800
+Subject: [PATCH 094/206] revert(shorebird): unroute the pool emitters from
+ PadLoadStore
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+eb17b43924d broke kernel compilation and a stale file hid it for a whole
+session.
+
+gen_kernel_aot.dart.snapshot is built by our own gen_snapshot. Rebuilt
+with the padding in place, it segfaults on startup -- SEGV_ACCERR, no
+stack. Rebuilt without it, it compiles a 4.4MB dill. That is an A/B on
+one line, so the padding is the cause.
+
+Why nothing caught it: dd_runtime_check.sh writes app.dill into a
+persistent directory and guarded it with `[ -s app.dill ]`. The kernel
+compile had been failing since dartaotruntime was rebuilt without its
+gen_kernel snapshot, and the check kept passing against a dill from the
+previous day. Fixed separately in the spike.
+
+The mechanism is that padding is incompatible with fixed-distance
+backward reads. instructions_arm64.cc:32 does
+DecodeLoadWordFromPool(pc - 2 * Instr::kInstrSize) -- it assumes the pool
+load ends exactly two instructions before the call. NOPs between them
+move it. DecodeLoadDoubleWordFromPool at :47 does the same, so kinds 1
+and 3, the two common emitters.
+
+⚠️ The conclusion is NOT that padding is wrong. Measured on their own
+snapshot: all 2299 PP loads are followed by nop,nop -- every single one,
+including the ones inside call sequences. So their readback patterns
+handle padding, and the fix is there rather than in the routing. My
+guess that narrowing the routing might work is falsified by that count.
+
+Reverted rather than pursued because a tree that cannot compile kernels
+is not a tree to leave overnight. The editor is inert again as a result,
+and op_rewrite_check.sh now reports BLOCKED rather than passing.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index d564663f3c4..5ae1ebd881f 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -510,44 +510,24 @@ void Assembler::LoadWordFromPoolIndex(Register dst,
+                                       Register pp) {
+   ASSERT((pp != PP) || constant_pool_allowed());
+   ASSERT(dst != pp);
++  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: padded to a fixed footprint so that renumbering the pool never
+-  // moves the code around it. See PadLoadStore.
+-  //
+-  // ⚠️ Precompiled mode only, and that gate is OURS. The padding exists so the
+-  // object pool editor can renumber entries without moving code, which only
+-  // happens to AOT snapshots. In JIT mode it breaks the InstructionPattern
+-  // decoders that read these sequences back -- LoadDoubleWordFromPoolIndex's
+-  // own comment says it must stay in sync with DecodeLoadDoubleWordFromPool --
+-  // and it does so loudly: IL_IndirectStaticCall_SerializationRoundTrip and
+-  // IsolateReload_ShapeChange_Const_AddSlot both crash in unoptimized code
+-  // without it. Their gen_snapshot is precompiler-only, so whether their JIT
+-  // build pads is not observable from anything here.
+-  const auto emit = [&]() {
+-        Operand op;
+-        const uint32_t upper20 = offset & 0xfffff000;
+-        if (Address::CanHoldOffset(offset)) {
+-          ldr(dst, Address(pp, offset));
+-        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-                   Operand::Immediate) {
+-          const uint32_t lower12 = offset & 0x00000fff;
+-          ASSERT(Address::CanHoldOffset(lower12));
+-          add(dst, pp, op);
+-          ldr(dst, Address(dst, lower12));
+-        } else {
+-          const uint16_t offset_low = Utils::Low16Bits(offset);
+-          const uint16_t offset_high = Utils::High16Bits(offset);
+-          movz(dst, Immediate(offset_low), 0);
+-          movk(dst, Immediate(offset_high), 1);
+-          ldr(dst, Address(pp, dst));
+-        }
+-  };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::Offset);
++  const uint32_t upper20 = offset & 0xfffff000;
++  if (Address::CanHoldOffset(offset)) {
++    ldr(dst, Address(pp, offset));
++  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++             Operand::Immediate) {
++    const uint32_t lower12 = offset & 0x00000fff;
++    ASSERT(Address::CanHoldOffset(lower12));
++    add(dst, pp, op);
++    ldr(dst, Address(dst, lower12));
+   } else {
+-    emit();
++    const uint16_t offset_low = Utils::Low16Bits(offset);
++    const uint16_t offset_high = Utils::High16Bits(offset);
++    movz(dst, Immediate(offset_low), 0);
++    movk(dst, Immediate(offset_high), 1);
++    ldr(dst, Address(pp, dst));
+   }
+ }
+ 
+@@ -556,33 +536,24 @@ void Assembler::StoreWordToPoolIndex(Register src,
+                                      Register pp) {
+   ASSERT((pp != PP) || constant_pool_allowed());
+   ASSERT(src != pp);
++  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
+-  const auto emit = [&]() {
+-        Operand op;
+-        const uint32_t upper20 = offset & 0xfffff000;
+-        if (Address::CanHoldOffset(offset)) {
+-          str(src, Address(pp, offset));
+-        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-                   Operand::Immediate) {
+-          const uint32_t lower12 = offset & 0x00000fff;
+-          ASSERT(Address::CanHoldOffset(lower12));
+-          add(TMP, pp, op);
+-          str(src, Address(TMP, lower12));
+-        } else {
+-          const uint16_t offset_low = Utils::Low16Bits(offset);
+-          const uint16_t offset_high = Utils::High16Bits(offset);
+-          movz(TMP, Immediate(offset_low), 0);
+-          movk(TMP, Immediate(offset_high), 1);
+-          str(src, Address(pp, TMP));
+-        }
+-  };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::Offset);
++  const uint32_t upper20 = offset & 0xfffff000;
++  if (Address::CanHoldOffset(offset)) {
++    str(src, Address(pp, offset));
++  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++             Operand::Immediate) {
++    const uint32_t lower12 = offset & 0x00000fff;
++    ASSERT(Address::CanHoldOffset(lower12));
++    add(TMP, pp, op);
++    str(src, Address(TMP, lower12));
+   } else {
+-    emit();
++    const uint16_t offset_low = Utils::Low16Bits(offset);
++    const uint16_t offset_high = Utils::High16Bits(offset);
++    movz(TMP, Immediate(offset_low), 0);
++    movk(TMP, Immediate(offset_high), 1);
++    str(src, Address(pp, TMP));
+   }
+ }
+ 
+@@ -594,56 +565,45 @@ void Assembler::LoadDoubleWordFromPoolIndex(Register lower,
+   ASSERT(constant_pool_allowed());
+   ASSERT(lower != PP && upper != PP);
+ 
++  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
+-  // This one is always PP-relative, so the padding applies whenever the gate is
+-  // open.
+-  const auto emit = [&]() {
+-        Operand op;
+-        const uint32_t upper20 = offset & 0xfffff000;
+-        const uint32_t lower12 = offset & 0x00000fff;
+-        if (Address::CanHoldOffset(offset, Address::PairOffset)) {
+-          ldp(lower, upper, Address(PP, offset, Address::PairOffset));
+-        } else if (Operand::CanHold(offset, kXRegSizeInBits, &op) ==
+-                   Operand::Immediate) {
+-          add(TMP, PP, op);
+-          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+-        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-                       Operand::Immediate &&
+-                   Address::CanHoldOffset(lower12, Address::PairOffset)) {
+-          add(TMP, PP, op);
+-          ldp(lower, upper, Address(TMP, lower12, Address::PairOffset));
+-        } else if (Utils::IsUint(24, offset)) {
+-          const uint32_t low12 = offset & 0xfff;
+-          const uint32_t higher12 = offset & 0xfff000;
+-
+-          Operand op_high, op_low;
+-          bool ok = Operand::CanHold(higher12, kXRegSizeInBits, &op_high) ==
+-                        Operand::Immediate &&
+-                    Operand::CanHold(low12, kXRegSizeInBits, &op_low) ==
+-                        Operand::Immediate;
+-          RELEASE_ASSERT(ok);
+-
+-          add(TMP, PP, op_high);
+-          add(TMP, TMP, op_low);
+-          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+-        } else if (Utils::IsUint(32, offset)) {
+-          const uint16_t offset_low = Utils::Low16Bits(offset);
+-          const uint16_t offset_high = Utils::High16Bits(offset);
+-          movz(TMP, Immediate(offset_low), 0);
+-          movk(TMP, Immediate(offset_high), 1);
+-          add(TMP, TMP, Operand(PP));
+-          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+-        } else {
+-          UNIMPLEMENTED();
+-        }
+-  };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, PP, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::PairOffset);
++  const uint32_t upper20 = offset & 0xfffff000;
++  const uint32_t lower12 = offset & 0x00000fff;
++  if (Address::CanHoldOffset(offset, Address::PairOffset)) {
++    ldp(lower, upper, Address(PP, offset, Address::PairOffset));
++  } else if (Operand::CanHold(offset, kXRegSizeInBits, &op) ==
++             Operand::Immediate) {
++    add(TMP, PP, op);
++    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++                 Operand::Immediate &&
++             Address::CanHoldOffset(lower12, Address::PairOffset)) {
++    add(TMP, PP, op);
++    ldp(lower, upper, Address(TMP, lower12, Address::PairOffset));
++  } else if (Utils::IsUint(24, offset)) {
++    const uint32_t lower12 = offset & 0xfff;
++    const uint32_t higher12 = offset & 0xfff000;
++
++    Operand op_high, op_low;
++    bool ok = Operand::CanHold(higher12, kXRegSizeInBits, &op_high) ==
++                  Operand::Immediate &&
++              Operand::CanHold(lower12, kXRegSizeInBits, &op_low) ==
++                  Operand::Immediate;
++    RELEASE_ASSERT(ok);
++
++    add(TMP, PP, op_high);
++    add(TMP, TMP, op_low);
++    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++  } else if (Utils::IsUint(32, offset)) {
++    const uint16_t offset_low = Utils::Low16Bits(offset);
++    const uint16_t offset_high = Utils::High16Bits(offset);
++    movz(TMP, Immediate(offset_low), 0);
++    movk(TMP, Immediate(offset_high), 1);
++    add(TMP, TMP, Operand(PP));
++    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+   } else {
+-    emit();
++    UNIMPLEMENTED();
+   }
+ }
+ 
+-- 
+2.53.0
+

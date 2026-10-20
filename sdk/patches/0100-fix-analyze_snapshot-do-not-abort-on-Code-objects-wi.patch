@@ -1,0 +1,65 @@
+From a86e852f4872694473a30b78ace5ec4693384d9c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 19:17:23 +0800
+Subject: [PATCH 100/206] fix(analyze_snapshot): do not abort on Code objects
+ with no known stub name
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Our analyze_snapshot aborted on every snapshot we produce. The default,
+upstream dump mode -- no Shorebird flag involved -- hit UNREACHABLE at
+analyze_snapshot_api_impl.cc:355 and died with SIGABRT.
+
+Instrumented rather than guessed: four Code objects, eight bytes each, null
+owner, that are neither in VM_STUB_CODE_LIST nor isolate-specific stub copies.
+Upstream's comment there says "Expected to handle all possibilities"; our
+snapshots contain one it did not expect.
+
+They get the name Dart itself gives them, code.Name(), which is
+"[unknown stub]". The tool now dumps 1776 Code objects and exits 0 where it
+used to abort.
+
+⚠️ Marked in the code as a fallback and not a diagnosis. Why our snapshots
+contain these and Shorebird's visibly do not is still open: every 8-byte Code
+in their dump has an owner, so their binary never reaches this branch, which
+also means what they would print is not observable and this name is ours.
+
+Our own Shorebird stubs are NOT the explanation, and that was checked because
+they were the obvious suspects: ResumeOnCPU, RunDartOnCPU,
+CallSimulatorFromFfiTrampoline and the rest are all in VM_STUB_CODE_LIST and
+get named through StubCode::ForEachStub.
+
+--shorebird still reports zero functions; that is the separate base-address bug
+from task 33 and is untouched here.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 9d3358cf073..c5b2ed81c10 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -352,7 +352,19 @@ void SnapshotAnalyzer::DumpCode(const Code& code) {
+                    thread_->isolate_group()->object_store(), code)) {
+       js_.PrintProperty("name", stub_name);
+     } else {
+-      UNREACHABLE();
++      // Upstream asserts this is unreachable. It is reachable on our own AOT
++      // snapshots: four Code objects, eight bytes each, with a null owner, that
++      // are neither in VM_STUB_CODE_LIST nor isolate-specific copies. Aborting
++      // the whole dump over them makes analyze_snapshot useless against every
++      // snapshot we produce, so they get the name Dart itself gives them.
++      //
++      // ⚠️ This is a fallback, not a diagnosis. Why our snapshots contain them
++      // and Shorebird's visibly do not is still open -- their dump never
++      // reaches this branch, so what they would print here is not observable,
++      // and this name is ours. Our own Shorebird stubs are NOT the explanation:
++      // ResumeOnCPU, RunDartOnCPU and the rest are all in VM_STUB_CODE_LIST and
++      // are named through it. Checked, because they were the obvious suspects.
++      js_.PrintProperty("name", code.Name());
+     }
+   }
+ }
+-- 
+2.53.0
+

@@ -1,0 +1,77 @@
+From d9f2db2a646fcc65894a0803f9a343ecf07727d2 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 23:56:32 +0800
+Subject: [PATCH 155/206] analyze_snapshot: gate the pool_seen dedup behind a
+ switch (F67)
+
+ComputeShorebirdCodeFacts kept a std::set<intptr_t> pool_seen and appended an
+index to facts.pool_indices only on first sight. facts.pool_indices feeds
+self_pp / self_pp_indices, so our self_pp was a sub-multiset of theirs by
+construction and "contained" measured our dedup, not our decode -- the same
+defect F66 removed from subgraph_selectors, on a field where it had never been
+disclosed.
+
+Default stays 1 (dedup ON, historical behaviour); this commit changes no
+output. F67_POOL_SEEN_DEDUP=0 emits every pool reference the classifier fires
+on, in walk order, and is measured by
+spikes/shorebird_linkinfo_oracle/nc3_f67_pool_seen_multiset.sh.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index ade8d8dcf22..abe7627554a 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1069,6 +1069,25 @@ static constexpr intptr_t kNoSelector = -1;
+ #define F66_SUBGRAPH_SELECTOR_DEDUP 0
+ #endif
+ 
++// F67. The third one-sided dedup, found by the F66 falsification pass and
++// disclosed nowhere before it: ComputeShorebirdCodeFacts keeps a `pool_seen`
++// std::set and only appends an index to facts.pool_indices the first time it
++// is seen. facts.pool_indices feeds self_pp (and self_pp_indices), so every
++// statement about self_pp inherited the same defect F66 removed from
++// subgraph_selectors: our list was a sub-multiset of theirs BY CONSTRUCTION,
++// and "contained" said nothing about the decode.
++//
++// The switch exists so that both states are reachable from one committed
++// command. spikes/shorebird_linkinfo_oracle/nc3_f67_pool_seen_multiset.sh is
++// default-agnostic: it reads whichever value is committed, measures it, flips,
++// measures again, restores and proves the binary comes back byte for byte.
++//
++// 1 = dedup ON (the historical behaviour). 0 = emit every pool reference the
++// classifier fires on, in walk order.
++#ifndef F67_POOL_SEEN_DEDUP
++#define F67_POOL_SEEN_DEDUP 1
++#endif
++
+ // `add lr, x0, x17` makes the row index (origin + x17), so whatever was
+ // materialised into IP1 is a selector offset from kOriginElement, exactly like
+ // the #imm12 of the add/sub head below.
+@@ -1237,7 +1256,10 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   for (intptr_t k = 0; k < words; k++) memcpy(&code_words[k], code + k * 4, 4);
+   const uint32_t* w_at = code_words.data();
+ 
+-  std::set<intptr_t> pool_seen, field_seen, external_seen;
++  std::set<intptr_t> field_seen, external_seen;
++#if F67_POOL_SEEN_DEDUP
++  std::set<intptr_t> pool_seen;
++#endif
+ 
+   intptr_t i = 0;
+   while (i < words) {
+@@ -1263,7 +1285,11 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       if (ahead > words - 1 - i) ahead = static_cast<int32_t>(words - 1 - i);
+       facts.classified.push_back(
+           {ShorebirdClassifiedStep::kPool, used + ahead, index});
++#if F67_POOL_SEEN_DEDUP
+       if (pool_seen.insert(index).second) facts.pool_indices.push_back(index);
++#else
++      facts.pool_indices.push_back(index);
++#endif
+       i += 1 + ahead;
+       continue;
+     }
+-- 
+2.53.0
+

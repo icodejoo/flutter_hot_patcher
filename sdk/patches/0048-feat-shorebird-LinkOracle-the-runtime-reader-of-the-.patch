@@ -1,0 +1,609 @@
+From 94ee77c3624309ab735e176abbb65e7b880acfee Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 11:24:21 +0800
+Subject: [PATCH 048/206] feat(shorebird): LinkOracle -- the runtime reader of
+ the .vmcode link table
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Their class, recovered from the DWARF in Flutter.framework.dSYM: byte size 0x60,
+member order and offsets, method set, signatures, enumerator values and
+declaration lines all come from their debug info rather than from inference, so
+each member carries the line it sits on in their header. The file pairing is
+theirs too -- header at runtime/vm/shorebird/shorebird.h, implementation at
+runtime/vm/shorebird.cc -- kept so the dSYM line differential stays usable.
+
+What it does: a patch is compiled by a simulator gen_snapshot, so patch code
+cannot run on the CPU. The linker pairs every patch function whose subgraph hash
+is unchanged with its base counterpart and writes those pairs into the .vmcode
+header; this class answers, per offset, whether a function runs the base's
+native code or has to be simulated. The header layout is the one established
+byte by byte in GROUND_TRUTH.md §1 (uint32 count, then count pairs of uint32),
+which is what tools/linker.py already writes -- the two are ends of one contract.
+
+Dart_ShorebirdLoadVmcode now builds one and installs it, so this is wired rather
+than dead. The existing Simulator::SetPendingVmcodeFile path is untouched.
+
+Two deliberate divergences, both marked in the header:
+- Install() is ours. Their installer is in code we have not recovered, and a
+  singleton nothing can populate cannot be tested.
+- RunTargetFromBaseOffset is dead in their engine -- declared in DWARF with no
+  inlined instance anywhere and no out-of-line symbol, the same situation as
+  print_dispatch_table_debug_info_to in gen_snapshot. Its body here is the
+  symmetric reading of the same table and is not verified against them.
+
+Bounds are plain ifs, not ASSERTs: a negative or absurd entry count is rejected
+before it can become an allocation, and a table that does not fit its buffer is
+refused in ReadHeaderSize rather than read out of bounds in BuildCaches.
+
+Verified: 13 new LinkOracle cases pass; all 69 shorebird-side cases pass; the
+product gen_snapshot still links and still emits byte-identical .ddid. Negative
+control run -- flipping the hit branch of RunTargetFromPatchOffset from cpu to
+sim turns exactly two cases red, so these tests can fail.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index 37483a7b659..e687c53948a 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -59,6 +59,7 @@
+ #include "vm/service.h"
+ #include "vm/service_event.h"
+ #include "vm/service_isolate.h"
++#include "vm/shorebird/shorebird.h"
+ #include "vm/stack_frame.h"
+ #include "vm/symbols.h"
+ #include "vm/tags.h"
+@@ -7267,19 +7268,34 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+ // member.
+ #if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
+   if (vmcode_path == nullptr) return false;
+-  
++
+   FILE* f = fopen(vmcode_path, "rb");
+   if (f == nullptr) return false;
+-  
++
+   uint32_t n_entries = 0;
+   if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return false; }
+   if (n_entries > 65536) { fclose(f); return false; }
+-  
++
++  // Read the whole header back and hand it to LinkOracle, which is how they
++  // consume this table: LinkOracle::shared() answers, per code offset, whether
++  // that function runs the base's native code or has to be simulated. Their
++  // deserializer queries it -- see runtime/vm/shorebird/shorebird.h.
++  const size_t header_size = 4 + static_cast<size_t>(n_entries) * 8;
++  std::unique_ptr<uint8_t[]> header(new uint8_t[header_size]);
++  rewind(f);
++  const bool header_read = fread(header.get(), 1, header_size, f) == header_size;
+   fclose(f);
++  if (!header_read) return false;
++
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(header.get(), header_size);
++  if (oracle == nullptr) return false;
++  LinkOracle::Install(std::move(oracle));
++
+   // Store the vmcode path; the Simulator will read and apply it lazily
+   // when the first isolate creates its Simulator via Simulator::Current().
+   Simulator::SetPendingVmcodeFile(vmcode_path);
+-  
++
+   return n_entries > 0;
+ #else
+   return false;
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+new file mode 100644
+index 00000000000..0ba7f4ef530
+--- /dev/null
++++ b/runtime/vm/shorebird.cc
+@@ -0,0 +1,136 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++// Their file lives at runtime/vm/shorebird.cc while its header is at
++// runtime/vm/shorebird/shorebird.h -- an odd pairing, kept because their DWARF
++// names both paths and matching them keeps the dSYM line differential usable.
++
++#include "vm/shorebird/shorebird.h"
++
++#include <cstring>
++#include <utility>
++
++namespace dart {
++
++// The `.vmcode` header, established byte by byte against their own linker
++// output in spikes/b_route_phase2_groundtruth/GROUND_TRUTH.md §1:
++//
++//   0x0000  uint32 LE  entry_count
++//   0x0004  8 * count  { uint32 LE patch_offset, uint32 LE base_offset }
++//           zero pad up to the snapshot alignment
++//   0x4000  the patch ELF
++//
++// There is no magic and no version field; that was checked, and the WrongMagic
++// / WrongVersion strings in the engine belong to the Dart snapshot header
++// inside the ELF, not to this container.
++static constexpr size_t kEntryCountSize = 4;
++static constexpr size_t kEntrySize = 8;
++
++// A table larger than this is taken as corruption rather than trusted into an
++// allocation. Their linker emits ~1052 entries for a small program; four orders
++// of magnitude of headroom is enough that a legitimate table never trips it,
++// and it keeps a hostile count from turning into a multi-gigabyte reserve. The
++// datastream lesson applies: a bound that is only an ASSERT is no bound at all
++// in a product build, so this is a plain `if`.
++static constexpr int64_t kMaxEntries = 1 << 24;
++
++int32_t LinkOracle::int32_in(const uint8_t* buffer, size_t offset) {
++  int32_t value;
++  memcpy(&value, buffer + offset, sizeof(value));
++  return value;
++}
++
++int32_t LinkOracle::int32_at(size_t offset) const {
++  return int32_in(backing_.get(), offset);
++}
++
++size_t LinkOracle::ReadHeaderSize(const uint8_t* buffer, size_t size) {
++  if (buffer == nullptr) return 0;
++  if (size < kEntryCountSize) return 0;
++
++  const int32_t count = int32_in(buffer, 0);
++  if (count < 0 || count > kMaxEntries) return 0;
++
++  const size_t header_size =
++      kEntryCountSize + static_cast<size_t>(count) * kEntrySize;
++  // The declared table has to fit in what we were actually handed.
++  if (header_size > size) return 0;
++  return header_size;
++}
++
++LinkOracle::LinkOracle(std::unique_ptr<uint8_t[]> backing, size_t header_size)
++    : backing_(std::move(backing)), header_size_(header_size) {
++  BuildCaches();
++}
++
++std::unique_ptr<LinkOracle> LinkOracle::fromBuffer(const uint8_t* buffer,
++                                                   size_t size) {
++  const size_t header_size = ReadHeaderSize(buffer, size);
++  if (header_size == 0) return nullptr;
++
++  // Only the header is retained. The ELF that follows it is mapped separately
++  // by the loader, so copying it here would double the patch's memory cost.
++  std::unique_ptr<uint8_t[]> backing(new uint8_t[header_size]);
++  memcpy(backing.get(), buffer, header_size);
++  return std::unique_ptr<LinkOracle>(
++      new LinkOracle(std::move(backing), header_size));
++}
++
++intptr_t LinkOracle::entry_count() const {
++  if (header_size_ < kEntryCountSize) return 0;
++  return static_cast<intptr_t>((header_size_ - kEntryCountSize) / kEntrySize);
++}
++
++void LinkOracle::BuildCaches() {
++  const intptr_t count = entry_count();
++  for (intptr_t i = 0; i < count; i++) {
++    const size_t entry = kEntryCountSize + static_cast<size_t>(i) * kEntrySize;
++    const int32_t patch_offset = int32_at(entry);
++    const int32_t base_offset = int32_at(entry + 4);
++    // Both columns are unique across a well-formed table -- verified on their
++    // output, 1052/1052 -- so a repeat means a malformed file. Keep the first
++    // pairing rather than letting a later row silently redirect a function.
++    patch_to_cpu_offset_.emplace(patch_offset, base_offset);
++    cpu_to_patch_offset_.emplace(base_offset, patch_offset);
++  }
++}
++
++bool LinkOracle::HasPatch() const {
++  return backing_ != nullptr && entry_count() > 0;
++}
++
++LinkOracle::RunTargetOffset LinkOracle::RunTargetFromPatchOffset(
++    int64_t patch_offset) const {
++  const auto it = patch_to_cpu_offset_.find(static_cast<int>(patch_offset));
++  if (it != patch_to_cpu_offset_.end()) {
++    return RunTargetOffset{static_cast<int64_t>(it->second), RunTarget::cpu};
++  }
++  return RunTargetOffset{patch_offset, RunTarget::sim};
++}
++
++LinkOracle::RunTargetOffset LinkOracle::RunTargetFromBaseOffset(
++    int64_t base_offset) const {
++  const auto it = cpu_to_patch_offset_.find(static_cast<int>(base_offset));
++  if (it != cpu_to_patch_offset_.end()) {
++    return RunTargetOffset{static_cast<int64_t>(it->second), RunTarget::sim};
++  }
++  return RunTargetOffset{base_offset, RunTarget::cpu};
++}
++
++// The singleton. Their `shared()` returns a bare pointer, so ownership stays
++// here for the life of the process.
++static std::unique_ptr<LinkOracle>* shared_oracle() {
++  static std::unique_ptr<LinkOracle> instance;
++  return &instance;
++}
++
++LinkOracle* LinkOracle::shared() {
++  return shared_oracle()->get();
++}
++
++void LinkOracle::Install(std::unique_ptr<LinkOracle> oracle) {
++  *shared_oracle() = std::move(oracle);
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/shorebird.h b/runtime/vm/shorebird/shorebird.h
+new file mode 100644
+index 00000000000..73743a15508
+--- /dev/null
++++ b/runtime/vm/shorebird/shorebird.h
+@@ -0,0 +1,124 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_SHOREBIRD_H_
++#define RUNTIME_VM_SHOREBIRD_SHOREBIRD_H_
++
++#include <cstdint>
++#include <memory>
++#include <unordered_map>
++
++#include "platform/globals.h"
++
++namespace dart {
++
++// The runtime reader of the `.vmcode` link table.
++//
++// Reproduced from their `runtime/vm/shorebird/shorebird.h` (their file, their
++// class name), whose full shape -- byte size, member order, member offsets,
++// method set, signatures, enumerator values and declaration lines -- comes from
++// the DWARF their `Flutter.framework.dSYM` ships. Declaration lines from their
++// header are quoted per member so a future dSYM line-table differential has
++// something to compare against.
++//
++// Why it exists: a Shorebird patch is compiled by a *simulator* `gen_snapshot`,
++// so patch code cannot execute on the real CPU. The linker pairs every patch
++// function whose subgraph hash is unchanged with the base function it matches,
++// and writes those pairs into the `.vmcode` header. At load time this class
++// answers, per code offset, "does this run on the CPU or under the simulator" --
++// linked functions run the base's native code, everything else is simulated.
++//
++// The consumer is the deserializer: their `app_snapshot.cc:891` calls
++// `RunTargetFromPatchOffset`, and `Deserializer::WrapperForRunTarget`
++// (`app_snapshot.cc:894`, called from 944/951/993) turns the answer into the
++// entry-point wrapper that `WrapperAllocator::AllocateMetadata` hands out.
++class LinkOracle {                                         // their :27
++ public:
++  // their :77. A 4-byte enum, not a bool: the DWARF gives the underlying type
++  // as `unsigned int` and both enumerator values.
++  enum RunTarget : uint32_t {
++    cpu = 0,
++    sim = 1,
++  };
++
++  // their :79, 0x10 bytes. `offset` really is const in their DWARF, which makes
++  // the struct non-assignable; that is reproduced rather than smoothed over.
++  struct RunTargetOffset {
++    const int64_t offset;  // their :80, @0x00
++    RunTarget target;      // their :81, @0x08
++
++    bool is_cpu() const { return target == RunTarget::cpu; }  // their :83
++    bool is_sim() const { return target == RunTarget::sim; }  // their :84
++  };
++
++  // their :53. Takes ownership of the header bytes; `header_size` is the value
++  // `ReadHeaderSize` computed for them.
++  LinkOracle(std::unique_ptr<uint8_t[]> backing, size_t header_size);
++
++  // their :59. Parses the front of a `.vmcode` image. Returns nullptr when the
++  // buffer cannot hold the table it declares, so a truncated or hostile file is
++  // rejected here rather than read out of bounds later.
++  static std::unique_ptr<LinkOracle> fromBuffer(const uint8_t* buffer,
++                                                size_t size);
++
++  // their :63. `4 + 8 * entry_count`, or 0 when `size` cannot even hold the
++  // count or cannot hold the table the count declares.
++  static size_t ReadHeaderSize(const uint8_t* buffer, size_t size);
++
++  // their :56. False for a table that pairs nothing -- a patch in which every
++  // function changed still produces a well-formed header with zero entries.
++  bool HasPatch() const;
++
++  // their :58. Process-wide singleton, the same idiom as
++  // ShorebirdLinker::shared(). Null until Install() runs.
++  static LinkOracle* shared();
++
++  // Ours, not theirs: their installer lives in code we have not recovered, and
++  // a singleton nothing can populate is not testable. Takes ownership and
++  // replaces any previous oracle.
++  static void Install(std::unique_ptr<LinkOracle> oracle);
++
++  // their :75.
++  size_t header_size() const { return header_size_; }
++
++  // Number of (patch, base) pairs the header carries.
++  intptr_t entry_count() const;
++
++  // their :97. Patch-side offset in, run target out. A hit means the linker
++  // proved this function unchanged, so the base's native code at the paired
++  // offset runs on the CPU; a miss means the patch's own code must be simulated
++  // at the offset it came in on.
++  RunTargetOffset RunTargetFromPatchOffset(int64_t patch_offset) const;
++
++  // their :104. The reverse query.
++  //
++  // NOT EXERCISED BY THEM: the DWARF has the declaration and no inlined
++  // instance anywhere in their engine, and `nm` finds no out-of-line copy, so
++  // in the build we can see it is dead -- the same situation as
++  // `print_dispatch_table_debug_info_to` in gen_snapshot. Its behaviour here is
++  // the symmetric reading of the same table and cannot be confirmed against
++  // them; do not treat it as verified.
++  RunTargetOffset RunTargetFromBaseOffset(int64_t base_offset) const;
++
++ private:
++  // their :31. Little-endian, matching the writer in tools/linker.py.
++  static int32_t int32_in(const uint8_t* buffer, size_t offset);
++
++  // their :35.
++  int32_t int32_at(size_t offset) const;
++
++  // their :39. Fills both direction caches from the header bytes.
++  void BuildCaches();
++
++  std::unique_ptr<uint8_t[]> backing_;                  // their :28, @0x00
++  size_t header_size_;                                  // their :29, @0x08
++  std::unordered_map<int, int> patch_to_cpu_offset_;    // their :44, @0x10
++  std::unordered_map<int, int> cpu_to_patch_offset_;    // their :50, @0x38
++
++  DISALLOW_COPY_AND_ASSIGN(LinkOracle);
++};
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_SHOREBIRD_H_
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+new file mode 100644
+index 00000000000..b303f88f7b5
+--- /dev/null
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -0,0 +1,210 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/shorebird.h"
++
++#include <cstring>
++#include <utility>
++#include <vector>
++
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// Builds a `.vmcode` header the way tools/linker.py does: a little-endian
++// uint32 count followed by that many (patch, base) uint32 pairs.
++static std::vector<uint8_t> MakeHeader(
++    const std::vector<std::pair<int32_t, int32_t>>& pairs) {
++  std::vector<uint8_t> bytes(4 + 8 * pairs.size());
++  const int32_t count = static_cast<int32_t>(pairs.size());
++  memcpy(bytes.data(), &count, 4);
++  for (size_t i = 0; i < pairs.size(); i++) {
++    memcpy(bytes.data() + 4 + 8 * i, &pairs[i].first, 4);
++    memcpy(bytes.data() + 8 + 8 * i, &pairs[i].second, 4);
++  }
++  return bytes;
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_RunTargetOffsetLayoutMatchesTheirs) {
++  // Their DWARF: RunTargetOffset is 0x10 bytes, offset @0x00, target @0x08,
++  // and RunTarget is a 4-byte enum with cpu == 0 and sim == 1.
++  EXPECT_EQ(static_cast<size_t>(0x10), sizeof(LinkOracle::RunTargetOffset));
++  EXPECT_EQ(static_cast<size_t>(4), sizeof(LinkOracle::RunTarget));
++  EXPECT_EQ(0u, static_cast<uint32_t>(LinkOracle::RunTarget::cpu));
++  EXPECT_EQ(1u, static_cast<uint32_t>(LinkOracle::RunTarget::sim));
++  EXPECT_EQ(static_cast<size_t>(0x00),
++            offsetof(LinkOracle::RunTargetOffset, offset));
++  EXPECT_EQ(static_cast<size_t>(0x08),
++            offsetof(LinkOracle::RunTargetOffset, target));
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_RunTargetOffsetPredicates) {
++  const LinkOracle::RunTargetOffset on_cpu{42, LinkOracle::RunTarget::cpu};
++  const LinkOracle::RunTargetOffset on_sim{42, LinkOracle::RunTarget::sim};
++  EXPECT(on_cpu.is_cpu());
++  EXPECT(!on_cpu.is_sim());
++  EXPECT(on_sim.is_sim());
++  EXPECT(!on_sim.is_cpu());
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeIsCountTimesEight) {
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}, {256, 52100}});
++  EXPECT_EQ(static_cast<size_t>(4 + 16),
++            LinkOracle::ReadHeaderSize(bytes.data(), bytes.size()));
++
++  // An empty table is well-formed: every function changed.
++  const std::vector<uint8_t> empty = MakeHeader({});
++  EXPECT_EQ(static_cast<size_t>(4),
++            LinkOracle::ReadHeaderSize(empty.data(), empty.size()));
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeRejectsMalformed) {
++  EXPECT_EQ(static_cast<size_t>(0), LinkOracle::ReadHeaderSize(nullptr, 100));
++
++  // Too short to hold even the count.
++  const uint8_t stub[3] = {1, 0, 0};
++  EXPECT_EQ(static_cast<size_t>(0), LinkOracle::ReadHeaderSize(stub, 3));
++
++  // Declares two entries but carries one. Reading this as a header would walk
++  // eight bytes past the buffer.
++  std::vector<uint8_t> truncated = MakeHeader({{128, 52016}, {256, 52100}});
++  truncated.resize(truncated.size() - 8);
++  EXPECT_EQ(static_cast<size_t>(0),
++            LinkOracle::ReadHeaderSize(truncated.data(), truncated.size()));
++
++  // A negative count must not become a huge size_t.
++  std::vector<uint8_t> negative = MakeHeader({{1, 2}});
++  const int32_t minus_one = -1;
++  memcpy(negative.data(), &minus_one, 4);
++  EXPECT_EQ(static_cast<size_t>(0),
++            LinkOracle::ReadHeaderSize(negative.data(), negative.size()));
++
++  // An absurd count must be refused on its own, before the size check can be
++  // satisfied by a correspondingly absurd buffer.
++  std::vector<uint8_t> absurd = MakeHeader({{1, 2}});
++  const int32_t huge = 1 << 25;
++  memcpy(absurd.data(), &huge, 4);
++  EXPECT_EQ(static_cast<size_t>(0),
++            LinkOracle::ReadHeaderSize(absurd.data(), absurd.size()));
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_FromBufferParsesTheTable) {
++  // First pair is the one their own s1 sample starts with.
++  const std::vector<uint8_t> bytes =
++      MakeHeader({{128, 52016}, {256, 52100}, {1024, 60000}});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++  EXPECT_EQ(static_cast<size_t>(4 + 24), oracle->header_size());
++  EXPECT_EQ(static_cast<intptr_t>(3), oracle->entry_count());
++  EXPECT(oracle->HasPatch());
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_FromBufferSurvivesTheSourceBufferGoingAway) {
++  std::unique_ptr<LinkOracle> oracle;
++  {
++    const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}});
++    oracle = LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  }
++  EXPECT(oracle != nullptr);
++  // Would read freed memory if fromBuffer had kept a pointer instead of a copy.
++  EXPECT(oracle->RunTargetFromPatchOffset(128).is_cpu());
++  EXPECT_EQ(static_cast<int64_t>(52016),
++            oracle->RunTargetFromPatchOffset(128).offset);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_FromBufferRejectsMalformed) {
++  EXPECT(LinkOracle::fromBuffer(nullptr, 8) == nullptr);
++  const uint8_t stub[2] = {0, 0};
++  EXPECT(LinkOracle::fromBuffer(stub, 2) == nullptr);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_EmptyTableHasNoPatch) {
++  const std::vector<uint8_t> bytes = MakeHeader({});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++  EXPECT_EQ(static_cast<intptr_t>(0), oracle->entry_count());
++  EXPECT(!oracle->HasPatch());
++  // With nothing linked, every patch offset must be simulated.
++  const LinkOracle::RunTargetOffset r = oracle->RunTargetFromPatchOffset(128);
++  EXPECT(r.is_sim());
++  EXPECT_EQ(static_cast<int64_t>(128), r.offset);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_PatchOffsetHitRunsOnCpuAtTheBaseOffset) {
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}, {256, 52100}});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++
++  const LinkOracle::RunTargetOffset a = oracle->RunTargetFromPatchOffset(128);
++  EXPECT(a.is_cpu());
++  EXPECT_EQ(static_cast<int64_t>(52016), a.offset);
++
++  const LinkOracle::RunTargetOffset b = oracle->RunTargetFromPatchOffset(256);
++  EXPECT(b.is_cpu());
++  EXPECT_EQ(static_cast<int64_t>(52100), b.offset);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_PatchOffsetMissIsSimulatedInPlace) {
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++
++  // 999 is not in the table: the linker could not prove it unchanged.
++  const LinkOracle::RunTargetOffset r = oracle->RunTargetFromPatchOffset(999);
++  EXPECT(r.is_sim());
++  EXPECT_EQ(static_cast<int64_t>(999), r.offset);
++
++  // A base offset must not answer the patch-side query. 52016 is the *base*
++  // half of the only pair; asking it as a patch offset has to miss, otherwise
++  // the two caches are aliased.
++  EXPECT(oracle->RunTargetFromPatchOffset(52016).is_sim());
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_BaseOffsetQueryIsTheReverseDirection) {
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++
++  const LinkOracle::RunTargetOffset hit = oracle->RunTargetFromBaseOffset(52016);
++  EXPECT(hit.is_sim());
++  EXPECT_EQ(static_cast<int64_t>(128), hit.offset);
++
++  const LinkOracle::RunTargetOffset miss = oracle->RunTargetFromBaseOffset(7);
++  EXPECT(miss.is_cpu());
++  EXPECT_EQ(static_cast<int64_t>(7), miss.offset);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_DuplicateRowKeepsTheFirstPairing) {
++  // Their tables have unique offsets on both sides (1052/1052). A repeat is a
++  // malformed file; it must not silently redirect an already-paired function.
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}, {128, 99999}});
++  std::unique_ptr<LinkOracle> oracle =
++      LinkOracle::fromBuffer(bytes.data(), bytes.size());
++  EXPECT(oracle != nullptr);
++  EXPECT_EQ(static_cast<int64_t>(52016),
++            oracle->RunTargetFromPatchOffset(128).offset);
++}
++
++VM_UNIT_TEST_CASE(LinkOracle_SharedIsNullUntilInstalled) {
++  // Install() takes ownership, so save and restore nothing -- instead assert
++  // the transition and then clear, leaving the process as it was found.
++  LinkOracle::Install(nullptr);
++  EXPECT(LinkOracle::shared() == nullptr);
++
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}});
++  LinkOracle::Install(LinkOracle::fromBuffer(bytes.data(), bytes.size()));
++  EXPECT(LinkOracle::shared() != nullptr);
++  EXPECT(LinkOracle::shared()->HasPatch());
++  EXPECT_EQ(LinkOracle::shared(), LinkOracle::shared());
++
++  LinkOracle::Install(nullptr);
++  EXPECT(LinkOracle::shared() == nullptr);
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index f564bc027fa..6d10d93173b 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -307,6 +307,8 @@ vm_sources = [
+   "shorebird/dd_voting.h",
+   "shorebird/linker.cc",
+   "shorebird/linker.h",
++  "shorebird/shorebird.h",
++  "shorebird.cc",
+   "simulator_memory.h",
+   "simulator_riscv.cc",
+   "simulator_riscv.h",
+@@ -399,6 +401,7 @@ vm_sources_tests = [
+   "shorebird/wrapper_stub_test.cc",
+   "shorebird/linker_test.cc",
+   "shorebird/dd_voting_test.cc",
++  "shorebird/shorebird_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+   # flutter_hot_patcher B2
+-- 
+2.53.0
+

@@ -1,0 +1,147 @@
+From 1f872f94da75d8456086dfea999445b99ddafa44 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 12:24:53 +0800
+Subject: [PATCH 131/206] feat(elf_loader): thread mode parameter through to
+ LoadSegments
+
+Shorebird's embedder calls Dart_LoadELF with an explicit kReadOnly mode
+(patch_cache.cc:41). The 6-arg inline had been accepting the parameter
+but ignoring it since 247512b1b73 -- the comment even said so.
+
+This wires the mode through:
+  - LoadedElf gains an exec_segment_map_type_ member, default kReadExecute
+  - LoadSegments uses the member instead of a hardcoded constant
+  - Dart_LoadELF_Shorebird: new exported 6-arg entry point; kReadOnly
+    mode maps PF_R|PF_X segments as PROT_READ only (required on iOS);
+    any other value uses kReadExecute (the upstream default)
+  - The 6-arg inline Dart_LoadELF now delegates to Dart_LoadELF_Shorebird
+    instead of being a stub that ignores mode
+
+The 7-arg Dart_LoadELF (vm_snapshot + isolate_snapshot, used by
+dartaotruntime) is unaffected: it continues to use kReadExecute because
+its callers are not loading data files under iOS's PROT_EXEC restriction.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/bin/elf_loader.cc b/runtime/bin/elf_loader.cc
+index 868314c541c..e8aed40caf6 100644
+--- a/runtime/bin/elf_loader.cc
++++ b/runtime/bin/elf_loader.cc
+@@ -30,8 +30,11 @@ namespace elf {
+ class LoadedElf {
+  public:
+   explicit LoadedElf(std::unique_ptr<Mappable> mappable,
+-                     uint64_t elf_data_offset)
+-      : mappable_(std::move(mappable)), elf_data_offset_(elf_data_offset) {}
++                     uint64_t elf_data_offset,
++                     File::MapType exec_segment_map_type = File::kReadExecute)
++      : mappable_(std::move(mappable)),
++        elf_data_offset_(elf_data_offset),
++        exec_segment_map_type_(exec_segment_map_type) {}
+ 
+   ~LoadedElf();
+ 
+@@ -77,6 +80,7 @@ class LoadedElf {
+   // Initialized on a successful Load().
+   std::unique_ptr<Mappable> mappable_;
+   const uint64_t elf_data_offset_;
++  const File::MapType exec_segment_map_type_;
+ 
+   // Initialized on error.
+   const char* error_ = nullptr;
+@@ -293,7 +297,7 @@ bool LoadedElf::LoadSegments() {
+     if (header.flags == (dart::elf::PF_R | dart::elf::PF_W)) {
+       map_type = File::kReadWrite;
+     } else if (header.flags == (dart::elf::PF_R | dart::elf::PF_X)) {
+-      map_type = File::kReadOnly;  // iOS denies PROT_EXEC on data files; Simulator doesn't need it
++      map_type = exec_segment_map_type_;
+     } else if (header.flags == dart::elf::PF_R) {
+       map_type = File::kReadOnly;
+     } else {
+@@ -499,6 +503,37 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Memory(
+   return reinterpret_cast<Dart_LoadedElf*>(elf.release());
+ }
+ 
++// Shorebird variant: isolate-only (no separate vm pair) + explicit mode.
++// mode == dart::bin::kReadOnly (0) maps executable segments read-only, which
++// is required on iOS where PROT_EXEC is denied for data files loaded by the
++// Dart VM embedder.  Any other value restores the upstream kReadExecute mapping.
++DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
++    const char* filename,
++    uint64_t file_offset,
++    const char** error,
++    const uint8_t** snapshot_data,
++    const uint8_t** snapshot_instrs,
++    int mode) {
++  std::unique_ptr<Mappable> mappable(Mappable::FromPath(filename));
++  if (mappable == nullptr) {
++    *error = "Couldn't open file.";
++    return nullptr;
++  }
++  const dart::bin::File::MapType exec_map =
++      (mode == dart::bin::kReadOnly) ? dart::bin::File::kReadOnly
++                                     : dart::bin::File::kReadExecute;
++  std::unique_ptr<LoadedElf> elf(
++      new LoadedElf(std::move(mappable), file_offset, exec_map));
++
++  if (!elf->Load() ||
++      !elf->ResolveSymbols(nullptr, nullptr, snapshot_data, snapshot_instrs)) {
++    *error = elf->error();
++    return nullptr;
++  }
++
++  return reinterpret_cast<Dart_LoadedElf*>(elf.release());
++}
++
+ DART_EXPORT void Dart_UnloadELF(Dart_LoadedElf* loaded) {
+   delete reinterpret_cast<LoadedElf*>(loaded);
+ }
+diff --git a/runtime/bin/elf_loader.h b/runtime/bin/elf_loader.h
+index 4ab3d081c04..18063fab796 100644
+--- a/runtime/bin/elf_loader.h
++++ b/runtime/bin/elf_loader.h
+@@ -55,6 +55,18 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Memory(
+     const uint8_t** vm_isolate_data,
+     const uint8_t** vm_isolate_instrs);
+ 
++/// Shorebird variant: isolate-only ELF (no separate VM snapshot pair) with an
++/// explicit mode parameter controlling how executable segments are mapped.
++/// Pass dart::bin::kReadOnly (0) on iOS where PROT_EXEC is denied for data
++/// files; pass any other value to get the upstream kReadExecute mapping.
++DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
++    const char* filename,
++    uint64_t file_offset,
++    const char** error,
++    const uint8_t** snapshot_data,
++    const uint8_t** snapshot_instrs,
++    int mode);
++
+ /// Unloads an ELF object loaded through Dart_LoadELF{_Fd, _Memory}.
+ ///
+ /// Unlike dlclose(), this does not use reference counting.
+@@ -86,17 +98,16 @@ inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
+ 
+ // Shorebird variant of Dart_LoadELF: drops the separate vm snapshot pair
+ // (the VM isolate is folded into the isolate group in modern AOT) and adds a
+-// mode parameter. The mode value is accepted but not consulted -- the mapping
+-// is always read-only.
++// mode parameter that is now honoured: kReadOnly → PROT_READ only (required on
++// iOS); any other value → PROT_READ|EXEC (upstream default).
+ inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
+                                      uint64_t file_offset,
+                                      const char** error,
+                                      const uint8_t** snapshot_data,
+                                      const uint8_t** snapshot_instrs,
+-                                     int /*mode*/) {
+-  return Dart_LoadELF(filename, file_offset, error,
+-                      nullptr, nullptr,
+-                      snapshot_data, snapshot_instrs);
++                                     int mode) {
++  return Dart_LoadELF_Shorebird(filename, file_offset, error,
++                                 snapshot_data, snapshot_instrs, mode);
+ }
+ #endif  // __cplusplus
+ 
+-- 
+2.53.0
+

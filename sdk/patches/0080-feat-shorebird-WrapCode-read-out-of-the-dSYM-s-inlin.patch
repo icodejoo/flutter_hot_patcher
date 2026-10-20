@@ -1,0 +1,371 @@
+From 1076a3598b65c8ad6d18b45892011ed136f62462 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 10:43:20 +0800
+Subject: [PATCH 080/206] feat(shorebird): WrapCode, read out of the dSYM's
+ inline line records
+
+Four earlier attempts stopped here and the fourth wrote down why: the body
+exists only inlined, 1588 bytes of undifferentiated machine code, and the two
+out-parameters could not be told apart from ReadInstructions' locals. The
+stated unblock conditions were a non-inlined copy or behavioural differencing.
+Neither happened. A third way did.
+
+Every callee inlined into WrapCode carries DW_AT_call_line, and line
+attribution survives inlining by design -- that is what line tables are for.
+Reading those records turns the 1588 bytes into a short list with an address
+range each:
+
+  :929 InstructionsLengthAt   :935 ASSERT(IsExecutable)  :936 return identity
+  :941 IsLinkingEnabled       :942 ASSERT                :944/:945 wrap only
+  :950 RunTargetForPatchIndex :951 WrapperForRunTarget   :952 Stats::Record
+  :955 EntryPointForOffset    :958 AssertInstructionMatch
+  :959 FindEntry              :967 rodata  :969 SetCodeAt  :970/:972 return
+
+With the ranges known, the disassembly is targeted rather than blind. The
+payoff is at 0x73b078: the EntryPoints returned on the linked path is built
+from x23, which 0x73af24 computed as base_start_pc + offset. A patch entry
+whose code matches the base resolves to the base image's address, and its Code
+is registered in the base table -- which is what keeps pc-to-Code lookups on
+unpatched addresses working. Note SetCodeAt appears twice, at :969 on the base
+table and at :10225 on the patch's; they are not the same call.
+
+AssertInstructionMatch also fell out: 0x73af28 loads one 32-bit word from each
+address and compares them, failing an assert at :919. One word, not the body --
+they pass no length.
+
+Two upstream-class additions come with it, both named by the same records:
+InstructionsTable::EntryPointForOffset (:955) and InstructionsLengthAt (:929).
+The latter is the length computation ReadInstructions had inline, moved to
+where theirs keeps it.
+
+DELIBERATE DEVIATION, marked in the header: theirs takes uint32_t& and uword&
+out-parameters and we do not. Neither dSYM names them, no artifact on this
+machine has an out-of-line copy, and after optimisation the writes are
+indistinguishable from the caller's own locals. Our caller computes what it
+needs itself. Inventing a meaning would be the freelancing rule 3 forbids.
+
+Built in the configuration that actually defines DART_PRECOMPILED_RUNTIME --
+dartaotruntime, not run_vm_tests, which is trap 17 in this project's notes.
+
+Negative control, because green after a refactor can just mean the new code is
+not reached: returning payload_start + 4 on the non-linking path turns
+dd_runtime_check red with 5 failures, so WrapCode is on the live path for all
+1380 entry points. Reverted by the reverse patch. 102 tests pass and
+verify_all.sh reports 5 ran, 0 failed, 0 skipped.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index dd1ea0c7744..ac485b82998 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -812,6 +812,17 @@ class Deserializer : public ThreadStackResource {
+   std::function<uword(uword)> WrapperForRunTarget(
+       LinkOracle::RunTarget target) const;
+ 
++#if defined(DART_PRECOMPILED_RUNTIME)
++  // Shorebird. Their :923, :941, :950 and :958 -- see the definitions.
++  EntryPoints WrapCode(CodePtr code,
++                       intptr_t index,
++                       uint32_t payload_info,
++                       uword payload_start);
++  bool IsLinkingEnabled() const;
++  LinkOracle::RunTargetOffset RunTargetForPatchIndex(intptr_t index) const;
++  void AssertInstructionMatch(uword base_pc, uword patch_pc) const;
++#endif  // defined(DART_PRECOMPILED_RUNTIME)
++
+   // Verifies the image alignment.
+   //
+   // Returns ApiError::null() on success and an ApiError with an an appropriate
+@@ -9921,72 +9932,22 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+     return;
+   }
+ 
++  // Their :10204 / :10205 / :10208, in that order.
+   const uword payload_start = instructions_table_.EntryPointAt(
+       instructions_table_.rodata()->first_entry_with_code +
+       instructions_index_);
+   const uint32_t payload_info = ReadUnsigned();
+ 
+-  // Shorebird: the arithmetic upstream did inline lives in EntryPoints now, so
+-  // that the addresses can be routed through a wrapper on the way out.
+-  //
+-  // Application code is wrapped, VM code is not, and a patch being present does
+-  // not enter into it. Theirs gates on exactly this: WrapFunction and WrapCode
+-  // both check instructions_type_ first and take an identity function pointer
+-  // -- a bare `ret` at 0x733170 -- when it is not `app`. Only application code
+-  // is ever replaced by a patch, which is what exempts the VM isolate.
+-  //
+-  // This was gated on a LinkOracle being installed until the wrapper had been
+-  // shown to work, since wrapping unconditionally costs a landing pad per entry
+-  // point. It does work: dropping the gate wraps all 1400-odd entry points in
+-  // the fixture and the program still produces the right answer, and corrupting
+-  // the stored target by four bytes segfaults every case -- so the wrappers are
+-  // being entered and are routing through the metadata, not quietly bypassed.
+-  //
+-  // ⚠️ That evidence is one small program on one platform. A real app has far
+-  // more entry points and correspondingly more wrapper pages.
+-  const bool wrap = instructions_type_ == InstructionsType::app;
+-  const EntryPoints entry_points(
+-      payload_start,
+-      wrap ? WrapperForRunTarget(LinkOracle::RunTarget::cpu)
+-           : std::function<uword(uword)>(
+-                 [](uword entry_point) { return entry_point; }),
+-      payload_info);
++  // Their :10214.
++  const EntryPoints entry_points =
++      WrapCode(code, instructions_index_, payload_info, payload_start);
+ 
++  // Their :10225 and :10227. Note this SetCodeAt is on *this* table; WrapCode
++  // has its own, on the base table, and they are not the same call.
+   instructions_table_.SetCodeAt(instructions_index_++, code);
+-
+   // There are no serialized RawInstructions objects in this mode.
+   code->untag()->instructions_ = Instructions::null();
+   entry_points.StoreInto(code);
+-
+-  // Theirs records right after wrapping, once per entry point, with the run
+-  // target it just used. Everything reaching here is cpu until the sim side of
+-  // WrapCode exists.
+-  //
+-  // The length is theirs exactly (0x73aa5c..0x73aad4). Every entry but the last
+-  // measures to where the next one starts. The last has no next, so it measures
+-  // to end_pc_ and then walks backwards over trailing `brk #0` -- the padding
+-  // the image is filled out with -- which is why only that entry needs the
+-  // trim: the others already stop where real code stops.
+-  const auto* const rodata = instructions_table_.rodata();
+-  const intptr_t entry =
+-      static_cast<intptr_t>(rodata->first_entry_with_code) +
+-      instructions_index_ - 1;
+-  const uint32_t start = rodata->entries()[entry].pc_offset;
+-  uint32_t end;
+-  if (entry + 1 < static_cast<intptr_t>(rodata->length)) {
+-    end = rodata->entries()[entry + 1].pc_offset;
+-  } else {
+-    const uword start_pc = instructions_table_.ptr()->untag()->start_pc_;
+-    end = static_cast<uint32_t>(
+-        instructions_table_.ptr()->untag()->end_pc_ - start_pc);
+-    // 0xd4200000 is `brk #0`, the word their loop compares against.
+-    while (end > start &&
+-           *reinterpret_cast<const uint32_t*>(start_pc + end - 4) ==
+-               0xd4200000) {
+-      end -= 4;
+-    }
+-  }
+-  stats_.Record(LinkOracle::RunTarget::cpu, end - start);
+ #else
+   ASSERT(!deferred);
+   InstructionsPtr instr = image_reader_->GetInstructionsAt(Read<uint32_t>());
+@@ -10002,6 +9963,141 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+ #endif  // defined(DART_PRECOMPILED_RUNTIME)
+ }
+ 
++#if defined(DART_PRECOMPILED_RUNTIME)
++// Shorebird. Their app_snapshot.cc:923.
++//
++// Recovered from the engine dSYM's inline records: every callee inlined into
++// this function carries a DW_AT_call_line, and line attribution survives
++// inlining by design, so the operation sequence below is read rather than
++// guessed. Four earlier attempts stalled because the body was being read as
++// 1588 bytes of undifferentiated machine code; the line map turns it into a
++// short list with an address range each.
++//
++//   :929  InstructionsTable::InstructionsLengthAt(index)
++//   :935  ASSERT(VirtualMemory::IsExecutable(...))
++//   :936  return EntryPoints::Code(payload_start, identity, payload_info)
++//   :941  IsLinkingEnabled()
++//   :942  ASSERT(...)
++//   :944  WrapperForRunTarget(...)      :945  return EntryPoints::Code(...)
++//   :950  RunTargetForPatchIndex(index) :951  WrapperForRunTarget(target)
++//   :952  Stats::Record(target, length)
++//   :955  InstructionsTable::EntryPointForOffset(offset)
++//   :958  AssertInstructionMatch(base_pc, patch_pc)
++//   :959  InstructionsTable::FindEntry(base_table, pc, ...)
++//   :967  rodata()                      :969  SetCodeAt(index, code)
++//   :970 / :972  return EntryPoints::Code(...)
++//
++// The linked path's payoff is visible at 0x73b078: the EntryPoints it returns
++// is built from x23, which 0x73af24 computed as base_start_pc + offset. So a
++// patch entry whose code matches the base resolves to the *base* image's
++// address, and its Code object is registered in the *base* table -- which is
++// what makes pc-to-Code lookups on unpatched addresses keep working.
++//
++// ⚠️ DELIBERATE DEVIATION, and the one thing here that is not evidence-backed.
++// Theirs takes two out-parameters, `uint32_t&` and `uword&`. Neither dSYM
++// names them -- WrapCode appears only as a declaration, its formal parameters
++// carry types and no names, and no artifact on this machine has an out-of-line
++// copy (checked across two Flutter revisions and six engine configurations).
++// After optimisation the writes are indistinguishable from ReadInstructions'
++// own locals. Rather than invent a meaning, they are omitted: our caller
++// computes what it needs itself. If behavioural differencing against a real
++// .vmcode ever becomes possible, this is the seam to revisit.
++Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
++                                                 intptr_t index,
++                                                 uint32_t payload_info,
++                                                 uword payload_start) {
++  const std::function<uword(uword)> identity = [](uword ep) { return ep; };
++
++  // :936. A patch only ever replaces application code, so VM code is never
++  // wrapped and never linked. Theirs checks this first and takes a plain
++  // identity function pointer -- a bare `ret` at 0x733170.
++  if (instructions_type_ != InstructionsType::app) {
++    return EntryPoints(payload_start, identity, payload_info);
++  }
++
++  const intptr_t length = instructions_table_.InstructionsLengthAt(index);
++
++  // :941. Without a base to link against there is nothing to look up, so the
++  // code keeps its own address and is merely wrapped.
++  if (!IsLinkingEnabled()) {
++    stats_.Record(LinkOracle::RunTarget::cpu, length);
++    return EntryPoints(payload_start,
++                       WrapperForRunTarget(LinkOracle::RunTarget::cpu),
++                       payload_info);
++  }
++
++  // :950. One query answers both halves: which target this entry was linked
++  // for, and -- on a hit -- where in the base image its code lives. That is
++  // why their RunTargetOffset carries an offset alongside the enum.
++  const LinkOracle::RunTargetOffset resolved = RunTargetForPatchIndex(index);
++  const std::function<uword(uword)> wrapper =
++      WrapperForRunTarget(resolved.target);
++  stats_.Record(resolved.target, length);
++
++  // A miss means the linker could not prove this function unchanged, so the
++  // patch's own code stands and there is no base entry to point at.
++  if (resolved.is_sim()) {
++    return EntryPoints(payload_start, wrapper, payload_info);
++  }
++
++  // :955. start_pc plus the offset, nothing else.
++  const uword base_entry =
++      shorebird_base_instructions_table_.EntryPointForOffset(
++          static_cast<uint32_t>(resolved.offset));
++
++  // :958. Their check is exactly a first-instruction-word comparison
++  // (0x73af28: two `ldr w` and a `cmp`), so a mismatched link is caught before
++  // anything is rewritten rather than after.
++  AssertInstructionMatch(base_entry, payload_start);
++
++  // :959 / :967 / :969. Find which base entry contains that pc, convert to a
++  // code index, and register this Code there.
++  const intptr_t entry = InstructionsTable::FindEntry(
++      shorebird_base_instructions_table_.ptr(), base_entry, 0);
++  if (entry >= 0) {
++    const intptr_t code_index =
++        entry - shorebird_base_instructions_table_.FirstEntryWithCode();
++    shorebird_base_instructions_table_.SetCodeAt(code_index, code);
++  }
++
++  // :970. Built from the base address, not the patch's -- see above.
++  return EntryPoints(base_entry, wrapper, payload_info);
++}
++
++// Shorebird. Their :941. Linking needs both halves: a table saying which patch
++// offsets pair with which base offsets, and the base image those offsets are
++// into. Either one missing and every entry keeps its own address.
++bool Deserializer::IsLinkingEnabled() const {
++  return LinkOracle::shared() != nullptr &&
++         !shorebird_base_instructions_table_.IsNull();
++}
++
++// Shorebird. Their :950.
++//
++// The link table is keyed by offset into the instructions image, which is what
++// tools/linker.py writes, so the index has to be turned back into one first.
++LinkOracle::RunTargetOffset Deserializer::RunTargetForPatchIndex(
++    intptr_t index) const {
++  const auto* const data = instructions_table_.rodata();
++  const intptr_t entry =
++      static_cast<intptr_t>(data->first_entry_with_code) + index;
++  ASSERT(0 <= entry);
++  ASSERT(entry < static_cast<intptr_t>(data->length));
++  return LinkOracle::shared()->RunTargetFromPatchOffset(
++      static_cast<int64_t>(data->entries()[entry].pc_offset));
++}
++
++// Shorebird. Their :958, and the assert it fails is at :919.
++void Deserializer::AssertInstructionMatch(uword base_pc, uword patch_pc) const {
++  // One word, not the whole body. Theirs loads a single 32-bit word from each
++  // address and compares them; a full comparison would need a length they do
++  // not pass. It is a cheap guard against a link table that points somewhere
++  // unrelated, not a proof that the two functions are identical.
++  RELEASE_ASSERT(*reinterpret_cast<const uint32_t*>(base_pc) ==
++                 *reinterpret_cast<const uint32_t*>(patch_pc));
++}
++#endif  // defined(DART_PRECOMPILED_RUNTIME)
++
+ void Deserializer::EndInstructions() {
+ #if defined(DART_PRECOMPILED_RUNTIME)
+   if (instructions_table_.IsNull()) {
+diff --git a/runtime/vm/object.cc b/runtime/vm/object.cc
+index 12d670dca6b..13db77f9c1c 100644
+--- a/runtime/vm/object.cc
++++ b/runtime/vm/object.cc
+@@ -16386,6 +16386,31 @@ uword InstructionsTable::EntryPointAt(intptr_t code_index) const {
+          rodata()->entries()[code_index].pc_offset;
+ }
+ 
++// Shorebird. See the declaration for where in their binary this comes from.
++intptr_t InstructionsTable::InstructionsLengthAt(intptr_t index) const {
++  const auto* const data = rodata();
++  const intptr_t entry =
++      static_cast<intptr_t>(data->first_entry_with_code) + index;
++  ASSERT(0 <= entry);
++  ASSERT(entry < static_cast<intptr_t>(data->length));
++
++  const uint32_t start = data->entries()[entry].pc_offset;
++  uint32_t end;
++  if (entry + 1 < static_cast<intptr_t>(data->length)) {
++    end = data->entries()[entry + 1].pc_offset;
++  } else {
++    const uword image_start = ptr()->untag()->start_pc_;
++    end = static_cast<uint32_t>(ptr()->untag()->end_pc_ - image_start);
++    // 0xd4200000 is `brk #0`, the word their loop compares against.
++    while (end > start &&
++           *reinterpret_cast<const uint32_t*>(image_start + end - 4) ==
++               0xd4200000) {
++      end -= 4;
++    }
++  }
++  return static_cast<intptr_t>(end - start);
++}
++
+ const char* InstructionsTable::ToCString() const {
+   return "InstructionsTable";
+ }
+diff --git a/runtime/vm/object.h b/runtime/vm/object.h
+index 10e6a1b5f13..308f3679ca7 100644
+--- a/runtime/vm/object.h
++++ b/runtime/vm/object.h
+@@ -6163,6 +6163,27 @@ class InstructionsTable : public Object {
+     return static_cast<intptr_t>(rodata()->first_entry_with_code);
+   }
+ 
++  // Shorebird. Two additions to this upstream class, both recovered from the
++  // engine dSYM's inline records for Deserializer::WrapCode: theirs calls
++  // InstructionsLengthAt at app_snapshot.cc:929 and EntryPointForOffset at :955.
++
++  // The address an offset into this image denotes. Their code at 0x73af20 is
++  // exactly `ldur x9, [x8, #0x1f]` -- start_pc_ -- followed by `add x23, x9,
++  // x10`, so this is start_pc plus the offset and nothing else. Public because
++  // start_pc() is private and WrapCode needs this from outside.
++  uword EntryPointForOffset(uint32_t offset) const {
++    return start_pc() + offset;
++  }
++
++  // How many bytes of instructions the entry at `index` occupies, where index
++  // is relative to first_entry_with_code as everywhere else in this class.
++  //
++  // Every entry but the last measures to where the next one starts. The last
++  // has no next, so it measures to end_pc_ and then walks back over trailing
++  // `brk #0` -- the padding the image is filled out with -- which is why only
++  // that entry needs the trim: the others already stop where real code stops.
++  intptr_t InstructionsLengthAt(intptr_t index) const;
++
+  private:
+   uword start_pc() const { return InstructionsTable::start_pc(this->ptr()); }
+   static uword start_pc(InstructionsTablePtr table) {
+-- 
+2.53.0
+

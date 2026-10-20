@@ -1,0 +1,414 @@
+From f8c72803d16495daee15a22119a006e4d8cf433f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 12:17:32 +0800
+Subject: [PATCH 026/206] feat(shorebird): CT/FT/DT readers; move
+ ShorebirdLinker to dart:: namespace
+
+Two things, both driven by their symbol table.
+
+Namespace correction (fixes Task 1). Their symbols demangle to
+dart::ShorebirdLinker, not dart::shorebird::ShorebirdLinker -- the only
+things they put in dart::shorebird:: are the WrapperAllocator/WrapperLayout
+family, so wrapper.{h,cc} stays where it is and link_info.{h,cc} was already
+right. Our guard symbol now matches theirs verbatim:
+
+  guard variable for dart::ShorebirdLinker::shared()::shared_linker
+
+including the static's name, which their guard variable reveals. Verified
+6 dart::ShorebirdLinker symbols and 0 dart::shorebird::ShorebirdLinker in
+run_vm_tests. This mattered beyond tidiness: a symbol-level check grepping
+shorebird::ShorebirdLinker would have matched ours while never being able to
+match theirs, reporting success exactly when we diverged.
+
+Readers. ReadClassTableLinkInfo / ReadFieldTableLinkInfo /
+ReadDispatchTableLinkInfo each come in two overloads, with the ReadStream*
+form as the primary decoder and the const char* form reading the file and
+delegating to it -- one decoder, so the production path and the test path
+cannot drift apart. All three are count-driven, never read-until-EOF: the
+class and field formats put their scalar LAST (num_cids / max_field_id), so a
+parser that loops until the buffer is exhausted swallows the trailer as a
+phantom entry and then reports a clean full-buffer parse. Read the count, loop
+exactly that many times, then read the trailer. ReadString mirrors WriteString
+in link_info.cc: length prefix, then each char as a signed int32 varint.
+
+A zero-length file is treated as a read error rather than decoded: no valid
+encoding is zero bytes, and ReadStream's bounds checks are ASSERTs that are
+compiled out in Release/Product, so decoding an empty buffer would over-read
+the allocation instead of failing.
+
+Because both overloads take pointers, a bare nullptr is ambiguous; the tests
+cast explicitly and say why.
+
+Scope limit recorded in the test file: these three tests exercise only the
+null-path guard, which returns before any decoding happens. They cannot
+distinguish a correct decoder from one returning the right count of wrong
+entries, nor one that stops early. Task 3's round-trip is the first real test
+of the decoder.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 399f46e106b..d697ebb6ac3 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -4,13 +4,19 @@
+ 
+ #include "vm/shorebird/linker.h"
+ 
++#include <cstdio>
++#include <cstdlib>
+ #include <memory>
++#include <string>
++#include <utility>
++#include <vector>
+ 
+ #include "platform/assert.h"
+ #include "platform/globals.h"
++#include "vm/datastream.h"
++#include "vm/os.h"
+ 
+ namespace dart {
+-namespace shorebird {
+ 
+ // Their binary allocates 0x88 = 136 bytes in shared() via malloc(1, 0x88).
+ // A size match is weak evidence (same-width substitutions pass), but it is
+@@ -35,8 +41,11 @@ ShorebirdLinker* ShorebirdLinker::shared() {
+   // Function-local static: __cxa_guard_acquire/release pattern, matching their
+   // disassembly of shared() at 0x100199878. The guard variable in their binary
+   // lives at 0x1005214b8, the pointer at 0x1005214b0.
+-  static ShorebirdLinker* instance = new ShorebirdLinker();
+-  return instance;
++  //
++  // Named shared_linker to match theirs: their symbol table spells it out as
++  // "guard variable for dart::ShorebirdLinker::shared()::shared_linker".
++  static ShorebirdLinker* shared_linker = new ShorebirdLinker();
++  return shared_linker;
+ }
+ 
+ void ShorebirdLinker::InitializeWithClassTableLinkInfo(
+@@ -65,5 +74,171 @@ void ShorebirdLinker::InitializeWithDispatchTableLinkInfo(
+   base_dispatch_table_ = std::move(base);
+ }
+ 
+-}  // namespace shorebird
++namespace {
++
++// Reads a file entirely into a heap-allocated buffer. Returns true and sets
++// *buf/*size on success, false on any error. Caller must free(*buf).
++//
++// An empty file is reported as an error rather than handed on as a zero-length
++// buffer: every one of these formats begins with a count, so zero bytes cannot
++// be a valid encoding, and ReadStream's bounds ASSERT is compiled out in
++// Release/Product builds -- decoding a zero-length buffer would read off the
++// end of the allocation instead of failing.
++bool ReadFileIntoBuffer(const char* path, uint8_t** buf, intptr_t* size) {
++  FILE* f = fopen(path, "rb");
++  if (f == nullptr) {
++    OS::PrintErr("ShorebirdLinker: cannot open %s\n", path);
++    return false;
++  }
++  if (fseek(f, 0, SEEK_END) != 0) {
++    fclose(f);
++    return false;
++  }
++  const long len = ftell(f);  // NOLINT(runtime/int)
++  if (len <= 0) {
++    if (len == 0) {
++      OS::PrintErr("ShorebirdLinker: %s is empty\n", path);
++    }
++    fclose(f);
++    return false;
++  }
++  rewind(f);
++  uint8_t* data = reinterpret_cast<uint8_t*>(malloc(len));
++  if (data == nullptr) {
++    fclose(f);
++    return false;
++  }
++  if (fread(data, 1, static_cast<size_t>(len), f) != static_cast<size_t>(len)) {
++    free(data);
++    fclose(f);
++    return false;
++  }
++  fclose(f);
++  *buf = data;
++  *size = static_cast<intptr_t>(len);
++  return true;
++}
++
++// str := len:u, char:s * len
++// Mirrors WriteString() in link_info.cc, which length-prefixes and then writes
++// each character with Write<int32_t> -- the signed varint form, so this must
++// read back with Read<int32_t> (kEndByteMarker), not ReadUnsigned.
++std::string ReadString(ReadStream* stream) {
++  const intptr_t len = stream->ReadUnsigned<intptr_t>();
++  std::string result;
++  result.reserve(static_cast<size_t>(len));
++  for (intptr_t i = 0; i < len; i++) {
++    const int32_t ch = stream->Read<int32_t>();
++    result.push_back(static_cast<char>(ch));
++  }
++  return result;
++}
++
++}  // namespace
++
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream) {
++  // count:u, { id:u, name:str, hash:str } * count, num_cids:u
++  //
++  // Count-driven: read the count, loop exactly that many times, and only then
++  // read the trailer. Looping until the buffer is exhausted would swallow
++  // num_cids as a phantom entry while still looking like a clean parse.
++  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  std::vector<ClassInfo> classes;
++  classes.reserve(static_cast<size_t>(count));
++  for (intptr_t i = 0; i < count; i++) {
++    ClassInfo info;
++    info.cid = stream->ReadUnsigned<intptr_t>();
++    info.name = ReadString(stream);
++    info.hash = ReadString(stream);
++    classes.push_back(std::move(info));
++  }
++  // Trailing scalar -- after the loop, not inside it.
++  const intptr_t num_cids = stream->ReadUnsigned<intptr_t>();
++
++  return std::make_unique<ClassTableLinkInfo>(std::move(classes), num_cids);
++}
++
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path) {
++  uint8_t* buf = nullptr;
++  intptr_t size = 0;
++  if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    return std::make_unique<ClassTableLinkInfo>(std::vector<ClassInfo>{},
++                                                /*num_cids=*/0);
++  }
++  // Frees buf however we leave this function.
++  std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
++
++  ReadStream stream(buf, size);
++  return ReadClassTableLinkInfo(&stream);
++}
++
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream) {
++  // count:u, { id:u, name:str, hash:str } * count, max_field_id:u
++  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  std::vector<FieldInfo> fields;
++  fields.reserve(static_cast<size_t>(count));
++  for (intptr_t i = 0; i < count; i++) {
++    FieldInfo info;
++    info.id = stream->ReadUnsigned<intptr_t>();
++    info.name = ReadString(stream);
++    info.hash = ReadString(stream);
++    fields.push_back(std::move(info));
++  }
++  // Trailing scalar.
++  const intptr_t max_field_id = stream->ReadUnsigned<intptr_t>();
++
++  return std::make_unique<FieldTableLinkInfo>(std::move(fields), max_field_id);
++}
++
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path) {
++  uint8_t* buf = nullptr;
++  intptr_t size = 0;
++  if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    return std::make_unique<FieldTableLinkInfo>(std::vector<FieldInfo>{},
++                                                /*max_field_id=*/0);
++  }
++  std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
++
++  ReadStream stream(buf, size);
++  return ReadFieldTableLinkInfo(&stream);
++}
++
++std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
++    ReadStream* stream) {
++  // count:u, { offset:u, hash:str, nranges:u, (lo:u, hi:u)*nranges } * count
++  // No trailing scalar; the end of the entry loop is the end of the data.
++  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  std::vector<SelectorRowInfo> selectors;
++  selectors.reserve(static_cast<size_t>(count));
++  for (intptr_t i = 0; i < count; i++) {
++    SelectorRowInfo row;
++    row.offset = stream->ReadUnsigned<intptr_t>();
++    row.hash = ReadString(stream);
++    const intptr_t nranges = stream->ReadUnsigned<intptr_t>();
++    row.ranges.reserve(static_cast<size_t>(nranges));
++    for (intptr_t j = 0; j < nranges; j++) {
++      const intptr_t lo = stream->ReadUnsigned<intptr_t>();
++      const intptr_t hi = stream->ReadUnsigned<intptr_t>();
++      row.ranges.push_back({lo, hi});
++    }
++    selectors.push_back(std::move(row));
++  }
++
++  return std::make_unique<DispatchTableLinkInfo>(std::move(selectors));
++}
++
++std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
++    const char* path) {
++  uint8_t* buf = nullptr;
++  intptr_t size = 0;
++  if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    return std::make_unique<DispatchTableLinkInfo>(
++        std::vector<SelectorRowInfo>{});
++  }
++  std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
++
++  ReadStream stream(buf, size);
++  return ReadDispatchTableLinkInfo(&stream);
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 8b71ac1cd96..9756b541aec 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -6,18 +6,30 @@
+ #define RUNTIME_VM_SHOREBIRD_LINKER_H_
+ 
+ #include <memory>
++#include <string>
++#include <vector>
+ 
+ #include "platform/globals.h"
+ #include "vm/shorebird/link_info.h"
+ 
+ namespace dart {
+-namespace shorebird {
++
++// Forward declared rather than including vm/datastream.h, which is heavy and
++// is only needed by the readers' implementation.
++class ReadStream;
+ 
+ // ShorebirdLinker is the central aggregation point for all link-info
+ // structures produced by a base snapshot and consumed by a patch link.
+ // It is a function-local static singleton (not a global) — `shared()` uses
+ // __cxa_guard_acquire/release, as confirmed by disassembly.
+ //
++// NAMESPACE: plain `dart`, NOT `dart::shorebird`, even though this file lives
++// in runtime/vm/shorebird/. Measured, not a style choice: their symbols
++// demangle to `dart::ShorebirdLinker::...`, and the only things they place in
++// `dart::shorebird::` are the WrapperAllocator/WrapperLayout family. Putting
++// this class in `dart::shorebird` would compile fine while silently diverging
++// from their ABI, and would defeat any symbol-level check against their binary.
++//
+ // Field layout (measured from their gen_snapshot.arm64 disassembly; see
+ // LINKER_RECON.md §3):
+ //
+@@ -135,7 +147,56 @@ class ShorebirdLinker {
+   DISALLOW_COPY_AND_ASSIGN(ShorebirdLinker);
+ };
+ 
+-}  // namespace shorebird
++// Readers for the three link-info wire formats.
++//
++// Each format comes in two overloads. The ReadStream* form is the PRIMARY
++// decoder; the const char* form reads the file into memory and delegates to it.
++// One decoder, two entry points -- so the production path (a file named by a
++// gen_snapshot option) and the test path (bytes straight from the real encoder)
++// cannot drift apart.
++//
++// All three decoders are COUNT-DRIVEN, never read-until-EOF. Both the class and
++// field formats put a scalar LAST (num_cids / max_field_id) rather than in the
++// header, so a parser that loops until the buffer is exhausted consumes that
++// trailer as a phantom final entry and then reports a clean full-buffer parse --
++// a false pass this project has already been bitten by once, caught only by
++// diffing against Shorebird's own JSON output. Read the count, loop exactly that
++// many times, then read the trailer.
++//
++// Objects are allocated with plain `new` (heap, not Zone) so they can be created
++// before an isolate exists, matching the _main call-site pattern in their
++// binary. ClassTableLinkInfo and friends derive from ZoneObject, whose
++// destructor is virtual, so unique_ptr's default deleter is correct here.
++//
++// Because the overloads are both on pointer types, calling these with a bare
++// `nullptr` is ambiguous; callers passing a null path must cast explicitly.
++
++// count:u, { id:u, name:str, hash:str } * count, num_cids:u
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream);
++
++// Reads the file produced by --print_class_table_link_info_to.
++// Returns an empty object (count=0, num_cids=0) on a null path, an unreadable
++// file, or an empty file. Never returns null, so callers need no null check
++// before handing the result to Initialize*.
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path);
++
++// count:u, { id:u, name:str, hash:str } * count, max_field_id:u
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream);
++
++// Reads the file produced by --print_field_table_link_info_to.
++// Returns an empty object (count=0, max_field_id=0) on error, never null.
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path);
++
++// count:u, { offset:u, hash:str, nranges:u, (lo:u, hi:u)*nranges } * count
++// No trailing scalar -- the end of the entry loop is the end of the data.
++std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
++    ReadStream* stream);
++
++// Reads the file produced by --print_dispatch_table_link_info_to.
++// Returns an empty object (count=0) on error, never null.
++std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
++    const char* path);
++
+ }  // namespace dart
+ 
+ #endif  // RUNTIME_VM_SHOREBIRD_LINKER_H_
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index e1401a3cf83..12672cec96a 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -7,7 +7,6 @@
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+-namespace shorebird {
+ 
+ // shared() must return the same address on repeated calls.
+ VM_UNIT_TEST_CASE(ShorebirdLinker_SharedReturnsSingleton) {
+@@ -26,5 +25,42 @@ VM_UNIT_TEST_CASE(ShorebirdLinker_FreshHasNullSlots) {
+   EXPECT(linker->base_dispatch_table() == nullptr);
+ }
+ 
+-}  // namespace shorebird
++// Reader smoke tests.
++//
++// These exercise ONLY the null-path guard. They deliberately do not go through
++// the singleton (see the plan's "Singleton state leaks across tests" rule): a
++// reader test that called Initialize* would mutate process-wide state that
++// every later test in the same process observes.
++//
++// Scope honesty: the null path returns before any decoding happens, so these
++// tests say nothing about whether the decoder is correct. A reader that returned
++// the right number of wrong entries, or one that stopped early, would pass all
++// three. The decoder's real oracle is the round-trip test in Task 3.
++//
++// The explicit static_cast<const char*> is required, not stylistic:
++// ReadClassTableLinkInfo is overloaded on (const char*) and (ReadStream*), so a
++// bare nullptr is ambiguous and does not compile.
++VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_NullPathReturnsEmpty) {
++  std::unique_ptr<ClassTableLinkInfo> result =
++      ReadClassTableLinkInfo(static_cast<const char*>(nullptr));
++  EXPECT(result != nullptr);
++  EXPECT_EQ(static_cast<size_t>(0), result->classes().size());
++  EXPECT_EQ(static_cast<intptr_t>(0), result->num_cids());
++}
++
++VM_UNIT_TEST_CASE(ReadFieldTableLinkInfo_NullPathReturnsEmpty) {
++  std::unique_ptr<FieldTableLinkInfo> result =
++      ReadFieldTableLinkInfo(static_cast<const char*>(nullptr));
++  EXPECT(result != nullptr);
++  EXPECT_EQ(static_cast<size_t>(0), result->fields().size());
++  EXPECT_EQ(static_cast<intptr_t>(0), result->max_field_id());
++}
++
++VM_UNIT_TEST_CASE(ReadDispatchTableLinkInfo_NullPathReturnsEmpty) {
++  std::unique_ptr<DispatchTableLinkInfo> result =
++      ReadDispatchTableLinkInfo(static_cast<const char*>(nullptr));
++  EXPECT(result != nullptr);
++  EXPECT_EQ(static_cast<size_t>(0), result->selectors().size());
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

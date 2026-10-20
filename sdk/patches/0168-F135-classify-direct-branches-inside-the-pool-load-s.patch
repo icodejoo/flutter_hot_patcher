@@ -1,0 +1,139 @@
+From aa6737ae4c02fe8183a8d351bb7e3a4026b76692 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Sun, 27 Sep 2026 18:18:48 +0800
+Subject: [PATCH 168/206] F135: classify direct branches inside the pool-load
+ skip window
+
+The pool form's 3-n word skip window swallowed every word after a pool
+load. Their analyze_snapshot (measured by patching words into hello
+fn#13, Q68_window_patch_probe.py) swallows pool loads, field loads, mov
+and blr there too, but still classifies any direct branch (b, bl,
+b.cond; local or external) and does not charge it to the budget: the
+window slides past it. A bl at word 5 now hashes like a bl at word 7
+(self_hash d539947c) and reports callee 25, matching theirs.
+
+Probe battery (28 rows) self_hash/self_pp/callees: before 17 DIFF,
+after 0 DIFF. hello/prog/base_dd outputs of 5 flags identical modulo
+the ASLR-dependent header addresses. Replaces the stale KNOWN-SUSPECT
+F68 comment.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 39e3f2d9e71..3642ef75927 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1148,6 +1148,10 @@ static constexpr intptr_t kNoSelector = -1;
+ // -- the snapshot version hash makes their analyze_snapshot refuse our .so and
+ // ours refuse theirs ("Wrong full snapshot version, expected '8b59e404...'
+ // found '839937dd...'", rc=255).
++// F135 (2026-09-27) tested it a different way -- patching words into a copy of
++// each side's OWN .so: their analyzer also swallows a pool load placed inside
++// the window (Q68 row T1, self_pp unchanged on both sides). What it does NOT
++// swallow is a direct branch; see the pool branch of ComputeShorebirdCodeFacts.
+ //
+ // Also retracted: "we do emit index 1332 elsewhere (hello 2x, prog 1x)", which
+ // (2) leaned on, is misleading -- pool index labels are PER FIXTURE.
+@@ -1445,6 +1449,26 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   std::set<intptr_t> pool_seen;
+ #endif
+ 
++  // Classifies the direct branch `w` at word `at`, if it is one. Shared by the
++  // main walk and by the pool form's skip window (F135, below).
++  auto classify_branch = [&](intptr_t at, uint32_t w) -> bool {
++    int32_t delta;
++    if (!DecodeBranchDelta(w, &delta)) return false;
++    const int64_t target = at * 4 + static_cast<int64_t>(delta) * 4;
++    if (target >= 0 && target < size) {
++      facts.classified.push_back({ShorebirdClassifiedStep::kLocalBranch, 1, 0});
++    } else if ((w & 0x7C000000) == 0x14000000) {
++      facts.classified.push_back({ShorebirdClassifiedStep::kCall, 1,
++                                  static_cast<intptr_t>(target)});
++      if (external_seen.insert(static_cast<intptr_t>(target)).second) {
++        facts.external_targets.push_back(static_cast<intptr_t>(target));
++      }
++    } else {
++      facts.classified.push_back({ShorebirdClassifiedStep::kRaw, 1, w});
++    }
++    return true;
++  };
++
+   intptr_t i = 0;
+   while (i < words) {
+     const uint32_t w = w_at[i];
+@@ -1465,26 +1489,34 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+                facts.classified.back().words == 1);
+         facts.classified.pop_back();
+       }
+-      // 🔴 KNOWN-SUSPECT, F68 (2026-09-15). This fixed three-word charge is
+-      // where the two missing self_pp slots come from -- see the F68 block above
+-      // the F67_POOL_SEEN_DEDUP switch. `ahead` is computed from the FORM, not
+-      // from what actually follows, so a decoded pool load always swallows the
+-      // next two words; if a genuine pool reference sits inside that window it is
+-      // never decoded. Measured: refs landing within 2 words of the previous ref
+-      // are prog OURS 2, prog THEIRS 0, hello both 0 -- exactly the shortfall at
+-      // prog fn#1580 / fn#1633. Their layout pads that site with NOPs; our tighter
+-      // codegen does not. Do not treat this skip as proven until F68 closes.
+-      // Reprint: spikes/shorebird_linkinfo_oracle/nc5_f68_x27_ref_decode.sh.
+-      int32_t ahead = 3 - used;
+-      if (ahead > words - 1 - i) ahead = static_cast<int32_t>(words - 1 - i);
+-      facts.classified.push_back(
+-          {ShorebirdClassifiedStep::kPool, used + ahead, index});
++      // F135 (2026-09-27). The skip window after a pool load. Measured against
++      // THEIR analyze_snapshot by patching words into hello fn#13 (pool load at
++      // word 4, window = words 5-6; spikes/shorebird_linkinfo_oracle/
++      // reports_20260925/Q68_window_patch_probe.py):
++      //  * pool loads, field loads, mov, blr inside the window are swallowed on
++      //    both sides -- the fixed 3-n budget itself matches theirs (this is
++      //    also why the F68 self_pp slots are a codegen-layout effect, not an
++      //    over-eager decoder: their analyzer carries the same skip);
++      //  * but a DIRECT BRANCH (anything DecodeBranchDelta accepts: b, bl, b.cond,
++      //    local or external) inside the window is still classified, and it does
++      //    NOT spend the budget: `bl` at word 5 hashes identically to `bl` at
++      //    word 7 with 5-6 left as NOPs (their self_hash d539947c both ways),
++      //    i.e. the window slides past the branch and swallows word 7 instead.
++      // Before this, ours swallowed the branch too: callees [19] vs their
++      // [19,25], self_hash c9dafe74 vs d539947c.
++      facts.classified.push_back({ShorebirdClassifiedStep::kPool, used, index});
+ #if F67_POOL_SEEN_DEDUP
+       if (pool_seen.insert(index).second) facts.pool_indices.push_back(index);
+ #else
+       facts.pool_indices.push_back(index);
+ #endif
+-      i += 1 + ahead;
++      int32_t budget = 3 - used;
++      intptr_t j = i + 1;
++      while (budget > 0 && j < words) {
++        if (!classify_branch(j, w_at[j])) budget--;
++        j++;
++      }
++      i = j;
+       continue;
+     }
+ 
+@@ -1507,21 +1539,7 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       continue;
+     }
+ 
+-    int32_t delta;
+-    if (DecodeBranchDelta(w, &delta)) {
+-      const int64_t target = i * 4 + static_cast<int64_t>(delta) * 4;
+-      if (target >= 0 && target < size) {
+-        facts.classified.push_back(
+-            {ShorebirdClassifiedStep::kLocalBranch, 1, 0});
+-      } else if ((w & 0x7C000000) == 0x14000000) {
+-        facts.classified.push_back({ShorebirdClassifiedStep::kCall, 1,
+-                                    static_cast<intptr_t>(target)});
+-        if (external_seen.insert(static_cast<intptr_t>(target)).second) {
+-          facts.external_targets.push_back(static_cast<intptr_t>(target));
+-        }
+-      } else {
+-        facts.classified.push_back({ShorebirdClassifiedStep::kRaw, 1, w});
+-      }
++    if (classify_branch(i, w)) {
+       i++;
+       continue;
+     }
+-- 
+2.53.0
+

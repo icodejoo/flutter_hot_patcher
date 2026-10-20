@@ -1,0 +1,215 @@
+From 723a32c8221907d9033f852f389359cd7a239210 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 22:28:30 +0800
+Subject: [PATCH 076/206] feat(shorebird): the three group-level pc queries
+
+Their signatures come from the engine dSYM, and they are not where the file
+layout suggested -- all three are declared in isolate.h, not shorebird.cc:
+
+  bool InBaseSnapshot(IsolateGroup*, uword);            isolate.h:393
+  bool InPatchSnapshot(IsolateGroup*, uword);           isolate.h:394
+  bool UnwrapEntryPoint(IsolateGroup*, uword, uword&);  isolate.h:865
+
+UnwrapEntryPoint returns bool with an out-parameter, which is
+WrapperAllocator::ContainsEntryPoint lifted to the group and asked of both
+directions. An earlier note here had it returning uword; that was a different
+symbol at shorebird.cc:37.
+
+IsolateGroup grows non-creating accessors for the two allocators, and the query
+uses those. The creating ones would map pages to answer "no", and this runs on
+addresses that mostly are not wrappers.
+
+Tests. The pc one checks that the two images are answered separately rather
+than one implying the other: with no base set, a pc that really is in the patch
+is still not in the base. The unwrap one round-trips a wrapper in each
+direction and checks a plain integer is rejected.
+
+94 of 94 shorebird tests; dd_runtime_check.sh clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/isolate.h b/runtime/vm/isolate.h
+index 12497950e8a..0de6cb46d5d 100644
+--- a/runtime/vm/isolate.h
++++ b/runtime/vm/isolate.h
+@@ -440,6 +440,16 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
+   shorebird::WrapperAllocator* shorebird_cpu_to_sim_wrappers();
+   shorebird::WrapperAllocator* shorebird_sim_to_cpu_wrappers();
+ 
++  // The same two without the build-on-first-use. A pc query must not map pages
++  // just to answer "no": UnwrapEntryPoint runs on addresses that mostly are not
++  // wrappers, and the creating accessors would allocate for every one of them.
++  shorebird::WrapperAllocator* shorebird_cpu_to_sim_wrappers_if_created() const {
++    return shorebird_cpu_to_sim_wrappers_.get();
++  }
++  shorebird::WrapperAllocator* shorebird_sim_to_cpu_wrappers_if_created() const {
++    return shorebird_sim_to_cpu_wrappers_.get();
++  }
++
+   // Shorebird's DD table, live form: entry points indexed by dd_slot, which is
+   // what IndirectStaticCallInstr's emitted sequence loads and branches to. Note
+   // it is a bare uword[] and not wrapped the way DispatchTable is -- theirs is
+@@ -1900,6 +1910,17 @@ class ActiveIsolateScope : public StackResource {
+   Thread* thread_;
+ };
+ 
++// Shorebird. Their three group-level queries (isolate.h:393, :394 and :865 in
++// their tree, by name and signature from the engine dSYM).
++//
++// InBaseSnapshot and InPatchSnapshot answer which image a pc came out of --
++// the base the patch was linked against, or the patch itself. UnwrapEntryPoint
++// answers whether an address is one of the wrappers handed out for this group,
++// and if so what it stands for.
++bool InBaseSnapshot(IsolateGroup* group, uword pc);
++bool InPatchSnapshot(IsolateGroup* group, uword pc);
++bool UnwrapEntryPoint(IsolateGroup* group, uword entry_point, uword& target);
++
+ }  // namespace dart
+ 
+ #endif  // RUNTIME_VM_ISOLATE_H_
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+index 41dbc0d176f..01c8f82f79d 100644
+--- a/runtime/vm/shorebird.cc
++++ b/runtime/vm/shorebird.cc
+@@ -10,6 +10,8 @@
+ 
+ #include "include/dart_api.h"
+ #include "vm/image_snapshot.h"
++#include "vm/isolate.h"
++#include "vm/shorebird/wrapper.h"
+ 
+ #include <cstring>
+ #include <utility>
+@@ -179,6 +181,44 @@ static bool BaseSnapshotsAreSet() {
+          base_vm_snapshot_instructions != nullptr;
+ }
+ 
++// Range of an instructions image, the same two bounds BaseSnapshotInstructions
++// and BaseSnapshotInstructionsEnd give: the image starts at its own buffer and
++// ends an Image away.
++static bool PcInImage(const uint8_t* image, uword pc) {
++  if (image == nullptr) return false;
++  const uword start = reinterpret_cast<uword>(image);
++  Image parsed(image);
++  const uword end =
++      reinterpret_cast<uword>(parsed.object_start()) + parsed.object_size();
++  return pc >= start && pc < end;
++}
++
++bool InBaseSnapshot(IsolateGroup* group, uword pc) {
++  return PcInImage(base_app_snapshot_instructions, pc);
++}
++
++bool InPatchSnapshot(IsolateGroup* group, uword pc) {
++  if (group == nullptr || group->source() == nullptr) return false;
++  return PcInImage(group->source()->snapshot_instructions, pc);
++}
++
++// Whether an address is one of the wrappers handed out for this group, and if
++// so what it stands for. Both directions, because a pc can be either.
++//
++// The non-creating accessors on purpose: this runs on addresses that mostly
++// are not wrappers, and building an allocator to answer "no" would map pages
++// for every miss.
++bool UnwrapEntryPoint(IsolateGroup* group, uword entry_point, uword& target) {
++  if (group == nullptr) return false;
++  if (auto* const cpu_to_sim = group->shorebird_cpu_to_sim_wrappers_if_created()) {
++    if (cpu_to_sim->ContainsEntryPoint(entry_point, &target)) return true;
++  }
++  if (auto* const sim_to_cpu = group->shorebird_sim_to_cpu_wrappers_if_created()) {
++    if (sim_to_cpu->ContainsEntryPoint(entry_point, &target)) return true;
++  }
++  return false;
++}
++
+ }  // namespace dart
+ 
+ DART_EXPORT void Shorebird_SetBaseSnapshots(
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index ff534f4e357..afe376d740e 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -12,6 +12,7 @@
+ 
+ #include "include/dart_api.h"
+ #include "vm/app_snapshot.h"
++#include "vm/shorebird/wrapper.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -424,4 +425,72 @@ ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderRejectsGarbage) {
+ }
+ 
+ 
++// The three group-level queries. InBaseSnapshot and InPatchSnapshot answer
++// which image a pc came from; UnwrapEntryPoint answers whether an address is a
++// wrapper this group handed out.
++ISOLATE_UNIT_TEST_CASE(Shorebird_PcQueriesAnswerForTheRightImage) {
++  auto* const group = thread->isolate_group();
++  const uint8_t* const patch_image = group->source()->snapshot_instructions;
++  const uint8_t* const other_image = dart::bin::vm_snapshot_instructions;
++  EXPECT(patch_image != nullptr);
++  EXPECT(other_image != nullptr);
++  if (patch_image == nullptr || other_image == nullptr) return;
++
++  const uword patch_pc = reinterpret_cast<uword>(patch_image);
++  EXPECT(InPatchSnapshot(group, patch_pc));
++
++  // No base set, so nothing is in the base -- including a pc that really is in
++  // the patch. The two queries are about different images, not about each
++  // other.
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++  EXPECT(!InBaseSnapshot(group, patch_pc));
++
++  // Point the base at a different image and the answers separate.
++  Shorebird_SetBaseSnapshots(other_image, other_image, other_image,
++                             other_image);
++  EXPECT(InBaseSnapshot(group, reinterpret_cast<uword>(other_image)));
++
++  // An address below either image belongs to neither.
++  EXPECT(!InBaseSnapshot(group, 0x1000));
++  EXPECT(!InPatchSnapshot(group, 0x1000));
++
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++}
++
++// A real function address to stand in for a wrapped target.
++static int UnwrapTestTarget(int x) {
++  return x + 1;
++}
++
++// A wrapper handed out by this group is recognised and resolves to what it
++// stands for; anything else is not. The allocators are reached through the
++// creating accessors here on purpose -- the query itself uses the non-creating
++// ones, and this checks it still finds them once they exist.
++ISOLATE_UNIT_TEST_CASE(Shorebird_UnwrapEntryPointFindsBothDirections) {
++  auto* const group = thread->isolate_group();
++
++  uword ignored = 0;
++  // Nothing has wrapped anything in some builds; if an allocator already
++  // exists this still holds, because a plain integer is not one of its pads.
++  EXPECT(!UnwrapEntryPoint(group, 0x1000, ignored));
++
++  shorebird::WrapperAllocator* const allocators[] = {
++      group->shorebird_cpu_to_sim_wrappers(),
++      group->shorebird_sim_to_cpu_wrappers(),
++  };
++  for (shorebird::WrapperAllocator* allocator : allocators) {
++    const uword target = reinterpret_cast<uword>(&UnwrapTestTarget);
++    void* const metadata = allocator->AllocateMetadata();
++    EXPECT(metadata != nullptr);
++    if (metadata == nullptr) continue;
++    static_cast<shorebird::Metadata*>(metadata)->target_entry_point = target;
++    const uword wrapper = allocator->WrapperOfMetadata(metadata);
++
++    uword recovered = 0;
++    EXPECT(UnwrapEntryPoint(group, wrapper, recovered));
++    EXPECT_EQ(target, recovered);
++  }
++}
++
++
+ }  // namespace dart
+-- 
+2.53.0
+

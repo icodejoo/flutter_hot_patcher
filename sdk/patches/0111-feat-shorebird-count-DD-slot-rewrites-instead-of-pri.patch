@@ -1,0 +1,237 @@
+From afa1f9c73ccf0b1111fea51ba3e9c3c3fabb0b0f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 10:37:34 +0800
+Subject: [PATCH 111/206] feat(shorebird): count DD slot rewrites instead of
+ printing a literal 0
+
+The `rewritten` and `rewritten_null` columns of --print_dd_resolution_to
+were hardcoded 0 in the format string, and `sentinel_filled` was
+`slots.size() - retained` -- count(null), which agrees with the real
+count only while rewritten_null is 0. All three are now counted.
+
+Finding the real rewrite path turned up something the old code was
+written against and that does not hold. Two runs of THEIR gen_snapshot
+over out_dd/base.dill, counting the three-instruction indirect sequence:
+
+  voters only  (voters.bin, no DDSlotMapping section)   -> 3 sites
+  mapping only (one row, kernel_offset 54623 at slot 0) -> 0 sites
+
+The mapping-only file is well formed and names a real function: ours
+emits 73 sites from the very same bytes. So the RESOLUTION drives their
+IL pass, not the DDSlotMapping. DDSlotResolution::owner_to_slot_ at
++0x28 in their DWARF -- until now with no consumer anywhere -- is
+exactly the lookup such a pass needs.
+
+The kernel_offset path is kept and consulted first, so the production
+configuration is unchanged and dd_pass_check.sh still covers it;
+dropping it is a separate decision, since the table build still keys on
+kernel_offset.
+
+Also deletes the comment claiming this needed "the DD IL subsystem we do
+not have". That subsystem landed in b13e2a0d54e; the comment outlived
+the work by two days.
+
+Oracle: --print_dd_resolution_to is now byte-identical to theirs on the
+dd_pipeline.sh fixture (8 slots, 7 retained, 2 rewritten, 1 sentinel),
+and our emitted sites land on the same slots as theirs (4, 4, 3).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/aot_call_specializer.cc b/runtime/vm/compiler/aot/aot_call_specializer.cc
+index d542aa35457..b979a43bce0 100644
+--- a/runtime/vm/compiler/aot/aot_call_specializer.cc
++++ b/runtime/vm/compiler/aot/aot_call_specializer.cc
+@@ -1193,9 +1193,36 @@ void AotCallSpecializer::ReplaceInstanceCallsWithDispatchTableCalls() {
+ // already un-inlined calls before the rewrite, so a pass running before the
+ // inliner would have produced the same output. Running late is the position
+ // consistent with the evidence, not the position the evidence forces.
++//
++// ⚠️ WHICH INPUT GATES THIS PASS -- measured 2026-08-26, and the answer is not
++// the one the body below was originally written to. Two runs of THEIR
++// gen_snapshot over out_dd/base.dill, counting the three-instruction sequence:
++//
++//   voters only  (out_dd/voters.bin, no DDSlotMapping section)  -> 3 sites
++//   mapping only (one row, kernel_offset 54623 at slot 0)       -> 0 sites
++//
++// The mapping-only file is well formed and does name a real function: ours
++// emits 73 sites from those very same bytes (dd_pass_check.sh's
++// StringBuffer.write case). So for them it is the RESOLUTION that drives the
++// rewrite, and the DDSlotMapping -- which DDTableBuilder demonstrably does read,
++// via ShorebirdLinker+0x40 -- does not drive this pass at all.
++//
++// A second, independent reason to believe that: DDSlotResolution carries
++// owner_to_slot_ at +0x28 in their own DWARF (dd_voting.h), and until now
++// nothing in the tree consulted it. A reverse map from owner to slot is exactly
++// what a resolution-driven pass needs and nothing else does.
++//
++// The kernel_offset path is KEPT rather than replaced, and consulted FIRST.
++// Removing it is a separate decision needing its own evidence: it is the only
++// path dd_pass_check.sh exercises, and FinalizeIndirectStaticCallTable still
++// keys the table on kernel_offset, so a tree with only the resolution path
++// would emit sites for slots the builder never populates. Consulting the
++// mapping first also leaves the production configuration -- voters and mapping
++// supplied together -- with exactly the behaviour it had before this note.
+ void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
+   const DDSlotMapping* mapping = ShorebirdLinker::shared()->dd_slot_mapping();
+-  if (mapping == nullptr) return;
++  const DDSlotResolution* resolution = ShorebirdLinker::shared()->resolution();
++  if (mapping == nullptr && resolution == nullptr) return;
+ 
+   ASSERT(current_iterator_ == nullptr);
+   for (BlockIterator block_it = flow_graph()->reverse_postorder_iterator();
+@@ -1216,11 +1243,27 @@ void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
+       // same map, so a call site and the table entry it dispatches to agree by
+       // construction. It is also the only per-function identity that survives
+       // recompilation of the same source, which is the whole point.
+-      const long slot = mapping->SlotForKernelOffset(target.kernel_offset());
++      long slot =
++          mapping != nullptr
++              ? mapping->SlotForKernelOffset(target.kernel_offset())
++              : -1;
++      if (slot < 0 && resolution != nullptr) {
++        // The raw FunctionPtr ResolveDDSlots recorded as the slot's winner.
++        // Raw rather than a handle because that is what it stored -- see the
++        // note on DDSlotResolution::slot_to_owner_ in dd_voting.h.
++        slot = resolution->SlotForOwner(static_cast<uword>(target.ptr()));
++      }
+       if (slot < 0) continue;
+ 
+       call->ReplaceWith(IndirectStaticCallInstr::FromCall(Z, call, slot),
+                         current_iterator());
++
++      // Record it where it happens. This is the only place that knows a slot
++      // was rewritten, and it is what --print_dd_resolution_to's `rewritten`
++      // column and their "N rewritten" report count. Slots are recorded, not
++      // sites: two calls to Expando.[] are one rewritten slot, which is how
++      // their fixture gets 3 sites but 2 rewritten.
++      ShorebirdLinker::NoteDDSlotRewritten(slot);
+     }
+     current_iterator_ = nullptr;
+   }
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 400df824cb3..7eea7cc5e97 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -37,6 +37,23 @@ static_assert(sizeof(ShorebirdLinker) == 0x88,
+               "ShorebirdLinker layout does not match their measured 136 bytes; "
+               "check field sizes and padding");
+ 
++// Slots the IL pass rewrote a call site for. See the declaration in linker.h
++// for why this is not a member.
++static std::set<long> g_dd_rewritten_slots;
++
++void ShorebirdLinker::NoteDDSlotRewritten(long slot) {
++  if (slot < 0) return;
++  g_dd_rewritten_slots.insert(slot);
++}
++
++bool ShorebirdLinker::DDSlotWasRewritten(long slot) {
++  return g_dd_rewritten_slots.find(slot) != g_dd_rewritten_slots.end();
++}
++
++void ShorebirdLinker::ResetDDSlotRewrites() {
++  g_dd_rewritten_slots.clear();
++}
++
+ // The two element sizes their vector::size() divisions gave up, pinned here so
+ // that a change to ClassInfo shows up as a build failure rather than as a
+ // mapper that strides past their layout. 0x38 is the stride their stage 1 uses
+@@ -1144,29 +1161,54 @@ void ShorebirdLinker::PrintDDResolutionIfRequested(Thread* thread, Zone* zone) {
+   if (dd_slot_voters_ == nullptr || resolution_ == nullptr) return;
+ 
+   const std::vector<intptr_t> slots = dd_slot_voters_->sorted_slot_ids();
+-  intptr_t retained = 0;
++
++  // The four counters their header carries, and what each one counts. `null`
++  // below means "this slot has no resolved owner", which is the same condition
++  // the outcome column prints as "sentinel".
++  //
++  //   retained         resolved
++  //   rewritten        the IL pass sent at least one call site through it
++  //   sentinel_filled  not rewritten AND null -- their "unrewritten-null
++  //                    filled with sentinel"
++  //   rewritten_null   rewritten AND null -- their "rewritten-null missing",
++  //                    the error case: code dispatches through a slot that
++  //                    resolution left empty
++  //
++  // sentinel_filled used to be spelled `slots.size() - retained`, which is
++  // count(null). That agrees with the real count only while no rewritten slot
++  // is null, i.e. only while rewritten_null is 0 -- it was a proxy that
++  // happened to be right on the one fixture, not a count.
++  intptr_t retained = 0, rewritten = 0, sentinel_filled = 0, rewritten_null = 0;
+   for (const intptr_t slot : slots) {
+-    if (resolution_->HasSlot(slot)) retained++;
++    const bool resolved = resolution_->HasSlot(slot);
++    const bool was_rewritten = DDSlotWasRewritten(slot);
++    if (resolved) retained++;
++    if (was_rewritten) rewritten++;
++    if (!resolved) {
++      if (was_rewritten) {
++        rewritten_null++;
++      } else {
++        sentinel_filled++;
++      }
++    }
+   }
+ 
+   TextBuffer buffer(4 * KB);
+   buffer.Printf("# DD slot resolution outcome\n");
+-  // rewritten and sentinel_filled describe the DD *table* rewrite, which needs
+-  // the DD IL subsystem we do not have. They are reported as 0 rather than
+-  // guessed; the slot/outcome/name columns are the part this build can produce.
+-  buffer.Printf(
+-      "# table_size=%" Pd " retained=%" Pd
+-      " rewritten=0 sentinel_filled=%" Pd " rewritten_null=0\n",
+-      static_cast<intptr_t>(slots.size()), retained,
+-      static_cast<intptr_t>(slots.size()) - retained);
++  buffer.Printf("# table_size=%" Pd " retained=%" Pd " rewritten=%" Pd
++                " sentinel_filled=%" Pd " rewritten_null=%" Pd "\n",
++                static_cast<intptr_t>(slots.size()), retained, rewritten,
++                sentinel_filled, rewritten_null);
+   buffer.Printf("slot\toutcome\trewritten\tname\n");
+ 
+   for (const intptr_t slot : slots) {
+     const bool resolved = resolution_->HasSlot(slot);
++    const intptr_t rewritten_flag = DDSlotWasRewritten(slot) ? 1 : 0;
+     const std::string name =
+         resolved ? OwnerName(zone, resolution_->OwnerForSlot(slot)) : "-";
+-    buffer.Printf("%" Pd "\t%s\t0\t%s\n", slot,
+-                  resolved ? "resolved" : "sentinel", name.c_str());
++    buffer.Printf("%" Pd "\t%s\t%" Pd "\t%s\n", slot,
++                  resolved ? "resolved" : "sentinel", rewritten_flag,
++                  name.c_str());
+   }
+ 
+   WriteThroughFileCallbacks(FLAG_print_dd_resolution_to, buffer.buffer(),
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 12762226043..63ba5a38e1b 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -194,6 +194,24 @@ class ShorebirdLinker {
+   // Called at the end of ResolveDDSlots, so the file reflects the last pass.
+   void PrintDDResolutionIfRequested(Thread* thread, Zone* zone);
+ 
++  // Which DD slots the IL pass actually sent a call site through.
++  //
++  // This is the `rewritten` column of --print_dd_resolution_to, and of their
++  // "DD table: N slots, N retained, N rewritten, ..." line. It is a property of
++  // the emitted code, not of the vote, so it can only be recorded where the
++  // rewrite happens: AotCallSpecializer::ReplaceStaticCallsWithIndirectStatic-
++  // Calls calls Note() once per rewritten call site.
++  //
++  // STATIC, not a member, and that is forced rather than chosen: sizeof(Shore-
++  // birdLinker) is pinned to their 0x88 by a static_assert in linker.cc, so
++  // bookkeeping of ours that has no counterpart in their layout cannot live in
++  // the object. The singleton is process-wide anyway, so file-scope storage is
++  // the same lifetime. Reset() exists because run_vm_tests runs many cases in
++  // one process; gen_snapshot never needs it.
++  static void NoteDDSlotRewritten(long slot);
++  static bool DDSlotWasRewritten(long slot);
++  static void ResetDDSlotRewrites();
++
+   // Shorebird's class table mapper, decoded from
+   // InitializeWithClassTableLinkInfo at 0x10019a448..0x10019a608. See the
+   // definition for how each step was read; the counters it fills are the four
+-- 
+2.53.0
+

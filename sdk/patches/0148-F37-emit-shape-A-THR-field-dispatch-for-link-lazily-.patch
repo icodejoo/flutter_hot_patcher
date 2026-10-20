@@ -1,0 +1,61 @@
+From 954cd28dcf94040108517f8ed75e5458bf544fe8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 9 Sep 2026 12:37:40 +0800
+Subject: [PATCH 148/206] F37: emit shape A (THR-field dispatch) for
+ link-lazily native calls in precompiled mode
+
+Shorebird replaces the upstream ldr-Code*;ldur-entry_point sequence with
+a thread-field-indexed dispatch for patchable native calls:
+  ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+The pool slot stores SmiTag(bootstrap_native_wrapper_entry_point_offset)
+so the untagged value is directly usable as a THR base-register offset.
+
+Negative control: disabling FLAG_precompiled_mode branch -> cmp differs (GOOD).
+Note: kObjectPoolLoadStoreMinInstructionCount=2 negative control was rejected
+by static_assert in assembler_arm64.h; equivalent branch-disable control used.
+
+Verified: measure_dd_emission.sh native_patched ours=92 (was 0, matches theirs).
+verify_reproduction.sh: 0 failures. verify_all.sh: 25 ran / 1 pre-existing failed.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index 583e0706cc1..2750d124024 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1328,9 +1328,29 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+                      link_lazily() ? ObjectPool::Patchability::kPatchable
+                                    : ObjectPool::Patchability::kNotPatchable);
+   if (link_lazily()) {
+-    compiler->GeneratePatchableCall(
+-        source(), *stub, UntaggedPcDescriptors::kOther, locs(),
+-        compiler::ObjectPoolBuilderEntry::kResetToBootstrapNative);
++    if (FLAG_precompiled_mode) {
++      // Shorebird shape A: dispatch via thread field instead of Code* stub.
++      // Emits: ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
++      // Pool slot stores SmiTag(bootstrap_native_wrapper_entry_point_offset)
++      // so the untagged value is directly usable as a THR base-register offset.
++      const intptr_t thr_off =
++          compiler::target::Thread::bootstrap_native_wrapper_entry_point_offset();
++      const intptr_t idx = __ object_pool_builder().AddImmediate(
++          static_cast<uword>(thr_off * 2));  // Smi-tagged thread offset
++      __ LoadWordFromPoolIndex(R16, idx);    // ldr x16,[PP,#s] + nop;nop in precompiled mode
++      __ AsrImmediate(R16, R16, 1);          // asr x16,x16,#1  (untag Smi)
++      CLOBBERS_LR({
++        __ ldr(LR, compiler::Address(THR, R16));  // ldr x30,[x26,x16]
++        __ blr(LR);                               // blr x30
++      });
++      compiler->EmitCallsiteMetadata(
++          source(), DeoptId::kNone, UntaggedPcDescriptors::kOther, locs(),
++          nullptr);
++    } else {
++      compiler->GeneratePatchableCall(
++          source(), *stub, UntaggedPcDescriptors::kOther, locs(),
++          compiler::ObjectPoolBuilderEntry::kResetToBootstrapNative);
++    }
+   } else {
+     // We can never lazy-deopt here because natives are never optimized.
+     ASSERT(!compiler->is_optimizing());
+-- 
+2.53.0
+

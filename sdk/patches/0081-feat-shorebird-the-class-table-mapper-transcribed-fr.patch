@@ -1,0 +1,300 @@
+From 7260c35198d3da8b37a31c5fd77feefafd21f137 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 10:57:05 +0800
+Subject: [PATCH 081/206] feat(shorebird): the class table mapper, transcribed
+ from their binary
+
+Two days ago this was recorded as not implementable under rule 3: no dSYM for
+gen_snapshot, the mapper inlined away, and six integers to design an algorithm
+from. Straight disassembly of InitializeWithClassTableLinkInfo settles it, and
+every step in ComputeClassTableMapping carries the address it came from.
+
+  0x10019a464  operator new(n * 8) then memset(0xff) -- a vector of -1
+  0x10019a4f4  stage 1 strides 0x70 = sizeof(LinkedValue<ClassInfo>)
+  0x10019a4f8  base cid at +0x00, patch cid at +0x38 = sizeof(ClassInfo)
+  0x10019a500  mapping[patch_cid] = base_cid, then the base cid's bit is set
+  0x10019a588  stage 3 walks the entries still holding -1
+  0x10019a5e0  nothing free below the end, so the cid space grows
+
+The middle stage is structurally absent. Its counter is zeroed at 0x10019a4ac
+and no path in the function increments it, which is why their class table
+report reads "Mappings from Pair Constraints 0" while the object pool's reads
+292 -- not an empty stage on this fixture but a stage this mapper does not
+have. The object pool's is a separate 8184-byte function.
+
+The algorithm reproduces their published numbers: 606 pairs over 619 patch
+classes gives 606 from link results, 0 from pair constraints, 13 backfilled.
+
+One correction to my own work, which is the part worth reading. The first
+negative control -- replacing the cursor with a restart from zero -- left every
+test green, so it was not a control at all. Brute force over 200000 random pair
+sets finds the two rules agreeing on every input: nothing is ever un-taken, so
+the lowest free cid is always above the last one assigned. The cursor is an
+optimisation and no behavioural test can distinguish it. The test named for it
+has been renamed to what it actually pins, and the comment that called it
+load-bearing now says the opposite, because a comment claiming a property
+matters invites trust in a test that cannot fail.
+
+A control that does discriminate: dropping the taken-marking in stage 1 turns
+two of the four tests red, and the two that stay green are the two that
+genuinely do not exercise it.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 7e91e98b2a6..0d67d6a0fcc 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -70,6 +70,94 @@ void ShorebirdLinker::InitializeWithClassTableLinkInfo(
+   initialized_flag_ = 1;
+ }
+ 
++// Shorebird's class table mapper, transcribed from
++// InitializeWithClassTableLinkInfo. Read rather than invented -- every step
++// below has an address, and the three-stage report that function ends with is
++// what named the stages in the first place.
++//
++//   0x10019a464  mapping is operator new(n * 8) then memset(0xff), which is a
++//                vector<intptr_t> filled with -1
++//   0x10019a4ac  the pair-constraint and backfill counters are zeroed
++//   0x10019a4f4  stage 1's loop, striding 0x70 = sizeof(LinkedValue<ClassInfo>)
++//   0x10019a4f8  base cid at +0x00, patch cid at +0x38 = sizeof(ClassInfo)
++//   0x10019a500  mapping[patch_cid] = base_cid
++//   0x10019a4cc  the base cid's bit is set in a vector<bool>
++//   0x10019a530  the stage 1 counter is stored
++//   0x10019a588  stage 3's loop, over entries still holding -1
++//   0x10019a594  the search resumes at cursor + 1, it does not restart at 0
++//   0x10019a5e0  nothing free below the end, so it lands past it
++//   0x10019a604  the backfill counter is stored
++//
++// NOTE the middle stage is structurally absent here. Its slot is zeroed at
++// 0x10019a4ac and never written again -- no path in this function increments
++// it. That is why their class table report reads "Mappings from Pair
++// Constraints 0" while the object pool's reads 292: not an empty stage on this
++// fixture, but a stage the class table mapper does not have. The object pool's
++// mapper is a separate and larger function (0x10019bd8c, 8184 bytes).
++std::vector<intptr_t> ShorebirdLinker::ComputeClassTableMapping(
++    const std::vector<ClassIdPair>& link_results,
++    intptr_t num_patch_cids,
++    MappingCounts* counts) {
++  ASSERT(counts != nullptr);
++  ASSERT(num_patch_cids >= 0);
++
++  // 0x10019a464: allocate, then fill with -1.
++  std::vector<intptr_t> mapping(static_cast<size_t>(num_patch_cids), -1);
++  // Which base cids are spoken for. Grown on demand exactly as theirs is --
++  // they call vector<bool>::resize(cid + 1, false) from two separate sites
++  // rather than sizing it up front.
++  std::vector<bool> taken;
++
++  counts->link_results = static_cast<intptr_t>(link_results.size());
++  counts->from_pair_constraints = 0;
++
++  // Stage 1. Every pair the linker proved becomes a mapping outright.
++  for (const ClassIdPair& pair : link_results) {
++    ASSERT(0 <= pair.patch_cid && pair.patch_cid < num_patch_cids);
++    ASSERT(pair.base_cid >= 0);
++    mapping[static_cast<size_t>(pair.patch_cid)] = pair.base_cid;
++    if (static_cast<intptr_t>(taken.size()) <= pair.base_cid) {
++      taken.resize(static_cast<size_t>(pair.base_cid) + 1, false);
++    }
++    taken[static_cast<size_t>(pair.base_cid)] = true;
++    counts->from_link_results++;
++  }
++
++  // Stage 3. Whatever is still unmapped takes the lowest free cid.
++  //
++  // The cursor is theirs -- 0x10019a544 loads -1 and 0x10019a594 resumes the
++  // search at cursor + 1 rather than restarting at 0 -- and it is reproduced
++  // because it is what they wrote, NOT because it changes the answer. It does
++  // not: nothing is ever un-taken, so the lowest free cid is always above the
++  // last one handed out, and resuming and restarting agree on every input.
++  // Checked rather than argued: brute force over 200000 random pair sets found
++  // zero disagreements, and mutating this line to `cid = 0` leaves every test
++  // green. So the cursor is an optimisation, linear instead of quadratic, and
++  // no test here can distinguish it -- which is worth saying out loud, because
++  // a comment claiming it matters would invite someone to trust a test that
++  // cannot fail.
++  intptr_t cursor = -1;
++  for (size_t i = 0; i < mapping.size(); i++) {
++    if (mapping[i] != -1) continue;
++
++    intptr_t cid = cursor + 1;
++    while (cid < static_cast<intptr_t>(taken.size()) &&
++           taken[static_cast<size_t>(cid)]) {
++      cid++;
++    }
++    // 0x10019a5e0: running off the end is not a failure, the space grows.
++    mapping[i] = cid;
++    if (cid >= static_cast<intptr_t>(taken.size())) {
++      taken.resize(static_cast<size_t>(cid) + 1, false);
++    }
++    taken[static_cast<size_t>(cid)] = true;
++    cursor = cid;
++    counts->from_backfill++;
++  }
++
++  return mapping;
++}
++
+ void ShorebirdLinker::InitializeWithFieldTableLinkInfo(
+     std::unique_ptr<FieldTableLinkInfo> base) {
+   // ASSERT string from their binary: "base_field_table_ == nullptr"
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 28f68e35582..b38123066dc 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -102,6 +102,36 @@ class ShorebirdLinker {
+   // Called at the end of ResolveDDSlots, so the file reflects the last pass.
+   void PrintDDResolutionIfRequested(Thread* thread, Zone* zone);
+ 
++  // Shorebird's class table mapper, decoded from
++  // InitializeWithClassTableLinkInfo at 0x10019a448..0x10019a608. See the
++  // definition for how each step was read; the counters it fills are the four
++  // their report prints.
++  //
++  // A link result pairs a base class with a patch class. Their container is
++  // `vector<LinkedValue<ClassInfo>>`, where LinkedValue<T> holds a base T then
++  // a patch T -- established by the element size their own vector::size()
++  // division reveals: 112 bytes against sizeof(ClassInfo) == 56, and 16 bytes
++  // against sizeof(uword) on the object pool side.
++  struct ClassIdPair {
++    intptr_t base_cid;
++    intptr_t patch_cid;
++  };
++
++  struct MappingCounts {
++    intptr_t link_results = 0;
++    intptr_t from_link_results = 0;
++    intptr_t from_pair_constraints = 0;
++    intptr_t from_backfill = 0;
++  };
++
++  // Returns mapping[patch_cid] -> base_cid for every patch cid below
++  // `num_patch_cids`. Static and free of linker state, so it can be tested
++  // directly against the numbers their own report prints.
++  static std::vector<intptr_t> ComputeClassTableMapping(
++      const std::vector<ClassIdPair>& link_results,
++      intptr_t num_patch_cids,
++      MappingCounts* counts);
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index 3e80de95d40..9ed3482d279 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -375,4 +375,109 @@ VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_AbsurdCountIsRejected) {
+   remove(path);
+ }
+ 
++
++// The class table mapper, against the numbers their own report prints.
++//
++// Their class table pass on the shared fixture reports:
++//   Link Results 606 / Mappings from Link Results 606
++//   Mappings from Pair Constraints 0 / Mappings from Backfill 13
++// and 606 + 0 + 13 == 619, the patch's class count. These tests pin the shape
++// that produces those numbers, and the one branch that is easiest to get wrong.
++
++VM_UNIT_TEST_CASE(ClassTableMapping_EveryPairMapsAndTheRestBackfill) {
++  // Six patch cids, four of them paired. The pairs deliberately claim base cids
++  // out of order and with a gap, so a backfill that just counted upward from
++  // zero would collide with one of them.
++  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {
++      {0, 0}, {1, 1}, {4, 3}, {2, 5},
++  };
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping =
++      ShorebirdLinker::ComputeClassTableMapping(pairs, 6, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(4), counts.link_results);
++  EXPECT_EQ(static_cast<intptr_t>(4), counts.from_link_results);
++  EXPECT_EQ(static_cast<intptr_t>(0), counts.from_pair_constraints);
++  EXPECT_EQ(static_cast<intptr_t>(2), counts.from_backfill);
++  // Like theirs, the three add up to the patch's class count.
++  EXPECT_EQ(static_cast<intptr_t>(6), counts.from_link_results +
++                                          counts.from_pair_constraints +
++                                          counts.from_backfill);
++
++  // The paired ones keep exactly what they were paired with.
++  EXPECT_EQ(static_cast<intptr_t>(0), mapping[0]);
++  EXPECT_EQ(static_cast<intptr_t>(1), mapping[1]);
++  EXPECT_EQ(static_cast<intptr_t>(2), mapping[5]);
++  EXPECT_EQ(static_cast<intptr_t>(4), mapping[3]);
++
++  // 0, 1, 2 and 4 are claimed, so the two unpaired patch cids -- 2 then 4, in
++  // index order -- take 3 and then 5.
++  EXPECT_EQ(static_cast<intptr_t>(3), mapping[2]);
++  EXPECT_EQ(static_cast<intptr_t>(5), mapping[4]);
++
++  // No base cid handed out twice. Asserted rather than assumed: a mapper that
++  // reused one would still satisfy every count above.
++  std::vector<bool> seen;
++  for (intptr_t cid : mapping) {
++    EXPECT(cid >= 0);
++    if (static_cast<intptr_t>(seen.size()) <= cid) seen.resize(cid + 1, false);
++    EXPECT(!seen[cid]);
++    seen[cid] = true;
++  }
++}
++
++// Backfill hands out the lowest free cid, walking patch cids in index order.
++//
++// This was first written as a test of their cursor -- the search resuming at
++// cursor + 1 instead of restarting at 0 -- and named for it. That was wrong:
++// mutating the implementation to restart at 0 left this and every other test
++// green, and brute force over 200000 random pair sets finds the two rules
++// agreeing everywhere. Nothing is ever un-taken, so the lowest free cid is
++// always above the last one assigned. The cursor is an optimisation and no
++// behavioural test can see it. Renamed to what it actually pins.
++VM_UNIT_TEST_CASE(ClassTableMapping_BackfillTakesTheLowestFreeCid) {
++  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {{5, 0}};
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping =
++      ShorebirdLinker::ComputeClassTableMapping(pairs, 3, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(5), mapping[0]);
++  // Patch cids 1 and 2 are unpaired. The cursor starts at -1, so the first
++  // candidate is 0 -- which is free -- and the second is 1.
++  EXPECT_EQ(static_cast<intptr_t>(0), mapping[1]);
++  EXPECT_EQ(static_cast<intptr_t>(1), mapping[2]);
++  EXPECT_EQ(static_cast<intptr_t>(2), counts.from_backfill);
++}
++
++// Their 0x10019a5e0: when nothing below the end is free the cid lands past it
++// and the space grows. A mapper that clamped instead would alias onto a taken
++// cid, so this is checked rather than left to the resize call.
++VM_UNIT_TEST_CASE(ClassTableMapping_BackfillGrowsPastTheEnd) {
++  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {
++      {0, 0}, {1, 1}, {2, 2},
++  };
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping =
++      ShorebirdLinker::ComputeClassTableMapping(pairs, 5, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(3), mapping[3]);
++  EXPECT_EQ(static_cast<intptr_t>(4), mapping[4]);
++  EXPECT_EQ(static_cast<intptr_t>(2), counts.from_backfill);
++}
++
++// No pairs at all: every patch cid backfills, and the identity falls out.
++// A patch in which every class changed is a real case, not a degenerate one.
++VM_UNIT_TEST_CASE(ClassTableMapping_NoPairsBackfillsEverything) {
++  ShorebirdLinker::MappingCounts counts;
++  const std::vector<intptr_t> mapping =
++      ShorebirdLinker::ComputeClassTableMapping({}, 4, &counts);
++
++  EXPECT_EQ(static_cast<intptr_t>(0), counts.link_results);
++  EXPECT_EQ(static_cast<intptr_t>(0), counts.from_link_results);
++  EXPECT_EQ(static_cast<intptr_t>(4), counts.from_backfill);
++  for (intptr_t i = 0; i < 4; i++) {
++    EXPECT_EQ(i, mapping[static_cast<size_t>(i)]);
++  }
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

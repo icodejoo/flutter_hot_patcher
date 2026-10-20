@@ -1,0 +1,69 @@
+From fbcefad72248d57d1eb83ee02b97e2b613035c20 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 17:17:10 +0800
+Subject: [PATCH 097/206] feat(shorebird): document --shorebird in
+ analyze_snapshot's help
+
+Their analyze_snapshot documents seven flags. Ours documented three, and the
+one Shorebird flag we do implement -- --shorebird, present since B2 -- was not
+among them. A flag that works and is undocumented is only slightly better than
+one that does not exist.
+
+The three lines added are byte-identical to theirs, padding included. Their
+separator before "Shorebird options:" is a bare newline while every other line
+is padded to 76 columns; that was measured, not guessed, and the check compares
+trailing whitespace precisely so it cannot be got wrong quietly.
+
+The six flags we do not implement are deliberately still absent. A help text
+that advertises a flag the parser rejects is worse than one that is short. They
+are listed in a comment at the point where theirs prints them, with what each
+would actually need:
+
+- --dump_object_pool_link_data and --no_pp_hash need op_subgraph_hash, a
+  private subsystem this tree does not have. ObjectPoolLinkInfo::WriteToStream
+  is already implemented and byte-verified against their files, so what is
+  missing is the producer, not the format.
+- --dump_blobs needs the four snapshot region sizes, which
+  Dart_SnapshotAnalyzerInformation does not carry.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 077fc53665d..adf4a13fe0f 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -51,6 +51,31 @@ static void PrintUsage() {
+ "  Print the SDK version.                                                    \n"
+ "--out                                                                       \n"
+ "  Path to generate the analysis results JSON.                               \n"
++"  This is used for the first step of linking to find Object Pool mappings.  \n"
++// Their separator here is a bare newline, not a line padded to 76 like every
++// other one. Measured, not guessed -- the check compares trailing whitespace.
++"\n"
++"Shorebird options:                                                          \n"
++"--shorebird                                                                 \n"
++"  Produce Shorebird formatted JSON, requires --out.                         \n"
++// Shorebird lists six more flags at this point, in this order: --no_pp_hash,
++// --dump_object_pool_link_data, --dump_blobs, --dump_object_pool,
++// --dump_class_table and --disassemble. They are deliberately NOT listed here,
++// because this binary does not implement them, and a help text advertising a
++// flag the parser rejects is worse than one that is short.
++//
++// The omission is pinned rather than left to memory:
++// analyze_snapshot_help_check.sh takes their --help, deletes exactly those six
++// blocks, and requires what is left to equal ours byte for byte. Every line
++// above is therefore checked against theirs on every run, and what is missing
++// is a number that has to shrink deliberately.
++//
++// None of the six is small. --dump_object_pool_link_data and --no_pp_hash need
++// op_subgraph_hash, a private subsystem this tree does not have --
++// ObjectPoolLinkInfo::WriteToStream is already here and byte-verified against
++// their files, so what is missing is the producer, not the format.
++// --dump_blobs needs the four region sizes, which
++// Dart_SnapshotAnalyzerInformation does not carry.
+ "If omitting [<vm-flags>] the VM parsing the snapshot is created with the    \n"
+ "following default flags:                                                    \n"
+ "--enable_mirrors=false                                                      \n"
+-- 
+2.53.0
+

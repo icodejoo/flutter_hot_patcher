@@ -1,0 +1,253 @@
+From d652ec53f6034d7c138df274302df7dac94cb815 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 15:06:41 +0800
+Subject: [PATCH 115/206] feat(shorebird): land analyze_snapshot --disassemble
+
+The last unimplemented flag in analyze_snapshot's Shorebird group. Our --help is
+now their --help byte for byte, with nothing withheld.
+
+It was skipped for several rounds on the grounds that the name collides with the
+VM's own --disassemble, and a source comment claimed an earlier attempt had been
+reverted for that reason. No such revert exists in this history, and the
+collision turns out to be the behaviour rather than an obstacle to it:
+
+    theirs --disassemble           -> --shorebird JSON grows 698828 -> 1894974
+    theirs --disassemble=true      -> 698828 bytes, no effect
+    theirs --no_disassemble        -> 698828 bytes, no effect
+    theirs --bogus_flag            -> Unrecognized flags: ...
+
+A VM bool flag accepts the "=true" spelling; dart_bin's DEFINE_BOOL_OPTION
+matches only the bare token. The bare token acting while "=true" does nothing is
+what proves their own option parser consumes it and the VM never sees it. So
+theirs does take the bare spelling away from the VM, and reproducing them means
+doing the same. Nothing is lost in practice: analyze_snapshot loads an AOT
+snapshot and compiles nothing, so FLAG_disassemble has no code to act on here,
+and "=true" still reaches the VM.
+
+The output shape is measured on their base.so, not chosen:
+
+  * a "disassembly" key on every one of their 1380 entries, positioned between
+    "size" and the hashes;
+  * an array of human-readable instruction strings, no addresses and no hex;
+  * one string per instruction, and instruction_count * 4 == size for all 1380;
+  * branch targets spelled relative ("bl +100"). That is
+    FLAG_disassemble_relative -- disassembler_arm64.cc:423 switches to "%+" Pd64
+    under it and prints an address otherwise -- and their output contains zero
+    branches rendered as an 0x address. The flag is set for the dump and
+    restored, since the rest of the VM reads it.
+  * shorebird mode only: their plain JSON is 878599 bytes with the flag and
+    without, byte identical. So the flag is a parameter on the shorebird entry
+    point rather than plumbed globally.
+
+Verified by disassemble_check.sh in the research tree, which asserts the
+contract on their binary first and then on ours, and additionally decodes
+nop/brk/b/bl straight out of our .so through the ELF program headers: 3817 of
+3817 agree, including the bl offsets computed from imm26, which is the
+arithmetic that separates relative spelling from absolute.
+
+Negative control: flipping FLAG_disassemble_relative to false rebuilds clean
+(ninja exit 0) and turns that check red on exactly the two assertions that
+should notice -- 0 relative / 21566 absolute, and the independent decode falling
+to 1670/3817. The help check stays green under that same break, which is why the
+behavioural check had to exist alongside it.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 599cd4a6405..8bc67dd673f 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -51,7 +51,8 @@ namespace bin {
+   V(shorebird, shorebird_mode)                                                 \
+   V(dump_class_table, dump_class_table)                                        \
+   V(dump_blobs, dump_blobs)                                                    \
+-  V(dump_object_pool, dump_object_pool)
++  V(dump_object_pool, dump_object_pool)                                        \
++  V(disassemble, disassemble_mode)
+ 
+ #define STRING_OPTION_DEFINITION(flag, variable)                               \
+   static const char* variable = nullptr;                                       \
+@@ -109,19 +110,32 @@ static void PrintUsage() {
+ "  Dump the object pool as JSON for debugging.                               \n"
+ "--dump_class_table                                                          \n"
+ "  Dump the class table as JSON for debugging.                               \n"
+-// Shorebird lists one more flag at this point, --disassemble. It is
+-// deliberately NOT listed here, because this binary does not implement it, and
+-// a help text advertising a flag the parser rejects is worse than one that is
+-// short.
++// --disassemble is registered, despite the VM owning a flag of the same name,
++// because that is precisely what theirs does. The collision is not a reason to
++// abstain -- it is the observable behaviour, and it was measured on their binary
++// rather than reasoned about:
+ //
+-// The omission is pinned rather than left to memory:
+-// analyze_snapshot_help_check.sh takes their --help, deletes exactly that
+-// block, and requires what is left to equal ours byte for byte. Every line
+-// above is therefore checked against theirs on every run, and what is missing
+-// is a number that has to shrink deliberately.
++//   theirs --disassemble             -> --shorebird JSON grows 698828 -> 1894974
++//   theirs --disassemble=true        -> 698828 bytes, i.e. NO effect
++//   theirs --no_disassemble          -> 698828 bytes
++//   theirs --definitely_not_a_flag   -> Unrecognized flags: ...
+ //
+-// --disassemble collides with the VM's own flag of the same name; an earlier
+-// attempt to register it was reverted for that reason.
++// That third and fourth line are the whole argument. A VM bool flag accepts the
++// "=true" spelling; dart_bin's DEFINE_BOOL_OPTION matches only the bare token.
++// Since the bare token acts and "=true" does not, the consumer is their own
++// option parser, not the VM -- so theirs takes the bare spelling away from the
++// VM too, and "=true" still reaches it. Registering here reproduces both halves.
++//
++// Nothing is actually lost to the VM: analyze_snapshot loads an AOT snapshot and
++// compiles nothing, so FLAG_disassemble has no code to act on here.
++//
++// The variable is named disassemble_mode for the same reason shorebird_mode is:
++// the flag name is the contract, the C++ identifier is not.
++"--disassemble                                                               \n"
++"  Include disassembly in the JSON output. Off by default.                   \n"
++// Their block ends with a bare newline, like the one above --out. Taken from
++// their bytes, not assumed.
++"\n"
+ "If omitting [<vm-flags>] the VM parsing the snapshot is created with the    \n"
+ "following default flags:                                                    \n"
+ "--enable_mirrors=false                                                      \n"
+@@ -342,8 +356,12 @@ int RunAnalyzer(int argc, char** argv) {
+     } else if (dump_class_table) {
+       Dart_DumpClassTableAsJson(info, &out, &out_len);
+     } else if (shorebird_mode) {
+-      Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
++      Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len,
++                                                  disassemble_mode);
+     } else {
++      // --disassemble is deliberately NOT forwarded here. Theirs ignores it
++      // outside --shorebird: their plain JSON is 878599 bytes with the flag and
++      // 878599 without, byte for byte identical.
+       Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
+     }
+     WriteFile(out_path, out, out_len);
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index 0f523d07291..fa1d9b09ba4 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -25,10 +25,17 @@ void Dart_DumpSnapshotInformationAsJson(
+     intptr_t* buffer_length);
+ 
+ // flutter_hot_patcher B2: Shorebird-compatible output.
++//
++// include_disassembly is Shorebird's --disassemble. It is a parameter rather
++// than a global because it only reaches this one entry point: measured on their
++// binary, --disassemble changes the --shorebird JSON and leaves the plain JSON
++// byte-identical (878599 bytes either way), so plumbing it any wider would
++// invent a behaviour they do not have.
+ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+-    intptr_t* out_len);
++    intptr_t* out_len,
++    bool include_disassembly = false);
+ 
+ // flutter_hot_patcher: Shorebird's --dump_class_table. The JSON is
+ // {"num_cids": N, "classes": [{"id", "name", "hash"}, ...]}, which is the same
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index b1034a382e6..8542690ef0a 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -12,7 +12,9 @@
+ #include <vector>
+ 
+ #include "include/analyze_snapshot_api.h"
++#include "vm/compiler/assembler/disassembler.h"
+ #include "vm/compiler/runtime_api.h"
++#include "vm/flags.h"
+ #include "vm/dart.h"
+ #include "vm/dart_api_impl.h"
+ #include "vm/globals.h"
+@@ -2089,10 +2091,64 @@ void Dart_DumpObjectPoolAsJson(const Dart_SnapshotAnalyzerInformation& info,
+   js.Steal(out, out_len);
+ }
+ 
++// Shorebird's --disassemble, which adds a "disassembly" key to every entry of
++// the --shorebird functions array. Everything about the shape below is measured
++// against their own binary on their own base.so rather than chosen:
++//
++//   * The value is an array of human-readable instruction strings with no
++//     addresses and no hex bytes -- just the mnemonic and operands, which is
++//     exactly DisassemblyFormatter's human_buffer.
++//   * One string per instruction, covering [payload, payload + size). Checked
++//     across all 1380 of their entries: instruction_count * 4 == size for every
++//     single one, and every entry has the key (none omitted, including size 0).
++//   * Branch targets are printed RELATIVE ("bl +100", not an absolute address).
++//     That is FLAG_disassemble_relative: disassembler_arm64.cc:423 switches to
++//     "%+" Pd64 under that flag and prints an address otherwise. Their output
++//     contains 0 branches rendered with an 0x address, so the flag is on.
++//
++// The flag is scoped to this dump rather than left set, because it is a global
++// the rest of the VM reads.
++class ShorebirdDisassemblyCollector : public DisassemblyFormatter {
++ public:
++  explicit ShorebirdDisassemblyCollector(std::vector<std::string>* out)
++      : out_(out) {}
++
++  void ConsumeInstruction(char* hex_buffer,
++                          intptr_t hex_size,
++                          char* human_buffer,
++                          intptr_t human_size,
++                          Object* object,
++                          uword pc) override {
++    out_->push_back(human_buffer);
++  }
++
++  // Disassemble() routes comments and "..." markers through Print(). Theirs
++  // emits neither -- the array is instructions only, one per 4 bytes -- so
++  // swallowing these is what reproduces their output, not laziness.
++  void Print(const char* format, ...) override {}
++
++ private:
++  std::vector<std::string>* out_;
++};
++
++static std::vector<std::string> ShorebirdDisassembleEntry(uword start,
++                                                          uword size) {
++  std::vector<std::string> lines;
++#if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
++  const bool saved_relative = FLAG_disassemble_relative;
++  FLAG_disassemble_relative = true;
++  ShorebirdDisassemblyCollector collector(&lines);
++  Disassembler::Disassemble(start, start + size, &collector);
++  FLAG_disassemble_relative = saved_relative;
++#endif
++  return lines;
++}
++
+ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+-    intptr_t* out_len) {
++    intptr_t* out_len,
++    bool include_disassembly) {
+   Thread* thread = Thread::Current();
+   IsolateGroup* ig = thread->isolate_group();
+   DARTSCOPE(thread);
+@@ -2141,6 +2197,19 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.PrintProperty64("offset", entry.offset);
+     js.PrintProperty64("size", entry.size);
+ 
++    // Between "size" and "subgraph_hash", which is where theirs puts it. The
++    // position is measured, not incidental: all 1380 of their entries have the
++    // first six keys in the order
++    //   name, index_in_entries, offset, size, disassembly, subgraph_hash
++    if (include_disassembly) {
++      js.OpenArray("disassembly");
++      for (const auto& line : ShorebirdDisassembleEntry(
++               reinterpret_cast<uword>(entry.payload), entry.size)) {
++        js.PrintValue(line.c_str());
++      }
++      js.CloseArray();
++    }
++
+     const ShorebirdCodeFacts& facts = all_facts[ci];
+     js.PrintProperty("self_hash", classified.self_hash[ci].c_str());
+     // The walk is implemented, so subgraph_hash is back -- and it is back
+-- 
+2.53.0
+

@@ -1,0 +1,158 @@
+From 45e94243ce97ce7af9da2ba793419bc81cb4c5c6 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 22:49:59 +0800
+Subject: [PATCH 077/206] feat(shorebird):
+ Assembler::InstructionCountForLoadStoreFromOffset
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Their ObjectPoolEditor::InstructionCountNoPadding at 0x1001a2b54 calls this and
+does not inline it, so the signature is theirs. It is how the editor decides
+whether moving an object pool entry changes code size at the sites that read
+it: an entry that still loads in one instruction can move freely, one that
+would need two or three cannot.
+
+Counted by assembling and measuring rather than by reasoning about the cases.
+PrepareLargeOffset picks between a bare offset, an add plus a 12-bit offset,
+and LoadImmediate plus a register offset, and LoadImmediate is itself a
+movz/movk sequence whose length depends on which bits are set. Writing that out
+by hand would be a second copy of the same rules, free to drift the moment
+either side changes.
+
+Their branch structure agrees with what falls out: they return 1 below 32768
+for the eight-byte case, which is exactly Address::CanHoldOffset's 12-bit
+scaled range, and 2 or 3 above it behind IsImmLogical checks.
+
+⚠️ It needs a current thread, because AssemblerBase is a StackResource.
+Discovered by segfault -- the first test was a VM_UNIT_TEST_CASE, which has no
+isolate, and constructing an Assembler there dereferences null. Asserted now,
+and the test is an ISOLATE_UNIT_TEST_CASE.
+
+The test compares against what the assembler emits at each offset rather than
+against a table of expected counts, since a table would be a third copy of the
+rules. Offsets chosen to reach each of PrepareLargeOffset's three branches.
+
+Also found on the way: the mapper lives in
+runtime/vm/shorebird/object_pool_editor.cc, from the file string in that
+function's own FATAL. That is the file to reproduce, and it is at least 525
+lines.
+
+95 of 95 tests.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index dc1616fb6be..3863c6e1b5f 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1024,6 +1024,35 @@ void Assembler::CompareImmediate(Register rn, int64_t imm, OperandSize sz) {
+   }
+ }
+ 
++// Shorebird. Counted by assembling, not by reasoning about the cases.
++//
++// PrepareLargeOffset below decides between a bare offset, an add plus a
++// 12-bit offset, and LoadImmediate plus a register offset, and LoadImmediate
++// itself is a movz/movk sequence whose length depends on the bits set. A
++// hand-written count of all that would be a second implementation of the same
++// rules, free to drift from the first the moment either changes. Running the
++// real one and measuring cannot.
++//
++// PP as the base because it is what an object pool load actually uses, and
++// because PrepareLargeOffset takes a different path for CSP.
++//
++// ⚠️ Needs a current thread: AssemblerBase is a StackResource, so constructing
++// one without a ThreadState dereferences null. The editor runs with a thread,
++// so this is not a restriction in practice -- but it is asserted rather than
++// left to segfault, which is how it first showed up.
++intptr_t Assembler::InstructionCountForLoadStoreFromOffset(
++    int32_t offset,
++    OperandSize sz,
++    Address::AddressType addr_type) {
++  ASSERT(ThreadState::Current() != nullptr);
++  compiler::ObjectPoolBuilder pool_builder;
++  Assembler assembler(&pool_builder);
++  const intptr_t before = assembler.CodeSize();
++  assembler.PrepareLargeOffset(PP, offset, sz, addr_type);
++  // Plus the load or store itself, which PrepareLargeOffset does not emit.
++  return (assembler.CodeSize() - before) / Instr::kInstrSize + 1;
++}
++
+ Address Assembler::PrepareLargeOffset(Register base,
+                                       int32_t offset,
+                                       OperandSize sz,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.h b/runtime/vm/compiler/assembler/assembler_arm64.h
+index 2f22f61c609..ff8657d6ceb 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.h
++++ b/runtime/vm/compiler/assembler/assembler_arm64.h
+@@ -1872,6 +1872,21 @@ class Assembler : public AssemblerBase {
+                         int64_t imm,
+                         OperandSize sz = kEightBytes) override;
+ 
++  // Shorebird. How many instructions a load or store from this offset will
++  // take, without emitting any. Their ObjectPoolEditor calls it to decide
++  // whether moving an object pool entry changes the code size at every site
++  // that reads it -- a move that does not is free, a move that does is not.
++  //
++  // Not derived from their disassembly: their InstructionCountNoPadding at
++  // 0x1001a2b54 calls this and does not inline it, so only the signature and
++  // the fact that it exists are theirs. The counts come from PrepareLargeOffset
++  // below, which is the code being counted, and the test assembles at each
++  // offset and compares -- so this cannot drift from what is actually emitted.
++  static intptr_t InstructionCountForLoadStoreFromOffset(
++      int32_t offset,
++      OperandSize sz = kEightBytes,
++      Address::AddressType addr_type = Address::AddressType::Offset);
++
+   Address PrepareLargeOffset(Register base,
+                              int32_t offset,
+                              OperandSize sz,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index 0ef5e3d0619..b96f663d5b7 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -26,6 +26,40 @@ namespace compiler {
+   EXPECT_STREQ(expected, test->RelativeDisassembly())
+ #endif
+ 
++// Shorebird's ObjectPoolEditor asks how many instructions a load from a given
++// offset costs, so it can tell whether moving a pool entry changes code size.
++// The answer has to match what the assembler really emits, so this checks it
++// against the emission rather than against a table of expected numbers -- a
++// table would be a third copy of the same rules.
++//
++// The offsets are chosen to land on each branch PrepareLargeOffset has: inside
++// the 12-bit scaled range, past it but with a representable upper half, and
++// past that.
++// ISOLATE_UNIT_TEST_CASE, not VM_UNIT_TEST_CASE: an Assembler is a
++// StackResource and needs a current thread. Getting that wrong is a segfault
++// at construction, not a compile error.
++ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
++  const int32_t kOffsets[] = {
++      0,      8,      0x1000, 0x7ff8,  // bare offset
++      0x8000, 0x9000, 0x10000,         // add + 12-bit offset
++      0x12345, 0x7ffffff8,             // LoadImmediate + register offset
++  };
++
++  for (int32_t offset : kOffsets) {
++    compiler::ObjectPoolBuilder pool_builder;
++    compiler::Assembler assembler(&pool_builder);
++    const intptr_t before = assembler.CodeSize();
++    assembler.LoadFromOffset(R0, PP, offset, compiler::kEightBytes);
++    const intptr_t emitted =
++        (assembler.CodeSize() - before) / Instr::kInstrSize;
++
++    const intptr_t counted =
++        compiler::Assembler::InstructionCountForLoadStoreFromOffset(
++            offset, compiler::kEightBytes);
++    EXPECT_EQ(emitted, counted);
++  }
++}
++
+ ASSEMBLER_TEST_GENERATE(Simple, assembler) {
+   __ add(R0, ZR, Operand(ZR));
+   __ add(R0, R0, Operand(42));
+-- 
+2.53.0
+

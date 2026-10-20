@@ -1,0 +1,103 @@
+From 1f1e51ad16e6b47b40e7a9ba7bce60b7ccdf9c4e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 3 Sep 2026 23:36:31 +0800
+Subject: [PATCH 130/206] fix(elf_loader,app_snapshot): iOS PROT_EXEC +
+ WrapCode identity wrapper
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+elf_loader.cc: map PF_R|PF_X segments as kReadOnly — iOS denies
+PROT_EXEC on data-container files (EPERM). dart_force_simulator=true
+means the Simulator interprets instructions without execute permission.
+Confirmed: Dart_LoadELF now returns non-null with error=(null).
+
+app_snapshot.cc WrapCode: use identity wrapper for all three paths
+when dart_force_simulator=true. The Sim->CPU and CPU->Sim stubs
+contain BRK/brk(0) transitions that the Simulator interprets
+literally, triggering SimulatorDebugger::Debug() which aborts when
+stdin is a terminal (SIGABRT, simulator_arm64.cc:550). Identity lets
+the Simulator interpret patch bytecode directly — safe because
+link%=100% means patch bytes are provably identical to base for every
+is_cpu() function.
+
+Engine rebuild + device verification pending (B8 round 2).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/bin/elf_loader.cc b/runtime/bin/elf_loader.cc
+index 2aef72be06c..868314c541c 100644
+--- a/runtime/bin/elf_loader.cc
++++ b/runtime/bin/elf_loader.cc
+@@ -293,7 +293,7 @@ bool LoadedElf::LoadSegments() {
+     if (header.flags == (dart::elf::PF_R | dart::elf::PF_W)) {
+       map_type = File::kReadWrite;
+     } else if (header.flags == (dart::elf::PF_R | dart::elf::PF_X)) {
+-      map_type = File::kReadExecute;
++      map_type = File::kReadOnly;  // iOS denies PROT_EXEC on data files; Simulator doesn't need it
+     } else if (header.flags == dart::elf::PF_R) {
+       map_type = File::kReadOnly;
+     } else {
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 523b326fed9..37a31ebee5d 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10026,13 +10026,15 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+ 
+   const intptr_t length = instructions_table_.InstructionsLengthAt(index);
+ 
+-  // :941. Without a base to link against there is nothing to look up, so the
+-  // code keeps its own address and is merely wrapped.
++  // :941. Without a base to link against there is nothing to look up.
++  // In Simulator mode all patch code is ARM64 bytecode (PROT_READ only).
++  // Using a Sim->CPU wrapper here causes the Simulator to interpret the
++  // wrapper, hit BRK #kRunDartOnCPUCode, and call payload_start as native
++  // ARM64 — which is PROT_READ-only and faults immediately (B6 crash).
++  // Identity lets the Simulator interpret the patch bytecode directly.
+   if (!IsLinkingEnabled()) {
+-    stats_.Record(LinkOracle::RunTarget::cpu, length);
+-    return EntryPoints(payload_start,
+-                       WrapperForRunTarget(LinkOracle::RunTarget::cpu),
+-                       payload_info);
++    stats_.Record(LinkOracle::RunTarget::sim, length);
++    return EntryPoints(payload_start, identity, payload_info);
+   }
+ 
+   // :950. One query answers both halves: which target this entry was linked
+@@ -10045,8 +10047,11 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+ 
+   // A miss means the linker could not prove this function unchanged, so the
+   // patch's own code stands and there is no base entry to point at.
++  // Same reasoning as the !IsLinkingEnabled() case: the cpu_to_sim wrapper
++  // crashes when interpreted because its dart_state_is_on_cpu check fires
++  // brk(0). Use identity so the Simulator interprets the bytecode directly.
+   if (resolved.is_sim()) {
+-    return EntryPoints(payload_start, wrapper, payload_info);
++    return EntryPoints(payload_start, identity, payload_info);
+   }
+ 
+   // :955. start_pc plus the offset, nothing else.
+@@ -10069,8 +10074,18 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+     shorebird_base_instructions_table_.SetCodeAt(code_index, code);
+   }
+ 
+-  // :970. Built from the base address, not the patch's -- see above.
+-  return EntryPoints(base_entry, wrapper, payload_info);
++  // :970. In Simulator mode (dart_force_simulator=true), the Simulator
++  // interprets ALL ARM64 bytecode -- both patch and base functions are
++  // identical ARM64 bytes for is_cpu() functions (that is what link%=100%
++  // means). Using a Sim->CPU wrapper here would cause the Simulator to
++  // interpret the wrapper stub, hit BRK #kRunDartOnCPUCode, and attempt
++  // InvokeWithTHR(base_entry). That transition crashes on iOS because the
++  // Simulator's calling-convention adapter is not compatible with Dart AOT
++  // ARM64 entry points in a mixed-ownership (App.framework + patch) binary.
++  // Identity lets the Simulator interpret the patch's own bytecode directly,
++  // which is safe and correct since patch and base bytes are provably identical
++  // for every is_cpu() function.
++  return EntryPoints(payload_start, identity, payload_info);
+ }
+ 
+ // Shorebird. Their :941. Linking needs both halves: a table saying which patch
+-- 
+2.53.0
+

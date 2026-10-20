@@ -1,0 +1,503 @@
+From a9a5341e8e90bf6789a02ac48d6bc59b96e65f96 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 14:16:34 +0800
+Subject: [PATCH 033/206] feat(shorebird): wire DDSlotVoters/DDSlotMapping into
+ ShorebirdLinker
+
+Replaces the placeholder bytes at +0x40/+0x48/+0x50 with the real types:
+unique_ptr<DDSlotMapping>, unique_ptr<DDSlotVoters>, and a RAW
+DDSlotResolution* (raw because their ResolveDDSlots frees and replaces it on the
+second call). sizeof(ShorebirdLinker)==0x88 still holds -- 8+8+8 replaces 16+8.
+
+InitializeWithDDSlotVoters / InitializeWithDDSlotMapping with their verified
+ASSERT strings, plus dd_slot_voters()/dd_slot_mapping()/resolution() accessors.
+
+gen_snapshot --dd_slot_mapping sniffs the first 4 bytes for the DDSlotVoters
+magic. EVERY failure path is loud: unopenable file, unseekable file, file
+shorter than the 8-byte header, short read, parse failure, and -- critically --
+a non-voters file, which REJECTS rather than silently taking the DDSlotMapping
+stub path. Without that exit a mistyped filename would look like success and the
+sniff branch would be untestable. Buffer slack is 0xFF, never 0x00, because
+datastream.h continues a varint while (b <= 127) and ReadStream's own bounds
+checks are ASSERTs that compile out in Release/Product.
+
+Observable-state assertion has both halves, the defect from Slice 1: the good
+path reports counts READ BACK THROUGH THE SINGLETON (not from a local captured
+before the move, which would print correct numbers even if the store were a
+no-op), and a bogus input is shown not to produce the same state. Verified
+end-to-end against the oracle fixture: "DDSlotVoters loaded: 8 slots, 8 voters",
+matching their own "DD table: 8 slots" log.
+
+Negative control: forcing the sniff to `if (true)` still exits 255 on a
+non-voters file but reports "bad magic" instead of "neither ... nor". Both
+branches exit 255, so exit code alone cannot distinguish them and any test of
+the sniff must assert on output -- noted in-source.
+
+Symbol count, product build, same patterns before and after (grep dart::, never
+dart::shorebird::; and dart::FunctionKey:: with the :: because bare
+dart::FunctionKey matches 26 pre-existing dart::FunctionKeyTraits symbols):
+  ShorebirdLinker::   12 -> 16 raw, 4 -> 6 unique methods
+  DDSlotVoters::       0 -> 2  (ReadFromStream)
+  DDSlotMapping::      0 -> 1  (ReadFromStream)
+  FunctionKey::        0 -> 2  (ReadFromStream)
+  DDSlotResolution::   0 -> 0  NOT landed -- no production caller exists;
+                              SetSlotOwner is test-only until Slice 2b's
+                              ResolveDDSlots calls it, so it is dead-stripped.
+Raw counts are not comparable to theirs (our unstripped Product build carries
+STABS debug-map duplicates); only "non-zero on both" and the deduplicated method
+lists mean anything.
+
+Also labels DDSlotResolution::SlotForOwner as test-only/diagnostic and not part
+of the reproduced interface, per ruling: it has no counterpart in their binary
+and exists solely to verify owner_to_slot_ is written at all.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index 7d709cc9902..18bd22a8390 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -35,6 +35,8 @@
+ #include "platform/hashmap.h"
+ #include "platform/syslog.h"
+ #include "platform/text_buffer.h"
++#include "vm/datastream.h"
++#include "vm/shorebird/dd_voting.h"
+ #include "vm/shorebird/linker.h"
+ 
+ namespace dart {
+@@ -120,7 +122,8 @@ static const char* const kSnapshotKindNames[] = {
+   V(base_ct_link_data, base_ct_link_data_filename)                             \
+   V(patch_ct_link_data, patch_ct_link_data_filename)                           \
+   V(base_ft_link_data, base_ft_link_data_filename)                             \
+-  V(base_dt_link_data, base_dt_link_data_filename)
++  V(base_dt_link_data, base_dt_link_data_filename)                             \
++  V(dd_slot_mapping, dd_slot_mapping_filename)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(compile_all, compile_all)                                                  \
+@@ -708,6 +711,155 @@ static void InitializeShorebirdLinkData() {
+     dart::ShorebirdLinker::shared()->InitializeWithDispatchTableLinkInfo(
+         std::move(base));
+   }
++
++  // --dd_slot_mapping: one file holding a DDSlotVoters section, optionally
++  // followed by a DDSlotMapping. Their _main sniffs the first 4 bytes and
++  // dispatches on the DDSlotVoters magic (LINKER_RECON §2/§5); there is no
++  // separate --dd_slot_voters option.
++  //
++  // EVERY failure path below is LOUD. The readers return an empty object rather
++  // than null on error, so a wrong path, an unreadable file, a zero-length file
++  // and a correct parse of an empty table are otherwise indistinguishable --
++  // all four would exit 0 with an empty linker. That was the defect caught in
++  // Slice 1's equivalent block.
++  if (dd_slot_mapping_filename != nullptr) {
++    FILE* f = fopen(dd_slot_mapping_filename, "rb");
++    if (f == nullptr) {
++      Syslog::PrintErr("Error: cannot open --dd_slot_mapping=%s\n\n",
++                       dd_slot_mapping_filename);
++      exit(kErrorExitCode);
++    }
++    if (fseek(f, 0, SEEK_END) != 0) {
++      Syslog::PrintErr("Error: cannot seek --dd_slot_mapping=%s\n\n",
++                       dd_slot_mapping_filename);
++      fclose(f);
++      exit(kErrorExitCode);
++    }
++    const long file_len = ftell(f);
++    // Reject zero-length and short files before any allocation. The header
++    // alone is 8 bytes (u32 magic + u32 version).
++    if (file_len < 8) {
++      Syslog::PrintErr(
++          "Error: --dd_slot_mapping=%s is %ld bytes; the header alone needs "
++          "8\n\n",
++          dd_slot_mapping_filename, file_len);
++      fclose(f);
++      exit(kErrorExitCode);
++    }
++    rewind(f);
++
++    // Slack past the logical end, filled with varint TERMINATOR bytes (0xFF).
++    // NOT 0x00: datastream.h continues a varint `while (b <= 127)`, so a zero
++    // pad is a CONTINUATION byte and invites the very overrun it looks like it
++    // prevents (measured in Slice 1: 4831 bytes out of bounds with 0x00, 1 byte
++    // with 0xFF). ReadStream's own bounds checks are ASSERTs and compile out in
++    // Release and Product, so this slack is the real guard.
++    constexpr intptr_t kSlack = 16;
++    uint8_t* buf = reinterpret_cast<uint8_t*>(malloc(file_len + kSlack));
++    if (buf == nullptr) {
++      Syslog::PrintErr("Error: out of memory reading --dd_slot_mapping\n\n");
++      fclose(f);
++      exit(kErrorExitCode);
++    }
++    if (fread(buf, 1, static_cast<size_t>(file_len), f) !=
++        static_cast<size_t>(file_len)) {
++      Syslog::PrintErr("Error: short read on --dd_slot_mapping=%s\n\n",
++                       dd_slot_mapping_filename);
++      free(buf);
++      fclose(f);
++      exit(kErrorExitCode);
++    }
++    fclose(f);
++    memset(buf + file_len, 0xFF, kSlack);
++
++    // Sniff the first 4 bytes as a raw LE u32 (little-endian host).
++    uint32_t sniff = 0;
++    memcpy(&sniff, buf, sizeof(sniff));
++    // NOTE: the two branches are distinguishable only by their error MESSAGE,
++    // not by exit code -- a bogus file exits 255 either way (verified by
++    // negative control: forcing this to `if (true)` still exits 255 on a
++    // non-voters file, but reports "DDSlotVoters: bad magic" instead of the
++    // "neither ... nor" message). Any test of the sniff must assert on output.
++    if (sniff == dart::DDSlotVoters::kMagic) {
++      dart::ReadStream stream(buf, static_cast<intptr_t>(file_len));
++      auto voters = std::make_unique<dart::DDSlotVoters>();
++      if (!voters->ReadFromStream(&stream)) {
++        Syslog::PrintErr(
++            "Error: failed to parse DDSlotVoters from --dd_slot_mapping=%s\n\n",
++            dd_slot_mapping_filename);
++        free(buf);
++        exit(kErrorExitCode);
++      }
++      dart::ShorebirdLinker::shared()->InitializeWithDDSlotVoters(
++          std::move(voters));
++
++      // Read the counts back THROUGH THE SINGLETON, never from a local
++      // captured before the move. Reporting the pre-move local would print the
++      // right numbers even if the store were a no-op -- the diagnostic would
++      // then be vacuous, which is the whole failure mode it exists to rule out.
++      const dart::DDSlotVoters* stored =
++          dart::ShorebirdLinker::shared()->dd_slot_voters();
++      if (stored == nullptr) {
++        Syslog::PrintErr(
++            "Error: DDSlotVoters parsed from --dd_slot_mapping=%s but the "
++            "linker singleton did not retain it.\n\n",
++            dd_slot_mapping_filename);
++        free(buf);
++        exit(kErrorExitCode);
++      }
++      const size_t parsed_slots = stored->slot_count();
++      const size_t parsed_voters = stored->voters().size();
++
++      // A DDSlotMapping may follow in the same stream. Absent is normal on a
++      // base build: dd_pipeline.sh step 6 passes voters only and their
++      // gen_snapshot still resolves 7 slots.
++      if (stream.PendingBytes() > 0) {
++        auto mapping = std::make_unique<dart::DDSlotMapping>();
++        if (!mapping->ReadFromStream(&stream)) {
++          // TODO(slice-2c): DDSlotMapping::ReadFromStream is a documented stub
++          // that always returns false; the wire format at 0x100198fb0 has not
++          // been disassembled. Trailing bytes are therefore expected to land
++          // here for now. Warn rather than fail so a voters-only file still
++          // works, but say so explicitly -- silence here would hide a real
++          // parse failure once the stub is implemented.
++          Syslog::PrintErr(
++              "Warning: %" Pd
++              " trailing bytes in --dd_slot_mapping=%s were not consumed; "
++              "DDSlotMapping::ReadFromStream is not yet implemented (stub). "
++              "Proceeding with voters only.\n",
++              stream.PendingBytes(), dd_slot_mapping_filename);
++        } else {
++          dart::ShorebirdLinker::shared()->InitializeWithDDSlotMapping(
++              std::move(mapping));
++        }
++      }
++
++      if (verbose) {
++        Syslog::PrintErr("DDSlotVoters loaded: %zu slots, %zu voters\n",
++                         parsed_slots, parsed_voters);
++      }
++    } else {
++      // Not a DDSlotVoters stream, so this must be a bare DDSlotMapping.
++      // ReadFromStream is a stub returning false, so this path REJECTS rather
++      // than silently succeeding. Without the exit, a wrong file would take the
++      // stub path and exit 0, leaving the sniffing branch untestable and making
++      // a mistyped filename look like success.
++      dart::ReadStream stream(buf, static_cast<intptr_t>(file_len));
++      auto mapping = std::make_unique<dart::DDSlotMapping>();
++      if (!mapping->ReadFromStream(&stream)) {
++        Syslog::PrintErr(
++            "Error: --dd_slot_mapping=%s is neither a DDSlotVoters stream "
++            "(magic 0x%X, got 0x%X) nor a parseable DDSlotMapping "
++            "(DDSlotMapping::ReadFromStream is not yet implemented).\n\n",
++            dd_slot_mapping_filename, dart::DDSlotVoters::kMagic, sniff);
++        free(buf);
++        exit(kErrorExitCode);
++      }
++      dart::ShorebirdLinker::shared()->InitializeWithDDSlotMapping(
++          std::move(mapping));
++    }
++    free(buf);
++  }
+ }
+ 
+ static void CreateAndWritePrecompiledSnapshot() {
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index a6b81728b53..8f09083b029 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -285,15 +285,25 @@ FunctionKey DDSlotResolution::KeyForSlot(long slot) const {
+   return it != slot_to_key_.end() ? it->second : FunctionKey{0, 0, 0, 0, 0};
+ }
+ 
++// TEST-ONLY / DIAGNOSTIC. NOT PART OF THE REPRODUCED INTERFACE.
++//
++// This accessor has NO counterpart in their binary: their symbol table exports
++// only SetSlotOwner and the destructor, so they never expose a reverse lookup.
++// It exists here for exactly one reason -- it is the only way to verify that
++// SetSlotOwner writes owner_to_slot_ at all, and an unverified write is a worse
++// problem than a documented sharp edge. Do not mistake it for reproduction
++// surface, and do not add production callers.
++//
+ // WARNING: may return a STALE slot. owner_to_slot_ is never pruned (see the
+ // analysis above SetSlotOwner), so if `owner` previously owned a slot that has
+ // since been reassigned, this returns that old slot id. A non-negative result
+ // therefore means "this owner was recorded against this slot at some point",
+ // NOT "this owner currently owns this slot".
+ //
+-// This accessor has no counterpart in their binary -- it exists for tests and
+-// diagnostics. Before using it from production code, confirm against
+-// slot_to_owner_ (OwnerForSlot(result) == owner) or prune on write.
++// If Slice 2b turns out to need a genuine reverse lookup, align with whatever
++// THEIR code actually does at that point -- do not build on this accessor's
++// semantics. Before any production use, confirm against slot_to_owner_
++// (OwnerForSlot(result) == owner) or prune on write.
+ long DDSlotResolution::SlotForOwner(uword owner) const {
+   auto it = owner_to_slot_.find(owner);
+   return it != owner_to_slot_.end() ? it->second : -1L;
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index d91b89da5e5..041293a97a1 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "vm/shorebird/dd_voting.h"
+ 
++#include "vm/shorebird/linker.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -624,4 +625,103 @@ VM_UNIT_TEST_CASE(DDSlotResolution_MultipleSlotsDoNotAlias) {
+   EXPECT_EQ(59582u, g2.signature_hash);
+ }
+ 
++// ===========================================================================
++// Task 4: ShorebirdLinker DD-slot wiring
++// ===========================================================================
++//
++// Each run_vm_tests invocation is a fresh process, so the function-local static
++// singleton starts null in every test and the Initialize* null-ASSERTs hold.
++
++// A fresh singleton has all three DD slots null. Without this, a test that
++// found voters already present could not tell a successful store from a
++// leftover from another test.
++VM_UNIT_TEST_CASE(ShorebirdLinker_FreshHasNullDDSlots) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  EXPECT(linker->dd_slot_voters() == nullptr);
++  EXPECT(linker->dd_slot_mapping() == nullptr);
++  EXPECT(linker->resolution() == nullptr);
++}
++
++// The singleton holds exactly what was parsed — checked field-by-field through
++// the accessor, not merely "non-null".
++//
++// This is the both-halves assertion Slice 1's equivalent block was missing: the
++// reader returns an EMPTY object rather than null on failure, so "non-null" is
++// satisfied by a total parse failure. Only reading the data back distinguishes
++// a real parse from an empty one.
++VM_UNIT_TEST_CASE(ShorebirdLinker_HoldsDDSlotVoters) {
++  ReadStream rs(kOracleVotersBin,
++                static_cast<intptr_t>(sizeof(kOracleVotersBin)));
++  auto voters = std::make_unique<DDSlotVoters>();
++  EXPECT(voters->ReadFromStream(&rs));
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  EXPECT(linker->dd_slot_voters() == nullptr);  // before
++  linker->InitializeWithDDSlotVoters(std::move(voters));
++
++  const DDSlotVoters* held = linker->dd_slot_voters();
++  EXPECT(held != nullptr);
++  if (held == nullptr) return;
++
++  // Half one: the real data landed, not an empty object.
++  EXPECT_EQ(static_cast<size_t>(8), held->slot_count());
++  EXPECT_EQ(static_cast<size_t>(8), held->voters().size());
++
++  // Field-exact spot check through the accessor: slot 2's caller/target.
++  const std::vector<size_t>* idxs = held->voters_for_slot(2);
++  EXPECT(idxs != nullptr);
++  if (idxs != nullptr) {
++    EXPECT_EQ(static_cast<size_t>(1), idxs->size());
++    const SlotVoter& v = held->voters()[(*idxs)[0]];
++    EXPECT_EQ(7L, v.caller_key.library_kernel_offset);
++    EXPECT_EQ(698L, v.caller_key.owner_class_kernel_offset);
++    EXPECT_EQ(836L, v.caller_key.kernel_offset);
++    EXPECT_EQ(5, static_cast<int>(v.caller_key.kind));
++    EXPECT_EQ(178746u, v.caller_key.signature_hash);
++    EXPECT_EQ(7L, v.target_key.library_kernel_offset);
++    EXPECT_EQ(1018L, v.target_key.owner_class_kernel_offset);
++    EXPECT_EQ(1484L, v.target_key.kernel_offset);
++    EXPECT_EQ(2, static_cast<int>(v.target_key.kind));
++    EXPECT_EQ(119164u, v.target_key.signature_hash);
++  }
++
++  // The mapping slot must still be null — storing voters must not populate it.
++  EXPECT(linker->dd_slot_mapping() == nullptr);
++  EXPECT(linker->resolution() == nullptr);
++}
++
++// Half two of the both-halves assertion: a deliberately bogus input must NOT
++// produce the same singleton state as a good one. A corrupted magic makes
++// ReadFromStream fail, so nothing is stored and the slot stays null.
++VM_UNIT_TEST_CASE(ShorebirdLinker_BogusVotersDoesNotPopulate) {
++  uint8_t corrupted[sizeof(kOracleVotersBin)];
++  memcpy(corrupted, kOracleVotersBin, sizeof(kOracleVotersBin));
++  corrupted[0] ^= 0xFF;  // break the magic
++
++  ReadStream rs(corrupted, static_cast<intptr_t>(sizeof(corrupted)));
++  auto voters = std::make_unique<DDSlotVoters>();
++  EXPECT(!voters->ReadFromStream(&rs));
++
++  // The failed parse yields an EMPTY object, not null — which is exactly why
++  // a pointer check alone is not a verification.
++  EXPECT_EQ(static_cast<size_t>(0), voters->slot_count());
++  EXPECT_EQ(static_cast<size_t>(0), voters->voters().size());
++
++  // gen_snapshot exits before storing on this path, so the singleton stays null.
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  EXPECT(linker->dd_slot_voters() == nullptr);
++}
++
++// DDSlotMapping::ReadFromStream is a documented stub. Pin that it returns false
++// so the gen_snapshot non-voters branch is known to reject rather than silently
++// succeed. When slice-2c implements it, this test is the tripwire that says so.
++VM_UNIT_TEST_CASE(DDSlotMapping_ReadFromStreamIsStillAStub) {
++  const uint8_t bytes[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
++  ReadStream rs(bytes, sizeof(bytes));
++  DDSlotMapping mapping;
++  EXPECT(!mapping.ReadFromStream(&rs));
++  EXPECT_EQ(static_cast<size_t>(0), mapping.size());
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 06c3df903dd..a1a428357c2 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -30,8 +30,9 @@ ShorebirdLinker::ShorebirdLinker()
+     : gap0_{},
+       object_pool_reserved_{},
+       gap1_{},
+-      dd_slot_reserved_{},
+-      resolution_reserved_{},
++      dd_slot_mapping_(nullptr),
++      dd_slot_voters_(nullptr),
++      resolution_(nullptr),
+       unordered_map_reserved_{},
+       load_factor_(1.0f),
+       pad_{},
+@@ -75,6 +76,24 @@ void ShorebirdLinker::InitializeWithDispatchTableLinkInfo(
+   base_dispatch_table_ = std::move(base);
+ }
+ 
++void ShorebirdLinker::InitializeWithDDSlotVoters(
++    std::unique_ptr<DDSlotVoters> voters) {
++  // ASSERT string from their binary: "dd_slot_voters_ == nullptr"
++  // Confirmed by the ldr x8,[x0,#0x48] null check in
++  // InitializeWithDDSlotVoters at 0x1001a04d8.
++  ASSERT(dd_slot_voters_ == nullptr);
++  dd_slot_voters_ = std::move(voters);
++}
++
++void ShorebirdLinker::InitializeWithDDSlotMapping(
++    std::unique_ptr<DDSlotMapping> mapping) {
++  // ASSERT string from their binary: "dd_slot_mapping_ == nullptr"
++  // Confirmed by the ldr x9,[x0,#0x40] null check in
++  // InitializeWithDDSlotMapping at 0x1001a0418.
++  ASSERT(dd_slot_mapping_ == nullptr);
++  dd_slot_mapping_ = std::move(mapping);
++}
++
+ namespace {
+ 
+ // Slack allocated past the logical end of every file buffer, filled with
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 1c6dcae2fac..1bac48a2927 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -10,12 +10,14 @@
+ #include <vector>
+ 
+ #include "platform/globals.h"
++#include "vm/shorebird/dd_voting.h"
+ #include "vm/shorebird/link_info.h"
+ 
+ namespace dart {
+ 
+-// Forward declared rather than including vm/datastream.h, which is heavy and
+-// is only needed by the readers' implementation.
++// NOTE: dd_voting.h pulls in vm/datastream.h, so ReadStream is already a
++// complete type here. The forward declaration below is retained because the
++// readers' signatures only need the declaration and the include could change.
+ class ReadStream;
+ 
+ // ShorebirdLinker is the central aggregation point for all link-info
+@@ -78,6 +80,15 @@ class ShorebirdLinker {
+   void InitializeWithDispatchTableLinkInfo(
+       std::unique_ptr<DispatchTableLinkInfo> base);
+ 
++  // Stores DDSlotVoters. Asserts the slot is null. Called from _main after
++  // reading the --dd_slot_mapping file's DDSlotVoters section, which comes
++  // before any DDSlotMapping in the stream.
++  void InitializeWithDDSlotVoters(std::unique_ptr<DDSlotVoters> voters);
++
++  // Stores DDSlotMapping. Asserts the slot is null. Called from _main after
++  // DDSlotVoters, reading from the same stream.
++  void InitializeWithDDSlotMapping(std::unique_ptr<DDSlotMapping> mapping);
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+@@ -92,6 +103,11 @@ class ShorebirdLinker {
+   const DispatchTableLinkInfo* base_dispatch_table() const {
+     return base_dispatch_table_.get();
+   }
++  const DDSlotVoters* dd_slot_voters() const { return dd_slot_voters_.get(); }
++  const DDSlotMapping* dd_slot_mapping() const {
++    return dd_slot_mapping_.get();
++  }
++  const DDSlotResolution* resolution() const { return resolution_; }
+ 
+  private:
+   // Private constructor — use shared().
+@@ -117,12 +133,20 @@ class ShorebirdLinker {
+   std::unique_ptr<FieldTableLinkInfo> base_field_table_;
+   std::unique_ptr<DispatchTableLinkInfo> base_dispatch_table_;
+ 
+-  // +0x40 / +0x48: DDSlotMapping / DDSlotVoters — OUT OF SCOPE.
+-  // Reserved so DDSlotResolution* lands at +0x50.
+-  uint8_t dd_slot_reserved_[16];
+-
+-  // +0x50: DDSlotResolution* — OUT OF SCOPE.
+-  uint8_t resolution_reserved_[8];
++  // +0x40: unique_ptr<DDSlotMapping> dd_slot_mapping_
++  // +0x48: unique_ptr<DDSlotVoters>  dd_slot_voters_
++  // Offsets confirmed by LINKER_RECON §3: ldr x9,[x0,#0x40] in
++  // InitializeWithDDSlotMapping's null check; ldr x8,[x0,#0x48] in
++  // InitializeWithDDSlotVoters and in ResolveDDSlots.
++  std::unique_ptr<DDSlotMapping> dd_slot_mapping_;
++  std::unique_ptr<DDSlotVoters> dd_slot_voters_;
++
++  // +0x50: DDSlotResolution* resolution_
++  // Stored by str x20,[x8,#0x50] in ResolveDDSlots; loaded after call 2 in
++  // DoCompileAll. A RAW pointer, not unique_ptr: their ResolveDDSlots frees and
++  // replaces it on the second call. Ownership is therefore manual and lives in
++  // ResolveDDSlots (Slice 2b); nothing in this slice allocates it.
++  DDSlotResolution* resolution_;
+ 
+   // +0x58..+0x77 (32 bytes): INFERRED — looks like a libc++ unordered_map
+   // (default max_load_factor = 1.0f matches the float stored at +0x78 in
+-- 
+2.53.0
+

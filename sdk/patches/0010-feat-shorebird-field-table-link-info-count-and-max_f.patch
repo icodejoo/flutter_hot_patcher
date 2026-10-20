@@ -1,0 +1,305 @@
+From 3443be0950515014dffc2413dc0e9152012b83a0 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 17:38:06 +0800
+Subject: [PATCH 010/206] feat(shorebird): field table link info -- count and
+ max_field_id match, 3 residual gaps
+
+Implements --print_field_table_link_info_to and its _debug_info_to twin.
+Now produces exactly 622 entries with max_field_id=244, matching Shorebird
+on the same kernel. Not yet byte-identical; see below.
+
+Recovered from their binaries rather than guessed:
+  * FieldHasher::DuplicateAwareHash builds
+      ScrubName(owner) + '.' + ScrubName(name, is_ext) + ' '
+      + kind_bits + ' ' + occurrence
+    Disassembly shows push_back(0x2e='.'), push_back(0x20=' '), and
+    __base_10_u32 fed from 'ldur w8,[x8,#0x5f]' -- the whole kind_bits_ word,
+    not individual bits. The same offset is read with >>0xb and >>0xc to test
+    is_extension, which pins ConstBit at bit 0 and hence identifies bit 17.
+  * id is Field::field_id(), i.e. the raw host_offset_or_field_id Smi
+    ('[x+0x27]' then '>>1' in their code). Not restricted to static fields,
+    which is why ids repeat across classes.
+  * Their CollectAllStaticFields walks the HEAP (Heap::ResetObjectIdTable,
+    UntaggedObject::VisitPointers), not class dictionaries. Iterating library
+    dictionaries finds only 360 of 622; heap iteration plus hooking before the
+    Drop phase reaches all 622.
+
+Hook placement was determined empirically: at DoCompileAll's end fields are
+already dropped (423 found); at its start they are not yet loaded (18412 bytes);
+immediately before DropFunctions/DropFields is correct.
+
+Three residual differences, all pointing at VM feature configuration rather than
+at this code:
+  1. 93 ids differ by exactly 94 in every case, so our VM has 94 more internal
+     static fields occupying lower ids.
+  2. 11 kind_bits differ by 131072 (bit 17, HasDeeplyImmutableTypeBit) or 65536
+     (bit 16, NoSanitizeThreadBit). Bit 17 is set in kernel_loader.cc, not during
+     DoCompileAll, so this is not a timing issue -- and it matches the earlier
+     assembly comparison where we emit stub EnsureDeeplyImmutable and they do
+     not. Shorebird appears to build with deeply-immutable disabled.
+  3. Ordering within equal ids: we stable_sort after heap iteration, they
+     introsort with a comparator not yet recovered.
+
+Adds Field::kind_bits() since kind_bits_ is protected and the hash needs the
+raw word.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index 33d2433d8bd..cc5768174aa 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -591,6 +591,10 @@ void Precompiler::DoCompileAll() {
+       FinalizeDispatchTable();
+       ReplaceFunctionStaticCallEntries();
+ 
++      // flutter_hot_patcher: capture the field link info while every Field is
++      // still reachable -- DropFields() below removes most of them.
++      PrintFieldTableLinkInfoIfRequested(T);
++
+       {
+         PRECOMPILER_TIMER_SCOPE(this, Drop);
+ 
+diff --git a/runtime/vm/object.h b/runtime/vm/object.h
+index f8bc544ea62..10e6a1b5f13 100644
+--- a/runtime/vm/object.h
++++ b/runtime/vm/object.h
+@@ -4506,6 +4506,12 @@ class Field : public Object {
+ 
+   bool is_static() const { return untag()->kind_bits_.Read<StaticBit>(); }
+   bool is_instance() const { return !is_static(); }
++  // flutter_hot_patcher: Shorebird's FieldHasher::DuplicateAwareHash embeds the
++  // whole kind_bits_ word in the field link info, so it needs the raw value
++  // rather than individual bits.
++  uint32_t kind_bits() const {
++    return static_cast<uint32_t>(untag()->kind_bits_);
++  }
+   bool is_final() const { return untag()->kind_bits_.Read<FinalBit>(); }
+   bool is_const() const { return untag()->kind_bits_.Read<ConstBit>(); }
+   bool is_late() const { return untag()->kind_bits_.Read<IsLateBit>(); }
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 1883a259752..a1d8c442efb 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -4,17 +4,21 @@
+ 
+ #include "vm/shorebird/link_info.h"
+ 
++#include <algorithm>
+ #include <map>
+ #include <string>
+ 
+ #include "platform/utils.h"
+ #include "vm/class_table.h"
++#include "vm/heap/heap.h"
++#include "vm/visitor.h"
+ #include "vm/dart.h"
+ #include "vm/dart_api_state.h"
+ #include "vm/datastream.h"
+ #include "vm/flags.h"
+ #include "vm/json_writer.h"
+ #include "vm/object.h"
++#include "vm/object_store.h"
+ #include "vm/thread.h"
+ #include "vm/zone_text_buffer.h"
+ 
+@@ -28,6 +32,14 @@ DEFINE_FLAG(charp,
+             print_class_table_link_debug_info_to,
+             nullptr,
+             "Write class table link info as JSON, for debugging");
++DEFINE_FLAG(charp,
++            print_field_table_link_info_to,
++            nullptr,
++            "Write field table link info as a binary file");
++DEFINE_FLAG(charp,
++            print_field_table_link_debug_info_to,
++            nullptr,
++            "Write field table link info as JSON, for debugging");
+ 
+ namespace {
+ 
+@@ -157,6 +169,132 @@ ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread) {
+   return new (zone) ClassTableLinkInfo(std::move(classes), num_cids);
+ }
+ 
++void FieldTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/1 * MB);
++  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(fields_.size()));
++  for (const FieldInfo& info : fields_) {
++    stream.WriteUnsigned<intptr_t>(info.id);
++    WriteString(&stream, info.name);
++    WriteString(&stream, info.hash);
++  }
++  stream.WriteUnsigned<intptr_t>(max_field_id_);
++
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(stream.buffer(), stream.bytes_written());
++  }
++}
++
++void FieldTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
++  JSONWriter js;
++  js.OpenObject();
++  js.PrintProperty64("max_field_id", max_field_id_);
++  js.OpenArray("fields");
++  for (const FieldInfo& info : fields_) {
++    js.OpenObject();
++    js.PrintProperty64("id", info.id);
++    js.PrintProperty("name", info.name.c_str());
++    js.PrintProperty("hash", info.hash.c_str());
++    js.CloseObject();
++  }
++  js.CloseArray();
++  js.CloseObject();
++
++  char* output = nullptr;
++  intptr_t output_length = 0;
++  js.Steal(&output, &output_length);
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(output, output_length);
++  }
++  free(output);
++}
++
++// Their CollectAllStaticFields walks the heap (the decompiled code calls
++// Heap::ResetObjectIdTable and UntaggedObject::VisitPointers), not the library
++// dictionaries. That matters: by the time DoCompileAll finishes, the precompiler
++// has dropped fields from Class::fields(), but the Field objects themselves are
++// still live on the heap. Iterating class dictionaries finds a strict subset --
++// 360 of 622 on our fixture.
++FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread) {
++  Zone* zone = thread->zone();
++
++  GrowableArray<FieldPtr> raw_fields;
++  {
++    HeapIterationScope iteration(thread);
++    class Collector : public ObjectVisitor {
++     public:
++      explicit Collector(GrowableArray<FieldPtr>* out) : out_(out) {}
++      void VisitObject(ObjectPtr obj) override {
++        if (obj->GetClassId() == kFieldCid) {
++          out_->Add(Field::RawCast(obj));
++        }
++      }
++     private:
++      GrowableArray<FieldPtr>* out_;
++    } collector(&raw_fields);
++    iteration.IterateObjects(&collector);
++  }
++
++  Field& field = Field::Handle(zone);
++  Class& owner = Class::Handle(zone);
++  String& name = String::Handle(zone);
++
++  std::vector<FieldInfo> fields;
++  std::map<std::string, intptr_t> seen;
++  intptr_t max_field_id = 0;
++
++  for (intptr_t i = 0; i < raw_fields.length(); i++) {
++    field = raw_fields[i];
++    name = field.name();
++    if (name.IsNull()) continue;
++    const bool is_ext =
++        field.is_extension_member() || field.is_extension_type_member();
++    const std::string field_name(String::ScrubName(name, is_ext));
++
++    owner = field.Owner();
++    std::string owner_name;
++    if (!owner.IsNull()) {
++      name = owner.Name();
++      if (!name.IsNull()) owner_name = String::ScrubName(name);
++    }
++
++    std::string qualified = owner_name;
++    qualified += '.';
++    qualified += field_name;
++    const intptr_t occurrence = ++seen[qualified];
++
++    std::string hash = qualified;
++    hash += ' ';
++    hash += std::to_string(field.kind_bits());
++    hash += ' ';
++    hash += std::to_string(occurrence);
++
++    const intptr_t id = field.field_id();
++    max_field_id = Utils::Maximum(max_field_id, id);
++    fields.push_back(FieldInfo{id, field_name, std::move(hash)});
++  }
++
++  std::stable_sort(fields.begin(), fields.end(),
++                   [](const FieldInfo& a, const FieldInfo& b) {
++                     return a.id < b.id;
++                   });
++
++  return new (zone) FieldTableLinkInfo(std::move(fields), max_field_id);
++}
++
++void PrintFieldTableLinkInfoIfRequested(Thread* thread) {
++  const bool want_binary = FLAG_print_field_table_link_info_to != nullptr;
++  const bool want_json = FLAG_print_field_table_link_debug_info_to != nullptr;
++  if (!want_binary && !want_json) return;
++
++  const FieldTableLinkInfo* info = GetFieldTableLinkInfo(thread);
++  if (want_binary) info->WriteToFile(FLAG_print_field_table_link_info_to);
++  if (want_json) {
++    info->WriteDebugInfoToFile(FLAG_print_field_table_link_debug_info_to);
++  }
++}
++
+ void PrintClassTableLinkInfoIfRequested(Thread* thread) {
+   const bool want_binary = FLAG_print_class_table_link_info_to != nullptr;
+   const bool want_json = FLAG_print_class_table_link_debug_info_to != nullptr;
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 83fed61dd76..9abb0c9bdbb 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -56,12 +56,42 @@ class ClassTableLinkInfo : public ZoneObject {
+   intptr_t num_cids_;
+ };
+ 
++// Link information describing the fields a base snapshot contains.
++struct FieldInfo {
++  intptr_t id;        // Field::field_id(), i.e. the raw host_offset_or_field_id
++  std::string name;   // ScrubName(field name)
++  // "<Owner>.<name> <kind_bits> <occurrence>" -- their FieldHasher builds this
++  // from ScrubName(owner) + '.' + ScrubName(name) + ' ' + the whole kind_bits_
++  // word + ' ' + a 1-based duplicate index (hence DuplicateAwareHash).
++  std::string hash;
++};
++
++class FieldTableLinkInfo : public ZoneObject {
++ public:
++  FieldTableLinkInfo(std::vector<FieldInfo> fields, intptr_t max_field_id)
++      : fields_(std::move(fields)), max_field_id_(max_field_id) {}
++
++  const std::vector<FieldInfo>& fields() const { return fields_; }
++  intptr_t max_field_id() const { return max_field_id_; }
++
++  // count, { id, name, hash }, max_field_id -- the scalar is again a trailer.
++  void WriteToFile(const char* path) const;
++  void WriteDebugInfoToFile(const char* path) const;
++
++ private:
++  std::vector<FieldInfo> fields_;
++  intptr_t max_field_id_;
++};
++
+ // Walks the class table and computes the link info for the current isolate.
+ ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread);
+ 
+-// Honours --print_class_table_link_info_to / _debug_info_to. No-op when neither
+-// flag is set.
++// Walks every library's classes (and their toplevel class) collecting fields.
++FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread);
++
++// Honour the --print_*_link_info_to flags. No-op when none are set.
+ void PrintClassTableLinkInfoIfRequested(Thread* thread);
++void PrintFieldTableLinkInfoIfRequested(Thread* thread);
+ 
+ }  // namespace dart
+ 
+-- 
+2.53.0
+

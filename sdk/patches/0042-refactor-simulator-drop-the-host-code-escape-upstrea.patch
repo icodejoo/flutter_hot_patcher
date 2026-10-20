@@ -1,0 +1,228 @@
+From dd8fba264f1bc61c9bd541351520980736ffc256 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 18:08:39 +0800
+Subject: [PATCH 042/206] refactor(simulator): drop the host-code escape,
+ upstream SIMULATOR_FFI covers it
+
+~100 lines guarded by SIMULATOR_HOST_ARCH_MATCH, a macro this tree defines
+nowhere: AddressInImage, IsHostCodeAddress, HostCallResult,
+kHostCallStackWindow, CallHostFunction, and their single call site in
+DecodeUnconditionalBranchReg. Rule 2 -- upstream's SIMULATOR_FFI does this job
+now, so ours should not exist.
+
+Both halves are measured:
+
+*Unnecessary.* All seven tests memory recorded as failing on ADRP
+(word=0xf00118c0) pass on upstream's mechanism alone, before this deletion and
+after it: Dart_SetFfiNativeResolver{,_MissingResolver,_DoesNotResolve} and
+DartAPI_{,Implicit,Negative}NativeFieldAccess{,_Throws}. They need
+--dfe=xcodebuild/ReleaseARM64/gen/kernel_service.dill; without it they fail as
+"Error while starting Kernel isolate task", which looks like an FFI regression
+and is not one.
+
+*Already inert.* #error inside the block leaves the build green, so it was not
+being compiled. Positive control: the same #error inside #if
+defined(__aarch64__) at :1754 gives "ninja: build stopped", so the test
+discriminates. An earlier attempt to establish this by counting symbols was
+invalid -- InvokeWithTHR is static and inlines away, so compiled and uncompiled
+look the same to nm.
+
+InvokeWithTHR is deliberately kept. It sits in the __aarch64__ block, is
+compiled and live, and carries A2/A5's link-table escape from the BL intercept
+(:2312) and the BLR intercept (:2408). It shares a function with the FFI escape
+and is a different mechanism; deleting both together would have broken the
+Sim->CPU direction.
+
+The globals.h note is rewritten rather than left pointing at a macro that no
+longer appears anywhere.
+
+73/73 shorebird, sim_bridge, sim_transition and shorebird_sim_to_cpu tests pass
+by exit code and by absence of "error:".
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/platform/globals.h b/runtime/platform/globals.h
+index 1ba117eb814..d48859d6388 100644
+--- a/runtime/platform/globals.h
++++ b/runtime/platform/globals.h
+@@ -438,8 +438,10 @@ struct simd128_value_t {
+ //     DART_INCLUDE_SIMULATOR -- so A1's edit to this file is obsolete.
+ //   * dart:ffi under the Simulator is upstream's SIMULATOR_FFI, set by
+ //     runtime/BUILD.gn whenever dart_force_simulator && arch == arm64. It covers
+-//     il_arm64.cc, stub_code_compiler_arm64.cc and ffi_callback_metadata.cc,
+-//     none of which our SIMULATOR_HOST_ARCH_MATCH ever touched.
++//     il_arm64.cc, stub_code_compiler_arm64.cc and ffi_callback_metadata.cc.
++//     Our own host-code escape in simulator_arm64.cc was retired with it: all
++//     seven Dart_SetFfiNativeResolver / DartAPI_*NativeFieldAccess tests pass
++//     on upstream's mechanism alone.
+ #if defined(DART_INCLUDE_SIMULATOR) && !defined(SIMULATOR_AVAILABLE)
+ #define SIMULATOR_AVAILABLE 1
+ #endif
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 372e8325480..c428f75cb83 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -1787,118 +1787,6 @@ static int64_t InvokeWithTHR(
+ 
+ #endif  // __aarch64__
+ 
+-// flutter_hot_patcher: host C code escape.
+-//
+-// Upstream never needs this. With host arch != target arch the simulator can
+-// only ever be handed Dart code, so `blr` always lands on something it can
+-// interpret. Here host == target, so an FFI call's `blr` lands on real host
+-// machine code, which clang compiles with ADRP / PAC / NEON / LSE atomics that
+-// this simulator does not model (the first one hit in practice is ADRP --
+-// DecodePCRel only implements ADR). Anything outside the Dart instruction
+-// images is therefore executed natively instead of interpreted.
+-//
+-// Stack arguments are handled by copying a fixed window from the simulated
+-// stack to the host stack right before the branch, so callees with more than
+-// eight integer or eight floating-point arguments read the right values.
+-// Anything past that window (kHostCallStackWindow bytes) is not transferred.
+-#if defined(SIMULATOR_HOST_ARCH_MATCH) && defined(__aarch64__)
+-
+-static bool AddressInImage(const uint8_t* image, uword addr) {
+-  if (image == nullptr) return false;
+-  return Image(image).contains(addr);
+-}
+-
+-// True when `addr` is host C code rather than Dart code the simulator owns.
+-static bool IsHostCodeAddress(uword addr) {
+-  if (addr == 0) return false;
+-
+-  IsolateGroup* group = IsolateGroup::Current();
+-  if (group != nullptr && group->source() != nullptr &&
+-      AddressInImage(group->source()->snapshot_instructions, addr)) {
+-    return false;
+-  }
+-  IsolateGroup* vm_group = Dart::vm_isolate_group();
+-  if (vm_group != nullptr && vm_group->source() != nullptr &&
+-      AddressInImage(vm_group->source()->snapshot_instructions, addr)) {
+-    return false;
+-  }
+-  // Runtime/native call redirection trampolines live outside the images but
+-  // must be interpreted so DecodeExceptionGen can dispatch them.
+-  if (Instr::At(addr)->InstructionBits() ==
+-      Instr::kSimulatorRedirectInstruction) {
+-    return false;
+-  }
+-  return true;
+-}
+-
+-struct HostCallResult {
+-  int64_t x0;
+-  int64_t d0;
+-};
+-
+-// Bytes of the simulated stack handed to the callee as its stack arguments.
+-// 32 slots; over-copying is harmless because the simulated stack is real
+-// memory, but the caller clamps it so we never read past stack_base().
+-static constexpr uword kHostCallStackWindow = 256;
+-
+-NO_SANITIZE_UNDEFINED_FUNCTION
+-static HostCallResult
+-CallHostFunction(uword target, const int64_t* sim_stack, uword stack_window,
+-                 int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+-                 int64_t a4, int64_t a5, int64_t a6, int64_t a7,
+-                 int64_t f0, int64_t f1, int64_t f2, int64_t f3,
+-                 int64_t f4, int64_t f5, int64_t f6, int64_t f7) {
+-  register int64_t r0 __asm__("x0") = a0;
+-  register int64_t r1 __asm__("x1") = a1;
+-  register int64_t r2 __asm__("x2") = a2;
+-  register int64_t r3 __asm__("x3") = a3;
+-  register int64_t r4 __asm__("x4") = a4;
+-  register int64_t r5 __asm__("x5") = a5;
+-  register int64_t r6 __asm__("x6") = a6;
+-  register int64_t r7 __asm__("x7") = a7;
+-  register double v0 __asm__("d0") = bit_cast<double>(f0);
+-  register double v1 __asm__("d1") = bit_cast<double>(f1);
+-  register double v2 __asm__("d2") = bit_cast<double>(f2);
+-  register double v3 __asm__("d3") = bit_cast<double>(f3);
+-  register double v4 __asm__("d4") = bit_cast<double>(f4);
+-  register double v5 __asm__("d5") = bit_cast<double>(f5);
+-  register double v6 __asm__("d6") = bit_cast<double>(f6);
+-  register double v7 __asm__("d7") = bit_cast<double>(f7);
+-  register uword t __asm__("x9") = target;
+-  register const int64_t* stk __asm__("x10") = sim_stack;
+-  __asm__ volatile(
+-      "mov x19, sp\n\t"
+-      "sub sp, sp, %[win]\n\t"
+-      "mov x11, #0\n\t"
+-      "1:\n\t"
+-      "cmp x11, %[win]\n\t"
+-      "b.hs 2f\n\t"
+-      "ldr x12, [%[stk], x11]\n\t"
+-      "str x12, [sp, x11]\n\t"
+-      "add x11, x11, #8\n\t"
+-      "b 1b\n\t"
+-      "2:\n\t"
+-      "blr %[t]\n\t"
+-      "mov sp, x19\n\t"
+-      : "+r"(r0), "+w"(v0)
+-      : [t] "r"(t), [stk] "r"(stk), [win] "r"(stack_window),
+-        "r"(r1), "r"(r2), "r"(r3), "r"(r4),
+-        "r"(r5), "r"(r6), "r"(r7),
+-        "w"(v1), "w"(v2), "w"(v3), "w"(v4),
+-        "w"(v5), "w"(v6), "w"(v7)
+-      : "memory", "cc",
+-        "x8", "x11", "x12", "x13", "x14", "x15",
+-        "x16", "x17", "x19", "x30",
+-        "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
+-        "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+-  HostCallResult result;
+-  result.x0 = r0;
+-  result.d0 = bit_cast<int64_t>(v0);
+-  return result;
+-}
+-
+-#endif  // SIMULATOR_HOST_ARCH_MATCH && __aarch64__
+-
+ // flutter_hot_patcher A2: SimulatorToCPU assembly shim declaration.
+ // Defined in shorebird_sim_to_cpu_arm64.S.
+ // Calls a native ARM64 Dart function with simulated register state:
+@@ -2424,41 +2312,6 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+           }
+         }
+ 
+-#if defined(SIMULATOR_HOST_ARCH_MATCH) && defined(__aarch64__)
+-        if (IsHostCodeAddress(static_cast<uword>(dest))) {
+-          // Do not set LR: the callee returns into C++ here, so the simulated
+-          // LR must survive for the eventual simulated `ret`.
+-          set_pc(ret);
+-          memory_.FlushAll();
+-          SimulatorSetjmpBuffer buffer(this);
+-          if (!setjmp(buffer.buffer_)) {
+-            // Clamp the stack-argument window so a shallow frame cannot read
+-            // past the top of the simulated stack.
+-            const uword sim_sp =
+-                static_cast<uword>(get_register(R31, R31IsSP));
+-            uword window = kHostCallStackWindow;
+-            if (stack_base() > sim_sp && (stack_base() - sim_sp) < window) {
+-              window = Utils::RoundDown(stack_base() - sim_sp, 16);
+-            }
+-            const HostCallResult r = CallHostFunction(
+-                static_cast<uword>(dest),
+-                reinterpret_cast<const int64_t*>(sim_sp), window,
+-                get_register(R0), get_register(R1), get_register(R2),
+-                get_register(R3), get_register(R4), get_register(R5),
+-                get_register(R6), get_register(R7),
+-                get_vregisterd(V0, 0), get_vregisterd(V1, 0),
+-                get_vregisterd(V2, 0), get_vregisterd(V3, 0),
+-                get_vregisterd(V4, 0), get_vregisterd(V5, 0),
+-                get_vregisterd(V6, 0), get_vregisterd(V7, 0));
+-            set_register(instr, R0, r.x0);
+-            set_vregisterd(V0, 0, r.d0);
+-          }
+-          // else: a Dart exception was thrown out of host code; JumpToFrame
+-          // already moved PC/SP/FP to the handler.
+-          break;
+-        }
+-#endif  // SIMULATOR_HOST_ARCH_MATCH && __aarch64__
+-
+         set_pc(dest);
+         set_register(instr, LR, ret);
+         break;
+-- 
+2.53.0
+

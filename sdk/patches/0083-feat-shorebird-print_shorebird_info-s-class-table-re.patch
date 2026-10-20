@@ -1,0 +1,187 @@
+From 8275b3de81f592d8f9f16367b4f521747cb8a2e6 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 11:19:32 +0800
+Subject: [PATCH 083/206] feat(shorebird): print_shorebird_info's class table
+ report matches theirs
+
+The last piece was the link-results producer -- the half of
+InitializeWithClassTableLinkInfo that decides which base class pairs with which
+patch class. It turned out to have an out-of-line symbol sitting in plain
+sight: dart::groupBy<ClassInfo> at 0x10019aa08, whose mangled name gives the
+whole signature.
+
+  unordered_map<string, vector<T>> groupBy(const vector<T>&,
+                                           string (T::*key)() const)
+
+Called twice at 0x100199a88 and 0x100199a94, once per side. Its body strides
+0x38 = sizeof(ClassInfo) and reads the string at +0x20, which is class_hash_,
+not class_name_ at +0x08. Then the pairing walks the patch map and takes a
+group only when it holds exactly one class -- checked on the patch side at
+0x100199ad4 (cmp #0x38) and on the base side at 0x100199dd4 (cmp #1 after
+dividing by 56). A hash naming two classes on either side is ambiguous and
+pairs nothing.
+
+With that, --print_shorebird_info prints and the report is identical to theirs
+on their own link-info files:
+
+  Link Results 606 / from Link Results 606 / Pair Constraints 0 / Backfill 13
+
+shorebird_info_check.sh holds it there, and it runs two inputs rather than one
+because one proves almost nothing: the fixture's base.ct and patch.ct are
+byte-identical, so every hash pairs with itself and the unpaired path is never
+taken. The second input is base.ct with 20 classes removed, which moves the
+numbers to 586/33 -- and we match there too.
+
+Negative control on the part that was inferred hardest. Grouping by name
+instead of hash gives 600/19 rather than 606/13, because six classes share a
+name and differ only in the occurrence index the hash carries. So the choice of
+key is now settled by behaviour and not only by the offset the body reads.
+
+verify_all.sh reports 6 ran, 0 failed, 0 skipped, and 113 unit tests pass.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index af00324f22a..be676f67d94 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -26,6 +26,7 @@
+ namespace dart {
+ 
+ DECLARE_FLAG(charp, print_dd_resolution_to);
++DECLARE_FLAG(bool, print_shorebird_info);
+ 
+ // Their binary allocates 0x88 = 136 bytes in shared() via malloc(1, 0x88).
+ // A size match is weak evidence (same-width substitutions pass), but it is
+@@ -68,6 +69,71 @@ void ShorebirdLinker::InitializeWithClassTableLinkInfo(
+   patch_class_table_ = std::move(patch);
+   // Set the flag byte (strb w8,[x0,#0x80] at 0x10019995c in their binary).
+   initialized_flag_ = 1;
++
++  // Theirs does the whole link here rather than deferring it -- the report is
++  // printed from inside this function, before it returns.
++  MappingCounts counts;
++  LinkClassTables(&counts);
++}
++
++// The link-results producer, from the first half of
++// InitializeWithClassTableLinkInfo.
++//
++//   0x100199a88  groupBy(base->classes(),  &ClassInfo::hash)
++//   0x100199a94  groupBy(patch->classes(), &ClassInfo::hash)
++//   0x10019aa70  groupBy reads the string at +0x20 -- class_hash_, not the name
++//                at +0x08 -- and strides 0x38 = sizeof(ClassInfo)
++//   0x100199acc  walk the patch map's nodes
++//   0x100199ad4  cmp #0x38: skip unless the patch group holds exactly one
++//   0x100199b40  look the same key up in the base map
++//   0x100199dd4  cmp #1 after dividing by 56: skip unless the base group does too
++//   0x100199de0  copy the base ClassInfo to +0x00 and the patch one to +0x38,
++//                which is the LinkedValue<ClassInfo> layout the stages read
++//
++// A hash naming more than one class on either side is ambiguous and pairs
++// nothing, which is what the two size checks are for.
++std::vector<ShorebirdLinker::ClassIdPair>
++ShorebirdLinker::ComputeClassTableLinkResults(const ClassTableLinkInfo& base,
++                                              const ClassTableLinkInfo& patch) {
++  const auto key = [](const ClassInfo& info) { return info.hash; };
++  const auto base_groups = GroupBy<ClassInfo>(base.classes(), key);
++  const auto patch_groups = GroupBy<ClassInfo>(patch.classes(), key);
++
++  std::vector<ClassIdPair> link_results;
++  for (const auto& entry : patch_groups) {
++    if (entry.second.size() != 1) continue;
++    const auto found = base_groups.find(entry.first);
++    if (found == base_groups.end() || found->second.size() != 1) continue;
++    link_results.push_back(
++        ClassIdPair{found->second[0].cid, entry.second[0].cid});
++  }
++  return link_results;
++}
++
++std::vector<intptr_t> ShorebirdLinker::LinkClassTables(
++    MappingCounts* counts) const {
++  ASSERT(counts != nullptr);
++  if (base_class_table_ == nullptr || patch_class_table_ == nullptr) {
++    return std::vector<intptr_t>();
++  }
++
++  const std::vector<ClassIdPair> link_results =
++      ComputeClassTableLinkResults(*base_class_table_, *patch_class_table_);
++  std::vector<intptr_t> mapping = ComputeClassTableMapping(
++      link_results, patch_class_table_->num_cids(), counts);
++
++  if (FLAG_print_shorebird_info) {
++    // Their four lines and their exact wording, printed in this order at
++    // 0x10019a780..0x10019a7c0.
++    OS::Print("Link Results %zu\n", static_cast<size_t>(counts->link_results));
++    OS::Print("Mappings from Link Results %zu\n",
++              static_cast<size_t>(counts->from_link_results));
++    OS::Print("Mappings from Pair Constraints %zu\n",
++              static_cast<size_t>(counts->from_pair_constraints));
++    OS::Print("Mappings from Backfill %zu\n",
++              static_cast<size_t>(counts->from_backfill));
++  }
++  return mapping;
+ }
+ 
+ // Shorebird's class table mapper, transcribed from
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 024e7b54d3a..ea2a1c54128 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -7,6 +7,7 @@
+ 
+ #include <memory>
+ #include <string>
++#include <unordered_map>
+ #include <vector>
+ 
+ #include "platform/globals.h"
+@@ -155,6 +156,44 @@ class ShorebirdLinker {
+   // both sides are >= 8 (0x10019d72c, a cmp/ccmp against 8).
+   static constexpr intptr_t kFirstMappablePoolIndex = 8;
+ 
++  // Their `dart::groupBy<T>`, which is an out-of-line symbol in their
++  // gen_snapshot (0x10019aa08) and therefore fully readable:
++  //
++  //   unordered_map<string, vector<T>> groupBy(const vector<T>&,
++  //                                            string (T::*key)() const)
++  //
++  // The body strides sizeof(T) and appends each item to the bucket its key
++  // names. We take a plain function rather than a member pointer -- the
++  // template argument is the only thing that differs and their two call sites
++  // both constant-fold it, so a member pointer would buy nothing but syntax.
++  template <typename T, typename KeyFn>
++  static std::unordered_map<std::string, std::vector<T>> GroupBy(
++      const std::vector<T>& items,
++      KeyFn key) {
++    std::unordered_map<std::string, std::vector<T>> groups;
++    for (const T& item : items) {
++      groups[key(item)].push_back(item);
++    }
++    return groups;
++  }
++
++  // The link results the three stages consume: base/patch class pairs that the
++  // two link-info files agree on unambiguously.
++  //
++  // Decoded from the first half of InitializeWithClassTableLinkInfo. Both sides
++  // are grouped by ClassInfo's hash (0x10019aa70 reads the string at +0x20,
++  // which is class_hash_, not class_name_ at +0x08), and a group is only usable
++  // when it holds exactly one class -- the patch side checked at 0x100199ad4
++  // and the base side at 0x100199dd4. A hash naming two classes on either side
++  // is ambiguous, so it pairs nothing.
++  static std::vector<ClassIdPair> ComputeClassTableLinkResults(
++      const ClassTableLinkInfo& base,
++      const ClassTableLinkInfo& patch);
++
++  // Runs the producer and the three stages, and honours --print_shorebird_info
++  // by printing their four report lines. Returns mapping[patch_cid].
++  std::vector<intptr_t> LinkClassTables(MappingCounts* counts) const;
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+-- 
+2.53.0
+

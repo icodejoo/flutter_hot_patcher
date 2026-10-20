@@ -1,0 +1,37 @@
+From 003f2759a688b8b7c83d9b2689f369f357ceec61 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 18 Sep 2026 18:06:34 +0800
+Subject: [PATCH 161/206] feat(arm64): pad LoadDFromOffset pool loads to 3
+ instruction words
+
+- Wrap LoadDFromOffset in PadLoadStore gated strictly on:
+    if (FLAG_precompiled_mode && base == PP)
+- Leaves non-PP loads (heap objects, stack) and non-precompiled mode (JIT, debug)
+  completely untouched without padding
+- Resolves missing double constant pool padding in AOT mode
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index e3e249026ec..30e0a1e4152 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1303,8 +1303,15 @@ void Assembler::LoadSFromOffset(VRegister dest, Register base, int32_t offset) {
+ }
+ 
+ void Assembler::LoadDFromOffset(VRegister dest, Register base, int32_t offset) {
+-  auto const type = Address::AddressType::Offset;
+-  fldrd(dest, PrepareLargeOffset(base, offset, kDWord, type));
++  const auto emit = [&]() {
++    auto const type = Address::AddressType::Offset;
++    fldrd(dest, PrepareLargeOffset(base, offset, kDWord, type));
++  };
++  if (FLAG_precompiled_mode && base == PP) {
++    PadLoadStore(emit, base, offset, kEightBytes, Address::Offset);
++  } else {
++    emit();
++  }
+ }
+ 
+ void Assembler::LoadQFromOffset(VRegister dest, Register base, int32_t offset) {
+-- 
+2.53.0
+

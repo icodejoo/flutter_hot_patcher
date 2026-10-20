@@ -1,0 +1,68 @@
+From 232849c87d808235478f55c3e0748d07cfb884c3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 8 Sep 2026 09:34:10 +0800
+Subject: [PATCH 147/206] comment: A5's conclusion does not survive counting
+ their emitted instructions
+
+The note above the early return said resolution is the only path Shorebird's IL
+pass uses, because a mapping-only file yields 0 rewrite sites for their binary
+and a voters-only file yields the expected ones. Running their gen_snapshot and
+counting what it emitted says otherwise:
+
+  theirs, voters.bin supplied : 92 dispatch sites
+  theirs, no input at all     : 92
+  ours,   voters.bin supplied :  3
+  ours,   no input at all      :  0
+
+Counted as `ldr x30, [x26, xN]`, with 92 of 92 preceded by an untagging asr and
+followed by `blr x30`, and every one of them inside a listed function body
+rather than an inherited stub. The voters file drives resolution, not emission.
+
+A5 was reading rewrite-site counters; this reads the instructions that came
+out. Both can be right about what they measured, and only one of them answers
+whether we diverge.
+
+No behaviour change here. What selects their 92 sites is still unknown and
+rewriting unconditionally would overshoot -- 84 of 1380 optimized functions
+carry one. Tracked as F34.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/aot_call_specializer.cc b/runtime/vm/compiler/aot/aot_call_specializer.cc
+index 4e96b75b40f..131d9f62fa8 100644
+--- a/runtime/vm/compiler/aot/aot_call_specializer.cc
++++ b/runtime/vm/compiler/aot/aot_call_specializer.cc
+@@ -1220,10 +1220,26 @@ void AotCallSpecializer::ReplaceInstanceCallsWithDispatchTableCalls() {
+ // mapping first also leaves the production configuration -- voters and mapping
+ // supplied together -- with exactly the behaviour it had before this note.
+ void AotCallSpecializer::ReplaceStaticCallsWithIndirectStaticCalls() {
+-  // Resolution is the only path Shorebird's IL pass uses (A5): a file with
+-  // only a DDSlotMapping section gives 0 rewrite sites for their binary, while
+-  // a voters-only file gives the expected sites. The kernel_offset path was
+-  // removed once this was confirmed by experiment.
++  // A5 said resolution is the only path Shorebird's IL pass uses, on the
++  // grounds that a mapping-only file gives 0 rewrite sites for their binary
++  // while a voters-only file gives the expected ones. Measured against their
++  // emitted instructions on 2026-09-08, that conclusion does not hold:
++  //
++  //   their gen_snapshot, voters.bin supplied : 92 dispatch sites
++  //   their gen_snapshot, no input at all     : 92 dispatch sites
++  //   ours,               voters.bin supplied :  3
++  //   ours,               no input at all     :  0
++  //
++  // Counted as `ldr x30, [x26, xN]` -- 92 of 92 preceded by `asr xN,xN,#1` and
++  // followed by `blr x30`, and all 92 inside listed function bodies rather
++  // than inherited stubs. So the voters file drives resolution, not emission,
++  // and the early return below is a divergence from them rather than a gate
++  // they also have. A5 measured rewrite-site counters; this measures the
++  // instructions that actually came out.
++  //
++  // Left in place deliberately: what selects their 92 sites is not known yet,
++  // and rewriting unconditionally would overshoot badly -- only 84 of 1380
++  // optimized functions carry one. Tracked as F34.
+   const DDSlotResolution* resolution = ShorebirdLinker::shared()->resolution();
+   if (resolution == nullptr) return;
+ 
+-- 
+2.53.0
+

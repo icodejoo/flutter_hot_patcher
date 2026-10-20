@@ -1,0 +1,345 @@
+From dbd4b16e5776213cd9fc9585ebefc6cd93d5bb4c Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 17:22:09 +0800
+Subject: [PATCH 009/206] feat(shorebird): reproduce class table link info --
+ byte-identical to theirs
+
+Implements --print_class_table_link_info_to and
+--print_class_table_link_debug_info_to. Both outputs are byte-for-byte
+identical to Shorebird's own gen_snapshot on the same kernel (31416 bytes
+binary, 36761 bytes JSON, verified with cmp).
+
+The hash encoding was recovered rather than guessed. Decompiling their
+GetClassTableLinkInfo showed the call chain Class::Handle -> String::ScrubName
+-> Utils::StringHash -> std::to_string, and the data confirmed the shape:
+stripping the last digit puts all 606 values below 2^32 (only 62 fit otherwise),
+and the three classes whose suffix is 2 are exactly the three duplicate scrubbed
+names -- Function (cid 7 and 598), Symbol (308, 521), _UnmodifiableMapMixin
+(384, 432) -- each sharing a hash body with its cid-1 twin. So:
+
+  hash = str(Utils::StringHash(ScrubName(name))) + str(nth_occurrence)
+
+Placed under runtime/vm/shorebird/ to match their own layout, which their
+binaries' assertion strings and dSYM reveal as runtime/vm/shorebird/link_info.cc.
+
+Also fixes a long-standing build defect inherited from the 3.7 branch:
+sim_bridge.cc, sim_bridge_arm64.S and sim_transition.{cc,h} were registered in
+vm_sources_tests rather than vm_sources, so the A2/C1 simulator bridge was only
+ever compiled into run_vm_tests and was ABSENT from gen_snapshot and every
+production artifact. That is why InvokeWithTHR/CallHostFunction/ShorebirdSimToCpu
+could not be found in the linked binary earlier -- not inlining, just never
+built. Only *_test.cc remain in the test list.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index a1501f76cdb..33d2433d8bd 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -13,6 +13,7 @@
+ #include "vm/closure_functions_cache.h"
+ #include "vm/code_patcher.h"
+ #include "vm/compiler/aot/aot_call_specializer.h"
++#include "vm/shorebird/link_info.h"
+ #include "vm/compiler/aot/precompiler_tracer.h"
+ #include "vm/compiler/assembler/assembler.h"
+ #include "vm/compiler/assembler/disassembler.h"
+@@ -684,6 +685,10 @@ void Precompiler::DoCompileAll() {
+     THR_Print(" %" Pd " constants arrays entries.\n",
+               dropped_constants_arrays_entries_count_);
+   }
++
++  // flutter_hot_patcher: the class table is final at this point, so this is
++  // where the base snapshot's link info is captured.
++  PrintClassTableLinkInfoIfRequested(T);
+ }
+ 
+ void Precompiler::PrecompileConstructors() {
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+new file mode 100644
+index 00000000000..1883a259752
+--- /dev/null
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -0,0 +1,172 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/link_info.h"
++
++#include <map>
++#include <string>
++
++#include "platform/utils.h"
++#include "vm/class_table.h"
++#include "vm/dart.h"
++#include "vm/dart_api_state.h"
++#include "vm/datastream.h"
++#include "vm/flags.h"
++#include "vm/json_writer.h"
++#include "vm/object.h"
++#include "vm/thread.h"
++#include "vm/zone_text_buffer.h"
++
++namespace dart {
++
++DEFINE_FLAG(charp,
++            print_class_table_link_info_to,
++            nullptr,
++            "Write class table link info as a binary file");
++DEFINE_FLAG(charp,
++            print_class_table_link_debug_info_to,
++            nullptr,
++            "Write class table link info as JSON, for debugging");
++
++namespace {
++
++// Opens via the embedder's file callbacks, the way upstream's
++// ClassTable::PrintToJSONObject-to-file path does.
++class CallbackFile {
++ public:
++  explicit CallbackFile(const char* path) : path_(path) {
++    open_ = Dart::file_open_callback();
++    write_ = Dart::file_write_callback();
++    close_ = Dart::file_close_callback();
++    if (open_ == nullptr || write_ == nullptr || close_ == nullptr) {
++      OS::PrintErr(
++          "warning: %s requires Dart file callbacks (open/write/close); "
++          "none were registered by the embedder.\n",
++          path);
++      return;
++    }
++    handle_ = open_(path, /*write=*/true);
++    if (handle_ == nullptr) {
++      OS::PrintErr("warning: %s: failed to open file for writing.\n", path);
++    }
++  }
++
++  ~CallbackFile() {
++    if (handle_ != nullptr) close_(handle_);
++  }
++
++  bool is_open() const { return handle_ != nullptr; }
++
++  void Write(const void* data, intptr_t length) {
++    if (handle_ != nullptr && length > 0) write_(data, length, handle_);
++  }
++
++ private:
++  const char* path_;
++  Dart_FileOpenCallback open_ = nullptr;
++  Dart_FileWriteCallback write_ = nullptr;
++  Dart_FileCloseCallback close_ = nullptr;
++  void* handle_ = nullptr;
++};
++
++// Strings are length-prefixed, then one signed varint per character. Characters
++// <= 63 therefore occupy a single byte and letters occupy two.
++void WriteString(BaseWriteStream* stream, const std::string& s) {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(s.size()));
++  for (char c : s) {
++    stream->Write<int32_t>(static_cast<int32_t>(c));
++  }
++}
++
++}  // namespace
++
++void ClassTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/1 * MB);
++  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(classes_.size()));
++  for (const ClassInfo& info : classes_) {
++    stream.WriteUnsigned<intptr_t>(info.cid);
++    WriteString(&stream, info.name);
++    WriteString(&stream, info.hash);
++  }
++  // The class table size is a trailer, not a header field.
++  stream.WriteUnsigned<intptr_t>(num_cids_);
++
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(stream.buffer(), stream.bytes_written());
++  }
++}
++
++void ClassTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
++  JSONWriter js;
++  js.OpenObject();
++  js.PrintProperty64("num_cids", num_cids_);
++  js.OpenArray("classes");
++  for (const ClassInfo& info : classes_) {
++    js.OpenObject();
++    js.PrintProperty64("id", info.cid);
++    js.PrintProperty("name", info.name.c_str());
++    js.PrintProperty("hash", info.hash.c_str());
++    js.CloseObject();
++  }
++  js.CloseArray();
++  js.CloseObject();
++
++  char* output = nullptr;
++  intptr_t output_length = 0;
++  js.Steal(&output, &output_length);
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(output, output_length);
++  }
++  free(output);
++}
++
++ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread) {
++  Zone* zone = thread->zone();
++  ClassTable* table = thread->isolate_group()->class_table();
++  const intptr_t num_cids = table->NumCids();
++
++  std::vector<ClassInfo> classes;
++  // Counts occurrences of each scrubbed name, so duplicates can be told apart
++  // by a 1-based index appended to the hash.
++  std::map<std::string, intptr_t> seen;
++
++  Class& cls = Class::Handle(zone);
++  String& name = String::Handle(zone);
++  for (intptr_t cid = 1; cid < num_cids; cid++) {
++    if (!table->HasValidClassAt(cid)) continue;
++    cls = table->At(cid);
++    if (cls.IsNull()) continue;
++    name = cls.Name();
++    if (name.IsNull()) continue;
++
++    const char* scrubbed = String::ScrubName(name);
++    const std::string key(scrubbed);
++    const intptr_t occurrence = ++seen[key];
++
++    const uint32_t string_hash =
++        Utils::StringHash(scrubbed, static_cast<int>(key.size()));
++    std::string hash = std::to_string(string_hash);
++    hash += std::to_string(occurrence);
++
++    classes.push_back(ClassInfo{cid, key, std::move(hash)});
++  }
++
++  return new (zone) ClassTableLinkInfo(std::move(classes), num_cids);
++}
++
++void PrintClassTableLinkInfoIfRequested(Thread* thread) {
++  const bool want_binary = FLAG_print_class_table_link_info_to != nullptr;
++  const bool want_json = FLAG_print_class_table_link_debug_info_to != nullptr;
++  if (!want_binary && !want_json) return;
++
++  const ClassTableLinkInfo* info = GetClassTableLinkInfo(thread);
++  if (want_binary) info->WriteToFile(FLAG_print_class_table_link_info_to);
++  if (want_json) {
++    info->WriteDebugInfoToFile(FLAG_print_class_table_link_debug_info_to);
++  }
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+new file mode 100644
+index 00000000000..83fed61dd76
+--- /dev/null
++++ b/runtime/vm/shorebird/link_info.h
+@@ -0,0 +1,68 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
++#define RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
++
++#include <string>
++#include <vector>
++
++#include "vm/allocation.h"
++#include "vm/globals.h"
++
++namespace dart {
++
++class Thread;
++
++// Link information describing a base snapshot's class table, so a patch
++// compiled later can be mapped onto it.
++//
++// Reproduced from Shorebird's closed dart-sdk. The file layout and the hash
++// encoding were recovered from their shipped binaries; see
++// flutter_hot_patcher spikes/shorebird_linkinfo_oracle/README.md. Their own
++// source lives in runtime/vm/shorebird/link_info.cc (path recovered from
++// assertion strings in their binaries), which is why this file is placed here.
++struct ClassInfo {
++  intptr_t cid;
++  std::string name;
++  // str(Utils::StringHash(ScrubName(name))) followed by the 1-based occurrence
++  // index among classes sharing that scrubbed name. The index disambiguates
++  // genuine duplicates -- e.g. the VM's Function (cid 7) and dart:core's
++  // Function both hash to 909654927 and are distinguished as ...1 and ...2.
++  std::string hash;
++};
++
++class ClassTableLinkInfo : public ZoneObject {
++ public:
++  ClassTableLinkInfo(std::vector<ClassInfo> classes, intptr_t num_cids)
++      : classes_(std::move(classes)), num_cids_(num_cids) {}
++
++  const std::vector<ClassInfo>& classes() const { return classes_; }
++  intptr_t num_cids() const { return num_cids_; }
++
++  // Binary form, matching --print_class_table_link_info_to. Uses Dart's own
++  // WriteStream varint encoding:
++  //   count, { cid, name, hash }, num_cids
++  // Note num_cids is written *last*, not in the header.
++  void WriteToFile(const char* path) const;
++
++  // JSON form, matching --print_class_table_link_debug_info_to. Same data, and
++  // the cross-check for the binary writer.
++  void WriteDebugInfoToFile(const char* path) const;
++
++ private:
++  std::vector<ClassInfo> classes_;
++  intptr_t num_cids_;
++};
++
++// Walks the class table and computes the link info for the current isolate.
++ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread);
++
++// Honours --print_class_table_link_info_to / _debug_info_to. No-op when neither
++// flag is set.
++void PrintClassTableLinkInfoIfRequested(Thread* thread);
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 2588aab46e0..3aa315c3312 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -293,6 +293,14 @@ vm_sources = [
+   "simulator_arm64.cc",
+   "simulator_arm64.h",
+   "shorebird_sim_to_cpu_arm64.S",
++  # flutter_hot_patcher A2/C1: simulator bridge (production, not test-only)
++  "sim_bridge_arm64.S",
++  "sim_transition.cc",
++  "sim_transition.h",
++  "sim_bridge.cc",
++  "sim_bridge.h",
++  "shorebird/link_info.cc",
++  "shorebird/link_info.h",
+   "simulator_memory.h",
+   "simulator_riscv.cc",
+   "simulator_riscv.h",
+@@ -380,13 +388,7 @@ vm_sources = [
+ 
+ vm_sources_tests = [
+   "allocation_test.cc",
+-  # flutter_hot_patcher A2
+-  "sim_bridge_arm64.S",
+-  "sim_transition.cc",
+-  "sim_transition.h",
+   "sim_transition_test.cc",
+-  "sim_bridge.cc",
+-  "sim_bridge.h",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+   # flutter_hot_patcher B2
+-- 
+2.53.0
+

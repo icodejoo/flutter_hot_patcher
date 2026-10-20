@@ -1,0 +1,119 @@
+From 121cc101d4338c10116dd9ff2e78e9b5fa648b5a Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 15 Sep 2026 17:25:57 +0800
+Subject: [PATCH 159/206] F79: revert F37's shape-A native call emission -- it
+ cannot run
+
+F37 (954cd28dcf9, plus 9f740d6104b) made every link_lazily native call in
+precompiled mode emit
+
+  ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+
+with the pool slot holding SmiTag(bootstrap_native_wrapper_entry_point_offset).
+That bought "ours=92, matches theirs" on measure_dd_emission.sh. The count was
+never runtime-validated: dd_runtime_check.sh is the only check in verify_all.sh
+that executes a compiled AOT program, and it had not been run since before F37
+landed. The first run after rebuilding ProductARM64 at HEAD dies on the very
+first snapshot it is asked to run:
+
+  si_signo=SIGSEGV, si_code=SEGV_ACCERR, si_addr=0x7000000000000095
+  dart::TransitionSafepointState::TransitionSafepointState(dart::Thread*)
+  <- ThreadStackResource <- StackResource
+
+Bisected: 232849c87d8 (F37's parent) is good, dd_runtime_check.sh reports
+0 failure(s); 954cd28dcf9 is the first bad commit, identical signature. The
+9 commits between it and HEAD touch only analyze_snapshot_api_impl.cc.
+
+Root cause: Thread caches no entry point for the CallBootstrapNative *stub*.
+CACHED_ADDRESSES_LIST (thread.h:262) caches only the address of the C function
+NativeEntry::BootstrapNativeCallWrapper, so `blr x30` lands directly on a C
+function with Dart registers in x0/x1 instead of the (Dart_NativeArguments,
+Dart_NativeFunction) C ABI -- hence the garbage Thread* 0x95 -- and skips the
+exit frame, vm_tag and NativeArguments setup GenerateCallNativeWithWrapperStub
+performs. Independently, NativeCallPattern (instructions_arm64.cc:82) recovers
+both pool indices by decoding this exact call site, so LinkNativeCall and
+CodePatcher::{Get,Patch}NativeCallAt cannot decode shape A either.
+
+No local correction of the pool slot fixes this; there is no offset in the
+current Thread layout that makes the sequence correct. Choosing one would mean
+inventing a dispatch protocol and calling it Shorebird's, which is what rule 3
+forbids -- and per F35 this instruction pattern has already been misread once.
+So this reverts the emission and records both constraints at the site.
+
+Cost, stated plainly: measure_dd_emission.sh native_patched goes ours 92 -> 0,
+theirs 92. That gap is real again and F37 should be reopened.
+
+Post-revert: dd_runtime_check.sh 0 failure(s); all three inputs that crashed
+(gen_kernel --help, fresh hello snapshot, hello.dill -> .so) now run, and the
+snapshot prints the pinned EXPECTED block. --self-test output is byte-identical
+to the known-good parent (4 failures + the F78 threshold bug, unchanged).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index e84972c9aa1..26dce5d8544 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1328,32 +1328,33 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+                      link_lazily() ? ObjectPool::Patchability::kPatchable
+                                    : ObjectPool::Patchability::kNotPatchable);
+   if (link_lazily()) {
+-    if (FLAG_precompiled_mode) {
+-      // Shorebird shape A: dispatch via thread field instead of Code* stub.
+-      // Emits: ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+-      // Pool slot stores SmiTag(bootstrap_native_wrapper_entry_point_offset)
+-      // so the untagged value is directly usable as a THR base-register offset.
+-      const intptr_t thr_off =
+-          compiler::target::Thread::bootstrap_native_wrapper_entry_point_offset();
+-      // Store SmiTag(thr_off) as kTaggedObject so the pool entry type matches
+-      // Shorebird's encoding (Smi stored as tagged object, not raw immediate).
+-      // At runtime: ldr x16 loads thr_off*2; asr x16,x16,#1 untags to thr_off.
+-      const Smi& thr_off_smi = Smi::ZoneHandle(Smi::New(thr_off));
+-      const intptr_t idx = __ object_pool_builder().AddObject(thr_off_smi);
+-      __ LoadWordFromPoolIndex(R16, idx);    // ldr x16,[PP,#s] + nop;nop in precompiled mode
+-      __ AsrImmediate(R16, R16, 1);          // asr x16,x16,#1  (untag Smi)
+-      CLOBBERS_LR({
+-        __ ldr(LR, compiler::Address(THR, R16));  // ldr x30,[x26,x16]
+-        __ blr(LR);                               // blr x30
+-      });
+-      compiler->EmitCallsiteMetadata(
+-          source(), DeoptId::kNone, UntaggedPcDescriptors::kOther, locs(),
+-          nullptr);
+-    } else {
+-      compiler->GeneratePatchableCall(
+-          source(), *stub, UntaggedPcDescriptors::kOther, locs(),
+-          compiler::ObjectPoolBuilderEntry::kResetToBootstrapNative);
+-    }
++    // F79: F37 replaced this, in precompiled mode, with Shorebird's "shape A"
++    // ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
++    // where the pool slot held SmiTag(bootstrap_native_wrapper_entry_point_
++    // offset). That emission was reverted here because it cannot run, and the
++    // "ours=92 matches theirs" parity it bought was a pure instruction-shape
++    // count that is invariant to whether the code works. Two facts constrain
++    // any future attempt; neither was known when F37 landed:
++    //
++    //  1. Thread caches no entry point for the CallBootstrapNative *stub* --
++    //     CACHED_ADDRESSES_LIST (thread.h) only caches the address of the C
++    //     function NativeEntry::BootstrapNativeCallWrapper. So blr'ing through
++    //     any existing THR slot lands on a C function with Dart registers in
++    //     x0/x1 instead of (Dart_NativeArguments, Dart_NativeFunction), and it
++    //     faults in TransitionSafepointState's ctor reading a garbage Thread*.
++    //     It also skips the exit frame, vm_tag and NativeArguments setup that
++    //     GenerateCallNativeWithWrapperStub does.
++    //  2. NativeCallPattern (instructions_arm64.cc:82) recovers both pool
++    //     indices by decoding this call site, so LinkNativeCall and
++    //     CodePatcher::{Get,Patch}NativeCallAt break on shape A even if the
++    //     branch target were right.
++    //
++    // Before re-landing shape A, establish what their pool slot actually
++    // indexes -- per F35 this instruction pattern has already been misread
++    // once -- rather than choosing an offset that makes a count match.
++    compiler->GeneratePatchableCall(
++        source(), *stub, UntaggedPcDescriptors::kOther, locs(),
++        compiler::ObjectPoolBuilderEntry::kResetToBootstrapNative);
+   } else {
+     // We can never lazy-deopt here because natives are never optimized.
+     ASSERT(!compiler->is_optimizing());
+-- 
+2.53.0
+

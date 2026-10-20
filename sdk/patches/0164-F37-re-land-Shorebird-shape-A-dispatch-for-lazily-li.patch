@@ -1,0 +1,102 @@
+From 63716223bdea01ce41753021e256421868eb3398 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 24 Sep 2026 13:38:17 +0800
+Subject: [PATCH 164/206] F37: re-land Shorebird shape-A dispatch for
+ lazily-linked native calls
+
+In precompiled mode NativeCallInstr now emits
+
+  ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+
+with the slot holding SmiTag(Thread::call_bootstrap_native_entry_point_offset()).
+
+Both reasons F79 reverted the first attempt are addressed:
+  - the branch target is now a real cached *stub* entry point (531c5356dda),
+    not the raw C function NativeEntry::BootstrapNativeCallWrapper;
+  - NativeCallPattern decodes the shape and relinks it by rewriting the
+    immediate to name one of the three cached trampoline fields (edce6e25b77),
+    so an auto-scope or no-scope native is still routed to its own wrapper.
+
+Thread's own offsets are used rather than target::Thread's because these three
+fields are not in the checked-in runtime_offsets_extracted.h table, guarded by a
+RELEASE_ASSERT that host and target agree on a neighbouring field that is in it.
+
+Criteria (ProductARM64, built incrementally, 949/949):
+  dd_runtime_check.sh    rc=0, 0 failure(s) -- the AOT program is compiled,
+                         loaded and run, and its stdout matches the pinned
+                         baseline. CPU instructions length moved 286196 ->
+                         286564, so this is not a stale artifact.
+  measure_dd_emission.sh ours native_patched 92 == theirs 92
+  verify_reproduction.sh rc=0, 28 artifacts / 0 failures, stubs 14 / 0 failures
+
+The static count alone is what closed this card wrongly the first time; it is
+reported here only alongside the run.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index 26dce5d8544..e94f187c087 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1327,7 +1327,57 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   __ LoadNativeEntry(R5, &label,
+                      link_lazily() ? ObjectPool::Patchability::kPatchable
+                                    : ObjectPool::Patchability::kNotPatchable);
+-  if (link_lazily()) {
++  if (link_lazily() && FLAG_precompiled_mode) {
++    // Shorebird "shape A": dispatch through a Thread field instead of a Code*
++    // pool entry.
++    //
++    //   ldr x16,[PP,#slot]   (+ object-pool load padding NOPs)
++    //   asr x16,x16,#1
++    //   ldr x30,[THR,x16]
++    //   blr x30
++    //
++    // The slot holds SmiTag(<Thread offset of call_bootstrap_native_entry_
++    // point_>). Relinking this site (NativeEntry::LinkNativeCall ->
++    // CodePatcher::PatchNativeCallAt -> NativeCallPattern::set_target) rewrites
++    // that immediate to name the no-scope or auto-scope field instead; that is
++    // why Thread caches all three and not just the bootstrap one.
++    //
++    // F79 reverted F37's first attempt at this shape for two reasons, both now
++    // addressed: (1) it branched through bootstrap_native_wrapper_entry_point_,
++    // the raw C function NativeEntry::BootstrapNativeCallWrapper, not a stub
++    // entry point -- 531c5356dda adds the real cached stub entry points;
++    // (2) NativeCallPattern could not decode the shape and produced a garbage
++    // pool index with asserts compiled out -- edce6e25b77 teaches it the shape
++    // and the immediate-slot contract.
++    //
++    // Thread's own offsets are used rather than target::Thread's because these
++    // three fields are not in the checked-in runtime_offsets_extracted.h table
++    // that this machine cannot regenerate (same situation as
++    // Thread::is_simulating_, see thread.h). That substitution is only valid
++    // while the host and target Thread layouts agree, so check that against a
++    // neighbouring field which *is* in the table: a cross-architecture
++    // gen_snapshot then fails loudly here instead of emitting a wrong
++    // displacement.
++    RELEASE_ASSERT(compiler::target::Thread::exit_through_ffi_offset() ==
++                   dart::Thread::exit_through_ffi_offset());
++    const intptr_t thr_off =
++        dart::Thread::call_bootstrap_native_entry_point_offset();
++    // AddImmediate always appends (it does not go through FindObject), so each
++    // call site gets its own slot -- required, since each is patched
++    // independently.
++    const intptr_t idx = __ object_pool_builder().AddImmediate(
++        static_cast<uword>(thr_off) << kSmiTagSize,
++        compiler::ObjectPoolBuilderEntry::kPatchable);
++    __ LoadWordFromPoolIndex(R16, idx);
++    __ AsrImmediate(R16, R16, kSmiTagSize);
++    CLOBBERS_LR({
++      __ ldr(LR, compiler::Address(THR, R16));
++      __ blr(LR);
++    });
++    compiler->EmitCallsiteMetadata(source(), DeoptId::kNone,
++                                   UntaggedPcDescriptors::kOther, locs(),
++                                   /*env=*/nullptr);
++  } else if (link_lazily()) {
+     // F79: F37 replaced this, in precompiled mode, with Shorebird's "shape A"
+     // ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+     // where the pool slot held SmiTag(bootstrap_native_wrapper_entry_point_
+-- 
+2.53.0
+

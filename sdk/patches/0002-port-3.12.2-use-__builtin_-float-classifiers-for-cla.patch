@@ -1,0 +1,618 @@
+From 6070f5396bf571b54048b08afa1407c2a8001b57 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:14:05 +0800
+Subject: [PATCH 002/206] port(3.12.2): use __builtin_ float classifiers for
+ clang18/iOS26.5
+
+Redone on 3.12.2 rather than cherry-picked: upstream rewrote several of these
+files heavily (simulator_riscv.cc alone is +526/-149), so replaying the
+mechanical substitution is safer than resolving conflicts.
+
+Verified against the 3.7 original at equal granularity -- changed-line counts
+match exactly for every file, confirming the regex neither over-matches nor
+misses a site. Upstream still uses bare isnan/isinf at 3.12.2, so this batch is
+NOT obsolete as previously suspected.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/lib/double.cc b/runtime/lib/double.cc
+index d602adb42c9..eefbe1f8aea 100644
+--- a/runtime/lib/double.cc
++++ b/runtime/lib/double.cc
+@@ -181,19 +181,19 @@ DEFINE_NATIVE_ENTRY(Double_toStringAsPrecision, 0, 2) {
+ 
+ DEFINE_NATIVE_ENTRY(Double_getIsInfinite, 0, 1) {
+   const Double& arg = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+-  return Bool::Get(isinf(arg.value())).ptr();
++  return Bool::Get(__builtin_isinf(arg.value())).ptr();
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_getIsNaN, 0, 1) {
+   const Double& arg = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+-  return Bool::Get(isnan(arg.value())).ptr();
++  return Bool::Get(__builtin_isnan(arg.value())).ptr();
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_getIsNegative, 0, 1) {
+   const Double& arg = Double::CheckedHandle(zone, arguments->NativeArgAt(0));
+   // Include negative zero, infinity.
+   double dval = arg.value();
+-  return Bool::Get(signbit(dval) && !isnan(dval)).ptr();
++  return Bool::Get(__builtin_signbit(dval) && !__builtin_isnan(dval)).ptr();
+ }
+ 
+ DEFINE_NATIVE_ENTRY(Double_flipSignBit, 0, 1) {
+diff --git a/runtime/lib/simd128.cc b/runtime/lib/simd128.cc
+index 9d8f6848565..3e00215e18c 100644
+--- a/runtime/lib/simd128.cc
++++ b/runtime/lib/simd128.cc
+@@ -187,7 +187,7 @@ DEFINE_NATIVE_ENTRY(Float32x4_abs, 0, 1) {
+ static float vminf(float f1, float f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    auto result = signbit(f1) ? f1 : f2;
++    auto result = __builtin_signbit(f1) ? f1 : f2;
+     return result;
+   }
+   auto result = f1 > f2 ? f2 : f1;
+@@ -197,7 +197,7 @@ static float vminf(float f1, float f2) {
+ static float vmaxf(float f1, float f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    auto result = signbit(f1) ? f2 : f1;
++    auto result = __builtin_signbit(f1) ? f2 : f1;
+     return result;
+   }
+   auto result = f1 < f2 ? f2 : f1;
+@@ -767,7 +767,7 @@ DEFINE_NATIVE_ENTRY(Float64x2_abs, 0, 1) {
+ static double vmind(double f1, double f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    return signbit(f1) ? f1 : f2;
++    return __builtin_signbit(f1) ? f1 : f2;
+   }
+   return f1 > f2 ? f2 : f1;
+ }
+@@ -775,7 +775,7 @@ static double vmind(double f1, double f2) {
+ static double vmaxd(double f1, double f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    return signbit(f1) ? f2 : f1;
++    return __builtin_signbit(f1) ? f2 : f1;
+   }
+   return f1 < f2 ? f2 : f1;
+ }
+diff --git a/runtime/platform/floating_point_win.cc b/runtime/platform/floating_point_win.cc
+index 222420d3c55..79e5efbec47 100644
+--- a/runtime/platform/floating_point_win.cc
++++ b/runtime/platform/floating_point_win.cc
+@@ -16,7 +16,7 @@ double fmod_ieee(double x, double y) {
+   // If dividend is finite and divisor is an infinity or
+   //    dividend is a zero and divisor is nonzero finite,
+   // then dividend is returned.
+-  if (!(_finite(x) && (!_finite(y) && !isnan(y))) &&
++  if (!(_finite(x) && (!_finite(y) && !__builtin_isnan(y))) &&
+       !(x == 0 && (y != 0 && _finite(y)))) {
+     x = fmod(x, y);
+   }
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index a979b64fa96..0ef5e3d0619 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -6884,7 +6884,7 @@ ASSEMBLER_TEST_GENERATE(Vmaxs_zero, assembler) {
+ ASSEMBLER_TEST_RUN(Vmaxs_zero, test) {
+   typedef double (*DoubleReturn)() DART_UNUSED;
+   double d = EXECUTE_TEST_CODE_DOUBLE(DoubleReturn, test->entry());
+-  EXPECT_EQ(true, !signbit(d) && (d == 0.0));
++  EXPECT_EQ(true, !__builtin_signbit(d) && (d == 0.0));
+   EXPECT_DISASSEMBLY(
+       "veor v1, v1, v1\n"
+       "vnegd v2, v1\n"
+@@ -6962,7 +6962,7 @@ ASSEMBLER_TEST_GENERATE(Vmaxd_zero, assembler) {
+ ASSEMBLER_TEST_RUN(Vmaxd_zero, test) {
+   typedef double (*DoubleReturn)() DART_UNUSED;
+   double d = EXECUTE_TEST_CODE_DOUBLE(DoubleReturn, test->entry());
+-  EXPECT_EQ(true, !signbit(d) && (d == 0.0));
++  EXPECT_EQ(true, !__builtin_signbit(d) && (d == 0.0));
+   EXPECT_DISASSEMBLY(
+       "veor v1, v1, v1\n"
+       "vnegd v2, v1\n"
+@@ -7017,7 +7017,7 @@ ASSEMBLER_TEST_RUN(Vmins_zero, test) {
+   typedef double (*DoubleReturn)() DART_UNUSED;
+   double d = EXECUTE_TEST_CODE_DOUBLE(DoubleReturn, test->entry());
+   fprintf(stderr, "d: %f\n", d);
+-  EXPECT_EQ(true, signbit(d) && (d == 0.0));
++  EXPECT_EQ(true, __builtin_signbit(d) && (d == 0.0));
+   EXPECT_DISASSEMBLY(
+       "veor v1, v1, v1\n"
+       "vnegd v2, v1\n"
+@@ -7096,7 +7096,7 @@ ASSEMBLER_TEST_RUN(Vmind_zero, test) {
+   typedef double (*DoubleReturn)() DART_UNUSED;
+   double d = EXECUTE_TEST_CODE_DOUBLE(DoubleReturn, test->entry());
+   fprintf(stderr, "d: %f\n", d);
+-  EXPECT_EQ(true, signbit(d) && (d == 0.0));
++  EXPECT_EQ(true, __builtin_signbit(d) && (d == 0.0));
+   EXPECT_DISASSEMBLY(
+       "veor v1, v1, v1\n"
+       "vnegd v2, v1\n"
+@@ -7222,11 +7222,11 @@ ASSEMBLER_TEST_RUN(Vsqrtd, test) {
+ // This is the same function as in the Simulator.
+ static float arm_recip_estimate(float a) {
+   // From the ARM Architecture Reference Manual A2-85.
+-  if (isinf(a) || (fabs(a) >= exp2f(126)))
++  if (__builtin_isinf(a) || (fabs(a) >= exp2f(126)))
+     return 0.0;
+   else if (a == 0.0)
+     return kPosInfinity;
+-  else if (isnan(a))
++  else if (__builtin_isnan(a))
+     return a;
+ 
+   uint32_t a_bits = bit_cast<uint32_t, float>(a);
+@@ -7372,11 +7372,11 @@ ASSEMBLER_TEST_RUN(VRecps, test) {
+ 
+ static float arm_reciprocal_sqrt_estimate(float a) {
+   // From the ARM Architecture Reference Manual A2-87.
+-  if (isinf(a) || (fabs(a) >= exp2f(126)))
++  if (__builtin_isinf(a) || (fabs(a) >= exp2f(126)))
+     return 0.0;
+   else if (a == 0.0)
+     return kPosInfinity;
+-  else if (isnan(a))
++  else if (__builtin_isnan(a))
+     return a;
+ 
+   uint32_t a_bits = bit_cast<uint32_t, float>(a);
+diff --git a/runtime/vm/compiler/assembler/assembler_arm_test.cc b/runtime/vm/compiler/assembler/assembler_arm_test.cc
+index 12f46fb5696..114e3f6255d 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm_test.cc
+@@ -18,11 +18,11 @@ namespace dart {
+ namespace compiler {
+ 
+ TEST_CASE(ReciprocalOps) {
+-  EXPECT_EQ(true, isinf(ReciprocalEstimate(-0.0f)));
+-  EXPECT_EQ(true, signbit(ReciprocalEstimate(-0.0f)));
+-  EXPECT_EQ(true, isinf(ReciprocalEstimate(0.0f)));
+-  EXPECT_EQ(true, !signbit(ReciprocalEstimate(0.0f)));
+-  EXPECT_EQ(true, isnan(ReciprocalEstimate(NAN)));
++  EXPECT_EQ(true, __builtin_isinf(ReciprocalEstimate(-0.0f)));
++  EXPECT_EQ(true, __builtin_signbit(ReciprocalEstimate(-0.0f)));
++  EXPECT_EQ(true, __builtin_isinf(ReciprocalEstimate(0.0f)));
++  EXPECT_EQ(true, !__builtin_signbit(ReciprocalEstimate(0.0f)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalEstimate(NAN)));
+ 
+ #define AS_UINT32(v) (bit_cast<uint32_t, float>(v))
+ #define EXPECT_BITWISE_EQ(a, b) EXPECT_EQ(AS_UINT32(a), AS_UINT32(b))
+@@ -37,17 +37,17 @@ TEST_CASE(ReciprocalOps) {
+   EXPECT_BITWISE_EQ(2.0f, ReciprocalStep(kNegInfinity, 0.0f));
+   EXPECT_BITWISE_EQ(2.0f, ReciprocalStep(kPosInfinity, -0.0f));
+   EXPECT_BITWISE_EQ(2.0f, ReciprocalStep(kNegInfinity, -0.0f));
+-  EXPECT_EQ(true, isnan(ReciprocalStep(NAN, 1.0f)));
+-  EXPECT_EQ(true, isnan(ReciprocalStep(1.0f, NAN)));
+-
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtEstimate(-1.0f)));
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtEstimate(kNegInfinity)));
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtEstimate(-1.0f)));
+-  EXPECT_EQ(true, isinf(ReciprocalSqrtEstimate(-0.0f)));
+-  EXPECT_EQ(true, signbit(ReciprocalSqrtEstimate(-0.0f)));
+-  EXPECT_EQ(true, isinf(ReciprocalSqrtEstimate(0.0f)));
+-  EXPECT_EQ(true, !signbit(ReciprocalSqrtEstimate(0.0f)));
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtEstimate(NAN)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalStep(NAN, 1.0f)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalStep(1.0f, NAN)));
++
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtEstimate(-1.0f)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtEstimate(kNegInfinity)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtEstimate(-1.0f)));
++  EXPECT_EQ(true, __builtin_isinf(ReciprocalSqrtEstimate(-0.0f)));
++  EXPECT_EQ(true, __builtin_signbit(ReciprocalSqrtEstimate(-0.0f)));
++  EXPECT_EQ(true, __builtin_isinf(ReciprocalSqrtEstimate(0.0f)));
++  EXPECT_EQ(true, !__builtin_signbit(ReciprocalSqrtEstimate(0.0f)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtEstimate(NAN)));
+   EXPECT_BITWISE_EQ(0.0f, ReciprocalSqrtEstimate(kPosInfinity));
+ 
+   EXPECT_BITWISE_EQ(1.5f, ReciprocalSqrtStep(0.0f, kPosInfinity));
+@@ -58,8 +58,8 @@ TEST_CASE(ReciprocalOps) {
+   EXPECT_BITWISE_EQ(1.5f, ReciprocalSqrtStep(kNegInfinity, 0.0f));
+   EXPECT_BITWISE_EQ(1.5f, ReciprocalSqrtStep(kPosInfinity, -0.0f));
+   EXPECT_BITWISE_EQ(1.5f, ReciprocalSqrtStep(kNegInfinity, -0.0f));
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtStep(NAN, 1.0f)));
+-  EXPECT_EQ(true, isnan(ReciprocalSqrtStep(1.0f, NAN)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtStep(NAN, 1.0f)));
++  EXPECT_EQ(true, __builtin_isnan(ReciprocalSqrtStep(1.0f, NAN)));
+ 
+ #undef AS_UINT32
+ #undef EXPECT_BITWISE_EQ
+@@ -3455,7 +3455,7 @@ ASSEMBLER_TEST_RUN(Vminqs_zero, test) {
+   if (TargetCPUFeatures::neon_supported()) {
+     typedef float (*Tst)() DART_UNUSED;
+     float res = EXECUTE_TEST_CODE_FLOAT(Tst, test->entry());
+-    EXPECT_EQ(true, signbit(res) && (res == 0.0));
++    EXPECT_EQ(true, __builtin_signbit(res) && (res == 0.0));
+   }
+ }
+ 
+@@ -3506,7 +3506,7 @@ ASSEMBLER_TEST_RUN(Vmaxqs_zero, test) {
+   if (TargetCPUFeatures::neon_supported()) {
+     typedef float (*Tst)() DART_UNUSED;
+     float res = EXECUTE_TEST_CODE_FLOAT(Tst, test->entry());
+-    EXPECT_EQ(true, !signbit(res) && (res == 0.0));
++    EXPECT_EQ(true, !__builtin_signbit(res) && (res == 0.0));
+   }
+ }
+ 
+diff --git a/runtime/vm/compiler/assembler/assembler_riscv_test.cc b/runtime/vm/compiler/assembler/assembler_riscv_test.cc
+index 1723d257ba7..9ef1267a06d 100644
+--- a/runtime/vm/compiler/assembler/assembler_riscv_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_riscv_test.cc
+@@ -3809,11 +3809,11 @@ ASSEMBLER_TEST_RUN(BitCastIntegerToSingle, test) {
+   EXPECT_EQ(42.0f, CallF(test->entry(), sign_extend(bit_cast<int32_t>(42.0f))));
+   EXPECT_EQ(-42.0f,
+             CallF(test->entry(), sign_extend(bit_cast<int32_t>(-42.0f))));
+-  EXPECT_EQ(true, isnan(CallF(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallF(test->entry(),
+                               sign_extend(bit_cast<int32_t>(
+                                   std::numeric_limits<float>::quiet_NaN())))));
+   EXPECT_EQ(true,
+-            isnan(CallF(test->entry(),
++            __builtin_isnan(CallF(test->entry(),
+                         sign_extend(bit_cast<int32_t>(
+                             std::numeric_limits<float>::signaling_NaN())))));
+   EXPECT_EQ(std::numeric_limits<float>::infinity(),
+@@ -4302,9 +4302,9 @@ ASSEMBLER_TEST_RUN(DoubleToSingle, test) {
+   EXPECT_EQ(0.0f, CallF(test->entry(), 0.0));
+   EXPECT_EQ(42.0f, CallF(test->entry(), 42.0));
+   EXPECT_EQ(-42.0f, CallF(test->entry(), -42.0));
+-  EXPECT_EQ(true, isnan(CallF(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallF(test->entry(),
+                               std::numeric_limits<double>::quiet_NaN())));
+-  EXPECT_EQ(true, isnan(CallF(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallF(test->entry(),
+                               std::numeric_limits<double>::signaling_NaN())));
+   EXPECT_EQ(std::numeric_limits<float>::infinity(),
+             CallF(test->entry(), std::numeric_limits<double>::infinity()));
+@@ -4324,9 +4324,9 @@ ASSEMBLER_TEST_RUN(SingleToDouble, test) {
+   EXPECT_EQ(0.0, CallD(test->entry(), 0.0f));
+   EXPECT_EQ(42.0, CallD(test->entry(), 42.0f));
+   EXPECT_EQ(-42.0, CallD(test->entry(), -42.0f));
+-  EXPECT_EQ(true, isnan(CallD(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallD(test->entry(),
+                               std::numeric_limits<float>::quiet_NaN())));
+-  EXPECT_EQ(true, isnan(CallD(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallD(test->entry(),
+                               std::numeric_limits<float>::signaling_NaN())));
+   EXPECT_EQ(std::numeric_limits<double>::infinity(),
+             CallD(test->entry(), std::numeric_limits<float>::infinity()));
+@@ -4340,7 +4340,7 @@ ASSEMBLER_TEST_GENERATE(NaNBoxing, assembler) {
+ }
+ ASSEMBLER_TEST_RUN(NaNBoxing, test) {
+   EXPECT_DISASSEMBLY("00008067 ret\n");
+-  EXPECT_EQ(true, isnan(CallD(test->entry(), 42.0f)));
++  EXPECT_EQ(true, __builtin_isnan(CallD(test->entry(), 42.0f)));
+ }
+ 
+ ASSEMBLER_TEST_GENERATE(DoubleEqual, assembler) {
+@@ -4921,11 +4921,11 @@ ASSEMBLER_TEST_RUN(BitCastIntegerToDouble, test) {
+   EXPECT_EQ(-0.0, CallD(test->entry(), bit_cast<int64_t>(-0.0)));
+   EXPECT_EQ(42.0, CallD(test->entry(), bit_cast<int64_t>(42.0)));
+   EXPECT_EQ(-42.0, CallD(test->entry(), bit_cast<int64_t>(-42.0)));
+-  EXPECT_EQ(true, isnan(CallD(test->entry(),
++  EXPECT_EQ(true, __builtin_isnan(CallD(test->entry(),
+                               bit_cast<int64_t>(
+                                   std::numeric_limits<double>::quiet_NaN()))));
+   EXPECT_EQ(true,
+-            isnan(CallD(test->entry(),
++            __builtin_isnan(CallD(test->entry(),
+                         bit_cast<int64_t>(
+                             std::numeric_limits<double>::signaling_NaN()))));
+   EXPECT_EQ(std::numeric_limits<double>::infinity(),
+diff --git a/runtime/vm/compiler/backend/constant_propagator.cc b/runtime/vm/compiler/backend/constant_propagator.cc
+index 65a8fb0941a..1a9e68c168a 100644
+--- a/runtime/vm/compiler/backend/constant_propagator.cc
++++ b/runtime/vm/compiler/backend/constant_propagator.cc
+@@ -1458,15 +1458,15 @@ void ConstantPropagator::VisitDoubleTestOp(DoubleTestOpInstr* instr) {
+     const double double_value = ToDouble(value);
+     switch (instr->op_kind()) {
+       case MethodRecognizer::kDouble_getIsNaN: {
+-        result = isnan(double_value);
++        result = __builtin_isnan(double_value);
+         break;
+       }
+       case MethodRecognizer::kDouble_getIsInfinite: {
+-        result = isinf(double_value);
++        result = __builtin_isinf(double_value);
+         break;
+       }
+       case MethodRecognizer::kDouble_getIsNegative: {
+-        result = signbit(double_value) && !isnan(double_value);
++        result = __builtin_signbit(double_value) && !__builtin_isnan(double_value);
+         break;
+       }
+       default:
+diff --git a/runtime/vm/constants_arm.cc b/runtime/vm/constants_arm.cc
+index b0e289ab262..0a81247936d 100644
+--- a/runtime/vm/constants_arm.cc
++++ b/runtime/vm/constants_arm.cc
+@@ -62,11 +62,11 @@ const SRegister CallingConventions::FpuSArgumentRegisters[] = {
+ 
+ float ReciprocalEstimate(float a) {
+   // From the ARM Architecture Reference Manual A2-85.
+-  if (isinf(a) || (fabs(a) >= exp2f(126)))
++  if (__builtin_isinf(a) || (fabs(a) >= exp2f(126)))
+     return a >= 0.0f ? 0.0f : -0.0f;
+   else if (a == 0.0f)
+     return 1.0f / a;
+-  else if (isnan(a))
++  else if (__builtin_isnan(a))
+     return a;
+ 
+   uint32_t a_bits = bit_cast<uint32_t, float>(a);
+@@ -98,7 +98,7 @@ float ReciprocalEstimate(float a) {
+ 
+ float ReciprocalStep(float op1, float op2) {
+   float p;
+-  if ((isinf(op1) && op2 == 0.0f) || (op1 == 0.0f && isinf(op2))) {
++  if ((__builtin_isinf(op1) && op2 == 0.0f) || (op1 == 0.0f && __builtin_isinf(op2))) {
+     p = 0.0f;
+   } else {
+     p = op1 * op2;
+@@ -110,11 +110,11 @@ float ReciprocalSqrtEstimate(float a) {
+   // From the ARM Architecture Reference Manual A2-87.
+   if (a < 0.0f)
+     return NAN;
+-  else if (isinf(a) || (fabs(a) >= exp2f(126)))
++  else if (__builtin_isinf(a) || (fabs(a) >= exp2f(126)))
+     return 0.0f;
+   else if (a == 0.0)
+     return 1.0f / a;
+-  else if (isnan(a))
++  else if (__builtin_isnan(a))
+     return a;
+ 
+   uint32_t a_bits = bit_cast<uint32_t, float>(a);
+@@ -164,7 +164,7 @@ float ReciprocalSqrtEstimate(float a) {
+ 
+ float ReciprocalSqrtStep(float op1, float op2) {
+   float p;
+-  if ((isinf(op1) && op2 == 0.0f) || (op1 == 0.0f && isinf(op2))) {
++  if ((__builtin_isinf(op1) && op2 == 0.0f) || (op1 == 0.0f && __builtin_isinf(op2))) {
+     p = 0.0f;
+   } else {
+     p = op1 * op2;
+diff --git a/runtime/vm/double_conversion.cc b/runtime/vm/double_conversion.cc
+index ca299977544..9c782ec6d3f 100644
+--- a/runtime/vm/double_conversion.cc
++++ b/runtime/vm/double_conversion.cc
+@@ -168,7 +168,7 @@ bool CStringToDouble(const char* str, intptr_t length, double* result) {
+ }
+ 
+ IntegerPtr DoubleToInteger(Zone* zone, double val) {
+-  if (isinf(val) || isnan(val)) {
++  if (__builtin_isinf(val) || __builtin_isnan(val)) {
+     const Array& args = Array::Handle(zone, Array::New(1));
+     args.SetAt(0, String::Handle(zone, String::New("Infinity or NaN toInt")));
+     Exceptions::ThrowByType(Exceptions::kUnsupported, args);
+diff --git a/runtime/vm/object.cc b/runtime/vm/object.cc
+index f8109ed0986..12d670dca6b 100644
+--- a/runtime/vm/object.cc
++++ b/runtime/vm/object.cc
+@@ -24281,10 +24281,10 @@ StringPtr Number::ToString(Heap::Space space) const {
+ }
+ 
+ const char* Double::ToCString() const {
+-  if (isnan(value())) {
++  if (__builtin_isnan(value())) {
+     return "NaN";
+   }
+-  if (isinf(value())) {
++  if (__builtin_isinf(value())) {
+     return value() < 0 ? "-Infinity" : "Infinity";
+   }
+   const int kBufferSize = 128;
+diff --git a/runtime/vm/object_test.cc b/runtime/vm/object_test.cc
+index 054b20f6fe4..deb4281f881 100644
+--- a/runtime/vm/object_test.cc
++++ b/runtime/vm/object_test.cc
+@@ -639,7 +639,7 @@ ISOLATE_UNIT_TEST_CASE(Double) {
+     EXPECT(!dbl1.OperatorEquals(Smi::Handle(Smi::New(3))));
+     EXPECT(!dbl1.OperatorEquals(Double::Handle()));
+     const Double& nan0 = Double::Handle(Double::New(NAN));
+-    EXPECT(isnan(nan0.value()));
++    EXPECT(__builtin_isnan(nan0.value()));
+     EXPECT(nan0.IsIdenticalTo(nan0));
+     EXPECT(nan0.CanonicalizeEquals(nan0));
+     EXPECT(!nan0.OperatorEquals(nan0));
+@@ -647,8 +647,8 @@ ISOLATE_UNIT_TEST_CASE(Double) {
+         Double::Handle(Double::New(bit_cast<double>(kMaxUint64 - 0)));
+     const Double& nan2 =
+         Double::Handle(Double::New(bit_cast<double>(kMaxUint64 - 1)));
+-    EXPECT(isnan(nan1.value()));
+-    EXPECT(isnan(nan2.value()));
++    EXPECT(__builtin_isnan(nan1.value()));
++    EXPECT(__builtin_isnan(nan2.value()));
+     EXPECT(!nan1.IsIdenticalTo(nan2));
+     EXPECT(!nan1.CanonicalizeEquals(nan2));
+     EXPECT(!nan1.OperatorEquals(nan2));
+diff --git a/runtime/vm/simulator_arm.cc b/runtime/vm/simulator_arm.cc
+index 43d2514ef8d..1963411892d 100644
+--- a/runtime/vm/simulator_arm.cc
++++ b/runtime/vm/simulator_arm.cc
+@@ -2699,7 +2699,7 @@ void Simulator::DecodeType7(Instr* instr) {
+                     // Format(instr, "vcmps'cond 'sd, #0.0");
+                     sm_val = 0.0f;
+                   }
+-                  if (isnan(sd_val) || isnan(sm_val)) {
++                  if (__builtin_isnan(sd_val) || __builtin_isnan(sm_val)) {
+                     fp_c_flag_ = true;
+                     fp_v_flag_ = true;
+                   } else if (sd_val == sm_val) {
+@@ -2720,7 +2720,7 @@ void Simulator::DecodeType7(Instr* instr) {
+                     // Format(instr, "vcmpd'cond 'dd, #0.0");
+                     dm_val = 0.0;
+                   }
+-                  if (isnan(dd_val) || isnan(dm_val)) {
++                  if (__builtin_isnan(dd_val) || __builtin_isnan(dm_val)) {
+                     fp_c_flag_ = true;
+                     fp_v_flag_ = true;
+                   } else if (dd_val == dm_val) {
+@@ -2827,7 +2827,7 @@ void Simulator::DecodeType7(Instr* instr) {
+                     id_val = INT32_MIN;
+                   } else if (dm_val >= static_cast<double>(INT32_MAX)) {
+                     id_val = INT32_MAX;
+-                  } else if (isnan(dm_val)) {
++                  } else if (__builtin_isnan(dm_val)) {
+                     id_val = 0;
+                   } else {
+                     id_val = static_cast<int32_t>(dm_val);
+@@ -2923,7 +2923,7 @@ static void simd_value_swap(simd_value_t* s1,
+ static float vminf(float f1, float f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    return signbit(f1) ? f1 : f2;
++    return __builtin_signbit(f1) ? f1 : f2;
+   }
+   return f1 > f2 ? f2 : f1;
+ }
+@@ -2931,7 +2931,7 @@ static float vminf(float f1, float f2) {
+ static float vmaxf(float f1, float f2) {
+   if (f1 == f2) {
+     // take care of (-0.0) < 0.0, (they are equal according to minss)
+-    return signbit(f1) ? f2 : f1;
++    return __builtin_signbit(f1) ? f2 : f1;
+   }
+   return f1 < f2 ? f2 : f1;
+ }
+diff --git a/runtime/vm/simulator_riscv.cc b/runtime/vm/simulator_riscv.cc
+index 0e0789eccd6..44490dab807 100644
+--- a/runtime/vm/simulator_riscv.cc
++++ b/runtime/vm/simulator_riscv.cc
+@@ -2827,34 +2827,34 @@ void Simulator::InterpretFNMADD(Instr instr) {
+ //  canonical NaN. If only one operand is a NaN, the result is the non-NaN
+ //  operand."
+ static double rv_fmin(double x, double y) {
+-  if (isnan(x) && isnan(y)) return std::numeric_limits<double>::quiet_NaN();
+-  if (isnan(x)) return y;
+-  if (isnan(y)) return x;
+-  if (x == y) return signbit(x) ? x : y;
++  if (__builtin_isnan(x) && __builtin_isnan(y)) return std::numeric_limits<double>::quiet_NaN();
++  if (__builtin_isnan(x)) return y;
++  if (__builtin_isnan(y)) return x;
++  if (x == y) return __builtin_signbit(x) ? x : y;
+   return fmin(x, y);
+ }
+ 
+ static double rv_fmax(double x, double y) {
+-  if (isnan(x) && isnan(y)) return std::numeric_limits<double>::quiet_NaN();
+-  if (isnan(x)) return y;
+-  if (isnan(y)) return x;
+-  if (x == y) return signbit(x) ? y : x;
++  if (__builtin_isnan(x) && __builtin_isnan(y)) return std::numeric_limits<double>::quiet_NaN();
++  if (__builtin_isnan(x)) return y;
++  if (__builtin_isnan(y)) return x;
++  if (x == y) return __builtin_signbit(x) ? y : x;
+   return fmax(x, y);
+ }
+ 
+ static float rv_fminf(float x, float y) {
+-  if (isnan(x) && isnan(y)) return std::numeric_limits<float>::quiet_NaN();
+-  if (isnan(x)) return y;
+-  if (isnan(y)) return x;
+-  if (x == y) return signbit(x) ? x : y;
++  if (__builtin_isnan(x) && __builtin_isnan(y)) return std::numeric_limits<float>::quiet_NaN();
++  if (__builtin_isnan(x)) return y;
++  if (__builtin_isnan(y)) return x;
++  if (x == y) return __builtin_signbit(x) ? x : y;
+   return fminf(x, y);
+ }
+ 
+ static float rv_fmaxf(float x, float y) {
+-  if (isnan(x) && isnan(y)) return std::numeric_limits<float>::quiet_NaN();
+-  if (isnan(x)) return y;
+-  if (isnan(y)) return x;
+-  if (x == y) return signbit(x) ? y : x;
++  if (__builtin_isnan(x) && __builtin_isnan(y)) return std::numeric_limits<float>::quiet_NaN();
++  if (__builtin_isnan(x)) return y;
++  if (__builtin_isnan(y)) return x;
++  if (x == y) return __builtin_signbit(x) ? y : x;
+   return fmaxf(x, y);
+ }
+ 
+@@ -2862,26 +2862,26 @@ static float rv_fmaxf(float x, float y) {
+ //  instructions, except that if either input is NaN, the result is the
+ //  canonical NaN."
+ static double rv_fminm(double x, double y) {
+-  if (isnan(x) || isnan(y)) return std::numeric_limits<double>::quiet_NaN();
+-  if (x == y) return signbit(x) ? x : y;
++  if (__builtin_isnan(x) || __builtin_isnan(y)) return std::numeric_limits<double>::quiet_NaN();
++  if (x == y) return __builtin_signbit(x) ? x : y;
+   return fmin(x, y);
+ }
+ 
+ static double rv_fmaxm(double x, double y) {
+-  if (isnan(x) || isnan(y)) return std::numeric_limits<double>::quiet_NaN();
+-  if (x == y) return signbit(x) ? y : x;
++  if (__builtin_isnan(x) || __builtin_isnan(y)) return std::numeric_limits<double>::quiet_NaN();
++  if (x == y) return __builtin_signbit(x) ? y : x;
+   return fmax(x, y);
+ }
+ 
+ static float rv_fminmf(float x, float y) {
+-  if (isnan(x) || isnan(y)) return std::numeric_limits<float>::quiet_NaN();
+-  if (x == y) return signbit(x) ? x : y;
++  if (__builtin_isnan(x) || __builtin_isnan(y)) return std::numeric_limits<float>::quiet_NaN();
++  if (x == y) return __builtin_signbit(x) ? x : y;
+   return fminf(x, y);
+ }
+ 
+ static float rv_fmaxmf(float x, float y) {
+-  if (isnan(x) || isnan(y)) return std::numeric_limits<float>::quiet_NaN();
+-  if (x == y) return signbit(x) ? y : x;
++  if (__builtin_isnan(x) || __builtin_isnan(y)) return std::numeric_limits<float>::quiet_NaN();
++  if (x == y) return __builtin_signbit(x) ? y : x;
+   return fmaxf(x, y);
+ }
+ 
+@@ -2896,15 +2896,15 @@ static uintx_t fclass(float x) {
+ 
+   switch (fpclassify(x)) {
+     case FP_INFINITE:
+-      return signbit(x) ? kFClassNegInfinity : kFClassPosInfinity;
++      return __builtin_signbit(x) ? kFClassNegInfinity : kFClassPosInfinity;
+     case FP_NAN:
+       return is_quiet(x) ? kFClassQuietNan : kFClassSignallingNan;
+     case FP_ZERO:
+-      return signbit(x) ? kFClassNegZero : kFClassPosZero;
++      return __builtin_signbit(x) ? kFClassNegZero : kFClassPosZero;
+     case FP_SUBNORMAL:
+-      return signbit(x) ? kFClassNegSubnormal : kFClassPosSubnormal;
++      return __builtin_signbit(x) ? kFClassNegSubnormal : kFClassPosSubnormal;
+     case FP_NORMAL:
+-      return signbit(x) ? kFClassNegNormal : kFClassPosNormal;
++      return __builtin_signbit(x) ? kFClassNegNormal : kFClassPosNormal;
+     default:
+       UNREACHABLE();
+       return 0;
+@@ -2922,15 +2922,15 @@ static uintx_t fclass(double x) {
+ 
+   switch (fpclassify(x)) {
+     case FP_INFINITE:
+-      return signbit(x) ? kFClassNegInfinity : kFClassPosInfinity;
++      return __builtin_signbit(x) ? kFClassNegInfinity : kFClassPosInfinity;
+     case FP_NAN:
+       return is_quiet(x) ? kFClassQuietNan : kFClassSignallingNan;
+     case FP_ZERO:
+-      return signbit(x) ? kFClassNegZero : kFClassPosZero;
++      return __builtin_signbit(x) ? kFClassNegZero : kFClassPosZero;
+     case FP_SUBNORMAL:
+-      return signbit(x) ? kFClassNegSubnormal : kFClassPosSubnormal;
++      return __builtin_signbit(x) ? kFClassNegSubnormal : kFClassPosSubnormal;
+     case FP_NORMAL:
+-      return signbit(x) ? kFClassNegNormal : kFClassPosNormal;
++      return __builtin_signbit(x) ? kFClassNegNormal : kFClassPosNormal;
+     default:
+       UNREACHABLE();
+       return 0;
+-- 
+2.53.0
+

@@ -1,0 +1,32 @@
+From 3b366e3f4fc05fe707a31ad58f4a97d3523b8925 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 16:19:34 +0800
+Subject: [PATCH 200/206] [vm] Mark ShorebirdSimToCpu_DeepRecursion_ToFloor as
+ expected Crash
+
+This test deliberately recurses until the F162 stack-floor guard in
+simulator_arm64.cc FATALs (SIGABRT, rc 134). It was registered with the
+default "Pass" expectation, so run_vm_tests --list reported Pass and
+expected-vs-actual harnesses counted the intended abort as an unexpected
+failure. Register it with ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(...,
+"Crash"), matching the existing convention. Test body unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+index 91f3178bebd..9eac08447d9 100644
+--- a/runtime/vm/shorebird_sim_to_cpu_test.cc
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -275,7 +275,8 @@ ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_DeepRecursion_SiteReachable) {
+ // takes the whole process down, which is the point: we want to see whether
+ // that crash is a controlled FATAL (SIGABRT, Dart's FATAL calls abort()) or
+ // an uncontrolled SIGSEGV/SIGBUS at an unrelated address.
+-ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_DeepRecursion_ToFloor) {
++ISOLATE_UNIT_TEST_CASE_WITH_EXPECTATION(ShorebirdSimToCpu_DeepRecursion_ToFloor,
++                                        "Crash") {
+   Simulator* sim = Simulator::Current();
+   const uword target =
+       reinterpret_cast<uword>(&ShorebirdTestDeepRecursiveNativeCaller);
+-- 
+2.53.0
+

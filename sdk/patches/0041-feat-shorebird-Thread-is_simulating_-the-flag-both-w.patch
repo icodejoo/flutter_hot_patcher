@@ -1,0 +1,148 @@
+From a398183529d1e3ca9325dbc65535ca508e3e8a24 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 17:53:52 +0800
+Subject: [PATCH 041/206] feat(shorebird): Thread::is_simulating_, the flag
+ both wrapper bodies branch on
+
+Task 6b-i of the wrapper-stubs plan. Both of Shorebird's wrapper shared bodies
+load a Thread field and branch on it -- Sim->CPU traps into the simulator when
+it is set, CPU->Sim takes its long path when it is clear -- and this fork had no
+such field. Confirmed rather than assumed: is_simulating|on_cpu|dart_state_is
+are all zero hits in our thread.h, so it is a new field and not a rename.
+
+**Appended, not placed where theirs sits.** Their field is at offset 0x8d8
+(thread.h:1643 per the Flutter dSYM, with dart_state_is_on_cpu_ directly after
+it), i.e. in the middle of the class. We cannot match that, and the reason is
+worth recording because it constrains every future Thread field:
+
+  - Thread offsets used by generated code live in the checked-in table
+    runtime/vm/compiler/runtime_offsets_extracted.h, one block per
+    (mode x arch x compressed x jit/aot) -- 32 blocks.
+  - Regenerating it means tools/run_offsets_extractor.dart, which builds
+    offsets_extractor for 8 archs x 2 modes. This machine has 66 GB free; that
+    is not enough for 16 configurations.
+  - An insertion in the middle of Thread shifts every listed offset after it.
+
+Verified, not reasoned about: inserting a dummy uword between stack_limit_ and
+write_barrier_mask_ fails the *build*, not just a test --
+
+  runtime/vm/dart.cc: 257: error: CheckOffsets failed. Try updating offsets by
+  running ./tools/run_offsets_extractor.dart
+
+because the build runs the VM to make snapshots and CheckOffsets aborts at
+startup. Appending after the last member (regexp_backtracking_stack_cache_)
+shifts nothing and Thread's sizeof is not in the table, so the build and all 60
+shorebird tests pass. Our offset is 0xf18 against their 0x8d8; generated code
+must therefore go through is_simulating_offset() and never a literal.
+
+The field is plain storage: nothing in the VM sets it yet. The polarity recorded
+in the comment is read off their two bodies (WRAPPER_STUBS.md 7.5, where the
+cbz flipping between the two directions under one meaning of the flag is the
+cross-check) and has not been observed running.
+
+The test asserts the constraint the stub body actually depends on: that
+  ldr x17, [THR, #offset]     (kEightBytes)
+can encode this offset, using compiler::Address::CanHoldOffset rather than an
+open-coded bound that could drift from the encoder. Negative control run:
+CanHoldOffset(offset + 1) is false, so the predicate does discriminate -- the
+alignment half of the assertion is real, though at 3864 the 12-bit-scaled bound
+is satisfied with room to spare.
+
+Suite: 60/60 shorebird tests, by exit code and by absence of "error:".
+Not addressed here: 6b-ii (brk 0xb128-0xb130 hypercall decoding) and 6b-iii
+(emitting the seven instructions).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index f1d9ca83ae7..ea0415d4b0b 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -4,12 +4,42 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include "vm/compiler/assembler/assembler.h"
+ #include "vm/stub_code.h"
++#include "vm/thread.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+ namespace shorebird {
+ 
++// Thread::is_simulating_ exists for the two wrapper stubs and nothing else yet,
++// so its constraints are tested here rather than in a Thread test.
++//
++// The Sim->CPU shared body reaches it with a single
++//   ldr x17, [THR, #<offset>]        (kEightBytes)
++// which on arm64 encodes the offset as a 12-bit immediate scaled by 8. Their
++// 0x8d8 satisfies that trivially; ours is at the end of Thread and does not
++// trivially, so the assembler's own predicate decides -- not an open-coded
++// bound that could drift from the encoder.
++ISOLATE_UNIT_TEST_CASE(Thread_IsSimulatingIsReachableFromGeneratedCode) {
++  // `thread` is supplied by ISOLATE_UNIT_TEST_CASE.
++  //
++  // Reads back through the accessor pair. The field is plain storage; nothing
++  // in the VM sets it yet, so restore it rather than leaving it dirty.
++  const uword saved = thread->is_simulating();
++  thread->set_is_simulating(1);
++  EXPECT_EQ(static_cast<uword>(1), thread->is_simulating());
++  thread->set_is_simulating(0);
++  EXPECT_EQ(static_cast<uword>(0), thread->is_simulating());
++  thread->set_is_simulating(saved);
++
++  const intptr_t offset = Thread::is_simulating_offset();
++  EXPECT(Utils::IsAligned(offset, static_cast<intptr_t>(sizeof(uword))));
++  EXPECT(compiler::Address::CanHoldOffset(static_cast<int32_t>(offset),
++                                          compiler::Address::Offset,
++                                          compiler::kEightBytes));
++}
++
+ // Stubs are generated at VM startup, so this needs an isolate -- VM_UNIT_TEST_CASE
+ // runs without one and StubCode would not be initialized.
+ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index a887d96e640..55a3f125f6c 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -509,6 +509,26 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, exit_through_ffi_);
+   }
+ 
++  // Shorebird: non-zero while this thread is executing inside the Simulator
++  // rather than on the CPU. Both wrapper stubs
++  // (TransitionDartTo{Cpu,Simulator}IfNeeded) branch on it -- Sim->CPU traps
++  // into the simulator when it is set, CPU->Sim takes its long path when it is
++  // clear. Nothing sets it yet; the polarity above is read off their two shared
++  // bodies (WRAPPER_STUBS.md 7.5) and has not been observed running.
++  //
++  // Shorebird declares the field in the middle of Thread -- offset 0x8d8,
++  // thread.h:1643 per the Flutter dSYM, with dart_state_is_on_cpu_ directly
++  // after it. We append it to the end of the members instead: an insertion in
++  // the middle shifts every Thread offset after it, and those offsets live in
++  // the checked-in runtime_offsets_extracted.h table that CheckOffsets()
++  // validates at VM startup. So our offset differs from theirs by construction
++  // and generated code must go through is_simulating_offset(), never a literal.
++  uword is_simulating() const { return is_simulating_; }
++  void set_is_simulating(uword value) { is_simulating_ = value; }
++  static intptr_t is_simulating_offset() {
++    return OFFSET_OF(Thread, is_simulating_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1664,6 +1684,10 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+ 
+   std::unique_ptr<VirtualMemory> regexp_backtracking_stack_cache_ = nullptr;
+ 
++  // Shorebird. Deliberately last -- see is_simulating() for why this is
++  // appended rather than placed where theirs sits.
++  uword is_simulating_ = 0;
++
+   explicit Thread(bool is_vm_isolate);
+ 
+   void StoreBufferRelease(
+-- 
+2.53.0
+

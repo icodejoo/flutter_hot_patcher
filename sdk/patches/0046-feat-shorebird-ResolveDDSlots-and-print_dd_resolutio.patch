@@ -1,0 +1,568 @@
+From d1fd67bb607b8d988c79763bd5799c9c3fbea473 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 10:04:44 +0800
+Subject: [PATCH 046/206] feat(shorebird): ResolveDDSlots and
+ --print_dd_resolution_to
+
+Tenth of their eleven private flags. Only print_shorebird_info is left, and it
+genuinely needs the three-stage mapper.
+
+This was recorded as blocked on the DD IL subsystem. It is not, and the reason
+it looked blocked was the "DD" in its name -- the same mistake that had been
+made about dd_function_identity. The slots come from the DDSlotVoters file, not
+from IndirectStaticCallInstr or a DD table, so the algorithm is drivable and
+checkable today.
+
+ResolveDDSlots builds a FunctionKey -> owner index by walking libraries ->
+classes -> functions plus one synthetic ForAllocStub key per class, then votes
+per slot. A vote counts only when both the caller and target keys resolve to
+exactly one owner; the winner is the TARGET. Unresolved slots fall back to the
+previous resolution. Called once per DoCompileAll from two points, so the second
+call is verify-only and preserves the first call's decisions.
+
+Verified against their own gen_snapshot on the pipeline's fixture:
+
+  - pass 2's report line is BYTE-IDENTICAL to theirs (0 resolved, 7 preserved,
+    7 carried, 1 dropped, empty_tally=1 [tgt_miss=1], from 2983 functions)
+  - pass 1 matches on every resolution counter; only the key map size differs
+    (2896 vs 2878), a call-site timing difference of 18 functions
+  - all 8 rows of the resolution TSV are identical, including the sentinel at
+    slot 2 and the exact function name in every resolved slot
+
+Negative controls: returning the caller instead of the target resolves every
+slot to the voter's caller function (Map._fromKeyValues, _objectHashCode, ...)
+and turns both the TSV comparison and the new unit test red (255). That swap
+leaves every structural property intact -- the stream parses, slots resolve,
+the counters still read "7 resolved" -- so nothing weaker than comparing the
+winning function's identity would catch it.
+
+KNOWN GAPS, deliberately not papered over:
+  - the TSV's `rewritten` column and the header's rewritten/ counts come from
+    the DD table rewrite step, which does need the DD IL subsystem. We emit 0
+    rather than guess, so our header reads rewritten=0 where theirs reads 2.
+  - plurality tie-breaking is unexercised: every fixture we can build has one
+    voter per slot. Theirs falls back to libc++ hash order, ours to
+    first-encountered. A passing oracle run does not confirm that branch.
+  - `refreshed` and `dropped-stale` are always 0; no fixture reaches them.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index 20947813055..d0d099851d8 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -14,6 +14,7 @@
+ #include "vm/code_patcher.h"
+ #include "vm/compiler/aot/aot_call_specializer.h"
+ #include "vm/shorebird/link_info.h"
++#include "vm/shorebird/linker.h"
+ #include "vm/compiler/aot/precompiler_tracer.h"
+ #include "vm/compiler/assembler/assembler.h"
+ #include "vm/compiler/assembler/disassembler.h"
+@@ -561,6 +562,13 @@ void Precompiler::DoCompileAll() {
+       AddTypeArguments(TypeArguments::Handle(
+           Z, IG->object_store()->type_argument_string_string()));
+ 
++      // Shorebird: pass 1 of DD slot resolution. Their report prints twice per
++      // run with key maps of 2878 then 2983; ours reads 2896 then 2983, so the
++      // verify pass lines up exactly and this one sits within 18 functions of
++      // theirs. The exact point they snapshot the key map is not pinned down --
++      // every resolution counter matches, only this diagnostic count differs.
++      ShorebirdLinker::shared()->ResolveDDSlots(T, Z);
++
+       // Compile newly found targets and add their callees until we reach a
+       // fixed point.
+       Iterate();
+@@ -601,6 +609,13 @@ void Precompiler::DoCompileAll() {
+       // still reachable -- DropFields() below removes most of them.
+       PrintFieldTableLinkInfoIfRequested(T);
+ 
++      // Shorebird: resolve DD slots here for the same reason -- the key map is
++      // built by walking libraries -> classes -> functions, and DropFunctions()
++      // /DropClasses() below empty those dictionaries. Runs once per
++      // DoCompileAll, i.e. twice per gen_snapshot invocation; the second call
++      // is verify-only and preserves the first call's decisions.
++      ShorebirdLinker::shared()->ResolveDDSlots(T, Z);
++
+       {
+         PRECOMPILER_TIMER_SCOPE(this, Drop);
+ 
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index e9c23570169..04f7a60169a 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "vm/shorebird/dd_voting.h"
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <functional>
+ 
+@@ -60,6 +61,14 @@ void FunctionKey::WriteToStream(BaseWriteStream* stream) const {
+          num_optional_named * 31u + num_type_params;
+ }
+ 
++std::vector<intptr_t> DDSlotVoters::sorted_slot_ids() const {
++  std::vector<intptr_t> ids;
++  ids.reserve(slots_.size());
++  for (const auto& entry : slots_) ids.push_back(entry.first);
++  std::sort(ids.begin(), ids.end());
++  return ids;
++}
++
+ /*static*/ FunctionKey FunctionKey::FromFunction(const Function& function) {
+   const Class& owner = Class::Handle(function.Owner());
+   const Library& library =
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+index b309b7df95a..cb7d6689d07 100644
+--- a/runtime/vm/shorebird/dd_voting.h
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -152,6 +152,11 @@ class DDSlotVoters {
+   // The contiguous voter array.
+   const std::vector<SlotVoter>& voters() const { return voters_; }
+ 
++  // Every slot id that has an entry, ascending. Sorted rather than exposing the
++  // map directly: iteration order of the underlying unordered_map is not stable
++  // across runs, and the resolution report and TSV are both per-slot output.
++  std::vector<intptr_t> sorted_slot_ids() const;
++
+  private:
+   // Contiguous storage; voters_[i] is the i-th recorded SlotVoter.
+   std::vector<SlotVoter> voters_;
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index f12ecbab7cc..9b224740123 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -777,6 +777,42 @@ VM_UNIT_TEST_CASE(DDFunctionIdentity_RoundTrip) {
+   EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
+ }
+ 
++// The slot's winner is the voter's TARGET, not its caller. Established from
++// their own dd_resolution.tsv: the synthesised voters pair
++// (caller=real[2i], target=real[2i+1]) and slot i resolves to real[2i+1].
++//
++// This is worth a test of its own because swapping the two keeps every
++// structural property intact -- the stream still parses, the slot still
++// resolves, the counters still read "7 resolved" -- and only the identity of
++// the winning function changes. The end-to-end oracle that catches it needs
++// their gen_snapshot, so it cannot run here.
++ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_WinnerIsTheTargetNotTheCaller) {
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const Array& functions = Array::Handle(cls.current_functions());
++  EXPECT(functions.Length() >= 2);
++
++  Function& caller = Function::Handle();
++  Function& target = Function::Handle();
++  caller ^= functions.At(0);
++  target ^= functions.At(1);
++  EXPECT(caller.ptr() != target.ptr());
++
++  auto voters = std::make_unique<DDSlotVoters>();
++  voters->AddVoter(0, FunctionKey::FromFunction(caller),
++                   FunctionKey::FromFunction(target));
++
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  linker->InitializeWithDDSlotVoters(std::move(voters));
++  linker->ResolveDDSlots(thread, thread->zone());
++
++  const DDSlotResolution* resolution = linker->resolution();
++  EXPECT(resolution != nullptr);
++  EXPECT(resolution->HasSlot(0));
++  EXPECT_EQ(static_cast<uword>(target.ptr()), resolution->OwnerForSlot(0));
++  EXPECT(resolution->OwnerForSlot(0) != static_cast<uword>(caller.ptr()));
++}
++
+ // All 87 alloc-stub rows in their base.ddid carry kernel_offset == 0 and
+ // signature_hash == 0. A class with a real kernel_offset must not leak it into
+ // either field.
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 8e964d7e39b..85efc50f44f 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -58,6 +58,12 @@ DEFINE_FLAG(charp,
+             print_dd_function_identity_to,
+             nullptr,
+             "Print DD function identity table to the given file");
++DEFINE_FLAG(charp,
++            print_dd_resolution_to,
++            nullptr,
++            "Write per-slot DD table resolution outcome (resolved / "
++            "sentinel-filled / null) to the given file as TSV. Diagnostic for "
++            "analyzing which slots got dropped during DD resolution.");
+ 
+ // Declared, never read -- and that is not an omission on our side. Their own
+ // arm64 gen_snapshot never reads it either: the flag has zero code references
+@@ -459,6 +465,15 @@ bool WantsDDFunctionIdentity() {
+   return FLAG_print_dd_function_identity_to != nullptr;
+ }
+ 
++void WriteThroughFileCallbacks(const char* path,
++                               const void* data,
++                               intptr_t length) {
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(data, length);
++  }
++}
++
+ void PrintDDFunctionIdentityIfRequested(Thread* thread,
+                                         const GrowableArray<CodePtr>& codes) {
+   if (!WantsDDFunctionIdentity()) return;
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 9e4aa22629c..fa6d663678a 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -194,6 +194,14 @@ class DDFunctionIdentity {
+ // the collection walk otherwise.
+ bool WantsDDFunctionIdentity();
+ 
++// Writes a byte range through the embedder's file callbacks, warning rather
++// than crashing when the embedder registered none -- which is what their own
++// "requires Dart file callbacks (open/write/close)" message does. Shared by the
++// dumps that live outside this file.
++void WriteThroughFileCallbacks(const char* path,
++                               const void* data,
++                               intptr_t length);
++
+ // Honour --print_dd_function_identity_to. `codes` is the serializer's code list
+ // in index order; row i of the dump keys off position i here.
+ void PrintDDFunctionIdentityIfRequested(Thread* thread,
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index a1a428357c2..9706d425a91 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -9,16 +9,24 @@
+ #include <cstring>
+ #include <memory>
+ #include <string>
++#include <unordered_map>
+ #include <utility>
+ #include <vector>
+ 
+ #include "platform/assert.h"
+ #include "platform/globals.h"
++#include "platform/text_buffer.h"
+ #include "vm/datastream.h"
++#include "vm/flags.h"
++#include "vm/object.h"
++#include "vm/object_store.h"
+ #include "vm/os.h"
++#include "vm/shorebird/link_info.h"
+ 
+ namespace dart {
+ 
++DECLARE_FLAG(charp, print_dd_resolution_to);
++
+ // Their binary allocates 0x88 = 136 bytes in shared() via malloc(1, 0x88).
+ // A size match is weak evidence (same-width substitutions pass), but it is
+ // still the strongest compile-time check available given the absence of DWARF.
+@@ -354,4 +362,280 @@ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+   return ReadDispatchTableLinkInfo(&stream, ok);
+ }
+ 
++// --- DD slot resolution ------------------------------------------------------
++//
++// Called twice from Precompiler::DoCompileAll(). The first call resolves; the
++// second recomputes but keeps the first call's decisions, which is what makes
++// slot ownership stable across the two passes.
++//
++// This does NOT depend on the DD IL subsystem: the slots come from the
++// DDSlotVoters file, not from IndirectStaticCallInstr or a DD table, so the
++// algorithm is drivable and checkable today. Recorded explicitly because this
++// was previously written off as blocked on nothing more than the "DD" in its
++// name -- the same mistake that was made about dd_function_identity.
++
++namespace {
++
++using KeyMap = std::unordered_map<FunctionKey,
++                                  std::vector<uword>,
++                                  FunctionKeyHash,
++                                  FunctionKeyEqual>;
++
++// Walks libraries -> classes -> functions, plus one synthetic ForAllocStub key
++// per class that still has an allocation stub. The owner recorded for a
++// function is a raw FunctionPtr; for an allocation stub it is a raw CodePtr.
++// That asymmetry is theirs (from the disassembly) -- do not unify it.
++void BuildKeyMap(Thread* thread, Zone* zone, KeyMap* out) {
++  const GrowableObjectArray& libraries = GrowableObjectArray::Handle(
++      zone, thread->isolate_group()->object_store()->libraries());
++
++  Library& library = Library::Handle(zone);
++  Class& cls = Class::Handle(zone);
++  Array& functions = Array::Handle(zone);
++  Function& function = Function::Handle(zone);
++  Code& code = Code::Handle(zone);
++
++  for (intptr_t i = 0; i < libraries.Length(); i++) {
++    library ^= libraries.At(i);
++    ClassDictionaryIterator it(library,
++                               ClassDictionaryIterator::kIteratePrivate);
++    while (it.HasNext()) {
++      cls = it.GetNextClass();
++      if (cls.IsNull()) continue;
++
++      functions = cls.current_functions();
++      if (!functions.IsNull()) {
++        for (intptr_t j = 0; j < functions.Length(); j++) {
++          function ^= functions.At(j);
++          if (function.IsNull()) continue;
++          (*out)[FunctionKey::FromFunction(function)].push_back(
++              static_cast<uword>(function.ptr()));
++        }
++      }
++
++      code = cls.allocation_stub();
++      if (!code.IsNull()) {
++        (*out)[FunctionKey::ForAllocStub(cls)].push_back(
++            static_cast<uword>(code.ptr()));
++      }
++    }
++  }
++}
++
++// Why votes were discarded. Their report breaks the drop count down by these,
++// so each has to be tracked separately rather than lumped into one counter.
++struct Tally {
++  intptr_t tgt_miss = 0;
++  intptr_t tgt_ambig = 0;
++  intptr_t caller_miss = 0;
++  intptr_t caller_ambig = 0;
++};
++
++// A vote counts only when BOTH keys resolve to exactly one owner. Returns the
++// target's owner on success and 0 otherwise, recording why on failure.
++uword ScoreVoter(const KeyMap& key_map, const SlotVoter& voter, Tally* tally) {
++  const auto caller = key_map.find(voter.caller_key);
++  if (caller == key_map.end()) {
++    tally->caller_miss++;
++    return 0;
++  }
++  if (caller->second.size() != 1) {
++    tally->caller_ambig++;
++    return 0;
++  }
++
++  const auto target = key_map.find(voter.target_key);
++  if (target == key_map.end()) {
++    tally->tgt_miss++;
++    return 0;
++  }
++  if (target->second.size() != 1) {
++    tally->tgt_ambig++;
++    return 0;
++  }
++  // The winner is the TARGET, not the caller. Established from the oracle: the
++  // synthesised voters pair (caller=real[2i], target=real[2i+1]) and slot i
++  // resolves to real[2i+1] in their own dd_resolution.tsv.
++  return target->second[0];
++}
++
++}  // namespace
++
++void ShorebirdLinker::ResolveDDSlots(Thread* thread, Zone* zone) {
++  if (dd_slot_voters_ == nullptr) return;
++
++  KeyMap key_map;
++  BuildKeyMap(thread, zone, &key_map);
++
++  DDSlotResolution* previous = resolution_;
++  auto* fresh = new DDSlotResolution();
++
++  intptr_t resolved = 0, preserved = 0, would_have_flipped = 0;
++  intptr_t carried = 0, refreshed = 0, dropped_stale = 0;
++  intptr_t dropped = 0, empty_tally = 0;
++  Tally tally;
++
++  for (const intptr_t slot : dd_slot_voters_->sorted_slot_ids()) {
++    const std::vector<size_t>* indices =
++        dd_slot_voters_->voters_for_slot(slot);
++    if (indices == nullptr) continue;
++
++    // Plurality -- not majority, not lowest id, not first.
++    //
++    // UNVERIFIED: every fixture we can build has exactly one voter per slot, so
++    // the oracle never exercises a tie. Their tie-break is libc++ __hash_table
++    // insertion order; ours is first-encountered. A passing oracle run does NOT
++    // confirm this branch.
++    std::unordered_map<uword, intptr_t> votes;
++    uword winner = 0;
++    intptr_t best = 0;
++    const SlotVoter* winning_voter = nullptr;
++    for (const size_t index : *indices) {
++      const SlotVoter& voter = dd_slot_voters_->voters()[index];
++      const uword owner = ScoreVoter(key_map, voter, &tally);
++      if (owner == 0) continue;
++      const intptr_t count = ++votes[owner];
++      if (count > best) {
++        best = count;
++        winner = owner;
++        winning_voter = &voter;
++      }
++    }
++
++    const bool had_previous = previous != nullptr && previous->HasSlot(slot);
++
++    if (winner != 0) {
++      if (had_previous) {
++        // Verify-only path: recompute, but the earlier decision stands. This is
++        // the mechanism that keeps slot ownership stable across the two
++        // DoCompileAll calls.
++        const uword old_owner = previous->OwnerForSlot(slot);
++        preserved++;
++        carried++;
++        if (old_owner != winner) {
++          would_have_flipped++;
++          OS::PrintErr("DD slot %" Pd
++                       " WOULD HAVE FLIPPED to a different owner "
++                       "(preserved by fix)\n",
++                       slot);
++        }
++        fresh->SetSlotOwner(slot, old_owner, previous->KeyForSlot(slot));
++      } else {
++        resolved++;
++        fresh->SetSlotOwner(slot, winner, winning_voter->target_key);
++      }
++      continue;
++    }
++
++    // No usable vote: rescue from the previous resolution if it had one.
++    if (had_previous) {
++      preserved++;
++      carried++;
++      fresh->SetSlotOwner(slot, previous->OwnerForSlot(slot),
++                          previous->KeyForSlot(slot));
++      continue;
++    }
++    dropped++;
++    empty_tally++;
++  }
++
++  OS::PrintErr(
++      "DD resolution: %" Pd " resolved, %" Pd " preserved (%" Pd
++      " would-have-flipped), %" Pd " carried (%" Pd " refreshed, %" Pd
++      " dropped-stale), %" Pd " dropped (empty_tally=%" Pd " [tgt_miss=%" Pd
++      " tgt_ambig=%" Pd " caller_miss=%" Pd " caller_ambig=%" Pd
++      "]) from %" Pd " functions in key map\n",
++      resolved, preserved, would_have_flipped, carried, refreshed,
++      dropped_stale, dropped, empty_tally, tally.tgt_miss, tally.tgt_ambig,
++      tally.caller_miss, tally.caller_ambig,
++      static_cast<intptr_t>(key_map.size()));
++
++  // Their ResolveDDSlots frees the old resolution and stores a new one, which
++  // is why resolution_ is a raw pointer rather than a unique_ptr.
++  delete previous;
++  resolution_ = fresh;
++
++  PrintDDResolutionIfRequested(thread, zone);
++}
++
++// --- --print_dd_resolution_to ------------------------------------------------
++
++namespace {
++
++// Their name format, read off their own TSV:
++//   <library url> '_' <class name> '_' <function name>
++// e.g. dart:core_::__objectEquals@0150898  (library dart:core, class "::",
++// function "_objectEquals@0150898") and
++// dart:core__FinalizerImpl@0150898__runFinalizers@0150898. Private names keep
++// their @<library key> mangling, so these are the raw names, not scrubbed ones.
++std::string OwnerName(Zone* zone, uword owner) {
++  if (owner == 0) return "-";
++
++  const Object& object = Object::Handle(zone, static_cast<ObjectPtr>(owner));
++  Class& cls = Class::Handle(zone);
++  String& name = String::Handle(zone);
++  std::string function_name;
++
++  if (object.IsFunction()) {
++    const Function& function = Function::Cast(object);
++    name = function.name();
++    if (!name.IsNull()) function_name = name.ToCString();
++    cls = function.Owner();
++  } else if (object.IsCode()) {
++    // Allocation stub: the owner is the Class itself.
++    const Object& stub_owner = Object::Handle(zone, Code::Cast(object).owner());
++    if (stub_owner.IsClass()) cls = Class::Cast(stub_owner).ptr();
++  }
++
++  std::string class_name;
++  std::string library_url;
++  if (!cls.IsNull()) {
++    name = cls.Name();
++    if (!name.IsNull()) class_name = name.ToCString();
++    const Library& library = Library::Handle(zone, cls.library());
++    if (!library.IsNull()) {
++      name = library.url();
++      if (!name.IsNull()) library_url = name.ToCString();
++    }
++  }
++
++  return library_url + "_" + class_name + "_" + function_name;
++}
++
++}  // namespace
++
++void ShorebirdLinker::PrintDDResolutionIfRequested(Thread* thread, Zone* zone) {
++  if (FLAG_print_dd_resolution_to == nullptr) return;
++  if (dd_slot_voters_ == nullptr || resolution_ == nullptr) return;
++
++  const std::vector<intptr_t> slots = dd_slot_voters_->sorted_slot_ids();
++  intptr_t retained = 0;
++  for (const intptr_t slot : slots) {
++    if (resolution_->HasSlot(slot)) retained++;
++  }
++
++  TextBuffer buffer(4 * KB);
++  buffer.Printf("# DD slot resolution outcome\n");
++  // rewritten and sentinel_filled describe the DD *table* rewrite, which needs
++  // the DD IL subsystem we do not have. They are reported as 0 rather than
++  // guessed; the slot/outcome/name columns are the part this build can produce.
++  buffer.Printf(
++      "# table_size=%" Pd " retained=%" Pd
++      " rewritten=0 sentinel_filled=%" Pd " rewritten_null=0\n",
++      static_cast<intptr_t>(slots.size()), retained,
++      static_cast<intptr_t>(slots.size()) - retained);
++  buffer.Printf("slot\toutcome\trewritten\tname\n");
++
++  for (const intptr_t slot : slots) {
++    const bool resolved = resolution_->HasSlot(slot);
++    const std::string name =
++        resolved ? OwnerName(zone, resolution_->OwnerForSlot(slot)) : "-";
++    buffer.Printf("%" Pd "\t%s\t0\t%s\n", slot,
++                  resolved ? "resolved" : "sentinel", name.c_str());
++  }
++
++  WriteThroughFileCallbacks(FLAG_print_dd_resolution_to, buffer.buffer(),
++                            static_cast<intptr_t>(strlen(buffer.buffer())));
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 1bac48a2927..28f68e35582 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -89,6 +89,19 @@ class ShorebirdLinker {
+   // DDSlotVoters, reading from the same stream.
+   void InitializeWithDDSlotMapping(std::unique_ptr<DDSlotMapping> mapping);
+ 
++  // Resolves every DD slot in dd_slot_voters_ by plurality vote over its
++  // voters, storing the outcome in resolution_.
++  //
++  // Called twice from Precompiler::DoCompileAll(). On the second call the first
++  // call's decisions are preserved rather than replaced, which is what keeps
++  // slot ownership stable across the two passes; a disagreement only logs
++  // "WOULD HAVE FLIPPED". No-op when no voters were supplied.
++  void ResolveDDSlots(Thread* thread, Zone* zone);
++
++  // Honours --print_dd_resolution_to, writing the per-slot outcome as TSV.
++  // Called at the end of ResolveDDSlots, so the file reflects the last pass.
++  void PrintDDResolutionIfRequested(Thread* thread, Zone* zone);
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+-- 
+2.53.0
+

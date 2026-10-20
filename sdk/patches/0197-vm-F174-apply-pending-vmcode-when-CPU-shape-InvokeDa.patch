@@ -1,0 +1,42 @@
+From 51d6b79120582aad664ad378440c33510670de46 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 01:12:43 +0800
+Subject: [PATCH 197/206] [vm] F174: apply pending vmcode when CPU-shape
+ InvokeDartCode allocates the Simulator
+
+Under --no-use_simulator, InvokeDartCode allocated the per-isolate Simulator
+itself and never reached Simulator::Current(), the only site that applied a
+patch registered via Dart_ShorebirdLoadVmcode before the first Dart entry.
+The patch was silently dropped. Call ApplyPendingVmcodeIfNeeded with the same
+base Simulator::Current() uses.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_entry.cc b/runtime/vm/dart_entry.cc
+index b84c4db2a68..2d31372c46a 100644
+--- a/runtime/vm/dart_entry.cc
++++ b/runtime/vm/dart_entry.cc
+@@ -128,7 +128,19 @@ static ObjectPtr InvokeDartCode(uword entry_point,
+   const uword saved_on_cpu = thread->dart_state_is_on_cpu();
+   const uword saved_sim_csp = thread->simulator_csp();
+   if (thread->isolate()->simulator() == nullptr) {
+-    thread->isolate()->set_simulator(new Simulator());
++    Simulator* new_sim = new Simulator();
++    thread->isolate()->set_simulator(new_sim);
++    // Simulator::Current() is the only other place a per-isolate Simulator
++    // is allocated, and it applies a vmcode patch registered before the
++    // first Dart entry (Dart_ShorebirdLoadVmcode). CPU-shape execution never
++    // reaches Simulator::Current(), so without this call the pending patch
++    // was silently dropped (F161/F174). ApplyPendingVmcodeIfNeeded is a
++    // no-op when nothing is pending or it already ran.
++    Simulator::ApplyPendingVmcodeIfNeeded(
++        new_sim, reinterpret_cast<uword>(thread->isolate()
++                                             ->group()
++                                             ->source()
++                                             ->snapshot_instructions));
+   }
+   thread->set_dart_state_is_on_cpu(1);
+   Simulator* sim = thread->isolate()->simulator();
+-- 
+2.53.0
+

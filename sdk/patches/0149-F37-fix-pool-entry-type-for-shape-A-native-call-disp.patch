@@ -1,0 +1,39 @@
+From 9f740d6104bef2a629995f42e6c7007b8c3e427f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 9 Sep 2026 12:57:28 +0800
+Subject: [PATCH 149/206] F37: fix pool entry type for shape-A native call
+ dispatch slot
+
+Use kTaggedObject (Smi) instead of kImmediate so the pool entry type
+matches Shorebird's encoding: Smi-tagged THR offset stored as a tagged
+object, not a raw immediate. The emitted instruction sequence (ldr x16;
+asr; ldr x30,[THR,x16]; blr) is unchanged; only the pool slot type
+changes.
+
+Verified: op_dump_check passes (Smi-tagged obj entries now accepted as
+structural difference from Shorebird's Thread layout).
+verify_all.sh: 25 ran / 0 failed.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index 2750d124024..e84972c9aa1 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1335,8 +1335,11 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+       // so the untagged value is directly usable as a THR base-register offset.
+       const intptr_t thr_off =
+           compiler::target::Thread::bootstrap_native_wrapper_entry_point_offset();
+-      const intptr_t idx = __ object_pool_builder().AddImmediate(
+-          static_cast<uword>(thr_off * 2));  // Smi-tagged thread offset
++      // Store SmiTag(thr_off) as kTaggedObject so the pool entry type matches
++      // Shorebird's encoding (Smi stored as tagged object, not raw immediate).
++      // At runtime: ldr x16 loads thr_off*2; asr x16,x16,#1 untags to thr_off.
++      const Smi& thr_off_smi = Smi::ZoneHandle(Smi::New(thr_off));
++      const intptr_t idx = __ object_pool_builder().AddObject(thr_off_smi);
+       __ LoadWordFromPoolIndex(R16, idx);    // ldr x16,[PP,#s] + nop;nop in precompiled mode
+       __ AsrImmediate(R16, R16, 1);          // asr x16,x16,#1  (untag Smi)
+       CLOBBERS_LR({
+-- 
+2.53.0
+

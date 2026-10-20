@@ -1,0 +1,93 @@
+From eed8ee6c7b478bc262a99bde719b1c8ff9e95b69 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 19:27:52 +0800
+Subject: [PATCH 136/206] feat(shorebird): emit subgraph_field_table in
+ --shorebird per-function JSON (F2)
+
+Union of field-table slot indices visited by the function's callee subgraph
+(DFS, deduplicated, first-seen). Collected alongside subgraph_pp in the
+existing ShorebirdSelfAndOpHashes walk using field_subgraph_seen set.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 8cbcb1abcae..dc4134ee47e 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1584,6 +1584,7 @@ struct ShorebirdClassifiedHashes {
+   std::vector<std::string> op_subgraph_hash;
+   std::vector<std::vector<intptr_t>> self_pp;
+   std::vector<std::vector<intptr_t>> subgraph_pp;
++  std::vector<std::vector<intptr_t>> subgraph_field_table;
+ };
+ 
+ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+@@ -1595,6 +1596,7 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+   out.op_subgraph_hash.reserve(n);
+   out.self_pp.reserve(n);
+   out.subgraph_pp.reserve(n);
++  out.subgraph_field_table.reserve(n);
+ 
+   std::vector<uint8_t> self_stream, op_stream;
+   std::vector<bool> visited(n);
+@@ -1614,6 +1616,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     std::map<intptr_t, intptr_t> pool_map, field_map, external;
+     intptr_t pool_refs = 0, field_refs = 0;
+     std::vector<intptr_t> self_pp, subgraph_pp;
++    std::vector<intptr_t> subgraph_field;
++    std::set<intptr_t> field_subgraph_seen;
+ 
+     push(&op_stream, kEntryCodeName,
+          Utils::StringHash(codes[root].name.c_str(),
+@@ -1664,6 +1668,9 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+         }
+         case ShorebirdClassifiedStep::kField: {
+           field_refs++;
++          if (field_subgraph_seen.insert(step.value).second) {
++            subgraph_field.push_back(step.value);
++          }
+           auto it = field_map.find(step.value);
+           if (it == field_map.end()) {
+             it = field_map.emplace(step.value, field_refs - 1).first;
+@@ -1712,6 +1719,7 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+         Sha1HexOf(op_stream.data(), op_stream.size()));
+     out.self_pp.push_back(std::move(self_pp));
+     out.subgraph_pp.push_back(std::move(subgraph_pp));
++    out.subgraph_field_table.push_back(std::move(subgraph_field));
+   }
+   return out;
+ }
+@@ -2240,12 +2248,15 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("subgraph_pp");
+     for (intptr_t slot : classified.subgraph_pp[ci]) js.PrintValue64(slot);
+     js.CloseArray();
+-    // Computable for the same reason self_pp is: the field table sequences are
+-    // already recognised by the scan above. subgraph_field_table stays absent,
+-    // because that one needs the callee walk.
++    // self_field_table: field slot indices accessed by this function only.
+     js.OpenArray("self_field_table");
+     for (intptr_t slot : facts.field_indices) js.PrintValue64(slot);
+     js.CloseArray();
++    // subgraph_field_table: union of field slot indices across the entire DFS
++    // callee subgraph, deduplicated in first-seen walk order.
++    js.OpenArray("subgraph_field_table");
++    for (intptr_t slot : classified.subgraph_field_table[ci]) js.PrintValue64(slot);
++    js.CloseArray();
+     // callees is now computed, and unlike the other absentees it is checked
+     // against theirs rather than merely plausible: on their own base.so the
+     // `b`/`bl` predicate ShorebirdCallGraph uses reproduces all 1380 of their
+@@ -2254,10 +2265,8 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("callees");
+     for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
+     js.CloseArray();
+-    // self_selectors, subgraph_selectors and subgraph_field_table are
++    // self_selectors and subgraph_selectors are
+     // DELIBERATELY ABSENT: they are not computed anywhere in this file.
+-    // subgraph_field_table additionally needs the full callee walk beyond what
+-    // ShorebirdSelfAndOpHashes provides today.
+     //
+     // subgraph_pp is now emitted (see above); it was previously absent because
+     // an earlier version emitted self_pp as a stand-in (wrong -- the subgraph
+-- 
+2.53.0
+

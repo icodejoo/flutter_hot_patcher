@@ -1,0 +1,213 @@
+From b468884fa7d60c83d17c8dbfa3c94e73573cd67c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 30 Sep 2026 17:17:44 +0800
+Subject: [PATCH 188/206] [vm] Shorebird: simulator runs the CPU-shape stubs
+ through their Simulator* twins (F160)
+
+dartaotruntime runs Dart in the simulator by default, but on AOT stubs of
+simulator-including builds F156/F157 emit the CPU shape, whose
+CallOnClangStack guard traps unless Dart is on the CPU. The first
+bootstrap native call of any AOT program -- the build's own kernel
+compiler included -- hit brk #0 there (CallBootstrapNative+0x9c,
+dart_state_is_on_cpu_ == 0).
+
+In DART_PRECOMPILED_RUNTIME, a simulated bl/blr/br to one of the five
+CPU-shape stubs now goes to its Simulator* twin, and the hypercalls those
+twins use (0xb12e, 0xb12f, 0xb12c, 0xb12b, 0xb128) are implemented:
+redirected runtime / native-wrapper calls (checked to be hlt redirections,
+FATAL otherwise) and DoRedirectedFfiCall with an explicit resume pc. Thread
+fields and codegen are unchanged, so code running on the CPU and every VM
+stub's size are unaffected. New Simulator members are appended.
+
+ProductSimARM64: the build's own CFE, then gen_snapshot, then
+dartaotruntime on 7 programs (print, allocation, parsing, throw/catch
+across recursion, async error, Map, FFI strlen) -- 7/7 PASS with the
+expected output. Negative control: the three set_pc(SimulatedStubFor(..))
+reverted to set_pc(..) -> 7/7 FAIL at the CFE step (abort); restored ->
+7/7 PASS. run_vm_tests unchanged: ReleaseARM64 153/0 13/0, DebugSIMARM64
+163/0 12/1; native dartvm FFI callback suites pass. (Design: subagent.)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 815d676bf86..144e1280033 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -1935,7 +1935,7 @@ static uword FfiRedirectResumePc(uword hlt_pc) {
+ }
+ #endif  // defined(HOST_ARCH_ARM64)
+ 
+-void Simulator::DoRedirectedFfiCall(Instr* instr) {
++void Simulator::DoRedirectedFfiCall(Instr* instr, uword resume_pc) {
+ #if !defined(HOST_ARCH_ARM64)
+   FATAL("Unsupported FFI call");
+ #else
+@@ -1987,7 +1987,8 @@ void Simulator::DoRedirectedFfiCall(Instr* instr) {
+     set_vregisterd(V3, 0, ctxt.double_arguments[3]);
+ 
+     // Skip over hlt and blr (and the simulator guard between them, if any).
+-    set_pc(FfiRedirectResumePc(static_cast<uword>(saved_pc)));
++    set_pc(resume_pc != 0 ? resume_pc
++                          : FfiRedirectResumePc(static_cast<uword>(saved_pc)));
+   } else {
+     // Coming via long jump from a throw. Continue to exception handler.
+   }
+@@ -2033,8 +2034,10 @@ const char* Simulator::NameOfSimToCpuHypercall(int32_t imm16) {
+ // Both arms therefore agree that the target lives in R16.
+ //
+ // Of the nine imm16 values in their block kRunDartOnCPUCode is implemented
+-// here, and the two guards in front of a blr (kCallLeafRuntimeOnCPUCode,
+-// kCallFFIOnCPUCode) carry on; see the constants in constants_arm64.h.
++// here, the two guards in front of a blr (kCallLeafRuntimeOnCPUCode,
++// kCallFFIOnCPUCode) carry on, and the five that the Simulator* runtime-call
++// stubs trap with make those stubs' call (F160); see the constants in
++// constants_arm64.h. kResumeDartOnCPUCode is not implemented.
+ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+   const int32_t imm = instr->Imm16Field();
+   if (imm < Instr::kFirstSimToCpuHypercallCode ||
+@@ -2050,6 +2053,43 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+   if (imm == Instr::kCallLeafRuntimeOnCPUCode) {
+     return true;
+   }
++  // F160: the Simulator* stubs that SimulatedStubFor substitutes for the
++  // CPU-shape runtime-call stubs trap here exactly where upstream's stubs blr
++  // into C. Make that blr. SimulatorCallToRuntime's target is the runtime entry
++  // in R5, the SimulatorCall*Native stubs' is the Thread's native-call wrapper;
++  // both are simulator redirections, so the hlt there makes the call
++  // (DoRedirectedCall) and returns to the instruction after this brk.
++  // SimulatorCallNativeThroughSafepoint calls the foreign function in R9, which
++  // is DoRedirectedFfiCall's job.
++  if (imm == Instr::kCallRuntimeOnCPUCode ||
++      imm == Instr::kCallBootstrapNativeOnCPUCode ||
++      imm == Instr::kCallNoScopeNativeOnCPUCode ||
++      imm == Instr::kCallAutoScopeNativeOnCPUCode) {
++    uword target = static_cast<uword>(get_register(R5));
++    if (imm != Instr::kCallRuntimeOnCPUCode) {
++      const intptr_t offset =
++          imm == Instr::kCallBootstrapNativeOnCPUCode
++              ? Thread::bootstrap_native_wrapper_entry_point_offset()
++          : imm == Instr::kCallNoScopeNativeOnCPUCode
++              ? Thread::no_scope_native_wrapper_entry_point_offset()
++              : Thread::auto_scope_native_wrapper_entry_point_offset();
++      target = *reinterpret_cast<uword*>(get_register(THR) + offset);
++    }
++    if (Instr::At(target)->InstructionBits() !=
++        Instr::kSimulatorRedirectInstruction) {
++      FATAL("%s at 0x%" Px ": target 0x%" Px " is not a simulator redirection",
++            name, reinterpret_cast<uword>(instr), target);
++    }
++    set_register(instr, LR,
++                 reinterpret_cast<uword>(instr) + Instr::kInstrSize);
++    set_pc(target);
++    return true;
++  }
++  if (imm == Instr::kCallNativeThroughSafepointOnCPUCode) {
++    DoRedirectedFfiCall(instr,
++                        reinterpret_cast<uword>(instr) + Instr::kInstrSize);
++    return true;
++  }
+   // kCallFFIOnCPUCode guards the blr of LeafRuntimeCallInstr and of
+   // FfiCallInstr's leaf path (il_arm64.cc); their handler takes the target
+   // from that blr and calls it on the CPU. Here neither needs that:
+@@ -2354,6 +2394,49 @@ void Simulator::DecodeTestAndBranch(Instr* instr) {
+   }
+ }
+ 
++// Shorebird (F160). In a simulator-including AOT build the CPU-side
++// runtime-call stubs -- CallToRuntime, Call{Bootstrap,NoScope,AutoScope}Native
++// and CallNativeThroughSafepoint -- have Shorebird's CPU shape
++// (UseShorebirdCpuRuntimeCallShape, stub_code_compiler_arm64.cc): the C call is
++// wrapped in CallOnClangStack, which spills the Dart state into this
++// Simulator's register file and switches to Thread::simulator_csp_, behind a
++// `brk #0` unless Thread::dart_state_is_on_cpu_ is 1. None of that can hold
++// while the simulator itself runs the stub: dart_state_is_on_cpu_ is 0, so the
++// first bootstrap native an AOT program calls stops on that brk; and were it 1,
++// the spill would alias the live register file (and ClobberVolatileRegisters
++// would then randomise the saved Dart SP in r15) and the stack switch would
++// land on the host C stack. The same VM image carries the simulated
++// counterparts, the Simulator* stubs, which trap into
++// DecodeSimulatorToNativeTransition where upstream's blr into C. So a
++// simulated call to a CPU-shape stub goes to its Simulator* counterpart. Code
++// running on the CPU is unaffected: the Thread fields it dispatches through
++// still name the CPU stubs. JIT stubs keep upstream's shape and are left alone.
++uword Simulator::SimulatedStubFor(uword dest) {
++#if defined(DART_PRECOMPILED_RUNTIME)
++  if (cpu_shape_stub_entries_[0] == 0) {
++    if (!StubCode::HasBeenInitialized()) return dest;
++    const Code* const cpu[kNumCpuShapeStubs] = {
++        &StubCode::CallToRuntime(), &StubCode::CallBootstrapNative(),
++        &StubCode::CallNoScopeNative(), &StubCode::CallAutoScopeNative(),
++        &StubCode::CallNativeThroughSafepoint()};
++    const Code* const sim[kNumCpuShapeStubs] = {
++        &StubCode::SimulatorCallToRuntime(),
++        &StubCode::SimulatorCallBootstrapNative(),
++        &StubCode::SimulatorCallNoScopeNative(),
++        &StubCode::SimulatorCallAutoScopeNative(),
++        &StubCode::SimulatorCallNativeThroughSafepoint()};
++    for (intptr_t i = 0; i < kNumCpuShapeStubs; i++) {
++      simulated_stub_entries_[i] = sim[i]->EntryPoint();
++      cpu_shape_stub_entries_[i] = cpu[i]->EntryPoint();
++    }
++  }
++  for (intptr_t i = 0; i < kNumCpuShapeStubs; i++) {
++    if (dest == cpu_shape_stub_entries_[i]) return simulated_stub_entries_[i];
++  }
++#endif
++  return dest;
++}
++
+ void Simulator::DecodeUnconditionalBranch(Instr* instr) {
+   const bool link = instr->Bit(31) == 1;
+   const uint64_t imm26 = instr->SImm26Field();
+@@ -2409,7 +2492,7 @@ void Simulator::DecodeUnconditionalBranch(Instr* instr) {
+   bl_simulate:
+ 
+ #endif  // __aarch64__
+-  set_pc(dest);
++  set_pc(SimulatedStubFor(dest));
+   if (link) {
+     set_register(instr, LR, ret);
+   }
+@@ -2423,7 +2506,7 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+         // Format(instr, "br 'rn");
+         const Register rn = instr->RnField();
+         const int64_t dest = get_register(rn, instr->RnMode());
+-        set_pc(dest);
++        set_pc(SimulatedStubFor(dest));
+         break;
+       }
+       case 1: {
+@@ -2510,7 +2593,7 @@ void Simulator::DecodeUnconditionalBranchReg(Instr* instr) {
+           }
+         }
+ 
+-        set_pc(dest);
++        set_pc(SimulatedStubFor(dest));
+         set_register(instr, LR, ret);
+         break;
+       }
+diff --git a/runtime/vm/simulator_arm64.h b/runtime/vm/simulator_arm64.h
+index f2597a58b9b..c725f2c7886 100644
+--- a/runtime/vm/simulator_arm64.h
++++ b/runtime/vm/simulator_arm64.h
+@@ -288,7 +288,16 @@ class Simulator {
+   bool ConditionallyExecute(Instr* instr);
+ 
+   void DoRedirectedCall(Instr* instr);
+-  void DoRedirectedFfiCall(Instr* instr);
++  // resume_pc == 0: continue past the blr after `instr` (the hlt).
++  void DoRedirectedFfiCall(Instr* instr, uword resume_pc = 0);
++
++  // Shorebird (F160): the target a simulated call to `dest` must take. The
++  // CPU-shape runtime-call stubs map to their Simulator* counterparts; any
++  // other address maps to itself. See the definition.
++  uword SimulatedStubFor(uword dest);
++  static constexpr intptr_t kNumCpuShapeStubs = 5;
++  uword cpu_shape_stub_entries_[kNumCpuShapeStubs] = {};
++  uword simulated_stub_entries_[kNumCpuShapeStubs] = {};
+ 
+   // Shorebird's Simulator -> CPU hypercall block: a brk whose imm16 falls in
+   // [Instr::kFirstSimToCpuHypercallCode, Instr::kLastSimToCpuHypercallCode].
+-- 
+2.53.0
+

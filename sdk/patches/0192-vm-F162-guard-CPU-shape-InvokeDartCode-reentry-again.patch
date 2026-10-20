@@ -1,0 +1,117 @@
+From 95c901172d7fbbd5575e627f56c708d1e88039f2 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 15:35:31 +0800
+Subject: [PATCH 192/206] [vm] F162: guard CPU-shape InvokeDartCode reentry
+ against real stack collision
+
+Reentering InvokeDartCode while already executing Dart natively on the
+CPU (saved_sim_csp != 0, e.g. via noSuchMethod dispatch, allocation, or
+exception handling triggering another runtime call) used to carve a
+fixed 0x1d0-byte margin for simulator_csp_ out of whatever the real
+ARM64 CSP happened to be at that moment, with no check against how
+much headroom was actually left. CallOnClangStack() then builds a real
+C stack frame there. Sufficiently deep recursion (confirmed with a
+self-recursive noSuchMethod repro, depth ~500+ under --no-use_simulator)
+drives the CSP below the floor of the buffer it is actually running on
+and crashes with SIGSEGV/SIGBUS at an unrelated address -- not a
+diagnosable Dart-level StackOverflow.
+
+Enlarging the magic constants only delays the collision; it does not
+fix it. Instead, before carving out the margin, check it against
+sim->overflow_stack_limit() -- the low-water mark of the buffer
+CallOnClangStack() actually points the real CSP register at. (This is
+NOT the OS thread's native pthread stack: empirically, comparing
+against OSThread::Current()->overflow_stack_limit() let every reentry
+report "safe" right up to the real crash, because by this point
+execution is already running on Simulator's own heap-allocated stack
+buffer, which is a disjoint address range from the pthread stack.)
+
+If the margin would collide, FATAL() with a diagnostic instead of
+proceeding. This converts silent memory corruption into an immediate,
+attributable abort. Raising a recoverable Dart StackOverflow exception
+from this exact spot would be preferable but is more invasive (no Dart
+frame/safepoint state is established yet at this point, and the two
+call sites of InvokeDartCode are not uniformly set up to propagate an
+Error object from here); left as a follow-up.
+
+Verified: p1-p8 runtime_check parity suite still 8/8 in both simulator
+and --no-use_simulator modes; deep-recursion repro (depth 2000) goes
+from SIGSEGV/SIGBUS at a bogus address to a controlled FATAL; negative
+control (temporarily disabling the new check) reproduces the original
+crash, confirming the check is load-bearing.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_entry.cc b/runtime/vm/dart_entry.cc
+index 7ecb0af80bd..b84c4db2a68 100644
+--- a/runtime/vm/dart_entry.cc
++++ b/runtime/vm/dart_entry.cc
+@@ -137,8 +137,64 @@ static ObjectPtr InvokeDartCode(uword entry_point,
+   if (saved_sim_csp == 0) {
+     thread->set_simulator_csp(sim->stack_base() - 0xd0);
+   } else {
++    // Re-entry: InvokeDartCode is being called again while we are already
++    // executing Dart code natively on the CPU (e.g. a native runtime call
++    // triggers noSuchMethod dispatch, allocation, or an exception, which in
++    // turn calls back into Dart). CallOnClangStack() (see
++    // stub_code_compiler_arm64.cc) will move the *real* ARM64 CSP register
++    // down to whatever we store here and build a genuine C stack frame of
++    // kSimCFrameSize (0xd0) bytes there, plus it needs kSimVRegBase (0x100)
++    // bytes of headroom below that for its vregister spill area. So every
++    // level of Dart recursion that re-enters this path consumes real OS
++    // stack -- carving out this margin unconditionally (as this code used
++    // to do) has no check against how much real OS stack is actually left.
++    // Sufficiently deep recursion (e.g. a self-recursive noSuchMethod call
++    // chain) drives the real stack pointer below the thread's guard page
++    // and crashes with a SIGSEGV/SIGBUS at a bogus address -- not a
++    // diagnosable Dart-level StackOverflow (F162).
++    //
++    // Simply enlarging the magic constants does not fix this: it only
++    // delays the collision to a greater recursion depth. Instead, check
++    // that stepping the CSP down by this margin still leaves us above the
++    // floor of the buffer CallOnClangStack() actually runs on.
++    //
++    // That floor is NOT the OS thread's native pthread stack bounds: by
++    // the time this reentry runs, CallOnClangStack() has already pointed
++    // the real ARM64 CSP register at Simulator's own heap-allocated stack
++    // buffer (sim->stack_base() downwards -- see Simulator::Simulator()),
++    // so OSThread::GetCurrentStackPointer() here reads an address inside
++    // *that* buffer, not the OS thread's native stack. The buffer's own
++    // low-water mark is sim->overflow_stack_limit() (confirmed empirically:
++    // comparing against OSThread::Current()->overflow_stack_limit() instead
++    // let every reentry report "margin_ok" right up to the real SIGSEGV,
++    // because the two address ranges are disjoint).
++    //
++    // TODO(F162 follow-up): ideally this should raise a recoverable Dart
++    // StackOverflow exception instead of aborting the process. Doing that
++    // safely from this exact spot -- before invokestub is called, with no
++    // Dart frame or safepoint state established for this reentry yet, and
++    // InvokeDartCode's two callers not uniformly prepared to propagate an
++    // Error object from here -- is more invasive than fits in this change.
++    // FATAL() at least converts silent memory corruption (crash at a
++    // bogus address far from the actual cause) into an immediate,
++    // diagnosable abort at the actual point of collision.
+     uword current_csp = OSThread::GetCurrentStackPointer();
+-    thread->set_simulator_csp(Utils::RoundDown(current_csp - 0xd0 - 0x100, 16));
++    const uword kCpuShapeCsiMargin = 0xd0 + 0x100;
++    const uword floor = sim->overflow_stack_limit();
++    if (current_csp < floor || (current_csp - kCpuShapeCsiMargin) < floor) {
++      FATAL(
++          "F162: CPU-shape simulator_csp_ reentry would collide with the "
++          "real OS C stack floor (current_csp=0x%" Pp
++          ", margin=0x%" Pp ", overflow_stack_limit=0x%" Pp
++          "). This indicates runaway Dart recursion re-entering "
++          "InvokeDartCode (e.g. via noSuchMethod/allocation/exception "
++          "dispatch) under --no-use_simulator CPU-shape execution. "
++          "Aborting to avoid silent stack corruption instead of crashing "
++          "at an unrelated address.",
++          current_csp, kCpuShapeCsiMargin, floor);
++    }
++    thread->set_simulator_csp(
++        Utils::RoundDown(current_csp - kCpuShapeCsiMargin, 16));
+   }
+ #endif
+   auto invoke = reinterpret_cast<invokestub>(stub);
+-- 
+2.53.0
+

@@ -1,0 +1,195 @@
+From 71209100501371e114f01e557532cbb77b67875c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 10:58:24 +0800
+Subject: [PATCH 020/206] feat(shorebird): COW wrapper page allocation via
+ mach_vm_remap
+
+Both halves are reserved as one contiguous region so the metadata half is
+always exactly rx_mapping_size above the wrapper half -- the invariant
+MetadataForWrapper depends on. The RX half is then overwritten with a
+mach_vm_remap(copy=TRUE) view of the stub's code, so reads see the stub and
+writes stay local.
+
+This is the one part of wrapper.cc with no byte-level oracle against their
+build, so it is validated behaviourally by three controls:
+
+  A. Skipping the remap entirely -> test fails (exit 255) on src[1234] and
+     src[32767]. Notably src[0] stayed silent: 0 & 0xff == 0 matches any
+     zeroed page, so that probe is vacuous.
+  B. copy=FALSE (shared, not COW) -> the plan's original test still PASSED
+     (exit 0). It did not assert COW at all. The metadata write it used as
+     the "does not propagate" check lands at rx_mapping_size, outside the
+     remapped span, so it can never alias the source whatever copy is.
+  C. With a write THROUGH the remap added, copy=FALSE now fails (exit 255,
+     src[1234] came back 0xAA instead of 0xD2) and copy=TRUE passes.
+
+Added that write-through-the-remap assertion, since without it a silently
+shared mapping is undetectable. Strengthens the test; nothing was weakened.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 6cdab1a0904..aaeb9ec53de 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++
+ namespace dart {
+ namespace shorebird {
+ 
+@@ -64,5 +67,46 @@ bool WrapperAllocator::ContainsEntryPoint(uword page, uword entry_point) const {
+          static_cast<uword>(layout_.num_wrappers_per_page);
+ }
+ 
++bool WrapperAllocator::AllocateWrapperPage(const CodeRange& stub_code,
++                                           uword* page) {
++  if (stub_code.size() <= 0) {
++    return false;
++  }
++
++  const mach_vm_size_t total =
++      static_cast<mach_vm_size_t>(layout_.rx_mapping_size) +
++      static_cast<mach_vm_size_t>(layout_.rw_mapping_size);
++
++  // Reserve both halves as one contiguous region so that the metadata half is
++  // always exactly rx_mapping_size above the wrapper half, which is the
++  // invariant MetadataForWrapper relies on.
++  mach_vm_address_t base = 0;
++  if (mach_vm_allocate(mach_task_self(), &base, total, VM_FLAGS_ANYWHERE) !=
++      KERN_SUCCESS) {
++    return false;
++  }
++
++  // Overwrite the RX half with a COW view of the stub's code. copy=TRUE is what
++  // makes this copy-on-write rather than shared, so per-page divergence stays
++  // local to this mapping.
++  mach_vm_address_t target = base;
++  vm_prot_t cur_prot = VM_PROT_NONE;
++  vm_prot_t max_prot = VM_PROT_NONE;
++  const kern_return_t kr = mach_vm_remap(
++      mach_task_self(), &target,
++      static_cast<mach_vm_size_t>(layout_.rx_mapping_size),
++      /*mask=*/0, VM_FLAGS_OVERWRITE, mach_task_self(),
++      static_cast<mach_vm_address_t>(stub_code.begin),
++      /*copy=*/TRUE, &cur_prot, &max_prot, VM_INHERIT_NONE);
++  if (kr != KERN_SUCCESS) {
++    mach_vm_deallocate(mach_task_self(), base, total);
++    return false;
++  }
++
++  wrapper_pages_.Add(static_cast<uword>(base));
++  *page = static_cast<uword>(base);
++  return true;
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 262015f6060..948c2aaeb16 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -116,6 +116,11 @@ class WrapperAllocator {
+   // landing-pad array, and correctly aligned to a pad boundary.
+   bool ContainsEntryPoint(uword page, uword entry_point) const;
+ 
++  // Maps one wrapper page: the RX half is a copy-on-write remap of the stub's
++  // own code pages, the RW half is fresh zeroed metadata. Returns false and
++  // leaves *page untouched if the range is empty or the kernel refuses.
++  bool AllocateWrapperPage(const CodeRange& stub_code, uword* page);
++
+   const Layout& layout() const { return layout_; }
+ 
+  private:
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index 9fcaa2d4b42..b5b7d900794 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -123,5 +126,70 @@ VM_UNIT_TEST_CASE(WrapperAllocator_ContainsEntryPointBoundaries) {
+   EXPECT(!allocator.ContainsEntryPoint(page, first + 1));
+ }
+ 
++// AllocateWrapperPage must refuse an empty stub range rather than remap zero
++// bytes -- the configs report an empty range until plan #2 generates stubs.
++VM_UNIT_TEST_CASE(WrapperAllocator_RejectsEmptyStubRange) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  WrapperAllocator allocator(l);
++  uword page = 0;
++  EXPECT(!allocator.AllocateWrapperPage(CodeRange(), &page));
++  EXPECT_EQ(static_cast<uword>(0), page);
++}
++
++// The RX half is a copy-on-write remap of the source, so it must start out
++// reading identical to the source and writes must not propagate back.
++VM_UNIT_TEST_CASE(WrapperAllocator_RxHalfIsCopyOnWrite) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  WrapperAllocator allocator(l);
++
++  // Stand in for generated stub code with an ordinary RW allocation.
++  const intptr_t source_size = l.rx_mapping_size;
++  void* source = nullptr;
++  EXPECT_EQ(KERN_SUCCESS,
++            vm_allocate(mach_task_self(),
++                        reinterpret_cast<vm_address_t*>(&source),
++                        source_size, VM_FLAGS_ANYWHERE));
++  uint8_t* src = reinterpret_cast<uint8_t*>(source);
++  for (intptr_t i = 0; i < source_size; i++) {
++    src[i] = static_cast<uint8_t>(i & 0xff);
++  }
++
++  CodeRange range;
++  range.begin = reinterpret_cast<uword>(source);
++  range.end = range.begin + source_size;
++
++  uword page = 0;
++  EXPECT(allocator.AllocateWrapperPage(range, &page));
++  EXPECT(page != 0);
++
++  uint8_t* mapped = reinterpret_cast<uint8_t*>(page);
++  // Reads through the remap see the source bytes.
++  EXPECT_EQ(src[0], mapped[0]);
++  EXPECT_EQ(src[1234], mapped[1234]);
++  EXPECT_EQ(src[source_size - 1], mapped[source_size - 1]);
++
++  // The actual copy-on-write assertion: write THROUGH the remap and confirm
++  // the source is untouched. Nothing else in this test can detect a shared
++  // mapping -- verified by control, a copy=FALSE remap passes every other
++  // assertion here, including the metadata check below, because that write
++  // lands at rx_mapping_size which is outside the remapped span and so can
++  // never alias the source regardless of copy semantics.
++  const uint8_t original = src[1234];
++  mapped[1234] = static_cast<uint8_t>(0xAA);
++  EXPECT_EQ(static_cast<uint8_t>(0xAA), mapped[1234]);
++  EXPECT_EQ(original, src[1234]);
++
++  // The RW metadata half is writable and starts zeroed.
++  uword* metadata = reinterpret_cast<uword*>(page + l.rx_mapping_size);
++  EXPECT_EQ(static_cast<uword>(0), metadata[0]);
++  metadata[0] = static_cast<uword>(0xdeadbeef);
++  EXPECT_EQ(static_cast<uword>(0xdeadbeef), metadata[0]);
++  // Writing metadata must not have touched the source.
++  EXPECT_EQ(static_cast<uint8_t>(0), src[0]);
++
++  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(source),
++                source_size);
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+-- 
+2.53.0
+

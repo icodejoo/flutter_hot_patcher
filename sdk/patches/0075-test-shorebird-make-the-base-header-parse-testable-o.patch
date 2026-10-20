@@ -1,0 +1,206 @@
+From d6ef873058287950ff0910be4a405209a12e5f22 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 22:17:20 +0800
+Subject: [PATCH 075/206] test(shorebird): make the base header parse testable
+ outside a precompiled runtime
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ReadBaseInstructionsTable is behind #if defined(DART_PRECOMPILED_RUNTIME),
+because the image accessors it ends with only exist there. That guard also hid
+the part most likely to be wrong -- the order of the five values and where the
+stream starts -- since run_vm_tests is a precompiler build and compiled none
+of it.
+
+Split, so the header half runs everywhere. The image half stays guarded.
+
+Two tests. The interesting one parses this binary's own snapshot and asserts
+the exact outcome: a JIT snapshot declares no instructions table, so the parse
+declines at the length. It then verifies separately that the version check
+passed, because otherwise the test cannot tell "verified, no table" from "did
+not verify" -- two very different failures with the same return value.
+
+The first draft branched on the result instead of asserting it. `if (ok)`
+passes whichever way it goes, which is the same as not checking; the value was
+determined by probing and then written down.
+
+⚠️ This does not close the gap the last commit recorded. The non-null path of
+ReadBaseInstructionsTable still has no embedder here and is still verified only
+by a one-off experiment.
+
+92 of 92 shorebird tests.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 5018ba45810..dd1ea0c7744 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10385,16 +10385,22 @@ void FullSnapshotWriter::WriteFullSnapshot(
+ // Returns a null handle when there is no base, when its header does not verify,
+ // or when it carries no instructions table. A null table is the signal that the
+ // base cannot be linked against, not an error to propagate.
+-InstructionsTablePtr ReadBaseInstructionsTable(Thread* thread) {
+-#if defined(DART_PRECOMPILED_RUNTIME)
+-  const uint8_t* const data = BaseSnapshotData();
+-  const uint8_t* const instructions = BaseSnapshotInstructionsBuffer();
+-  if (data == nullptr || instructions == nullptr) {
+-    return InstructionsTable::null();
+-  }
++// The header half, split out so it is testable in every build. Everything below
++// it needs GetBareInstructionsAt, which only exists in a precompiled runtime,
++// and that guard would otherwise hide the part most likely to be wrong -- the
++// order of the five values and where the stream starts.
++//
++// Returns false when there is no base, when its header does not verify against
++// this VM, or when it declares no instructions table.
++bool ReadBaseSnapshotHeader(Thread* thread,
++                            const uint8_t* data,
++                            const Snapshot** out_snapshot,
++                            intptr_t* out_instructions_table_len,
++                            uint32_t* out_instruction_table_data_offset) {
++  if (data == nullptr) return false;
+ 
+   const Snapshot* const snapshot = Snapshot::SetupFromBuffer(data);
+-  if (snapshot == nullptr) return InstructionsTable::null();
++  if (snapshot == nullptr) return false;
+ 
+   SnapshotHeaderReader header_reader(snapshot);
+   intptr_t offset = 0;
+@@ -10404,16 +10410,37 @@ InstructionsTablePtr ReadBaseInstructionsTable(Thread* thread) {
+     // The base is a different build than this VM. Refusing to link is the
+     // right outcome; the caller reports it as "no base instructions table".
+     free(error);
+-    return InstructionsTable::null();
++    return false;
+   }
+ 
++  // The same five Deserialize reads, in the same order.
+   ReadStream stream(snapshot->Addr(), snapshot->length(), offset);
+   stream.ReadUnsigned();  // num_base_objects
+   stream.ReadUnsigned();  // num_objects
+   stream.ReadUnsigned();  // num_clusters
+   const intptr_t instructions_table_len = stream.ReadUnsigned();
+   const uint32_t instruction_table_data_offset = stream.ReadUnsigned();
+-  if (instructions_table_len <= 0) return InstructionsTable::null();
++  if (instructions_table_len <= 0) return false;
++
++  *out_snapshot = snapshot;
++  *out_instructions_table_len = instructions_table_len;
++  *out_instruction_table_data_offset = instruction_table_data_offset;
++  return true;
++}
++
++InstructionsTablePtr ReadBaseInstructionsTable(Thread* thread) {
++#if defined(DART_PRECOMPILED_RUNTIME)
++  const uint8_t* const instructions = BaseSnapshotInstructionsBuffer();
++  if (instructions == nullptr) return InstructionsTable::null();
++
++  const Snapshot* snapshot = nullptr;
++  intptr_t instructions_table_len = 0;
++  uint32_t instruction_table_data_offset = 0;
++  if (!ReadBaseSnapshotHeader(thread, BaseSnapshotData(), &snapshot,
++                              &instructions_table_len,
++                              &instruction_table_data_offset)) {
++    return InstructionsTable::null();
++  }
+ 
+   ImageReader* const reader =
+       new (thread->zone()) ImageReader(snapshot->DataImage(), instructions);
+diff --git a/runtime/vm/app_snapshot.h b/runtime/vm/app_snapshot.h
+index 775de0576a2..60c970630d1 100644
+--- a/runtime/vm/app_snapshot.h
++++ b/runtime/vm/app_snapshot.h
+@@ -160,6 +160,16 @@ class FullSnapshotWriter {
+   DISALLOW_COPY_AND_ASSIGN(FullSnapshotWriter);
+ };
+ 
++// Shorebird. Reads the base snapshot's header -- the five values at the start
++// of its clustered stream. Declared here so it can be tested in builds that are
++// not a precompiled runtime, where the rest of the base instructions table
++// cannot be built.
++bool ReadBaseSnapshotHeader(Thread* thread,
++                            const uint8_t* data,
++                            const Snapshot** out_snapshot,
++                            intptr_t* out_instructions_table_len,
++                            uint32_t* out_instruction_table_data_offset);
++
+ class FullSnapshotReader {
+  public:
+   FullSnapshotReader(const Snapshot* snapshot,
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index 4da8727f899..ff534f4e357 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -11,6 +11,7 @@
+ #include <unistd.h>
+ 
+ #include "include/dart_api.h"
++#include "vm/app_snapshot.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -368,4 +369,59 @@ VM_UNIT_TEST_CASE(Shorebird_BaseInstructionRangeSpansTheImage) {
+ }
+ 
+ 
++// The base snapshot header parse, against a real snapshot: the one this test
++// binary was itself built from. ReadBaseInstructionsTable's other half needs a
++// precompiled runtime and cannot run here, which is exactly why this half was
++// split out -- the guard would otherwise hide the part most likely to be wrong,
++// which is the order of the five values and where the stream starts.
++ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderParsesARealSnapshot) {
++  const uint8_t* const data = dart::bin::vm_snapshot_data;
++  // Asserted, not skipped: an early return would pass without parsing anything.
++  EXPECT(data != nullptr);
++  if (data == nullptr) return;
++
++  const Snapshot* snapshot = nullptr;
++  intptr_t instructions_table_len = 0;
++  uint32_t instruction_table_data_offset = 0;
++  const bool ok =
++      ReadBaseSnapshotHeader(thread, data, &snapshot, &instructions_table_len,
++                             &instruction_table_data_offset);
++
++  // This binary's own snapshot is a JIT one and declares no instructions table,
++  // so the parse is expected to decline -- at the length, having got past
++  // everything before it. Asserting the outcome rather than branching on it:
++  // `if (ok)` would have passed whichever way it went, which is the same as not
++  // checking.
++  EXPECT(!ok);
++
++  // And it declined at the length rather than earlier. Without this the test
++  // cannot tell "the version verified and there is no table" from "the version
++  // did not verify", which are very different failures.
++  const Snapshot* const raw = Snapshot::SetupFromBuffer(data);
++  EXPECT(raw != nullptr);
++  if (raw == nullptr) return;
++  SnapshotHeaderReader header_reader(raw);
++  intptr_t offset = 0;
++  char* error = header_reader.VerifyVersionAndFeatures(thread->isolate_group(),
++                                                       &offset);
++  EXPECT(error == nullptr);
++  free(error);
++  EXPECT(offset > 0);
++}
++
++// Garbage in, false out, and nothing dereferenced. Their reader is handed a
++// mapping the embedder chose; a wrong one must not walk off it.
++ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderRejectsGarbage) {
++  const Snapshot* snapshot = nullptr;
++  intptr_t len = 0;
++  uint32_t offset = 0;
++
++  EXPECT(!ReadBaseSnapshotHeader(thread, nullptr, &snapshot, &len, &offset));
++
++  uint8_t garbage[64];
++  memset(garbage, 0xa5, sizeof(garbage));
++  EXPECT(!ReadBaseSnapshotHeader(thread, garbage, &snapshot, &len, &offset));
++}
++
++
+ }  // namespace dart
+-- 
+2.53.0
+

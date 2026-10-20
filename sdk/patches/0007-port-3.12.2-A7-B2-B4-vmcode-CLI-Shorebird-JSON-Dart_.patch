@@ -1,0 +1,639 @@
+From e1961f48ea835c44b435bdf980451ed37335d19c Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:42:31 +0800
+Subject: [PATCH 007/206] port(3.12.2): A7/B2/B4 -- vmcode CLI, Shorebird JSON,
+ Dart_ShorebirdLoadVmcode
+
+Three upstream features now supersede hand-rolled work, so theirs is used
+instead (CLAUDE.md rule 2):
+
+  * A1's globals.h edit forcing the Simulator is obsolete -- upstream added the
+    GN arg dart_force_simulator ('Force use of the simulator even when the Dart
+    target arch matches the current cpu'), absent at our 3.7 baseline.
+  * SIMULATOR_HOST_ARCH_MATCH is dropped for upstream's SIMULATOR_FFI, set by
+    runtime/BUILD.gn when dart_force_simulator && arm64. It covers il_arm64.cc,
+    stub_code_compiler_arm64.cc and ffi_callback_metadata.cc, which our macro
+    never reached, so ffi_dynamic_library.cc reverts to upstream entirely.
+  * analyze_snapshot.cc's platform widening is obsolete: upstream dropped the
+    android/linux restriction outright.
+
+C3 survives in minimal form -- upstream still conflates 'Simulator compiled in'
+with 'codegen targets the Simulator', so SIMULATOR_AVAILABLE is still derived
+here, now settable from the command line rather than hard-coded per-arch.
+
+Dropped per rule 1 (Route-A is out of scope): stub_code_compiler.cc's LR-state
+fix, which lives inside #if defined(DART_DYNAMIC_MODULES); and the five Gate 1
+spike natives with their Dart-side declarations --
+runtime/lib/object.cc (121 lines), sdk/lib/internal/internal.dart,
+internal_patch.dart, bootstrap_natives.h. 202 lines of retired debt not carried
+over.
+
+Conflicts resolved: main_options.h keeps upstream's grown option list and
+appends shorebird_vmcode; dart_api_impl.cc keeps both sides.
+vm_sources.gni: all 466 registered sources exist. #if/#endif balances.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/BUILD.gn b/runtime/bin/BUILD.gn
+index 0eedc4279fc..2da0cf47ff5 100644
+--- a/runtime/bin/BUILD.gn
++++ b/runtime/bin/BUILD.gn
+@@ -1337,3 +1337,4 @@ static_library("dart_embedder_runtime_jit") {
+   output_name = "dart_embedder_runtime_jit"
+   deps = [ ":dart_embedder_runtime_jit_set" ]
+ }
++
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 6b89a1fbef7..077fc53665d 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -24,7 +24,8 @@ namespace bin {
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(help, help)                                                                \
+-  V(sdk_version, sdk_version)
++  V(sdk_version, sdk_version)                                                  \
++  V(shorebird, shorebird_mode)
+ 
+ #define STRING_OPTION_DEFINITION(flag, variable)                               \
+   static const char* variable = nullptr;                                       \
+@@ -222,7 +223,11 @@ int RunAnalyzer(int argc, char** argv) {
+   intptr_t out_len = 0;
+ 
+   Dart_EnterScope();
+-  Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
++  if (shorebird_mode) {
++    Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
++  } else {
++    Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
++  }
+   WriteFile(out_path, out, out_len);
+ 
+   // Since ownership of the JSON buffer is ours, free before we exit.
+diff --git a/runtime/bin/main_impl.cc b/runtime/bin/main_impl.cc
+index e9a8add77dd..36edb4552da 100644
+--- a/runtime/bin/main_impl.cc
++++ b/runtime/bin/main_impl.cc
+@@ -25,6 +25,9 @@
+ #include "bin/isolate_data.h"
+ #include "bin/loader.h"
+ #include "bin/main_options.h"
++#if defined(DART_INCLUDE_SIMULATOR)
++#include "vm/simulator.h"
++#endif
+ #include "bin/platform.h"
+ #include "bin/process.h"
+ #include "bin/snapshot_utils.h"
+@@ -1054,6 +1057,51 @@ void RunMainIsolate(const char* script_name,
+ 
+   Dart_EnterScope();
+ 
++#if defined(DART_INCLUDE_SIMULATOR)
++  // flutter_hot_patcher A7: if --shorebird-vmcode was provided,
++  // parse the link table and configure the Simulator for Sim↔CPU transitions.
++  if (Options::shorebird_vmcode_path() != nullptr) {
++    const char* vmcode_path = Options::shorebird_vmcode_path();
++    File* vmcode_file = File::Open(nullptr, vmcode_path, File::kRead);
++    if (vmcode_file == nullptr) {
++      Syslog::PrintErr("[A7] Cannot open vmcode: %s\n", vmcode_path);
++    } else {
++      // Read link table header
++      uint32_t n_entries = 0;
++      vmcode_file->ReadFully(&n_entries, 4);
++      // Get base instructions base address (the currently loaded snapshot)
++      const uword base_instr_base =
++          reinterpret_cast<uword>(app_isolate_snapshot_instructions);
++      // Get patch instructions base: it's in the ELF that follows the header
++      // For now, patch ELF is same-offset layout as base ELF, so we use
++      // the same base address after loading the patch.
++      // The sim_offset values are relative to _kDartIsolateSnapshotInstructions
++      // in the patch ELF, and cpu_offset values are relative to the base ELF.
++      //
++      // Configure Simulator link table
++      Simulator* sim = Simulator::Current();
++      if (sim != nullptr) {
++        // Pass absolute cpu addresses; set base=0 to avoid double-adding in BLR handler.
++        sim->SetBaseInstructionsBase(0);
++        for (uint32_t i = 0; i < n_entries; i++) {
++          uint32_t sim_off = 0, cpu_off = 0;
++          vmcode_file->ReadFully(&sim_off, 4);
++          vmcode_file->ReadFully(&cpu_off, 4);
++          // sim address = base_instr_base + sim_off (patch offset)
++          // cpu address = base_instr_base + cpu_off (base offset)
++          sim->SetLinkedFunction(base_instr_base + sim_off,
++                                 base_instr_base + cpu_off);
++        }
++        Syslog::PrintErr("[A7] Configured %u link table entries from %s\n",
++                         n_entries, vmcode_path);
++        // Set 50M instruction threshold to skip VM startup phase.
++        sim->SetSimToCpuStartupThreshold(50000000ULL);
++      }
++      vmcode_file->Release();
++    }
++  }
++#endif  // DART_INCLUDE_SIMULATOR
++
+   // Kernel snapshots should have been handled before reaching this point.
+   ASSERT(Options::gen_snapshot_kind() != kKernel);
+   // Lookup the library of the root script.
+diff --git a/runtime/bin/main_options.h b/runtime/bin/main_options.h
+index cfdd2a0075f..9b93521ce0b 100644
+--- a/runtime/bin/main_options.h
++++ b/runtime/bin/main_options.h
+@@ -34,7 +34,8 @@ namespace bin {
+   /* The purpose of these flags is documented in */                            \
+   /* pkg/dartdev/lib/src/commands/compilation_server.dart. */                  \
+   V(resident_server_info_file, resident_server_info_file_path)                 \
+-  V(resident_compiler_info_file, resident_compiler_info_file_path)
++  V(resident_compiler_info_file, resident_compiler_info_file_path)             \
++  V(shorebird_vmcode, shorebird_vmcode_path)
+ 
+ // As STRING_OPTIONS_LIST but for boolean valued options. The default value is
+ // always false, and the presence of the flag switches the value to true.
+diff --git a/runtime/include/dart_api.h b/runtime/include/dart_api.h
+index 46a01c3632a..ef085ce0c25 100644
+--- a/runtime/include/dart_api.h
++++ b/runtime/include/dart_api.h
+@@ -4335,4 +4335,16 @@ typedef char* (*Dart_DwarfStackTraceFootnoteCallback)(void* addresses[],
+ DART_EXPORT void Dart_SetDwarfStackTraceFootnoteCallback(
+     Dart_DwarfStackTraceFootnoteCallback callback);
+ 
++/**
++ * flutter_hot_patcher B4: Load a Shorebird-format vmcode patch.
++ * 
++ * Parses the .vmcode header (link table) and configures the Dart VM's
++ * Simulator with SimulatorToCPU entries for each linked function.
++ * Must be called BEFORE Dart_CreateIsolateGroup.
++ *
++ * Returns true on success, false on failure.
++ */
++DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path);
++
++
+ #endif /* INCLUDE_DART_API_H_ */ /* NOLINT */
+diff --git a/runtime/platform/globals.h b/runtime/platform/globals.h
+index dc65c9aedfc..1ba117eb814 100644
+--- a/runtime/platform/globals.h
++++ b/runtime/platform/globals.h
+@@ -401,36 +401,9 @@ struct simd128_value_t {
+ #endif
+ #endif
+ #elif defined(TARGET_ARCH_ARM64)
+-// flutter_hot_patcher A1/C3: on an arm64 host targeting arm64 we still want the
+-// Simulator, but "the Simulator is compiled in" and "code generation targets the
+-// Simulator" are two different things that upstream conflates under one macro:
+-//
+-//   DART_INCLUDE_SIMULATOR  changes CODE GENERATION. RuntimeEntry::GetEntryPoint()
+-//                           returns a redirection address, and that address is
+-//                           baked into stubs and compiled code, which then
+-//                           CANNOT execute natively.
+-//   SIMULATOR_AVAILABLE     only compiles the Simulator class in.
+-//
+-// Hot patching needs the latter without the former: base code must stay natively
+-// executable at full speed, while patch code -- mapped read-only, so not
+-// natively executable -- is run by the Simulator, entered through SimBridge.
+-//
+-// FHP_NO_SIMULATOR_CODEGEN selects the split build. Without it behaviour is
+-// unchanged from A1, so existing configurations keep working.
+-//
+-// NB: upstream 3.12.2 renamed USING_SIMULATOR -> DART_INCLUDE_SIMULATOR and added
+-// TARGET_HOST_MISMATCH, but that new macro is only consumed by cpu_arm.cc for
+-// IS_SIMARM_HOST64 and is unrelated to FFI -- it is NOT this split.
+-#if !defined(FHP_NO_SIMULATOR_CODEGEN)
++#if !defined(HOST_ARCH_ARM64)
+ #define DART_INCLUDE_SIMULATOR 1
+ #endif
+-#define SIMULATOR_AVAILABLE 1
+-#if defined(HOST_ARCH_ARM64)
+-// flutter_hot_patcher: upstream disables some features purely because host and
+-// target ABIs differ under a simulator build. Here the ABIs are identical, so
+-// anything gated only by that barrier (notably dart:ffi) must stay enabled.
+-#define SIMULATOR_HOST_ARCH_MATCH 1
+-#endif
+ #elif defined(TARGET_ARCH_RISCV32)
+ #if !defined(HOST_ARCH_RISCV32)
+ #define DART_INCLUDE_SIMULATOR 1
+@@ -443,7 +416,30 @@ struct simd128_value_t {
+ #error Unknown architecture.
+ #endif
+ 
+-// Wherever code generation targets the Simulator, the Simulator is compiled in.
++// flutter_hot_patcher C3: separate "the Simulator class is compiled in" from
++// "code generation targets the Simulator", which upstream conflates under
++// DART_INCLUDE_SIMULATOR.
++//
++//   DART_INCLUDE_SIMULATOR  changes CODE GENERATION. RuntimeEntry::GetEntryPoint()
++//                           returns a redirection address that is baked into
++//                           stubs and compiled code, which then CANNOT execute
++//                           natively.
++//   SIMULATOR_AVAILABLE     only compiles the Simulator class in.
++//
++// Hot patching needs the latter without the former: base code must stay natively
++// executable at full speed, while patch code -- mapped read-only, so not
++// natively executable -- is run by the Simulator, entered through SimBridge.
++// Define SIMULATOR_AVAILABLE on the command line to select that split build.
++//
++// Two things A1/C3 used to hand-roll here are now upstream features, and we use
++// theirs instead (CLAUDE.md rule 2):
++//   * forcing the Simulator on a matching host/target is the GN argument
++//     `dart_force_simulator` (runtime/runtime_args.gni), which also defines
++//     DART_INCLUDE_SIMULATOR -- so A1's edit to this file is obsolete.
++//   * dart:ffi under the Simulator is upstream's SIMULATOR_FFI, set by
++//     runtime/BUILD.gn whenever dart_force_simulator && arch == arm64. It covers
++//     il_arm64.cc, stub_code_compiler_arm64.cc and ffi_callback_metadata.cc,
++//     none of which our SIMULATOR_HOST_ARCH_MATCH ever touched.
+ #if defined(DART_INCLUDE_SIMULATOR) && !defined(SIMULATOR_AVAILABLE)
+ #define SIMULATOR_AVAILABLE 1
+ #endif
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 9c2ee447f0b..d6604728537 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -15,6 +15,9 @@
+ #include "vm/dart_api_impl.h"
+ #include "vm/globals.h"
+ #include "vm/json_writer.h"
++#include <algorithm>
++#include <string>
++#include <vector>
+ #include "vm/object.h"
+ #include "vm/object_store.h"
+ #include "vm/thread.h"
+@@ -692,5 +695,294 @@ void Dart_DumpSnapshotInformationAsJson(
+   analyzer.DumpSnapshotInformation(out, out_len);
+ }
+ 
++// ============================================================
++// flutter_hot_patcher B2: --shorebird mode
++// Outputs Shorebird-compatible JSON with function hashes.
++// The hash is SHA-1 of code bytes - stable for same source code,
++// changes when function body changes. Self-consistent for our pipeline.
++// ============================================================
++
++// flutter_hot_patcher B2: Inline SHA-1 implementation (avoids external deps)
++// Based on RFC 3174 reference implementation.
++namespace {
++struct FhpSHA1Ctx {
++  uint32_t state[5];
++  uint32_t count[2];
++  uint8_t  buffer[64];
++};
++static void FhpSHA1Init(FhpSHA1Ctx* ctx) {
++  ctx->state[0]=0x67452301; ctx->state[1]=0xEFCDAB89;
++  ctx->state[2]=0x98BADCFE; ctx->state[3]=0x10325476;
++  ctx->state[4]=0xC3D2E1F0;
++  ctx->count[0]=ctx->count[1]=0;
++}
++static inline uint32_t FhpRot(uint32_t x,int n){return (x<<n)|(x>>(32-n));}
++static void FhpSHA1Transform(uint32_t state[5], const uint8_t buf[64]) {
++  uint32_t a,b,c,d,e,t,w[80];
++  for(int i=0;i<16;i++) w[i]=(buf[i*4]<<24)|(buf[i*4+1]<<16)|(buf[i*4+2]<<8)|buf[i*4+3];
++  for(int i=16;i<80;i++) w[i]=FhpRot(w[i-3]^w[i-8]^w[i-14]^w[i-16],1);
++  a=state[0];b=state[1];c=state[2];d=state[3];e=state[4];
++  #define FF(i,f,k) t=FhpRot(a,5)+(f)+e+(k)+w[i]; e=d; d=c; c=FhpRot(b,30); b=a; a=t
++  for(int i= 0;i<20;i++) FF(i,(b&c)|(~b&d),0x5A827999);
++  for(int i=20;i<40;i++) FF(i,b^c^d,0x6ED9EBA1);
++  for(int i=40;i<60;i++) FF(i,(b&c)|(b&d)|(c&d),0x8F1BBCDC);
++  for(int i=60;i<80;i++) FF(i,b^c^d,0xCA62C1D6);
++  #undef FF
++  state[0]+=a;state[1]+=b;state[2]+=c;state[3]+=d;state[4]+=e;
++}
++static void FhpSHA1Update(FhpSHA1Ctx* ctx, const uint8_t* data, size_t len) {
++  int j = (ctx->count[0]>>3) & 63;
++  if((ctx->count[0]+=len<<3)<(uint32_t)(len<<3)) ctx->count[1]++;
++  ctx->count[1]+=len>>29;
++  size_t i=0;
++  if(len>=64-(size_t)j){ memcpy(ctx->buffer+j,data,64-j); FhpSHA1Transform(ctx->state,ctx->buffer); i=64-j; j=0; for(;i+63<len;i+=64) FhpSHA1Transform(ctx->state,data+i); }
++  memcpy(ctx->buffer+j,data+i,len-i);
++}
++static void FhpSHA1Final(uint8_t digest[20], FhpSHA1Ctx* ctx) {
++  uint8_t finalcount[8];
++  for(int i=0;i<8;i++) finalcount[i]=(uint8_t)((i<4)?ctx->count[1]>>((3-i)*8):ctx->count[0]>>((7-i)*8));
++  FhpSHA1Update(ctx,(uint8_t*)"\x80",1);
++  while((ctx->count[0]&504)!=448) FhpSHA1Update(ctx,(uint8_t*)"\0",1);
++  FhpSHA1Update(ctx,finalcount,8);
++  for(int i=0;i<20;i++) digest[i]=(uint8_t)(ctx->state[i>>2]>>((3-(i&3))*8));
++}
++static void FhpSHA1(const uint8_t* data, size_t len, uint8_t digest[20]) {
++  FhpSHA1Ctx ctx; FhpSHA1Init(&ctx); FhpSHA1Update(&ctx,data,len); FhpSHA1Final(digest,&ctx);
++}
++} // namespace (anonymous for SHA1)
++
++namespace {
++
++// ARM64 Dart register constants for PP load detection
++static constexpr int kDartPPReg = 27;   // x27 = Object Pool pointer
++
++// Compute SHA-1 of instruction bytes as hex string.
++std::string Sha1HexOf(const uint8_t* data, size_t len) {
++  uint8_t digest[20];
++  FhpSHA1(data, len, digest);
++  char hex[41];
++  for (int i = 0; i < 20; i++) {
++    snprintf(hex + i * 2, 3, "%02x", digest[i]);
++  }
++  return std::string(hex);
++}
++
++// Collect PP slot indices used by a function.
++std::vector<intptr_t> GetSelfPPIndices(const uint8_t* code, intptr_t size) {
++  std::vector<intptr_t> slots;
++  for (intptr_t i = 0; i + 4 <= size; i += 4) {
++    uint32_t instr;
++    memcpy(&instr, code + i, 4);
++    // 64-bit LDR unsigned offset: bits[31:22] = 0b1111100101 = 0x3E5
++    if (((instr >> 22) & 0x3FF) == 0x3E5) {
++      int rn = (instr >> 5) & 0x1F;
++      if (rn == kDartPPReg) {
++        intptr_t imm12 = (instr >> 10) & 0xFFF;
++        // PP slot N is at offset (N+2)*8, so imm12 = N+2 → N = imm12-2
++        if (imm12 >= 2) slots.push_back(imm12 - 2);
++      }
++    }
++  }
++  return slots;
++}
++
++// Enumerate all Code objects in the snapshot in offset order.
++struct CodeEntry {
++  std::string name;
++  intptr_t index_in_entries;
++  intptr_t offset;   // from isolate_snapshot_instructions base
++  intptr_t size;
++  const uint8_t* payload;
++};
++
++// 枚举快照中的全部 Code 对象。
++//
++// 早期实现遍历 cls.functions()，但 **AOT 快照里该数组多被清空**，
++// 结果只找到一百多个函数、遗漏 app 自身代码；且它把 VM 区的 Code 也按
++// isolate 基址算偏移，产生负值。
++//
++// 这里改用与上游 SnapshotAnalyzer::DumpInterestingObjects 相同的可达对象图
++// 遍历：从 global object pool、libraries、class table、closure_functions 出发
++// 递归 VisitPointers，沿途收集 Code。凡 payload 落在 isolate instructions
++// 基址之前的（即 VM 区）一律跳过。
++void CollectAllCodes(
++    IsolateGroup* isolate_group,
++    const uintptr_t isolate_instr_base,
++    std::vector<CodeEntry>& out_codes) {
++  Thread* thread = Thread::Current();
++  Zone* zone = thread->zone();
++  Heap* heap = isolate_group->heap();
++
++  std::vector<const Code*> discovered;
++
++  heap->ResetObjectIdTable();
++  {
++    NoSafepointScope ns(thread);
++
++    FieldVisitor visitor(isolate_group);
++    std::function<void(ObjectPtr)> handle_object = [&](ObjectPtr value) {
++      if (!value.IsHeapObject()) return;
++      // 每个对象只处理一次。
++      if (heap->GetObjectId(value) != 0) return;
++      heap->SetObjectId(value, 1);
++
++      if (value->GetClassId() == kCodeCid) {
++        discovered.push_back(&Code::Handle(zone, Code::RawCast(value)));
++      }
++
++      value->untag()->VisitPointers(&visitor);
++    };
++    visitor.init(&handle_object);
++
++    Object& object = Object::Handle(zone);
++
++    // 对象池中可达的一切（AOT 下绝大多数 Code 由此可达）
++    object = isolate_group->object_store()->global_object_pool();
++    if (!object.IsNull()) handle_object(object.ptr());
++
++    // 所有库
++    object = isolate_group->object_store()->libraries();
++    if (!object.IsNull()) {
++      object = GrowableObjectArray::Cast(object).data();
++      if (!object.IsNull()) object.ptr().untag()->VisitPointers(&visitor);
++    }
++
++    // 所有类
++    auto class_table = isolate_group->class_table();
++    for (intptr_t cid = 0; cid < class_table->NumCids(); ++cid) {
++      if (!class_table->HasValidClassAt(cid)) continue;
++      object = class_table->At(cid);
++      if (!object.IsNull()) handle_object(object.ptr());
++    }
++
++    // 闭包函数（只需一次；旧实现误置于 cid 循环内，重复了 NumCids 遍）
++    object = isolate_group->object_store()->closure_functions();
++    if (!object.IsNull()) handle_object(object.ptr());
++
++    // AOT 的 bare-instructions 模式下，绝大多数 Code 不再从类/库可达，
++    // 而是挂在 InstructionsTable 的 code_objects_ 上。把这些表交给遍历器，
++    // 其内部指针会被 VisitPointers 走到，从而覆盖 app 自身的代码。
++    object = isolate_group->object_store()->instructions_tables();
++    if (!object.IsNull()) handle_object(object.ptr());
++  }
++
++  Function& func = Function::Handle(zone);
++  Object& owner = Object::Handle(zone);
++
++  for (const Code* code_ptr : discovered) {
++    const Code& code = *code_ptr;
++    if (code.IsNull()) continue;
++
++    const uintptr_t payload = static_cast<uintptr_t>(code.PayloadStart());
++    // payload == 0 出现在被树摇掉的 VM 快照条目上；
++    // payload < base 表示该 Code 位于 VM instructions 区，不属于本快照。
++    if (payload == 0 || payload < isolate_instr_base) continue;
++
++    CodeEntry entry;
++    owner = code.owner();
++    if (!owner.IsNull() && owner.IsFunction()) {
++      func ^= owner.ptr();
++      entry.name = func.QualifiedUserVisibleNameCString();
++    } else if (code.IsStubCode()) {
++      entry.name = std::string("[Stub] ") + code.Name();
++    } else {
++      entry.name = code.Name();
++    }
++    entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
++    entry.size = code.Size();
++    entry.payload = reinterpret_cast<const uint8_t*>(payload);
++    entry.index_in_entries = -1;  // 排序后填充
++    out_codes.push_back(std::move(entry));
++  }
++
++  // 按偏移排序并按偏移去重（同一段代码可能被多个 owner 引用）
++  std::sort(out_codes.begin(), out_codes.end(),
++            [](const CodeEntry& a, const CodeEntry& b) {
++              return a.offset < b.offset;
++            });
++  out_codes.erase(std::unique(out_codes.begin(), out_codes.end(),
++                              [](const CodeEntry& a, const CodeEntry& b) {
++                                return a.offset == b.offset;
++                              }),
++                  out_codes.end());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(out_codes.size()); ++i) {
++    out_codes[i].index_in_entries = i;
++  }
++}
++
++}  // namespace
++
++// Dumps Shorebird-compatible analyze_snapshot JSON (--shorebird mode).
++// Output format matches Shorebird's analyze_snapshot --shorebird JSON:
++//   {"shorebird":"true","snapshot_data":{...},"functions":[...]}
++// Each function entry: {name, index_in_entries, offset, size,
++//                       self_hash, subgraph_hash, op_subgraph_hash,
++//                       self_pp, subgraph_pp, callees, ...}
++void Dart_DumpSnapshotInformationShorebirdAsJson(
++    const Dart_SnapshotAnalyzerInformation& info,
++    char** out,
++    intptr_t* out_len) {
++  Thread* thread = Thread::Current();
++  IsolateGroup* ig = thread->isolate_group();
++  DARTSCOPE(thread);
++  
++  const uintptr_t isolate_instr_base =
++      reinterpret_cast<uintptr_t>(info.vm_isolate_instructions);
++  
++  // Collect all Code objects
++  std::vector<CodeEntry> codes;
++  SafepointReadRwLocker ml(thread, ig->program_lock());
++  CollectAllCodes(ig, isolate_instr_base, codes);
++  
++  JSONWriter js;
++  js.OpenObject();
++  js.PrintProperty("shorebird", "true");
++  
++  // snapshot_data section
++  js.OpenObject("snapshot_data");
++  js.PrintfProperty("vm_data", "%p", info.vm_snapshot_data);
++  js.PrintfProperty("vm_instructions", "%p", info.vm_snapshot_instructions);
++  js.PrintfProperty("isolate_data", "%p", info.vm_isolate_data);
++  js.PrintfProperty("isolate_instructions", "%p", info.vm_isolate_instructions);
++  js.CloseObject();
++  
++  // functions array
++  js.OpenArray("functions");
++  for (const auto& entry : codes) {
++    js.OpenObject();
++    js.PrintProperty("name", entry.name.c_str());
++    js.PrintProperty64("index_in_entries", entry.index_in_entries);
++    js.PrintProperty64("offset", entry.offset);
++    js.PrintProperty64("size", entry.size);
++    
++    // Compute SHA-1 hash of instruction bytes
++    std::string hash = Sha1HexOf(entry.payload, entry.size);
++    js.PrintProperty("self_hash", hash.c_str());
++    js.PrintProperty("subgraph_hash", hash.c_str());   // simplified: same as self_hash
++    js.PrintProperty("op_subgraph_hash", hash.c_str()); // simplified: same
++    
++    // PP slot indices
++    std::vector<intptr_t> pp_slots = GetSelfPPIndices(entry.payload, entry.size);
++    js.OpenArray("self_pp");
++    for (intptr_t s : pp_slots) js.PrintValue64(s);
++    js.CloseArray();
++    js.OpenArray("subgraph_pp");
++    for (intptr_t s : pp_slots) js.PrintValue64(s);
++    js.CloseArray();
++    
++    // Empty arrays for other fields (simplified)
++    js.OpenArray("self_selectors"); js.CloseArray();
++    js.OpenArray("subgraph_selectors"); js.CloseArray();
++    js.OpenArray("self_field_table"); js.CloseArray();
++    js.OpenArray("subgraph_field_table"); js.CloseArray();
++    js.OpenArray("callees"); js.CloseArray();
++    js.CloseObject();
++  }
++  js.CloseArray();
++  js.CloseObject();
++  
++  js.Steal(out, out_len);
++}
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index dcd3faeb93d..37483a7b659 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -21,6 +21,9 @@
+ #include "vm/compiler/jit/compiler.h"
+ #include "vm/dart.h"
+ #include "vm/dart_api_impl.h"
++#if defined(DART_INCLUDE_SIMULATOR)
++#include "vm/simulator.h"
++#endif
+ #include "vm/dart_api_message.h"
+ #include "vm/dart_api_state.h"
+ #include "vm/dart_entry.h"
+@@ -7252,4 +7255,35 @@ void ThrowCantRunWithoutIsolateError() {
+   Exceptions::ThrowArgumentError(error);
+ }
+ 
++// flutter_hot_patcher B4: Load vmcode and configure Simulator link table.
++// Uses stdio for file I/O (dart::bin not available in dart_api_impl.cc).
++DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
++// SetPendingVmcodeFile only exists on the arm64 Simulator. The guard is
++// SIMULATOR_AVAILABLE rather than DART_INCLUDE_SIMULATOR: the production configuration
++// compiles the Simulator in while keeping code generation native (C3a), and
++// this entry point has to work there -- it is how the engine populates the link
++// table. TARGET_ARCH_ARM64 is still required because e.g. a target-x64 build on
++// an arm64 host also sets DART_INCLUDE_SIMULATOR, and that Simulator has no such
++// member.
++#if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
++  if (vmcode_path == nullptr) return false;
++  
++  FILE* f = fopen(vmcode_path, "rb");
++  if (f == nullptr) return false;
++  
++  uint32_t n_entries = 0;
++  if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return false; }
++  if (n_entries > 65536) { fclose(f); return false; }
++  
++  fclose(f);
++  // Store the vmcode path; the Simulator will read and apply it lazily
++  // when the first isolate creates its Simulator via Simulator::Current().
++  Simulator::SetPendingVmcodeFile(vmcode_path);
++  
++  return n_entries > 0;
++#else
++  return false;
++#endif
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 2241123e032..2588aab46e0 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -292,6 +292,7 @@ vm_sources = [
+   "simulator_arm.h",
+   "simulator_arm64.cc",
+   "simulator_arm64.h",
++  "shorebird_sim_to_cpu_arm64.S",
+   "simulator_memory.h",
+   "simulator_riscv.cc",
+   "simulator_riscv.h",
+@@ -379,6 +380,17 @@ vm_sources = [
+ 
+ vm_sources_tests = [
+   "allocation_test.cc",
++  # flutter_hot_patcher A2
++  "sim_bridge_arm64.S",
++  "sim_transition.cc",
++  "sim_transition.h",
++  "sim_transition_test.cc",
++  "sim_bridge.cc",
++  "sim_bridge.h",
++  "shorebird_cpu_to_sim_test.cc",
++  "shorebird_sim_to_cpu_test.cc",
++  # flutter_hot_patcher B2
++  "shorebird_analyze_snapshot_test.cc",
+   "ama_test.cc",
+   "assert_test.cc",
+   "atomic_test.cc",
+-- 
+2.53.0
+

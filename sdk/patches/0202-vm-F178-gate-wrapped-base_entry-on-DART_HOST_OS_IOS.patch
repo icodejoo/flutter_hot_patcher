@@ -1,0 +1,40 @@
+From 8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 18:05:57 +0800
+Subject: [PATCH 202/206] [vm] F178: gate wrapped base_entry on
+ !DART_HOST_OS_IOS
+
+iOS falls back to the previous identity-on-payload_start return for the
+linked is_cpu hit in Deserializer::WrapCode. The 2026-09-03 revert
+(1f1e51ad16e) claimed InvokeWithTHR(base_entry) crashes on iOS; that claim
+was never retested and needs real-device verification (G3). Host and
+simulator builds keep the wrapper behavior from 0ae8fc7d1c8 unchanged.
+
+Host verification: C4 0 of 14 live checks failed before and after;
+preprocessor probe over the extracted gate behind platform/globals.h
+selects identity for arm64-apple-ios and wrapper for arm64-apple-macos,
+and flips when the #if is inverted.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index ce5bb36ca5c..ec2c1ffa9df 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10117,7 +10117,13 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+   // handing the Simulator a PROT_READ address to execute natively) does not
+   // apply here; wrap base_entry instead of defaulting to identity on
+   // payload_start, so an unchanged function actually runs on the CPU.
++  // F178: iOS keeps identity until real-device verification (G3) settles the
++  // unretested 2026-09-03 claim (1f1e51ad16e) that InvokeWithTHR crashes there.
++#if defined(DART_HOST_OS_IOS)
++  return EntryPoints(payload_start, identity, payload_info);
++#else
+   return EntryPoints(base_entry, wrapper, payload_info);
++#endif
+ }
+ 
+ // Shorebird. Their :941. Linking needs both halves: a table saying which patch
+-- 
+2.53.0
+

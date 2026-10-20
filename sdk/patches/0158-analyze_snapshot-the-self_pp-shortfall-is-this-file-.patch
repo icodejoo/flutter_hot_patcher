@@ -1,0 +1,137 @@
+From 274554f9bb3795765b0228cfac8c7f587c7c8d4c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 15 Sep 2026 01:26:51 +0800
+Subject: [PATCH 158/206] analyze_snapshot: the self_pp shortfall is this
+ file's fixed 3-word pool skip
+
+The F68 comment block asserted the 2 missing self_pp slots were a gen_snapshot
+codegen difference in parseNumber and that "nothing in this file is
+implicated". A falsification pass measured that and it is false: our prog .so
+does contain the pool-1332 load in both offenders, same instruction word
+0xfd54db60 (ldr d0,[x27,#10672]), at the same position in the reference stream
+as theirs. The real mechanism is the DecodePoolReference branch of
+ComputeShorebirdCodeFacts charging the pool form a fixed three words
+(ahead = 3 - used; i += 1 + ahead), which swallows a genuine reference when our
+codegen packs the site tighter than theirs -- refs landing within 2 words of
+the previous ref are prog OURS 2, prog THEIRS 0, hello both 0.
+
+Rewrites the attribution, records that this reading has now been
+mis-attributed twice, keeps every measured number, retracts the "ours emits
+1332 elsewhere" evidence (pool index labels are per-fixture), keeps the caveat
+that their analyzer may carry the same skip and never be triggered by their own
+layout, and adds a KNOWN-SUSPECT cross-reference at the skip itself.
+
+Comment only. No code change, no rebuild.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index e3f5a1029ea..c269195d1f1 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1092,10 +1092,20 @@ static constexpr intptr_t kNoSelector = -1;
+ // ⚠️ Two prog functions still come up one slot short -- index_in_entries 1580
+ // and 1633, ours 14 slots against their 15, both missing pool index 1332 -- so
+ // the undeduped self_pp is ordered-equal on 4594 of 4596 functions. Those two
+-// slots were first written up as "our WALK differs from theirs at two sites".
+-// THAT ATTRIBUTION WAS WRONG and is retracted here (F68, 2026-09-15).
++// slots have now been MIS-ATTRIBUTED TWICE. Both retractions are recorded here
++// so that neither story can be quoted without the other:
++//   (1) first written up as "our WALK differs from theirs at two sites";
++//       retracted 2026-09-15 -- that comparison had two uncontrolled
++//       variables, not one.
++//   (2) then written up as "our gen_snapshot emits parseNumber without the
++//       +Infinity pool load, nothing in this file is implicated"; retracted
++//       2026-09-15 by F68's falsification pass, which MEASURED it and found it
++//       false. THIS FILE IS IMPLICATED -- see the pool branch of
++//       ComputeShorebirdCodeFacts, :1350-1383 below (:1318-1331 before this
++//       comment block grew).
+ //
+-// The ours/theirs comparison has two independent variables, not one: two
++// (1)'s reasoning still stands as far as it goes, and every number it produced
++// is still true. The ours/theirs comparison has two independent variables: two
+ // analyze_snapshot binaries AND two input snapshots. as.prog.ours.so and
+ // as.prog.theirs.so are not the same file (1928488 vs 1928496 bytes), so a
+ // per-function output difference can just as well be reporting that the
+@@ -1106,16 +1116,52 @@ static constexpr intptr_t kNoSelector = -1;
+ //   code differs:       3820 functions, not ordered-equal on 2
+ // Both offenders are ...parseNumber, whose code we emit 40 bytes shorter than
+ // they do (2628/2352 vs 2668/2392, sharing only a 32-byte prefix); pool entry
+-// 1332 is byte-identical in both pools (+Infinity, 0x7ff0000000000000) and we
+-// do emit index 1332 elsewhere (hello 2x, prog 1x), so the decode is fine --
+-// that code simply does not contain the reference. The 44 subgraph_pp slots
+-// are the same two depth-0 slots propagated to 44 callers.
++// 1332 is byte-identical in both pools (+Infinity, 0x7ff0000000000000).
+ //
+-// => The shortfall is a gen_snapshot CODEGEN difference in parseNumber, not an
+-// analyze_snapshot traversal gap. Nothing in this file is implicated. Tracked
+-// as F68. Reprint every number above with
+-// spikes/shorebird_linkinfo_oracle/nc4_f68_codegen_pool_1332.sh (--negctl runs
+-// the byte-flip control that proves the partition is read from the .so bytes).
++// (2) does NOT stand. "That code simply does not contain the reference" was
++// never measured -- it was inferred from the partition. The pass measured it:
++// our prog .so DOES contain the pool-1332 load, in BOTH offenders, at the same
++// position in the reference stream as theirs and with the same instruction
++// word 0xfd54db60 (ldr d0,[x27,#10672]) -- at function-relative offset 1456
++// (ours) / 1480 (theirs) in fn#1580 and 1180 / 1204 in fn#1633. Decoding every
++// x27-relative scaled load over each function's byte range yields, for both
++// offenders, on OUR side:
++//   [1342,1343,1344,1345,1332,1334,1335,1335,1346,15,16,16,16,1346,15]
++// -- identical to THEIRS' decoded refs AND to THEIRS' self_pp. Ours' self_pp
++// is that same list minus the 1332. That decoder reproduces theirs' self_pp on
++// 1377/1380 hello + 3213/3216 prog functions and ours' on 1377/1380 + 3211/
++// 3216; the only refs present in the code but absent from a side's self_pp are
++// 2, both ours, both of kind (size=3, V=1).
++//
++// => The shortfall is a defect of THIS FILE'S DECODER, in the pool branch
++// of ComputeShorebirdCodeFacts at :1350-1383 (:1318-1331 before this block
++// grew), not a codegen gap. The pool form is charged a fixed three words there
++// (`int32_t ahead = 3 - used;` then `i += 1 + ahead`), so a decoded pool load
++// swallows the two words behind it. Counting refs that fall within 2 words of
++// the previous ref gives prog OURS 2, prog THEIRS 0, hello both 0 -- exactly
++// the two that go missing. Their layout has NOPs at that site; our tighter
++// codegen does not, so the fixed skip eats a genuine reference. The 44
++// subgraph_pp slots are the same two depth-0 slots propagated to 44 callers.
++//
++// CAVEAT, keep it: their analyzer may carry the same three-word skip and
++// simply never be triggered by their own layout. That is not directly testable
++// -- the snapshot version hash makes their analyze_snapshot refuse our .so and
++// ours refuse theirs ("Wrong full snapshot version, expected '8b59e404...'
++// found '839937dd...'", rc=255).
++//
++// Also retracted: "we do emit index 1332 elsewhere (hello 2x, prog 1x)", which
++// (2) leaned on, is misleading -- pool index labels are PER FIXTURE.
++// dump_object_pool entry 1332 is 0x7ff0000000000000 (unknown) in prog but
++// Type: _EventDispatch@5048458 (obj) in hello, and the two fixtures' pools
++// agree at equal index on only 1323/1421 (hello) and 3665/3849 (prog). Only
++// the prog 1x (double._tryParseDouble) is on topic.
++//
++// Tracked as F68, which is now the analyze_snapshot POOL-SKIP card. Reprint
++// the partition numbers with
++// spikes/shorebird_linkinfo_oracle/nc4_f68_pool_skip_1332.sh (--negctl runs
++// both controls: the byte flip that proves the partition is read from the .so
++// bytes, and the self_pp rewrite that proves the stream comparison itself can
++// go red). Reprint the decoder numbers with nc5_f68_x27_ref_decode.sh.
+ // F66's "values right, walk unproven" now applies only to code-differing
+ // functions; on byte-identical code the walk is proven for self_pp.
+ //
+@@ -1318,6 +1364,16 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+                facts.classified.back().words == 1);
+         facts.classified.pop_back();
+       }
++      // 🔴 KNOWN-SUSPECT, F68 (2026-09-15). This fixed three-word charge is
++      // where the two missing self_pp slots come from -- see the F68 block above
++      // the F67_POOL_SEEN_DEDUP switch. `ahead` is computed from the FORM, not
++      // from what actually follows, so a decoded pool load always swallows the
++      // next two words; if a genuine pool reference sits inside that window it is
++      // never decoded. Measured: refs landing within 2 words of the previous ref
++      // are prog OURS 2, prog THEIRS 0, hello both 0 -- exactly the shortfall at
++      // prog fn#1580 / fn#1633. Their layout pads that site with NOPs; our tighter
++      // codegen does not. Do not treat this skip as proven until F68 closes.
++      // Reprint: spikes/shorebird_linkinfo_oracle/nc5_f68_x27_ref_decode.sh.
+       int32_t ahead = 3 - used;
+       if (ahead > words - 1 - i) ahead = static_cast<int32_t>(words - 1 - i);
+       facts.classified.push_back(
+-- 
+2.53.0
+

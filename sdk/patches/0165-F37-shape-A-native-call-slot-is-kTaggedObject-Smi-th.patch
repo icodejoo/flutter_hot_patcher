@@ -1,0 +1,137 @@
+From b2e933506531a8ba83eb6c6f96437892d6bb84dd Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 25 Sep 2026 14:06:28 +0800
+Subject: [PATCH 165/206] F37: shape-A native call slot is kTaggedObject
+ Smi(thr_off), not kImmediate
+
+63716223bde re-landed shape A with
+AddImmediate(thr_off << 1, kPatchable), i.e. a kImmediate pool entry.
+Theirs is a kTaggedObject holding a Smi: their analyze_snapshot
+--dump_object_pool prints the slot as `2312 (obj)` (Smi 0x908 = their
+call_bootstrap_native_entry_point_), ours printed `0x1f00 (unknown)`.
+op_dump_check.sh failed on exactly these 92 slots (hello):
+1323/1421 identical, 98 differing, 92 of them unexplained.
+
+The first F37 landing used AddObject(Smi) for this reason; the re-landing
+dropped it. The loaded word is identical either way (Smi raw == value << 1),
+so the emitted instructions do not change -- only the entry_bits type.
+
+- il_arm64.cc: AddObject(Smi::ZoneHandle(Smi::New(thr_off)), kPatchable).
+  AddObject never goes through FindObject and patchable entries are not
+  entered into the dedup table, so each site keeps its own slot.
+- instructions_arm64.{h,cc}: NativeCallPattern::target()/set_target() read
+  and write the slot as a Smi via ObjectAt/SetObjectAt (SetRawValueAt on a
+  kTaggedObject slot would be wrong; SetObjectAt accepts a Smi there).
+  Thread offsets and bootstrap/no-scope/auto-scope selection unchanged.
+
+Serialization: in kFullAOT the code cluster's TracePool pushes every
+kTaggedObject entry of a non-deferred pool, so the Smi gets a ref and is
+not replaced by null; measured below (92 slots read back as `3968 (obj)`,
+3968 = 0xf80 = our call_bootstrap_native_entry_point_ offset).
+
+Measured on a private copy of the oracle dir, all three build dirs rebuilt:
+  op_dump_check.sh              rc=0 (was rc=1); pool 1421, 1323/1421
+                                identical, 98 remaining = 92 both-Smi-(obj)
+                                + 6 reset slots, all accounted for
+  pool size                     hello 1421, prog 2779 (unchanged)
+  dd_runtime_check.sh           rc=0, 0 failure(s) (ProductARM64)
+  measure_pool_residual.sh      UNEXPLAINED 3 (unchanged)
+  diff_units.sh dump_object_pool UNITS 10700
+  measure_dd_emission.sh        ours native_patched 92, theirs 92
+  run_vm_tests (verify_all selector, ReleaseARM64) 152/152
+Negative control: reverting only the emission to AddImmediate makes
+op_dump_check.sh red again with the 92-slot `0x1f00 (unknown)` signature.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index e94f187c087..d158ecef29e 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1362,12 +1362,22 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+                    dart::Thread::exit_through_ffi_offset());
+     const intptr_t thr_off =
+         dart::Thread::call_bootstrap_native_entry_point_offset();
+-    // AddImmediate always appends (it does not go through FindObject), so each
+-    // call site gets its own slot -- required, since each is patched
++    // The slot is a kTaggedObject holding Smi(thr_off), not a kImmediate
++    // holding the same bits: their analyze_snapshot --dump_object_pool prints
++    // these slots as `<n> (obj)` (Smi 2312 = 0x908, their
++    // call_bootstrap_native_entry_point_), i.e. the entry_bits type is
++    // kTaggedObject. The loaded word is identical either way (a Smi's raw
++    // representation is value << kSmiTagSize), so the `asr` below is
++    // unchanged; only the pool entry's type tag differs.
++    //
++    // AddObject(const Object&, kPatchable) always appends -- it does not go
++    // through FindObject, and patchable entries are never entered into the
++    // dedup index table -- so each call site gets its own slot. That is
++    // required: NativeCallPattern::set_target rewrites each site's slot
+     // independently.
+-    const intptr_t idx = __ object_pool_builder().AddImmediate(
+-        static_cast<uword>(thr_off) << kSmiTagSize,
+-        compiler::ObjectPoolBuilderEntry::kPatchable);
++    const Smi& thr_off_smi = Smi::ZoneHandle(Smi::New(thr_off));
++    const intptr_t idx = __ object_pool_builder().AddObject(
++        thr_off_smi, compiler::ObjectPoolBuilderEntry::kPatchable);
+     __ LoadWordFromPoolIndex(R16, idx);
+     __ AsrImmediate(R16, R16, kSmiTagSize);
+     CLOBBERS_LR({
+diff --git a/runtime/vm/instructions_arm64.cc b/runtime/vm/instructions_arm64.cc
+index f509c89c274..4045eb4fcee 100644
+--- a/runtime/vm/instructions_arm64.cc
++++ b/runtime/vm/instructions_arm64.cc
+@@ -91,9 +91,10 @@ ICCallPattern::ICCallPattern(uword pc, const Code& code)
+ // The pool slot holds SmiTag(<Thread offset of one of the three
+ // call_*_native_entry_point_ fields>). There is no Code* trampoline slot at
+ // such a site at all -- which trampoline runs is decided by *which Thread
+-// field the offset names*, so relinking rewrites the immediate rather than
+-// storing a Code object (ObjectPool::SetObjectAt would reject that anyway:
+-// the slot's type tag is kImmediate).
++// field the offset names*, so relinking stores a different Smi rather than
++// a Code object. The slot's type tag is kTaggedObject (matching theirs, whose
++// --dump_object_pool prints it as `<n> (obj)`), so it is read and written as
++// a Smi through ObjectAt/SetObjectAt.
+ //
+ // This tail is byte-identical to the one FlowGraphCompiler::
+ // EmitIndirectStaticCall emits for the DD table, but that construct never
+@@ -147,8 +148,9 @@ NativeCallPattern::NativeCallPattern(uword pc, const Code& code)
+ 
+ CodePtr NativeCallPattern::target() const {
+   if (via_thread_field_) {
+-    const intptr_t offset = static_cast<intptr_t>(
+-        object_pool_.RawValueAt(target_code_pool_index_) >> kSmiTagSize);
++    const intptr_t offset = Smi::Value(Smi::RawCast(
++        object_pool_.ObjectAt<std::memory_order_acquire>(
++            target_code_pool_index_)));
+     if (offset == Thread::call_bootstrap_native_entry_point_offset()) {
+       return StubCode::CallBootstrapNative().ptr();
+     }
+@@ -177,8 +179,8 @@ void NativeCallPattern::set_target(const Code& target) const {
+     } else {
+       FATAL("NativeCallPattern: no Thread field caches this trampoline");
+     }
+-    object_pool_.SetRawValueAt<std::memory_order_release>(
+-        target_code_pool_index_, static_cast<uword>(offset) << kSmiTagSize);
++    object_pool_.SetObjectAt<std::memory_order_release>(
++        target_code_pool_index_, Smi::Handle(Smi::New(offset)));
+     return;
+   }
+   object_pool_.SetObjectAt<std::memory_order_release>(target_code_pool_index_,
+diff --git a/runtime/vm/instructions_arm64.h b/runtime/vm/instructions_arm64.h
+index 857f4cf28fa..ecc62d0abf4 100644
+--- a/runtime/vm/instructions_arm64.h
++++ b/runtime/vm/instructions_arm64.h
+@@ -120,8 +120,8 @@ class NativeCallPattern : public ValueObject {
+   uword end_;
+   intptr_t native_function_pool_index_;
+   // Upstream shape: index of a kTaggedObject slot holding the trampoline Code.
+-  // Shorebird shape A (via_thread_field_): index of a kImmediate slot holding a
+-  // Smi-tagged *Thread offset* naming one of the three
++  // Shorebird shape A (via_thread_field_): index of a kTaggedObject slot
++  // holding a Smi whose value is the *Thread offset* of one of the three
+   // call_*_native_entry_point_ fields. target()/set_target() translate between
+   // the two representations; see instructions_arm64.cc.
+   intptr_t target_code_pool_index_;
+-- 
+2.53.0
+

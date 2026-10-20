@@ -1,0 +1,304 @@
+From 1a7dd48fe6070398152bef90fc33630c839a9b65 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 7 Sep 2026 14:38:49 +0800
+Subject: [PATCH 140/206] analyze_snapshot: thread data-region sizes through,
+ but the guard is not live yet
+
+Interrupted mid-round by a quota block; committing it because the
+plumbing is real and it does not regress -- blobs still come out at
+666708 on our Product .so.
+
+What it does not do is close the bug it was filed for. SetDataSizes
+defaults to 0 and is overridden only in MappedAppSnapshot, so on the ELF
+path -- the one every fixture and every user actually takes -- region_size
+arrives as 0 and DataRegionSize falls through to the unguarded read via
+its own `region_size == 0 ||` escape.
+
+Measured rather than reasoned: replacing that escape with `false` and
+rebuilding drops --dump_blobs from 666708 to 463732, the pre-fix number.
+The extra-block header is being read only because the bound is skipped.
+So the bounds check is dead code on the path that needed it, and the
+out-of-bounds read is exactly as unbounded as before.
+
+The ELF loader does know its segment sizes -- it maps them -- so the
+remaining work is exposing them, not inventing them. F19 stays open with
+this recorded.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 8bc67dd673f..e343675a351 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -285,6 +285,9 @@ int RunAnalyzer(int argc, char** argv) {
+   }
+   app_snapshot->SetBuffers(&vm_snapshot_data, &vm_snapshot_instructions,
+                            &vm_isolate_data, &vm_isolate_instructions);
++  intptr_t vm_snapshot_data_size = 0;
++  intptr_t vm_isolate_data_size = 0;
++  app_snapshot->SetDataSizes(&vm_snapshot_data_size, &vm_isolate_data_size);
+ 
+   // Begin initialization
+   Dart_InitializeParams init_params = {};
+@@ -325,7 +328,7 @@ int RunAnalyzer(int argc, char** argv) {
+ 
+   dart::snapshot_analyzer::Dart_SnapshotAnalyzerInformation info = {
+       vm_snapshot_data, vm_snapshot_instructions, vm_isolate_data,
+-      vm_isolate_instructions};
++      vm_isolate_instructions, vm_snapshot_data_size, vm_isolate_data_size};
+ 
+   char* out = nullptr;
+   intptr_t out_len = 0;
+diff --git a/runtime/bin/snapshot_utils.cc b/runtime/bin/snapshot_utils.cc
+index d48aa11b409..828b6e8dc54 100644
+--- a/runtime/bin/snapshot_utils.cc
++++ b/runtime/bin/snapshot_utils.cc
+@@ -54,7 +54,7 @@ class DummySnapshot : public AppSnapshot {
+   void SetBuffers(const uint8_t** vm_data_buffer,
+                   const uint8_t** vm_instructions_buffer,
+                   const uint8_t** isolate_data_buffer,
+-                  const uint8_t** isolate_instructions_buffer) {
++                  const uint8_t** isolate_instructions_buffer) override {
+     UNREACHABLE();
+   }
+ 
+@@ -83,7 +83,7 @@ class MappedAppSnapshot : public AppSnapshot {
+   void SetBuffers(const uint8_t** vm_data_buffer,
+                   const uint8_t** vm_instructions_buffer,
+                   const uint8_t** isolate_data_buffer,
+-                  const uint8_t** isolate_instructions_buffer) {
++                  const uint8_t** isolate_instructions_buffer) override {
+     if (vm_data_mapping_ != nullptr) {
+       *vm_data_buffer =
+           reinterpret_cast<const uint8_t*>(vm_data_mapping_->address());
+@@ -102,6 +102,14 @@ class MappedAppSnapshot : public AppSnapshot {
+     }
+   }
+ 
++  void SetDataSizes(intptr_t* vm_data_size,
++                    intptr_t* isolate_data_size) override {
++    *vm_data_size =
++        vm_data_mapping_ != nullptr ? vm_data_mapping_->size() : 0;
++    *isolate_data_size =
++        isolate_data_mapping_ != nullptr ? isolate_data_mapping_->size() : 0;
++  }
++
+  private:
+   MappedMemory* vm_data_mapping_;
+   MappedMemory* vm_instructions_mapping_;
+@@ -196,7 +204,7 @@ class DylibAppSnapshot : public AppSnapshot {
+   void SetBuffers(const uint8_t** vm_data_buffer,
+                   const uint8_t** vm_instructions_buffer,
+                   const uint8_t** isolate_data_buffer,
+-                  const uint8_t** isolate_instructions_buffer) {
++                  const uint8_t** isolate_instructions_buffer) override {
+     *vm_data_buffer = vm_snapshot_data_;
+     *vm_instructions_buffer = vm_snapshot_instructions_;
+     *isolate_data_buffer = isolate_snapshot_data_;
+@@ -303,7 +311,7 @@ class ElfAppSnapshot : public AppSnapshot {
+   void SetBuffers(const uint8_t** vm_data_buffer,
+                   const uint8_t** vm_instructions_buffer,
+                   const uint8_t** isolate_data_buffer,
+-                  const uint8_t** isolate_instructions_buffer) {
++                  const uint8_t** isolate_instructions_buffer) override {
+     *vm_data_buffer = vm_snapshot_data_;
+     *vm_instructions_buffer = vm_snapshot_instructions_;
+     *isolate_data_buffer = isolate_snapshot_data_;
+@@ -388,7 +396,7 @@ class MachODylibAppSnapshot : public AppSnapshot {
+   void SetBuffers(const uint8_t** vm_data_buffer,
+                   const uint8_t** vm_instructions_buffer,
+                   const uint8_t** isolate_data_buffer,
+-                  const uint8_t** isolate_instructions_buffer) {
++                  const uint8_t** isolate_instructions_buffer) override {
+     *vm_data_buffer = vm_snapshot_data_;
+     *vm_instructions_buffer = vm_snapshot_instructions_;
+     *isolate_data_buffer = isolate_snapshot_data_;
+diff --git a/runtime/bin/snapshot_utils.h b/runtime/bin/snapshot_utils.h
+index a68d152eebd..6894859fe2f 100644
+--- a/runtime/bin/snapshot_utils.h
++++ b/runtime/bin/snapshot_utils.h
+@@ -22,6 +22,14 @@ class AppSnapshot {
+                           const uint8_t** isolate_data_buffer,
+                           const uint8_t** isolate_instructions_buffer) = 0;
+ 
++  // Populate the byte sizes of the two data regions. Defaults to 0 (unknown)
++  // for snapshot types whose loaders do not expose segment sizes (ELF, MachO).
++  // Overridden in MappedAppSnapshot where MappedMemory::size() is available.
++  virtual void SetDataSizes(intptr_t* vm_data_size, intptr_t* isolate_data_size) {
++    *vm_data_size = 0;
++    *isolate_data_size = 0;
++  }
++
+   bool IsJIT() const { return magic_number_ == DartUtils::kAppJITMagicNumber; }
+   bool IsAOT() const { return DartUtils::IsAotMagicNumber(magic_number_); }
+   bool IsJITorAOT() const { return IsJIT() || IsAOT(); }
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index fa1d9b09ba4..40acdeac685 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -17,6 +17,11 @@ typedef struct {
+   const uint8_t* vm_snapshot_instructions;
+   const uint8_t* vm_isolate_data;
+   const uint8_t* vm_isolate_instructions;
++  // Byte sizes of the data regions. 0 means unknown: DataRegionSize falls back
++  // to the legacy unchecked read (needed for ELF/MachO loaders that do not
++  // expose segment sizes). Set via AppSnapshot::SetDataSizes when available.
++  intptr_t vm_snapshot_data_size;
++  intptr_t vm_isolate_data_size;
+ } Dart_SnapshotAnalyzerInformation;
+ 
+ void Dart_DumpSnapshotInformationAsJson(
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 1df73517e6c..f60ebb16c79 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1808,7 +1808,12 @@ bool ShorebirdHasIdentity(const std::string& name) {
+ // The order -- both data regions, then both instructions regions -- is taken
+ // from their output: it begins with the vm data magic and the instructions
+ // bytes appear after all of the data.
+-static intptr_t DataRegionSize(const uint8_t* region) {
++// region_size: known byte count of the mapped region, or 0 if unknown.
++// When 0, the extra-block header is read unconditionally (legacy behaviour
++// required for ELF/MachO loaders that do not expose segment sizes). When > 0,
++// the read is bounds-checked; if the extra-block header would fall outside the
++// region we fall back to snap_len (no Shorebird extras assumed).
++static intptr_t DataRegionSize(const uint8_t* region, intptr_t region_size) {
+   if (region == nullptr) return 0;
+   const Snapshot* snapshot = Snapshot::SetupFromBuffer(region);
+   if (snapshot == nullptr) return 0;
+@@ -1819,7 +1824,10 @@ static intptr_t DataRegionSize(const uint8_t* region) {
+   const intptr_t aligned_off =
+       (snap_len + kExtraAlignment - 1) & ~(kExtraAlignment - 1);
+   uint32_t extra_size = 0;
+-  memmove(&extra_size, region + aligned_off, sizeof(extra_size));
++  if (region_size == 0 ||
++      aligned_off + static_cast<intptr_t>(sizeof(extra_size)) <= region_size) {
++    memmove(&extra_size, region + aligned_off, sizeof(extra_size));
++  }
+   return snap_len + static_cast<intptr_t>(extra_size);
+ }
+ 
+@@ -1838,7 +1846,8 @@ void Dart_DumpBlobs(const Dart_SnapshotAnalyzerInformation& info,
+       info.vm_snapshot_data, info.vm_isolate_data,
+       info.vm_snapshot_instructions, info.vm_isolate_instructions};
+   const intptr_t sizes[4] = {
+-      DataRegionSize(regions[0]), DataRegionSize(regions[1]),
++      DataRegionSize(regions[0], info.vm_snapshot_data_size),
++      DataRegionSize(regions[1], info.vm_isolate_data_size),
+       InstructionsRegionSize(regions[2]), InstructionsRegionSize(regions[3])};
+ 
+   intptr_t total = 0;
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index c6eacff48fb..39e25fa8c46 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7281,14 +7281,22 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+   // Only an overflow guard; LinkOracle applies the real limit.
+   if (static_cast<size_t>(n_entries) > (SIZE_MAX - 4) / 8) { fclose(f); return false; }
+ 
+-  const size_t header_size = 4 + static_cast<size_t>(n_entries) * 8;
+-  std::unique_ptr<uint8_t[]> header(new uint8_t[header_size]);
++  const size_t table_size = 4 + static_cast<size_t>(n_entries) * 8;
++  // ReadHeaderSize page-aligns the table and then requires that the ELF start
++  // offset falls strictly inside the buffer (header_size < size). Read enough
++  // to satisfy that: the padded header plus four bytes of what follows it.
++  // kSnapshotAlignment must match the constant in shorebird.cc.
++  static constexpr size_t kSnapshotAlignment = 16384;
++  const size_t pages = (table_size + kSnapshotAlignment - 1) / kSnapshotAlignment;
++  const size_t read_size = (pages == 0 ? 1 : pages) * kSnapshotAlignment + 4;
++  std::unique_ptr<uint8_t[]> header(new uint8_t[read_size]);
+   rewind(f);
+-  const bool header_read = fread(header.get(), 1, header_size, f) == header_size;
++  const size_t bytes_read = fread(header.get(), 1, read_size, f);
+   fclose(f);
+-  if (!header_read) return false;
++  // Need at least the declared table; the rest is padding + ELF bytes.
++  if (bytes_read < table_size) return false;
+ 
+-  if (Shorebird_ReadLinkHeader(header.get(), header_size) == 0) return false;
++  if (Shorebird_ReadLinkHeader(header.get(), bytes_read) == 0) return false;
+ 
+   // Store the vmcode path; the Simulator will read and apply it lazily
+   // when the first isolate creates its Simulator via Simulator::Current().
+diff --git a/runtime/vm/shorebird_analyze_snapshot_test.cc b/runtime/vm/shorebird_analyze_snapshot_test.cc
+index 1ef2754b5e7..35203f8b9b2 100644
+--- a/runtime/vm/shorebird_analyze_snapshot_test.cc
++++ b/runtime/vm/shorebird_analyze_snapshot_test.cc
+@@ -1,18 +1,68 @@
+ // Copyright (c) 2025 flutter_hot_patcher. BSD license.
+-// Unit test for Dart_DumpSnapshotInformationShorebirdAsJson (B2).
++// Unit tests for Shorebird analyze_snapshot extensions.
++
++#include <cstring>
+ 
+-#include "vm/globals.h"
+ #include "include/analyze_snapshot_api.h"
++#include "vm/snapshot.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+ 
+ ISOLATE_UNIT_TEST_CASE(ShorebirdAnalyzeSnapshot_Basic) {
+-  // Test that Dart_DumpSnapshotInformationShorebirdAsJson produces valid JSON.
+-  // We use the currently loaded snapshot (the test binary's own snapshot).
+-  // API presence verified at compile time - function linked into the VM library
+-  EXPECT(true);  // B2 API is present and compiled
++  // API presence verified at compile time.
++  EXPECT(true);
+   OS::PrintErr("[B2] Dart_DumpSnapshotInformationShorebirdAsJson: API compiled OK\n");
+ }
+ 
++// F19: DataRegionSize bounds check.
++//
++// Build a minimal snapshot header of exactly kHeaderSize (20) bytes, then ask
++// Dart_DumpBlobs to measure it with vm_snapshot_data_size=20.  The
++// extra-block header lives at the 64-byte-aligned offset after snap_len (= 64
++// here), which is past the 20-byte region.  The fixed DataRegionSize must
++// detect this and fall back to snap_len=20 rather than reading out-of-bounds.
++//
++// Negative control: remove the bounds check in DataRegionSize; this test must
++// go red (OOB read changes out_len to snap_len + arbitrary garbage).
++UNIT_TEST_CASE(ShorebirdAnalyzeSnapshot_DataRegionSizeBoundsCheck) {
++  // Construct a minimal valid snapshot header: magic + length + kind.
++  // Total = kMagicSize(4) + kLengthSize(8) + kKindSize(8) = 20 bytes.
++  static_assert(Snapshot::kHeaderSize == 20, "header layout changed");
++  uint8_t buf[Snapshot::kHeaderSize] = {};
++
++  // Magic (4 bytes LE).
++  const uint32_t magic = Snapshot::kMagicValue;
++  memmove(buf + Snapshot::kMagicOffset, &magic, sizeof(magic));
++
++  // Stored length = snap_len - kMagicSize = 20 - 4 = 16.
++  const int64_t stored_len = static_cast<int64_t>(sizeof(buf)) -
++                             static_cast<int64_t>(Snapshot::kMagicSize);
++  memmove(buf + Snapshot::kLengthOffset, &stored_len, sizeof(stored_len));
++
++  // Kind = kFull (0) — SetupFromBuffer does not validate kind.
++  const int64_t kind = static_cast<int64_t>(Snapshot::kFull);
++  memmove(buf + Snapshot::kKindOffset, &kind, sizeof(kind));
++
++  // Verify our header is parseable.
++  const Snapshot* snap = Snapshot::SetupFromBuffer(buf);
++  EXPECT(snap != nullptr);
++  EXPECT_EQ(static_cast<intptr_t>(sizeof(buf)), snap->length());
++
++  // Call Dart_DumpBlobs with only vm_snapshot_data set and its size known.
++  // All other regions are null (sizes = 0, no copy).
++  dart::snapshot_analyzer::Dart_SnapshotAnalyzerInformation info = {};
++  info.vm_snapshot_data = buf;
++  info.vm_snapshot_data_size = static_cast<intptr_t>(sizeof(buf));
++
++  char* out = nullptr;
++  intptr_t out_len = 0;
++  Dart_DumpBlobs(info, &out, &out_len);
++
++  // DataRegionSize must have returned snap_len=20, not snap_len+garbage.
++  EXPECT_EQ(static_cast<intptr_t>(sizeof(buf)), out_len);
++  EXPECT(memcmp(out, buf, sizeof(buf)) == 0);
++  free(out);
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

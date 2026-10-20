@@ -1,0 +1,222 @@
+From 0fba1624683e03f170fecc78f681dd4b2f05131e Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 12:32:38 +0800
+Subject: [PATCH 050/206] feat(shorebird): ResumeOnCPU and
+ CallSimulatorFromFfiTrampoline stubs
+
+Two more of their sixteen, both transcribed from their emitted stub the same way
+as the CPU->Sim body. Both come out at exactly their size -- 16 and 124 bytes --
+and every instruction that is not a Thread access is byte-identical: 1 of 4 and
+29 of 31, the remainder differing only in a displacement because our Shorebird
+Thread fields are appended rather than mid-struct.
+
+Both exercise fields added last commit, which is independent confirmation of
+what those fields are for: ResumeOnCPU picks up simulator_async_resume_pc_ and
+clears it, and CallSimulatorFromFfiTrampoline calls through
+simulator_call_from_ffi_.
+
+Two oddities in their code are reproduced rather than tidied. ResumeOnCPU loads
+is_simulating_ into x17 and never uses it; a cleaned-up three-instruction
+version would be a 12-byte stub against their 16. CallSimulatorFromFfiTrampoline
+saves x8/x9 but does not restore them, and round-trips only q0-q7. The contract
+is their bytes.
+
+Verified: 83 shorebird cases pass, both builds link, and verify_reproduction.sh
+still reports 24 artifacts with 0 failures -- worth checking explicitly here,
+since adding entries to VM_STUB_CODE_LIST could have shifted the serializer's
+code list and broken the byte-identical .ddid. It did not; VM stubs only reach
+that list when referenced. Negative control: changing an ldp displacement from
+6 to 7 registers makes the new test exit 255, reverting returns it to 0.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 275b8f657b9..e98ed805b7a 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -860,6 +860,82 @@ void StubCodeCompiler::GenerateTransitionDartToCpuIfNeededStub() {
+   ASSERT_EQUAL(__ CodeSize() - body_start, layout.shared_body_size);
+ }
+ 
++// Shorebird. An async continuation that must run on the real CPU: pick up the
++// resume PC the simulator parked in the Thread, clear it, and jump.
++//
++// 4 instructions, transcribed from their emitted stub (WRAPPER_STUBS.md 9).
++// The first is a load into x17 whose result is never used -- dead in their code
++// too. It is reproduced because the contract here is their bytes, not our idea
++// of what the bytes should have been; a "cleaned up" 3-instruction version
++// would be a 12-byte stub against their 16.
++void StubCodeCompiler::GenerateResumeOnCPUStub() {
++  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
++         kEightBytes);
++  __ ldr(R11, Address(THR, dart::Thread::simulator_async_resume_pc_offset()),
++         kEightBytes);
++  __ str(ZR, Address(THR, dart::Thread::simulator_async_resume_pc_offset()),
++         kEightBytes);
++  __ br(R11);
++}
++
++// Shorebird. The FFI trampoline's way into the simulator: spill the argument
++// registers into the simulator's register file, call through
++// Thread::simulator_call_from_ffi_, and reload what it hands back.
++//
++// 31 instructions, transcribed from their emitted stub. Two asymmetries are
++// theirs and are reproduced: x8/x9 are saved but not restored, and only q0-q7
++// make the round trip. Their entry contract has x10 holding the value passed on
++// as the second argument.
++void StubCodeCompiler::GenerateCallSimulatorFromFfiTrampolineStub() {
++  // Simulator register-file displacements, as in the CPU->Sim body above.
++  constexpr intptr_t kSimReg = 8;
++  constexpr intptr_t kSimVRegBase = 0x100;
++  constexpr intptr_t kSimVReg = 16;
++
++  __ stp(R29, R30, Address::Pair(CSP, -16, Address::PairPreIndex));
++  __ mov(R29, CSP);
++
++  __ ldr(R11, Address(THR, compiler::target::Thread::isolate_offset()),
++         kEightBytes);
++  __ ldr(R11, Address(R11, 0x20), kEightBytes);
++
++  __ stp(R0, R1, Address::Pair(R11, 0 * kSimReg));
++  __ stp(R2, R3, Address::Pair(R11, 2 * kSimReg));
++  __ stp(R4, R5, Address::Pair(R11, 4 * kSimReg));
++  __ stp(R6, R7, Address::Pair(R11, 6 * kSimReg));
++  __ stp(R8, R9, Address::Pair(R11, 8 * kSimReg));
++  __ fstp(V0, V1, Address::Pair(R11, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fstp(V2, V3, Address::Pair(R11, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fstp(V4, V5, Address::Pair(R11, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fstp(V6, V7, Address::Pair(R11, kSimVRegBase + 6 * kSimVReg), kQWord);
++
++  __ mov(R0, R11);
++  __ mov(R1, R10);
++  __ mov(R2, R29);
++  __ mov(R3, THR);
++  __ ldr(TMP, Address(THR, dart::Thread::simulator_call_from_ffi_offset()),
++         kEightBytes);
++  // LR was spilled by the stp above, so the call is safe; the tracker is told
++  // again once the closing ldp restores it. See the CPU->Sim body.
++  __ set_lr_state(compiler::LRState::Clobbered());
++  __ blr(TMP);
++
++  __ mov(R11, R0);
++  __ ldp(R0, R1, Address::Pair(R11, 0 * kSimReg));
++  __ ldp(R2, R3, Address::Pair(R11, 2 * kSimReg));
++  __ ldp(R4, R5, Address::Pair(R11, 4 * kSimReg));
++  __ ldp(R6, R7, Address::Pair(R11, 6 * kSimReg));
++  __ fldp(V0, V1, Address::Pair(R11, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fldp(V2, V3, Address::Pair(R11, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fldp(V4, V5, Address::Pair(R11, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fldp(V6, V7, Address::Pair(R11, kSimVRegBase + 6 * kSimVReg), kQWord);
++
++  __ mov(CSP, R29);
++  __ ldp(R29, R30, Address::Pair(CSP, 16, Address::PairPostIndex));
++  __ set_lr_state(compiler::LRState::OnEntry());
++  __ ret();
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index fef879585ca..2081f0f0353 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -246,6 +246,82 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCpuToSimBodyMatchesTheirBytes) {
+   }
+ }
+ 
++// Shorebird ResumeOnCPU, 4 instructions. Three of the four touch Thread, so only
++// `br x11` can be a literal; the rest are re-derived. The first load is dead in
++// their stub too -- see the generator.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeOnCPUMatchesTheirBytes) {
++  const Code& stub = StubCode::ResumeOnCPU();
++  EXPECT_EQ(static_cast<intptr_t>(16), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  EXPECT_EQ(ldst_thr(0xf9400000u, Thread::is_simulating_offset(), 17), w[0]);
++  EXPECT_EQ(ldst_thr(0xf9400000u,
++                     Thread::simulator_async_resume_pc_offset(), 11), w[1]);
++  EXPECT_EQ(ldst_thr(0xf9000000u,
++                     Thread::simulator_async_resume_pc_offset(), 31), w[2]);
++  EXPECT_EQ(0xd61f0160u, w[3]);  // br x11
++}
++
++// Shorebird CallSimulatorFromFfiTrampoline, 31 instructions. 29 are position
++// independent; two encode a Thread offset and are re-derived.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallSimFromFfiMatchesTheirBytes) {
++  const Code& stub = StubCode::CallSimulatorFromFfiTrampoline();
++  EXPECT_EQ(static_cast<intptr_t>(124), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[31] = {
++      0xa9bf7bfdu,  // [0]
++      0x910003fdu,  // [1]
++      0u,  // [2]  derived
++      0xf940116bu,  // [3]
++      0xa9000560u,  // [4]
++      0xa9010d62u,  // [5]
++      0xa9021564u,  // [6]
++      0xa9031d66u,  // [7]
++      0xa9042568u,  // [8]
++      0xad080560u,  // [9]
++      0xad090d62u,  // [10]
++      0xad0a1564u,  // [11]
++      0xad0b1d66u,  // [12]
++      0xaa0b03e0u,  // [13]
++      0xaa0a03e1u,  // [14]
++      0xaa1d03e2u,  // [15]
++      0xaa1a03e3u,  // [16]
++      0u,  // [17]  derived
++      0xd63f0200u,  // [18]
++      0xaa0003ebu,  // [19]
++      0xa9400560u,  // [20]
++      0xa9410d62u,  // [21]
++      0xa9421564u,  // [22]
++      0xa9431d66u,  // [23]
++      0xad480560u,  // [24]
++      0xad490d62u,  // [25]
++      0xad4a1564u,  // [26]
++      0xad4b1d66u,  // [27]
++      0x910003bfu,  // [28]
++      0xa8c17bfdu,  // [29]
++      0xd65f03c0u,  // [30]
++  };
++
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  EXPECT_EQ(ldst_thr(0xf9400000u,
++                     compiler::target::Thread::isolate_offset(), 11), w[2]);
++  EXPECT_EQ(ldst_thr(0xf9400000u,
++                     Thread::simulator_call_from_ffi_offset(), 16), w[17]);
++
++  for (intptr_t i = 0; i < 31; i++) {
++    if (kExpected[i] == 0u) continue;  // checked by derivation above
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index fd9b0678b70..50077fb8a4a 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -158,6 +158,8 @@ namespace dart {
+   V(FfiCallbackTrampoline)                                                     \
+   V(TransitionDartToSimulatorIfNeeded)                                         \
+   V(TransitionDartToCpuIfNeeded)                                               \
++  V(ResumeOnCPU)                                                               \
++  V(CallSimulatorFromFfiTrampoline)                                            \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

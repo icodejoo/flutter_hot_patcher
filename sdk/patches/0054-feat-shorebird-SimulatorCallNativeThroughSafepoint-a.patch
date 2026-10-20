@@ -1,0 +1,293 @@
+From df424cba11cba35931cf7957034c9f2b4b580095 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 13:26:23 +0800
+Subject: [PATCH 054/206] feat(shorebird): SimulatorCallNativeThroughSafepoint,
+ and a build-dependent-word trap
+
+Ten of sixteen. 42 instructions / 168 bytes, matching theirs, 30 of 42 words
+byte-identical and every difference a Thread displacement. Adds two more Thread
+fields, enter_safepoint_entry_point_ and exit_safepoint_entry_point_: upstream
+reaches those stubs through a Code object and pays two loads for an entry point,
+Shorebird caches the entry point and pays one, which is why the slow path here
+is written out rather than delegated to Assembler::EnterFullSafepoint.
+
+The test failed first time, and the reason generalises. I had been capturing the
+expected words from a product build and asserting them in a release test, which
+works only for words that are the same in both. Two here are not: the safepoint
+state values encode differently per configuration, so movz #acquired and cmp
+#acquired moved and the literals were wrong.
+
+Diffing the same stub out of both builds turns out to be the reliable way to
+find which words must be derived rather than pinned -- the set that moves
+between configurations is exactly the set that cannot be a literal. Run over all
+six stubs landed so far it reports: ResumeOnCPU {0,1,2}, CallSimFromFfi {17},
+BootstrapNative {}, CallToRuntime {}, ResumeOnSimulator {0,1,2,21,26,27,41,57,62},
+and this one {12,16,26,32}. Every index in the first five was already derived, so
+only this stub had the gap, but I found that by checking rather than by assuming.
+
+Verified: 87 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures. Negative control, with PATCH_OK confirmed
+before building: swapping the hypercall to kCallFFIOnCPUCode exits 255,
+reverting returns 0.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 74e2a415a4b..61eaf1b9413 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -1094,6 +1094,88 @@ void StubCodeCompiler::GenerateResumeOnSimulatorStub() {
+   GenerateEnterSimulator(assembler, /*source=*/1, /*duplicate_pc_store=*/false);
+ }
+ 
++// Shorebird. Cross the safepoint the way an FFI leaf call does, but trap into
++// the simulator instead of calling native code. 42 instructions / 168 bytes,
++// transcribed from their emitted stub.
++//
++// The ldxr/stxr pair is upstream's compare-and-swap on Thread::safepoint_state_,
++// but the slow path differs: upstream loads enter_safepoint_stub_ and then digs
++// the entry point out of that Code object, two loads; Shorebird caches the entry
++// point in the Thread and needs one. That is why this is written out rather than
++// delegated to Assembler::EnterFullSafepoint.
++static void GenerateSimulatorSafepointTransition(Assembler* assembler,
++                                                 bool entering,
++                                                 intptr_t entry_point_offset) {
++  Label retry, slow_path, done;
++  const uword from = entering
++                         ? target::Thread::native_safepoint_state_unacquired()
++                         : target::Thread::native_safepoint_state_acquired();
++  const uword to = entering
++                       ? target::Thread::native_safepoint_state_acquired()
++                       : target::Thread::native_safepoint_state_unacquired();
++
++  __ movz(TMP2, Immediate(target::Thread::safepoint_state_offset()), 0);
++  __ add(TMP2, THR, Operand(TMP2));
++  __ Bind(&retry);
++  __ ldxr(R10, TMP2);
++  __ CompareImmediate(R10, from);
++  __ b(&slow_path, NE);
++  __ movz(R10, Immediate(to), 0);
++  __ stxr(TMP, R10, TMP2);
++  __ cbz(&done, TMP);
++  __ b(&retry);
++  __ Bind(&slow_path);
++  __ ldr(TMP2, Address(THR, entry_point_offset), kEightBytes);
++  __ blr(TMP2);
++  __ Bind(&done);
++}
++
++void StubCodeCompiler::GenerateSimulatorCallNativeThroughSafepointStub() {
++  // LR is parked in a callee-saved register because the safepoint slow paths
++  // below are real calls; the stub returns through it rather than through LR.
++  __ mov(R19, R30);
++  // From here LR is dead: the slow paths below are real calls and the stub
++  // returns through R19. Declaring it once keeps the two paths into each
++  // safepoint label in agreement, which the assembler checks at Bind.
++  __ set_lr_state(compiler::LRState::Clobbered());
++
++  __ LoadImmediate(R10, target::Thread::exit_through_ffi());
++  __ str(FP, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ str(R10, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ str(R9, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++  __ LoadImmediate(R10, target::Thread::native_execution_state());
++  __ str(R10, Address(THR, target::Thread::execution_state_offset()),
++         kEightBytes);
++
++  GenerateSimulatorSafepointTransition(
++      assembler, /*entering=*/true,
++      dart::Thread::enter_safepoint_entry_point_offset());
++
++  __ mov(R25, CSP);
++  __ mov(CSP, SPREG);
++  __ brk(Instr::kCallNativeThroughSafepointOnCPUCode);
++  __ mov(SPREG, CSP);
++  __ mov(CSP, R25);
++
++  GenerateSimulatorSafepointTransition(
++      assembler, /*entering=*/false,
++      dart::Thread::exit_safepoint_entry_point_offset());
++
++  __ LoadImmediate(R10, VMTag::kDartTagId);
++  __ str(R10, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++  __ LoadImmediate(R10, target::Thread::generated_execution_state());
++  __ str(R10, Address(THR, target::Thread::execution_state_offset()),
++         kEightBytes);
++  __ str(ZR, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ LoadImmediate(R10, 0);
++  __ str(R10, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ ret(R19);
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 69c289c955b..120628148a4 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -577,6 +577,102 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeOnSimulatorMatchesTheirBytes) {
+   }
+ }
+ 
++// Shorebird SimulatorCallNativeThroughSafepoint, 42 instructions / 168 bytes.
++// Twelve words encode a Thread offset and are re-derived; the other thirty are
++// pinned, and they include every constant the transcription had to get right --
++// the acquired/unacquired safepoint states, native and generated execution
++// states, kExitThroughFfi and VMTag::kDartTagId.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallNativeThroughSafepointMatchesTheirBytes) {
++  const Code& stub = StubCode::SimulatorCallNativeThroughSafepoint();
++  EXPECT_EQ(static_cast<intptr_t>(168), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[42] = {
++      0xaa1e03f3u,  // [0]
++      0xd280002au,  // [1]
++      0u,  // [2]  derived
++      0u,  // [3]  derived
++      0u,  // [4]  derived
++      0xd280004au,  // [5]
++      0u,  // [6]  derived
++      0u,  // [7]  derived
++      0x8b110351u,  // [8]
++      0xc85f7e2au,  // [9]
++      0xf100015fu,  // [10]
++      0x540000a1u,  // [11]
++      0u,  // [12]  derived
++      0xc8107e2au,  // [13]
++      0xb4000090u,  // [14]
++      0x17fffffau,  // [15]
++      0u,  // [16]  derived
++      0xd63f0220u,  // [17]
++      0x910003f9u,  // [18]
++      0x910001ffu,  // [19]
++      0xd4362500u,  // [20]
++      0x910003efu,  // [21]
++      0x9100033fu,  // [22]
++      0u,  // [23]  derived
++      0x8b110351u,  // [24]
++      0xc85f7e2au,  // [25]
++      0u,  // [26]  derived
++      0x540000a1u,  // [27]
++      0xd280000au,  // [28]
++      0xc8107e2au,  // [29]
++      0xb4000090u,  // [30]
++      0x17fffffau,  // [31]
++      0u,  // [32]  derived
++      0xd63f0220u,  // [33]
++      0xd280010au,  // [34]
++      0u,  // [35]  derived
++      0xd280002au,  // [36]
++      0u,  // [37]  derived
++      0u,  // [38]  derived
++      0xd280000au,  // [39]
++      0u,  // [40]  derived
++      0xd65f0260u,  // [41]
++  };
++
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  // movz Xd, #imm16: 0xd2800000 | imm16 << 5 | rd.
++  auto movz = [](intptr_t imm, uint32_t rd) {
++    return 0xd2800000u | (static_cast<uint32_t>(imm) << 5) | rd;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  using T = compiler::target::Thread;
++  EXPECT_EQ(ldst_thr(kStr, T::top_exit_frame_info_offset(), 29), w[2]);
++  EXPECT_EQ(ldst_thr(kStr, T::exit_through_ffi_offset(), 10), w[3]);
++  EXPECT_EQ(ldst_thr(kStr, T::vm_tag_offset(), 9), w[4]);
++  EXPECT_EQ(ldst_thr(kStr, T::execution_state_offset(), 10), w[6]);
++  EXPECT_EQ(movz(T::safepoint_state_offset(), 17), w[7]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::enter_safepoint_entry_point_offset(), 17),
++            w[16]);
++  EXPECT_EQ(movz(T::safepoint_state_offset(), 17), w[23]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::exit_safepoint_entry_point_offset(), 17),
++            w[32]);
++  EXPECT_EQ(ldst_thr(kStr, T::vm_tag_offset(), 10), w[35]);
++  EXPECT_EQ(ldst_thr(kStr, T::execution_state_offset(), 10), w[37]);
++  EXPECT_EQ(ldst_thr(kStr, T::top_exit_frame_info_offset(), 31), w[38]);
++  EXPECT_EQ(ldst_thr(kStr, T::exit_through_ffi_offset(), 10), w[40]);
++
++  // The safepoint state values are build-dependent -- product and release
++  // disagree -- so they are derived too. Found by diffing the same stub out of
++  // both builds: the words that move between configurations are exactly the
++  // ones that must not be literals.
++  const uword acq = compiler::target::Thread::native_safepoint_state_acquired();
++  EXPECT_EQ(0xd2800000u | (static_cast<uint32_t>(acq) << 5) | 10u, w[12]);
++  EXPECT_EQ(0xf1000000u | (static_cast<uint32_t>(acq) << 10) | (10u << 5) | 31u,
++            w[26]);
++
++  for (intptr_t i = 0; i < 42; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 688b20c2887..afbb7fbd79c 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -165,6 +165,7 @@ namespace dart {
+   V(SimulatorCallNoScopeNative)                                                \
+   V(SimulatorCallToRuntime)                                                    \
+   V(ResumeOnSimulator)                                                         \
++  V(SimulatorCallNativeThroughSafepoint)                                       \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index 82d17c0fe2a..566ff5e9ac6 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -577,6 +577,30 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, simulator_call_from_ffi_);
+   }
+ 
++  // Their 0x920 / 0x928. Upstream reaches the safepoint stubs through
++  // enter_safepoint_stub_, a Code object, and pays two loads to get an entry
++  // point out of it; Shorebird caches the entry point directly, so their
++  // SimulatorCallNativeThroughSafepoint slow path is one load and a blr.
++  uword enter_safepoint_entry_point() const {
++    return enter_safepoint_entry_point_;
++  }
++  void set_enter_safepoint_entry_point(uword v) {
++    enter_safepoint_entry_point_ = v;
++  }
++  static intptr_t enter_safepoint_entry_point_offset() {
++    return OFFSET_OF(Thread, enter_safepoint_entry_point_);
++  }
++
++  uword exit_safepoint_entry_point() const {
++    return exit_safepoint_entry_point_;
++  }
++  void set_exit_safepoint_entry_point(uword v) {
++    exit_safepoint_entry_point_ = v;
++  }
++  static intptr_t exit_safepoint_entry_point_offset() {
++    return OFFSET_OF(Thread, exit_safepoint_entry_point_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1743,6 +1767,8 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   uword simulator_async_resume_pc_ = 0;
+   uword simulator_execute_ = 0;
+   uword simulator_call_from_ffi_ = 0;
++  uword enter_safepoint_entry_point_ = 0;
++  uword exit_safepoint_entry_point_ = 0;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

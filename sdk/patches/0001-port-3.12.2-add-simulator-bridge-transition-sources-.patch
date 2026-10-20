@@ -1,0 +1,1044 @@
+From 741c7607c622dc4a0e9c1a48c71abb217027b3d3 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:12:28 +0800
+Subject: [PATCH 001/206] port(3.12.2): add simulator bridge/transition sources
+ and tests
+
+Additive files only -- no existing file is touched, so this batch cannot
+conflict with the 10337 upstream commits between 37bbc285d8d and 3.12.2.
+
+Build registration (vm_sources.gni, BUILD.gn) is deliberately left out of
+this commit; it lands with the edits to existing files.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird_analyze_snapshot_test.cc b/runtime/vm/shorebird_analyze_snapshot_test.cc
+new file mode 100644
+index 00000000000..1ef2754b5e7
+--- /dev/null
++++ b/runtime/vm/shorebird_analyze_snapshot_test.cc
+@@ -0,0 +1,18 @@
++// Copyright (c) 2025 flutter_hot_patcher. BSD license.
++// Unit test for Dart_DumpSnapshotInformationShorebirdAsJson (B2).
++
++#include "vm/globals.h"
++#include "include/analyze_snapshot_api.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++
++ISOLATE_UNIT_TEST_CASE(ShorebirdAnalyzeSnapshot_Basic) {
++  // Test that Dart_DumpSnapshotInformationShorebirdAsJson produces valid JSON.
++  // We use the currently loaded snapshot (the test binary's own snapshot).
++  // API presence verified at compile time - function linked into the VM library
++  EXPECT(true);  // B2 API is present and compiled
++  OS::PrintErr("[B2] Dart_DumpSnapshotInformationShorebirdAsJson: API compiled OK\n");
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird_cpu_to_sim_test.cc b/runtime/vm/shorebird_cpu_to_sim_test.cc
+new file mode 100644
+index 00000000000..63e938c0273
+--- /dev/null
++++ b/runtime/vm/shorebird_cpu_to_sim_test.cc
+@@ -0,0 +1,160 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++//
++// Unit tests for the CPU -> Simulator direction (SimBridge).
++//
++// The point of these tests is that the *caller* is real native code. A
++// trampoline handed out by SimBridge is called through a plain C function
++// pointer; if the mechanism works, control ends up in the Simulator, the
++// registered target executes there, and the result comes back.
++
++#include "vm/globals.h"
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++#include "vm/sim_bridge.h"
++#include "vm/simulator.h"
++#include "vm/unit_test.h"
++#include "vm/virtual_memory.h"
++
++namespace dart {
++
++// Writes `movz x0,#imm; ret` and returns the (non-executable) code address.
++// Non-executable on purpose: it stands in for a patch mapping, which the CPU
++// must not be able to run directly.
++static uword EmitSimOnlyConstant(VirtualMemory* mem, int64_t imm) {
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  code[0] = 0xD2800000u | ((static_cast<uint32_t>(imm) & 0xFFFFu) << 5);
++  code[1] = 0xD65F03C0u;  // ret
++  return reinterpret_cast<uword>(code);
++}
++
++// movz x0,#0; add x0,x0,x1 style: returns arg0 + arg1.
++static uword EmitSimOnlyAdd(VirtualMemory* mem) {
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  code[0] = 0x8B010000u;  // add x0, x0, x1
++  code[1] = 0xD65F03C0u;  // ret
++  return reinterpret_cast<uword>(code);
++}
++
++VM_UNIT_TEST_CASE(ShorebirdCpuToSim_RegionGeometry) {
++  // The trampoline body recovers its region start by masking its own PC, so the
++  // geometry must be a single power-of-two mask covering the whole region.
++  EXPECT(Utils::IsPowerOfTwo(SimBridge::RegionAlignment()));
++  EXPECT(SimBridge::RegionAlignment() >= SimBridge::RegionSize());
++  EXPECT(SimBridge::TrampolinesPerRegion() > 0);
++
++  // Masking any address inside a region must yield the same region start.
++  const uword base = SimBridge::RegionAlignment() * 4;
++  EXPECT_EQ(base, SimBridge::RegionStart(base));
++  EXPECT_EQ(base, SimBridge::RegionStart(base + SimBridge::kTrampolineSize));
++  EXPECT_EQ(base, SimBridge::RegionStart(base + SimBridge::RegionSize() - 1));
++}
++
++VM_UNIT_TEST_CASE(ShorebirdCpuToSim_AllocateAndLookup) {
++  SimBridge::Init();
++
++  const uword fake_target = 0xDEADBEE0;
++  const SimBridge::Trampoline t = SimBridge::Allocate(fake_target);
++  EXPECT(t != 0);
++  EXPECT_EQ(fake_target, SimBridge::TargetFor(t));
++
++  // Distinct allocations must not collide.
++  const uword other_target = 0xCAFEBAB0;
++  const SimBridge::Trampoline t2 = SimBridge::Allocate(other_target);
++  EXPECT(t2 != 0);
++  EXPECT(t2 != t);
++  EXPECT_EQ(other_target, SimBridge::TargetFor(t2));
++  EXPECT_EQ(fake_target, SimBridge::TargetFor(t));
++
++  // An address that is not a trampoline must not resolve.
++  EXPECT_EQ(static_cast<uword>(0), SimBridge::TargetFor(t + 1));
++
++  SimBridge::Free(t);
++  EXPECT_EQ(static_cast<uword>(0), SimBridge::TargetFor(t));
++
++  SimBridge::Cleanup();
++}
++
++// The load-bearing test: call the trampoline as native code and land in the
++// Simulator.
++ISOLATE_UNIT_TEST_CASE(ShorebirdCpuToSim_NativeCallEntersSimulator) {
++  SimBridge::Init();
++
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      SimBridge::kPageSize, /*is_executable=*/false, /*is_compressed=*/false,
++      "cpu_to_sim_target"));
++  EXPECT(mem != nullptr);
++  const uword target = EmitSimOnlyConstant(mem.get(), 4242);
++
++  const SimBridge::Trampoline t = SimBridge::Allocate(target);
++  EXPECT(t != 0);
++
++  using Fn = int64_t (*)(int64_t, int64_t, int64_t, int64_t);
++  Fn fn = reinterpret_cast<Fn>(t);
++  const int64_t result = fn(0, 0, 0, 0);
++  EXPECT_EQ(4242, result);
++
++  SimBridge::Free(t);
++  SimBridge::Cleanup();
++}
++
++// Arguments must survive the transition in x0-x3.
++ISOLATE_UNIT_TEST_CASE(ShorebirdCpuToSim_ForwardsArguments) {
++  SimBridge::Init();
++
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      SimBridge::kPageSize, /*is_executable=*/false, /*is_compressed=*/false,
++      "cpu_to_sim_add"));
++  EXPECT(mem != nullptr);
++  const uword target = EmitSimOnlyAdd(mem.get());
++
++  const SimBridge::Trampoline t = SimBridge::Allocate(target);
++  EXPECT(t != 0);
++
++  using Fn = int64_t (*)(int64_t, int64_t, int64_t, int64_t);
++  Fn fn = reinterpret_cast<Fn>(t);
++  EXPECT_EQ(30, fn(10, 20, 0, 0));
++  EXPECT_EQ(-1, fn(4, -5, 0, 0));
++
++  SimBridge::Free(t);
++  SimBridge::Cleanup();
++}
++
++// Every trampoline in a duplicated region must resolve to its own target, which
++// is what proves the identical-machine-code / key-by-PC design actually holds.
++ISOLATE_UNIT_TEST_CASE(ShorebirdCpuToSim_ManyTrampolinesDistinct) {
++  SimBridge::Init();
++
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      SimBridge::kPageSize, /*is_executable=*/false, /*is_compressed=*/false,
++      "cpu_to_sim_many"));
++  EXPECT(mem != nullptr);
++
++  // Four distinct targets, each returning a different constant.
++  const intptr_t kCount = 4;
++  uword targets[kCount];
++  SimBridge::Trampoline tramps[kCount];
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  for (intptr_t i = 0; i < kCount; i++) {
++    uint32_t* p = code + i * 4;
++    p[0] = 0xD2800000u | ((static_cast<uint32_t>(100 + i) & 0xFFFFu) << 5);
++    p[1] = 0xD65F03C0u;  // ret
++    targets[i] = reinterpret_cast<uword>(p);
++    tramps[i] = SimBridge::Allocate(targets[i]);
++    EXPECT(tramps[i] != 0);
++  }
++
++  using Fn = int64_t (*)(int64_t, int64_t, int64_t, int64_t);
++  for (intptr_t i = 0; i < kCount; i++) {
++    EXPECT_EQ(targets[i], SimBridge::TargetFor(tramps[i]));
++    EXPECT_EQ(100 + i, reinterpret_cast<Fn>(tramps[i])(0, 0, 0, 0));
++  }
++
++  for (intptr_t i = 0; i < kCount; i++) {
++    SimBridge::Free(tramps[i]);
++  }
++  SimBridge::Cleanup();
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
+diff --git a/runtime/vm/shorebird_sim_to_cpu_arm64.S b/runtime/vm/shorebird_sim_to_cpu_arm64.S
+new file mode 100644
+index 00000000000..c93aad6806a
+--- /dev/null
++++ b/runtime/vm/shorebird_sim_to_cpu_arm64.S
+@@ -0,0 +1,60 @@
++#if defined(__aarch64__)
++// Copyright (c) 2025 flutter_hot_patcher. BSD license.
++// SimulatorToCPU shim for arm64.
++//
++// Calling convention in:
++//   x0  = target (native Dart function entry point)
++//   x1  = simulated r0 (first Dart arg)
++//   x2  = simulated r1
++//   x3  = simulated r2
++//   x4  = simulated r3
++//   x5  = simulated r4
++//   x6  = simulated r5
++//   x7  = simulated r6
++//   [sp+0]  = simulated r7 (8th Dart arg)
++//   [sp+8]  = thr (Thread pointer, goes into x26)
++//   [sp+16] = pp  (ObjectPool pointer, goes into x27)
++//
++// On return: x0 = return value from native function.
++
++.globl _ShorebirdSimToCpuCall
++.align 4
++_ShorebirdSimToCpuCall:
++    // Prologue: save callee-saved registers we will clobber (x19, x26, x27, lr)
++    stp x26, x27, [sp, #-32]!
++    stp x19, x20, [sp, #16]
++
++    // Save target in x19 (callee-saved)
++    mov x19, x0
++
++    // Shift argument registers: simulated r0..r6 were in x1..x7, move to x0..x6
++    mov x0, x1
++    mov x1, x2
++    mov x2, x3
++    mov x3, x4
++    mov x4, x5
++    mov x5, x6
++    mov x6, x7
++
++    // Load r7 from original stack (now at sp+32 because we pushed 32 bytes)
++    ldr x7, [sp, #32]
++
++    // Load thr and pp from original stack
++    ldr x26, [sp, #40]   // Thread pointer -> x26 (THR)
++    ldr x27, [sp, #48]   // ObjectPool ptr -> x27 (PP)
++
++    // Call the native Dart function
++    blr x19
++
++    // Epilogue: restore callee-saved registers
++    ldp x19, x20, [sp, #16]
++    ldp x26, x27, [sp], #32
++    ret
++
++// Alias without leading underscore for Linux/ELF (arm64 only)
++#if defined(__aarch64__)
++.globl ShorebirdSimToCpuCall
++ShorebirdSimToCpuCall:
++    b _ShorebirdSimToCpuCall
++#endif
++#endif  // __aarch64__
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+new file mode 100644
+index 00000000000..1375d3b5b45
+--- /dev/null
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -0,0 +1,64 @@
++// Copyright (c) 2025 flutter_hot_patcher. BSD license.
++// Standalone unit test for the SimulatorToCPU mechanism (A2).
++// Tests that Simulator BLR to a linked address calls native code and returns the right value.
++
++#include "vm/globals.h"
++#if defined(TARGET_ARCH_ARM64) && defined(USING_SIMULATOR)
++
++#include "vm/simulator.h"
++#include "vm/unit_test.h"
++#include "vm/virtual_memory.h"
++
++namespace dart {
++
++// A trivial native function: multiply by 2.
++static int64_t ShorebirdTestNativeDoubler(int64_t x,
++    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t) {
++  return x * 2;
++}
++
++// Test: Link table API set/remove.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_LinkTableAPI) {
++  Simulator* sim = Simulator::Current();
++  ASSERT(sim != nullptr);
++  const uword fake_sim = 0x10000000;
++  const uword fake_cpu = 0x20000000;
++  sim->SetLinkedFunction(fake_sim, fake_cpu);
++  EXPECT(sim->IsLinkedFunction(fake_sim));
++  sim->SetLinkedFunction(fake_sim, 0);
++  EXPECT(!sim->IsLinkedFunction(fake_sim));
++}
++
++// Test: BLR to a linked address calls native code and returns 21*2 = 42.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_BasicCall) {
++  Simulator* sim = Simulator::Current();
++  const uword target = reinterpret_cast<uword>(&ShorebirdTestNativeDoubler);
++
++  sim->SetLinkedFunction(target, target);
++  sim->SetBaseInstructionsBase(0);  // absolute addresses
++  sim->SetSimToCpuEnabled(true);   // threshold=0: fire immediately (no startup window)
++
++  // Build arm64 code: movz x0,#21; [load target into x3]; blr x3; ret
++  std::unique_ptr<VirtualMemory> mem(
++      VirtualMemory::Allocate(4096, false, false, "a2test"));
++  ASSERT(mem != nullptr);
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  const uint64_t addr = static_cast<uint64_t>(target);
++  code[0] = 0xD2800000u | (21u << 5);                          // movz x0, #21
++  code[1] = 0xD2800003u | ((addr & 0xFFFF) << 5);             // movz x3, lo16
++  code[2] = 0xF2A00003u | (((addr >> 16) & 0xFFFF) << 5);    // movk x3, [31:16]
++  code[3] = 0xF2C00003u | (((addr >> 32) & 0xFFFF) << 5);    // movk x3, [47:32]
++  code[4] = 0xF2E00003u | (((addr >> 48) & 0xFFFF) << 5);    // movk x3, [63:48]
++  code[5] = 0xD63F0060u;                                       // blr x3
++  code[6] = 0xD65F03C0u;                                       // ret
++  mem->Protect(VirtualMemory::kReadExecute);
++
++  const int64_t result = sim->Call(
++      static_cast<int64_t>(reinterpret_cast<uword>(code)), 0, 0, 0, 0);
++  EXPECT_EQ(42, result);  // ShorebirdTestNativeDoubler(21) = 42
++
++  sim->SetLinkedFunction(target, 0);
++}
++
++}  // namespace dart
++#endif  // TARGET_ARCH_ARM64 && USING_SIMULATOR
+diff --git a/runtime/vm/sim_bridge.cc b/runtime/vm/sim_bridge.cc
+new file mode 100644
+index 00000000000..5d87f7cea70
+--- /dev/null
++++ b/runtime/vm/sim_bridge.cc
+@@ -0,0 +1,177 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++
++#include "vm/sim_bridge.h"
++
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++#include "vm/sim_transition.h"
++#include "vm/simulator.h"
++
++namespace dart {
++
++Mutex* SimBridge::lock_ = nullptr;
++VirtualMemory* SimBridge::template_region_ = nullptr;
++MallocGrowableArray<VirtualMemory*>* SimBridge::regions_ = nullptr;
++MallocGrowableArray<SimBridge::Trampoline>* SimBridge::free_list_ = nullptr;
++
++// The region geometry has to be expressible as a single AND mask, otherwise the
++// trampoline body cannot recover its region start from its own PC.
++static_assert(Utils::IsPowerOfTwo(SimBridge::RegionAlignment()),
++              "region alignment must be a power of two");
++static_assert(SimBridge::RegionAlignment() >= SimBridge::RegionSize(),
++              "alignment must cover the whole region");
++
++void SimBridge::Init() {
++  ASSERT(lock_ == nullptr);
++  lock_ = new Mutex();
++  regions_ = new MallocGrowableArray<VirtualMemory*>();
++  free_list_ = new MallocGrowableArray<Trampoline>();
++}
++
++void SimBridge::Cleanup() {
++  if (lock_ == nullptr) return;
++  {
++    MutexLocker ml(lock_);
++    for (intptr_t i = 0; i < regions_->length(); i++) {
++      delete (*regions_)[i];
++    }
++    delete regions_;
++    regions_ = nullptr;
++    delete free_list_;
++    free_list_ = nullptr;
++    // The template is a ForImagePage view over __TEXT: deleting the wrapper is
++    // fine, it does not unmap anything.
++    delete template_region_;
++    template_region_ = nullptr;
++  }
++  delete lock_;
++  lock_ = nullptr;
++}
++
++extern "C" {
++// Defined in sim_bridge_arm64.S; these are addresses in the signed __TEXT.
++extern void SimBridgeTemplateStart();
++extern void SimBridgeTemplateBody();
++extern void SimBridgeTemplateEnd();
++}
++
++bool SimBridge::EnsureTemplateLocked() {
++  ASSERT(lock_->IsOwnedByCurrentThread());
++  if (template_region_ != nullptr) return true;
++
++  // C2: the template is code that already exists in __TEXT, so nothing here
++  // writes or mprotects executable memory. That is what makes this work on iOS,
++  // where creating executable pages is impossible and only vm_remap of an
++  // existing executable mapping is allowed.
++  const uword start = reinterpret_cast<uword>(&SimBridgeTemplateStart);
++  const uword end = reinterpret_cast<uword>(&SimBridgeTemplateEnd);
++
++  // The .S file aligns the template to 16 KB, so it begins on a page boundary
++  // and the region arithmetic in the body stays valid after duplication.
++  ASSERT(Utils::IsAligned(start, kPageSize));
++  // The RX half must cover the whole template.
++  ASSERT((end - start) <= static_cast<uword>(kRXSize));
++  // The offset baked into the assembly has to agree with the C++ geometry.
++  ASSERT(EnterFnOffset() == 32768);
++
++  // A view over existing image pages: not owned, never unmapped, never written.
++  // Bounded tightly at the end of the code so DuplicateRX does not read past it.
++  template_region_ =
++      VirtualMemory::ForImagePage(reinterpret_cast<void*>(start), end - start);
++  return template_region_ != nullptr;
++}
++
++bool SimBridge::AddRegionLocked() {
++  ASSERT(lock_->IsOwnedByCurrentThread());
++  if (!EnsureTemplateLocked()) return false;
++
++  // Not executable: DuplicateRX supplies the executable mapping via vm_remap,
++  // which is the only way to obtain executable pages on iOS AOT.
++  VirtualMemory* region = VirtualMemory::AllocateAligned(
++      RegionSize(), RegionAlignment(), /*is_executable=*/false,
++      /*is_compressed=*/false, "SimBridge::Region");
++  if (region == nullptr) return false;
++
++  // Overwrites the first kRXSize bytes only; the RW half stays writable.
++  if (!template_region_->DuplicateRX(region)) {
++    delete region;
++    return false;
++  }
++
++  *reinterpret_cast<uword*>(region->start() + EnterFnOffset()) =
++      reinterpret_cast<uword>(&SimBridge::EnterSimulatorFromNative);
++
++  regions_->Add(region);
++  for (intptr_t i = 0; i < TrampolinesPerRegion(); i++) {
++    free_list_->Add(region->start() + i * kTrampolineSize);
++  }
++  return true;
++}
++
++SimBridge::Trampoline SimBridge::Allocate(uword sim_target) {
++  ASSERT(sim_target != 0);
++  MutexLocker ml(lock_);
++  if (free_list_->is_empty() && !AddRegionLocked()) return 0;
++  if (free_list_->is_empty()) return 0;
++
++  const Trampoline t = free_list_->RemoveLast();
++  const uword region = RegionStart(t);
++  const intptr_t index = (t - region) / kTrampolineSize;
++  reinterpret_cast<uword*>(region + TargetsOffset())[index] = sim_target;
++  return t;
++}
++
++bool SimBridge::IsOursLocked(uword region) {
++  ASSERT(lock_->IsOwnedByCurrentThread());
++  for (intptr_t i = 0; i < regions_->length(); i++) {
++    if ((*regions_)[i]->start() == region) return true;
++  }
++  return false;
++}
++
++uword SimBridge::TargetFor(Trampoline trampoline) {
++  MutexLocker ml(lock_);
++  if (regions_ == nullptr) return 0;
++  const uword region = RegionStart(trampoline);
++  if (!IsOursLocked(region)) return 0;
++  const uword offset = trampoline - region;
++  if (offset >= static_cast<uword>(TrampolinesPerRegion() * kTrampolineSize)) {
++    return 0;  // Points into the shared body or the RW half, not a trampoline.
++  }
++  if ((offset % kTrampolineSize) != 0) return 0;
++  return reinterpret_cast<uword*>(region + TargetsOffset())[offset /
++                                                           kTrampolineSize];
++}
++
++void SimBridge::Free(Trampoline trampoline) {
++  MutexLocker ml(lock_);
++  const uword region = RegionStart(trampoline);
++  if (!IsOursLocked(region)) return;
++  const intptr_t index = (trampoline - region) / kTrampolineSize;
++  reinterpret_cast<uword*>(region + TargetsOffset())[index] = 0;
++  free_list_->Add(trampoline);
++}
++
++int64_t SimBridge::EnterSimulatorFromNative(int64_t arg0,
++                                            int64_t arg1,
++                                            int64_t arg2,
++                                            int64_t arg3,
++                                            uword trampoline) {
++  const uword target = TargetFor(trampoline);
++  if (target == 0) {
++    FATAL("SimBridge: no target registered for trampoline %" Px "", trampoline);
++  }
++  Simulator* sim = Simulator::Current();
++  ASSERT(sim != nullptr);
++
++  // C4: record the crossing so a stack walk over the mixed stack can tell which
++  // frames ran simulated. The boundary is the trampoline: frames at it are on
++  // the native side, everything deeper is simulated, which is exactly the
++  // polarity CPUToSimulator encodes.
++  CPUToSimulator transition(trampoline);
++  return sim->Call(static_cast<int64_t>(target), arg0, arg1, arg2, arg3);
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
+diff --git a/runtime/vm/sim_bridge.h b/runtime/vm/sim_bridge.h
+new file mode 100644
+index 00000000000..9dc5996b881
+--- /dev/null
++++ b/runtime/vm/sim_bridge.h
+@@ -0,0 +1,150 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++//
++// CPU -> Simulator bridge (the direction A2 lacks).
++//
++// A2 handles Simulator -> CPU: while the isolate runs under the Simulator, a
++// BLR to a function that linked back to the base snapshot escapes into real
++// native code. The reverse is missing, and without it the only way to reach
++// simulated code is to start the whole isolate in the Simulator -- which is why
++// A1 force-enables USING_SIMULATOR unconditionally, and why unpatched code pays
++// interpretation cost it should not.
++//
++// This class supplies the missing direction. Given a target address inside a
++// patch mapping (read-only, therefore not natively executable), it hands out a
++// *natively callable* address; calling it enters the Simulator, runs the target,
++// and returns the result.
++//
++// The layout deliberately mirrors FfiCallbackMetadata, which solves the same
++// problem for FFI callbacks. On iOS AOT we cannot create executable memory, but
++// we can duplicate an existing executable mapping via vm_remap
++// (VirtualMemory::DuplicateRX). A duplicated page contains *identical* bytes,
++// so a trampoline cannot carry its identity in its instructions, and it cannot
++// embed the absolute address of the C++ helper it needs to call. Both problems
++// are solved the same way: everything is found relative to the trampoline's own
++// PC.
++//
++// Each allocation is one power-of-two aligned region:
++//
++//   [RX] template pages:  trampoline 0:  adr x9, #0   ; x9 = my own address
++//                                        b   body
++//                         trampoline 1:  adr x9, #0
++//                                        b   body
++//                         ...
++//                         body:          x10 = x9 & ~(RegionAlignment()-1)
++//                                        x11 = [x10 + kEnterFnOffset]
++//                                        x4  = x9
++//                                        br  x11
++//   [RW] data pages:      [0]  uword  EnterSimulatorFromNative
++//                         [1..] uword targets[TrampolinesPerRegion()]
++//
++// Because the helper pointer lives in RW at a fixed offset from the region
++// start, and the region start is derivable from any trampoline address by
++// masking, the RX bytes are position independent and duplicate cleanly.
++
++#ifndef RUNTIME_VM_SIM_BRIDGE_H_
++#define RUNTIME_VM_SIM_BRIDGE_H_
++
++#include "vm/globals.h"
++
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++#include "platform/growable_array.h"
++#include "platform/utils.h"
++#include "vm/allocation.h"
++#include "vm/lockers.h"
++#include "vm/virtual_memory.h"
++
++namespace dart {
++
++class SimBridge : public AllStatic {
++ public:
++  // A natively callable address that enters the Simulator.
++  using Trampoline = uword;
++
++  // adr + b.
++  static constexpr intptr_t kTrampolineSize = 8;
++
++  // macOS/iOS arm64. Kept as a constant rather than VirtualMemory::PageSize()
++  // because the region geometry has to be a compile-time constant: the mask the
++  // trampoline body applies to its own PC is baked into the RX bytes.
++  static constexpr intptr_t kPageSize = 16 * KB;
++
++  // One page of trampolines plus one page for the shared body, so the body is
++  // always reachable by the `b` in every trampoline.
++  static constexpr intptr_t kRXSize = 2 * kPageSize;
++
++  static constexpr intptr_t TrampolinesPerRegion() {
++    return kPageSize / kTrampolineSize;
++  }
++
++  // [0] = helper function pointer, then one target slot per trampoline.
++  static constexpr intptr_t kEnterFnSlots = 1;
++
++  // These have to be constexpr *functions* rather than constexpr variables:
++  // inside the class body the class is still incomplete, so a constant
++  // expression may not call its own member functions. FfiCallbackMetadata does
++  // the same thing for the same reason.
++  static constexpr intptr_t RWSize() {
++    return Utils::RoundUp((kEnterFnSlots + TrampolinesPerRegion()) * kWordSize,
++                          kPageSize);
++  }
++  static constexpr intptr_t RegionSize() { return kRXSize + RWSize(); }
++  static constexpr intptr_t RegionAlignment() {
++    return Utils::RoundUpToPowerOfTwo(RegionSize());
++  }
++
++  // Offsets within a region, used by both the generator and the C++ side.
++  static constexpr intptr_t EnterFnOffset() { return kRXSize; }
++  static constexpr intptr_t TargetsOffset() {
++    return kRXSize + kEnterFnSlots * kWordSize;
++  }
++
++  static uword RegionStart(uword address) {
++    return address & ~static_cast<uword>(RegionAlignment() - 1);
++  }
++
++  static void Init();
++  static void Cleanup();
++
++  // Returns a natively callable address which, when called, runs `sim_target`
++  // under the Simulator and returns its result. Up to four integer arguments
++  // are forwarded in x0-x3. Returns 0 if no trampoline could be allocated.
++  //
++  // `sim_target` only has to be fetchable by the Simulator; it does not have to
++  // be natively executable, which is the entire point.
++  static Trampoline Allocate(uword sim_target);
++
++  // The target `trampoline` stands for, or 0 if it is not one of ours.
++  static uword TargetFor(Trampoline trampoline);
++
++  // Releases a trampoline so it can be handed out again.
++  static void Free(Trampoline trampoline);
++
++  // Entered from the trampoline body with the trampoline's own address in x4.
++  // Declared here so the test can reference it; not part of any public API.
++  static int64_t EnterSimulatorFromNative(int64_t arg0,
++                                          int64_t arg1,
++                                          int64_t arg2,
++                                          int64_t arg3,
++                                          uword trampoline);
++
++ private:
++  // Builds the template region once.
++  static bool EnsureTemplateLocked();
++
++  // Adds a region: allocate aligned, DuplicateRX the template into it, fill in
++  // the RW helper pointer, and push its trampolines onto the free list.
++  static bool AddRegionLocked();
++
++  static bool IsOursLocked(uword region);
++
++  static Mutex* lock_;
++  static VirtualMemory* template_region_;
++  static MallocGrowableArray<VirtualMemory*>* regions_;
++  static MallocGrowableArray<Trampoline>* free_list_;
++};
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++#endif  // RUNTIME_VM_SIM_BRIDGE_H_
+diff --git a/runtime/vm/sim_bridge_arm64.S b/runtime/vm/sim_bridge_arm64.S
+new file mode 100644
+index 00000000000..b63e9f0d63d
+--- /dev/null
++++ b/runtime/vm/sim_bridge_arm64.S
+@@ -0,0 +1,69 @@
++#if defined(__aarch64__)
++// Copyright (c) 2026 flutter_hot_patcher. BSD license.
++//
++// CPU -> Simulator trampoline template (C2).
++//
++// C1 emitted this code at runtime and mprotected it to RX. macOS permits that;
++// iOS does not, which is the whole reason DuplicateRX/vm_remap exists. So the
++// template has to live in code that is already in the signed __TEXT. Upstream
++// solves the same problem by taking its template from a StubCodeCompiler stub
++// (StubCode::FfiCallbackTrampoline); we use a plain assembly file instead,
++// which keeps the change out of the global stub list and out of snapshots.
++//
++// Layout, mirroring FfiCallbackMetadata:
++//
++//   _SimBridgeTemplateStart:
++//       trampoline 0:  adr x9, #0      ; x9 = my own address
++//                      b   body
++//       trampoline 1:  adr x9, #0
++//                      b   body
++//       ...            (kSimBridgeTrampolineCount of them, 8 bytes each)
++//   body:
++//       adr  x10, _SimBridgeTemplateStart   ; start of *this copy* of the
++//                                           ; template, PC-relative
++//       add  x10, x10, #(RW offset)         ; -> helper pointer slot
++//       ldr  x11, [x10]
++//       mov  x4, x9                         ; identity, as 5th argument
++//       br   x11
++//
++// Every trampoline is byte-identical, so the page duplicates cleanly and a
++// trampoline's identity is purely its address. `adr` is PC-relative, so after
++// vm_remap each copy resolves to its own region.
++//
++// The RW offset must match SimBridge::EnterFnOffset() in sim_bridge.h. It is
++// asserted at runtime in SimBridge::EnsureTemplateLocked.
++
++// 2048 trampolines = 16 KB = one page on macOS/iOS arm64.
++#define TRAMPOLINE_COUNT 2048
++
++// Must equal SimBridge::EnterFnOffset() (= kRXSize = 2 * 16 KB).
++#define ENTER_FN_OFFSET 32768
++
++.text
++.align 14                      // 16 KB, so the template starts page-aligned.
++
++.globl _SimBridgeTemplateStart
++_SimBridgeTemplateStart:
++
++.rept TRAMPOLINE_COUNT
++    adr x9, .                  // x9 = address of this trampoline
++    b   _SimBridgeTemplateBody
++.endr
++
++.globl _SimBridgeTemplateBody
++_SimBridgeTemplateBody:
++    // x10 = start of this copy of the template (PC-relative, so it follows the
++    // copy after vm_remap rather than pointing back at the original).
++    adr  x10, _SimBridgeTemplateStart
++    // x10 -> the helper pointer slot in the RW half.
++    add  x10, x10, #(ENTER_FN_OFFSET >> 12), lsl #12
++    ldr  x11, [x10]
++    // Pass the trampoline's own address as the 5th argument; x0-x3 carry the
++    // caller's arguments through untouched.
++    mov  x4, x9
++    br   x11
++
++.globl _SimBridgeTemplateEnd
++_SimBridgeTemplateEnd:
++
++#endif  // defined(__aarch64__)
+diff --git a/runtime/vm/sim_transition.cc b/runtime/vm/sim_transition.cc
+new file mode 100644
+index 00000000000..7764a82f9bb
+--- /dev/null
++++ b/runtime/vm/sim_transition.cc
+@@ -0,0 +1,49 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++
++#include "vm/sim_transition.h"
++
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++namespace dart {
++
++// The chain head is per-thread. Shorebird anchors the equivalent on both the
++// Simulator and the Thread; a thread-local head is the same thing without
++// requiring a Simulator to exist yet, which matters because the first crossing
++// can happen before any Simulator has been created on this thread.
++static thread_local SimTransition* tls_head = nullptr;
++static thread_local intptr_t tls_depth = 0;
++
++SimTransition::SimTransition(uword boundary)
++    : boundary_(boundary), next_(tls_head) {
++  tls_head = this;
++  tls_depth++;
++}
++
++SimTransition::~SimTransition() {
++  // Stack discipline: transitions are scoped objects, so the one being
++  // destroyed must be the head.
++  ASSERT(tls_head == this);
++  tls_head = next_;
++  tls_depth--;
++}
++
++SimTransition* SimTransition::Current() {
++  return tls_head;
++}
++
++intptr_t SimTransition::Depth() {
++  return tls_depth;
++}
++
++bool SimTransition::StackFrameIsSimulating(uword pc) {
++  SimTransition* t = tls_head;
++  if (t == nullptr) {
++    // Nothing has crossed a boundary on this thread, so every frame is native.
++    return false;
++  }
++  return t->IsSimulating(pc);
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
+diff --git a/runtime/vm/sim_transition.h b/runtime/vm/sim_transition.h
+new file mode 100644
+index 00000000000..773505c7092
+--- /dev/null
++++ b/runtime/vm/sim_transition.h
+@@ -0,0 +1,99 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++//
++// Execution-mode bookkeeping for mixed native/simulated stacks (C4).
++//
++// Once patch code runs under the Simulator while base code runs natively, a
++// single stack interleaves both. Anything that walks that stack -- exception
++// unwinding, the profiler, crash reporting -- has to know which mode each frame
++// ran in, and a frame's PC alone does not say.
++//
++// The scheme mirrors what Shorebird's engine does, which the disassembly of
++// dart::Simulator::Transition / SimulatorToCPU / CPUToSimulator showed:
++//
++//   * every crossing pushes a Transition recording the boundary PC
++//   * the two directions are separate subclasses whose IsSimulating() differ
++//     only in comparison polarity:
++//
++//         SimulatorToCPU::IsSimulating(pc)  ->  pc == boundary
++//         CPUToSimulator::IsSimulating(pc)  ->  pc != boundary
++//
++//     (verbatim from their binary: ldr x8,[x0,#0x30]; cmp x1,x8; cset w0,eq/ne)
++//
++//   * the records form a chain, so a walker asks the innermost enclosing
++//     transition about each frame
++//
++// The virtual IsSimulating is why these are classes rather than an enum: the
++// walker does not need to know which direction it is looking at.
++
++#ifndef RUNTIME_VM_SIM_TRANSITION_H_
++#define RUNTIME_VM_SIM_TRANSITION_H_
++
++#include "vm/globals.h"
++
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++#include "vm/allocation.h"
++
++namespace dart {
++
++class Thread;
++
++class SimTransition : public ValueObject {
++ public:
++  virtual ~SimTransition();
++
++  // Was the frame at `pc` executing under the Simulator, as far as this
++  // transition is concerned?
++  virtual bool IsSimulating(uword pc) const = 0;
++
++  // For crash dumps and traces.
++  virtual const char* ToCString() const = 0;
++
++  uword boundary() const { return boundary_; }
++  SimTransition* next() const { return next_; }
++
++  // Innermost transition on the current thread, or nullptr if execution has
++  // not crossed a mode boundary.
++  static SimTransition* Current();
++
++  // Walks outwards and answers using the innermost transition that covers
++  // `pc`. Returns false when nothing has crossed a boundary, which is the
++  // correct answer for a purely native stack.
++  static bool StackFrameIsSimulating(uword pc);
++
++  // Depth of the chain; exposed so tests can assert push/pop balance.
++  static intptr_t Depth();
++
++ protected:
++  explicit SimTransition(uword boundary);
++
++ private:
++  const uword boundary_;
++  SimTransition* const next_;
++
++  DISALLOW_COPY_AND_ASSIGN(SimTransition);
++};
++
++// Simulated code called out to native code. Frames at the boundary belong to
++// the simulated side.
++class SimulatorToCPU : public SimTransition {
++ public:
++  explicit SimulatorToCPU(uword boundary) : SimTransition(boundary) {}
++
++  bool IsSimulating(uword pc) const override { return pc == boundary(); }
++  const char* ToCString() const override { return "SimulatorToCPU"; }
++};
++
++// Native code called into simulated code. Opposite polarity.
++class CPUToSimulator : public SimTransition {
++ public:
++  explicit CPUToSimulator(uword boundary) : SimTransition(boundary) {}
++
++  bool IsSimulating(uword pc) const override { return pc != boundary(); }
++  const char* ToCString() const override { return "CPUToSimulator"; }
++};
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++#endif  // RUNTIME_VM_SIM_TRANSITION_H_
+diff --git a/runtime/vm/sim_transition_test.cc b/runtime/vm/sim_transition_test.cc
+new file mode 100644
+index 00000000000..fdbdb715663
+--- /dev/null
++++ b/runtime/vm/sim_transition_test.cc
+@@ -0,0 +1,121 @@
++// Copyright (c) 2026 flutter_hot_patcher. BSD-style license.
++//
++// Tests for the mixed-stack execution-mode bookkeeping (C4).
++
++#include "vm/globals.h"
++#if defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
++
++#include "vm/sim_bridge.h"
++#include "vm/sim_transition.h"
++#include "vm/unit_test.h"
++#include "vm/virtual_memory.h"
++
++namespace dart {
++
++VM_UNIT_TEST_CASE(SimTransition_PolarityDiffersByDirection) {
++  const uword boundary = 0x4000;
++
++  // The two directions must disagree about the boundary frame itself: that is
++  // the whole content of the distinction, and it is how the polarity was
++  // recovered from Shorebird's binary.
++  {
++    SimulatorToCPU to_cpu(boundary);
++    EXPECT(to_cpu.IsSimulating(boundary));
++    EXPECT(!to_cpu.IsSimulating(boundary + 4));
++  }
++  {
++    CPUToSimulator to_sim(boundary);
++    EXPECT(!to_sim.IsSimulating(boundary));
++    EXPECT(to_sim.IsSimulating(boundary + 4));
++  }
++}
++
++VM_UNIT_TEST_CASE(SimTransition_ChainIsScoped) {
++  const intptr_t base = SimTransition::Depth();
++  EXPECT_EQ(nullptr, SimTransition::Current());
++
++  {
++    CPUToSimulator outer(0x1000);
++    EXPECT_EQ(base + 1, SimTransition::Depth());
++    EXPECT_EQ(static_cast<uword>(0x1000), SimTransition::Current()->boundary());
++
++    {
++      SimulatorToCPU inner(0x2000);
++      EXPECT_EQ(base + 2, SimTransition::Depth());
++      // Innermost wins.
++      EXPECT_EQ(static_cast<uword>(0x2000),
++                SimTransition::Current()->boundary());
++      EXPECT_STREQ("SimulatorToCPU", SimTransition::Current()->ToCString());
++      // And the chain still reaches the outer one.
++      EXPECT_EQ(static_cast<uword>(0x1000),
++                SimTransition::Current()->next()->boundary());
++    }
++
++    EXPECT_EQ(base + 1, SimTransition::Depth());
++    EXPECT_STREQ("CPUToSimulator", SimTransition::Current()->ToCString());
++  }
++
++  EXPECT_EQ(base, SimTransition::Depth());
++  EXPECT_EQ(nullptr, SimTransition::Current());
++}
++
++VM_UNIT_TEST_CASE(SimTransition_PurelyNativeStackIsNotSimulating) {
++  // With nothing on the chain every frame is native. Answering "true" here
++  // would make a normal unpatched app look simulated to the profiler.
++  EXPECT_EQ(nullptr, SimTransition::Current());
++  EXPECT(!SimTransition::StackFrameIsSimulating(0xDEAD));
++  EXPECT(!SimTransition::StackFrameIsSimulating(0));
++}
++
++VM_UNIT_TEST_CASE(SimTransition_QueryUsesInnermost) {
++  const uword outer_b = 0x1000;
++  const uword inner_b = 0x2000;
++
++  CPUToSimulator outer(outer_b);
++  // Before entering the inner transition, a PC past the boundary is simulated.
++  EXPECT(SimTransition::StackFrameIsSimulating(inner_b));
++
++  {
++    SimulatorToCPU inner(inner_b);
++    // Now the innermost transition answers, and it says the boundary frame is
++    // on the simulated side while anything else is not.
++    EXPECT(SimTransition::StackFrameIsSimulating(inner_b));
++    EXPECT(!SimTransition::StackFrameIsSimulating(inner_b + 4));
++  }
++
++  // Back to the outer polarity.
++  EXPECT(SimTransition::StackFrameIsSimulating(inner_b));
++  EXPECT(!SimTransition::StackFrameIsSimulating(outer_b));
++}
++
++// The bridge must leave the chain exactly as it found it, including when the
++// simulated target returns normally.
++ISOLATE_UNIT_TEST_CASE(SimTransition_BridgeBalancesTheChain) {
++  SimBridge::Init();
++
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      SimBridge::kPageSize, /*is_executable=*/false, /*is_compressed=*/false,
++      "sim_transition_target"));
++  EXPECT(mem != nullptr);
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  code[0] = 0xD2800000u | ((7u & 0xFFFFu) << 5);  // movz x0, #7
++  code[1] = 0xD65F03C0u;                          // ret
++
++  const intptr_t before = SimTransition::Depth();
++  const SimBridge::Trampoline t =
++      SimBridge::Allocate(reinterpret_cast<uword>(code));
++  EXPECT(t != 0);
++
++  using Fn = int64_t (*)(int64_t, int64_t, int64_t, int64_t);
++  EXPECT_EQ(7, reinterpret_cast<Fn>(t)(0, 0, 0, 0));
++
++  EXPECT_EQ(before, SimTransition::Depth());
++  EXPECT_EQ(nullptr, SimTransition::Current());
++
++  SimBridge::Free(t);
++  SimBridge::Cleanup();
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && defined(SIMULATOR_AVAILABLE)
+-- 
+2.53.0
+

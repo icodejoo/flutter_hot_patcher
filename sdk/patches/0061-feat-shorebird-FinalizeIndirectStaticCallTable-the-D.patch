@@ -1,0 +1,292 @@
+From 72f79dc513328029219314fe95f6e14adff31ca0 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 17:36:17 +0800
+Subject: [PATCH 061/206] feat(shorebird): FinalizeIndirectStaticCallTable --
+ the DD table is built
+
+First half of DD core. Theirs has no symbol of its own because it is
+inlined into DoCompileAll; only its local DDTableBuilder leaves any
+behind, and the whole function was decoded from those over rounds 3-5.
+
+Three phases, matching their control flow:
+
+  no mapping                       -> return    (cbz x19,  0x10021b414)
+  walk, collecting dd_slot -> Code (WalkProgram with the builder)
+  max_slot still -1                -> return    (tbnz #0x3f, 0x10021b474)
+  retain every function the table can dispatch to, reason "DD table
+      target" -- the string is theirs, at 0x1004c6567
+  Array::New(max_slot + 1, kOld), array[slot] = code, store in the
+      object store
+
+The ObjectStore field lands at 0x810, the same offset theirs uses. That
+is possible here and was not for Thread because the five ObjectStore
+fields CheckOffsets pins all sit far earlier in the field list, so
+inserting after dispatch_table_code_entries_ shifts nothing underneath
+them.
+
+Their Array::New call reads (90, len, 1) with the class id spelled out,
+but that overload is protected -- what the disassembly shows is the
+public two-argument New inlined into it, so ours is the same call.
+
+One deliberate deviation, marked in the source: the builder holds zone
+handles where theirs holds raw CodePtrs. Array::New in phase 3 can
+allocate, and a compacting GC between capture and use would leave raw
+pointers stale. This closes a hazard rather than reproducing it.
+
+Also drops two stale comments in gen_snapshot.cc that still described
+DDSlotMapping::ReadFromStream as an unimplemented stub, and the error
+message that said so. The two sniff branches stay distinguishable by
+message, which is load-bearing: both exit 255 on a bad file, so no test
+of the sniff can rely on the exit code.
+
+VERIFICATION -- and this is the first time any DD code has actually run,
+rather than only being byte-compared:
+
+  ninja exit 0 (Release and Product), binary newer than every source
+  76 of 77 shorebird tests exit 0 (IsolateReload_ShapeChange_Const_AddSlot
+      is upstream, needs --dfe, passes with it)
+  verify_reproduction.sh: 24 artifacts + 14 stubs, 0 failures -- ddid
+      still byte-identical on all seven fixtures, so inserting an
+      ObjectStore field regressed nothing
+
+  End to end, driving gen_snapshot with a mapping built from REAL kernel
+  offsets read out of a --print_dd_function_identity_to dump:
+      5-row mapping  -> "DD table target" appears 5 times, on named
+                        functions, all "retained": true
+      no --dd_slot_mapping -> 0 occurrences   (early return works, and
+                              nothing else emits this reason)
+      3-row mapping  -> 3 occurrences         (the count tracks the
+                              input; it is not a constant)
+
+Still unverified: how the table reaches Thread::indirect_static_call_table_
+at run time. Nothing here has been exercised on a device.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index 18bd22a8390..8c9b710e385 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -816,17 +816,17 @@ static void InitializeShorebirdLinkData() {
+       if (stream.PendingBytes() > 0) {
+         auto mapping = std::make_unique<dart::DDSlotMapping>();
+         if (!mapping->ReadFromStream(&stream)) {
+-          // TODO(slice-2c): DDSlotMapping::ReadFromStream is a documented stub
+-          // that always returns false; the wire format at 0x100198fb0 has not
+-          // been disassembled. Trailing bytes are therefore expected to land
+-          // here for now. Warn rather than fail so a voters-only file still
+-          // works, but say so explicitly -- silence here would hide a real
+-          // parse failure once the stub is implemented.
++          // ReadFromStream is implemented now, so reaching here means the
++          // trailing bytes are genuinely malformed rather than merely
++          // unparseable-by-us. Still a warning rather than an exit: a
++          // voters-only file is normal on a base build, and this branch cannot
++          // distinguish "no mapping section" from "corrupt mapping section" --
++          // both leave bytes unconsumed. What it must not do is stay silent,
++          // which would hide the corrupt case entirely.
+           Syslog::PrintErr(
+               "Warning: %" Pd
+-              " trailing bytes in --dd_slot_mapping=%s were not consumed; "
+-              "DDSlotMapping::ReadFromStream is not yet implemented (stub). "
+-              "Proceeding with voters only.\n",
++              " trailing bytes in --dd_slot_mapping=%s were not consumed as a "
++              "DDSlotMapping. Proceeding with voters only.\n",
+               stream.PendingBytes(), dd_slot_mapping_filename);
+         } else {
+           dart::ShorebirdLinker::shared()->InitializeWithDDSlotMapping(
+@@ -840,17 +840,22 @@ static void InitializeShorebirdLinkData() {
+       }
+     } else {
+       // Not a DDSlotVoters stream, so this must be a bare DDSlotMapping.
+-      // ReadFromStream is a stub returning false, so this path REJECTS rather
+-      // than silently succeeding. Without the exit, a wrong file would take the
+-      // stub path and exit 0, leaving the sniffing branch untestable and making
+-      // a mistyped filename look like success.
++      // ReadFromStream is implemented now, so unlike before this branch can
++      // succeed -- a mapping-only file is a legitimate input rather than a
++      // guaranteed rejection.
++      //
++      // The error message below stays distinct from the DDSlotVoters one on
++      // purpose. Both paths exit 255 on a bad file, so the exit code cannot
++      // tell them apart and any test of the format sniff has to assert on the
++      // message. That was established by negative control: forcing this branch
++      // unconditionally still exits 255 on a non-voters file and is
++      // distinguishable only by which message it prints.
+       dart::ReadStream stream(buf, static_cast<intptr_t>(file_len));
+       auto mapping = std::make_unique<dart::DDSlotMapping>();
+       if (!mapping->ReadFromStream(&stream)) {
+         Syslog::PrintErr(
+             "Error: --dd_slot_mapping=%s is neither a DDSlotVoters stream "
+-            "(magic 0x%X, got 0x%X) nor a parseable DDSlotMapping "
+-            "(DDSlotMapping::ReadFromStream is not yet implemented).\n\n",
++            "(magic 0x%X, got 0x%X) nor a parseable DDSlotMapping.\n\n",
+             dd_slot_mapping_filename, dart::DDSlotVoters::kMagic, sniff);
+         free(buf);
+         exit(kErrorExitCode);
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index d0d099851d8..36233b30167 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -616,6 +616,11 @@ void Precompiler::DoCompileAll() {
+       // is verify-only and preserves the first call's decisions.
+       ShorebirdLinker::shared()->ResolveDDSlots(T, Z);
+ 
++      // Shorebird: build the DD table. Ordered here for the same reason as the
++      // two calls above -- it retains the functions its entries point at, so it
++      // has to run before DropFunctions() below removes them.
++      FinalizeIndirectStaticCallTable();
++
+       {
+         PRECOMPILER_TIMER_SCOPE(this, Drop);
+ 
+@@ -2106,6 +2111,102 @@ void Precompiler::FinalizeDispatchTable() {
+   printed.Release();
+ }
+ 
++// Shorebird: build the DD table.
++//
++// Reproduced from their gen_snapshot, where this is inlined into DoCompileAll
++// and only its local DDTableBuilder leaves symbols behind. Decode notes live in
++// spikes/shorebird_linkinfo_oracle/README.md; the addresses cited below are in
++// their arm64 gen_snapshot.
++void Precompiler::FinalizeIndirectStaticCallTable() {
++  HANDLESCOPE(T);
++
++  // No mapping file means no table at all -- `cbz x19` at 0x10021b414 skips the
++  // whole thing rather than producing an empty Array.
++  const DDSlotMapping* mapping = ShorebirdLinker::shared()->dd_slot_mapping();
++  if (mapping == nullptr) return;
++
++  // Phase 1: walk the program, collecting dd_slot -> Code.
++  class DDTableBuilder : public CodeVisitor {
++   public:
++    DDTableBuilder(Zone* zone, const DDSlotMapping* mapping)
++        : zone_(zone), function_(Function::Handle(zone)), mapping_(mapping) {}
++
++    void VisitCode(const Code& code) override {
++      // Their order exactly: unwrap a WeakSerializationReference first, then
++      // gate on the owner being a Function. Codes owned by a Class (allocation
++      // stubs) and ownerless stubs both fall out here.
++      const ObjectPtr owner = WeakSerializationReference::Unwrap(code.owner());
++      if (owner == Object::null()) return;
++      if (owner->GetClassId() != kFunctionCid) return;
++      function_ = Function::RawCast(owner);
++
++      const intptr_t slot =
++          mapping_->SlotForKernelOffset(function_.kernel_offset());
++      // A negative slot means "not in the mapping". Theirs tests the sign bit
++      // (`tbnz x21, #0x3f`) rather than comparing against a sentinel, so slot 0
++      // is a legal slot and must not be filtered here.
++      if (slot < 0) return;
++
++      // Zone handles rather than raw CodePtrs. Theirs stores raw pointers, but
++      // Array::New in phase 3 can allocate, and a compacting GC between capture
++      // and use would leave those pointers stale. A zone handle is visited by
++      // the GC, so this closes a hazard rather than reproducing it. Deliberate
++      // deviation, and the only one in this function.
++      slot_to_code_[slot] = &Code::ZoneHandle(zone_, code.ptr());
++      if (slot > max_slot_) max_slot_ = slot;
++    }
++
++    intptr_t max_slot() const { return max_slot_; }
++    const std::unordered_map<intptr_t, const Code*>& slot_to_code() const {
++      return slot_to_code_;
++    }
++
++   private:
++    Zone* zone_;
++    Function& function_;
++    const DDSlotMapping* mapping_;
++    // -1, not 0: their builder initialises it with `mov x8, #-1` at 0x10021b434
++    // and treats "still negative" as "nothing matched".
++    intptr_t max_slot_ = -1;
++    std::unordered_map<intptr_t, const Code*> slot_to_code_;
++  };
++
++  DDTableBuilder builder(Z, mapping);
++  ProgramVisitor::WalkProgram(Z, IG, &builder);
++
++  // `tbnz x8, #0x3f` at 0x10021b474: nothing matched, so no table.
++  if (builder.max_slot() < 0) return;
++
++  // Phase 2: retain every function the table can dispatch to. Without this the
++  // drop phase below would remove them and the table would point at dropped
++  // code -- which is what the "Dispatch table references code for function to
++  // drop" diagnostic above reports for the analogous dispatch-table case.
++  Function& function = Function::Handle(Z);
++  for (const auto& entry : builder.slot_to_code()) {
++    const ObjectPtr owner =
++        WeakSerializationReference::Unwrap(entry.second->owner());
++    if (owner == Object::null()) continue;
++    if (owner->GetClassId() != kFunctionCid) continue;
++    function = Function::RawCast(owner);
++    AddTypesOf(function);
++    AddRetainReason(function, "DD table target");
++  }
++
++  // Phase 3: materialise the table. Array, not ImmutableArray -- entries get
++  // repointed when a patch is linked, which is the whole purpose of the table.
++  //
++  // Theirs reads `Array::New(90, max_slot+1, 1)` at 0x10021b568, i.e. the
++  // three-argument (class_id, len, space) form with kArrayCid spelled out. That
++  // overload is protected, so what their disassembly actually shows is the
++  // public two-argument New inlined into it -- this call is the same thing.
++  const Array& table =
++      Array::Handle(Z, Array::New(builder.max_slot() + 1, Heap::kOld));
++  for (const auto& entry : builder.slot_to_code()) {
++    table.SetAt(entry.first, *entry.second);
++  }
++  IG->object_store()->set_indirect_static_call_table(table);
++}
++
+ void Precompiler::ReplaceFunctionStaticCallEntries() {
+   PRECOMPILER_TIMER_SCOPE(this, ReplaceFunctionStaticCallEntries);
+   class StaticCallTableEntryFixer : public CodeVisitor {
+diff --git a/runtime/vm/compiler/aot/precompiler.h b/runtime/vm/compiler/aot/precompiler.h
+index 2d42048db75..111be36c940 100644
+--- a/runtime/vm/compiler/aot/precompiler.h
++++ b/runtime/vm/compiler/aot/precompiler.h
+@@ -339,6 +339,17 @@ class Precompiler : public ValueObject {
+ 
+   void TraceForRetainedFunctions();
+   void FinalizeDispatchTable();
++
++  // Shorebird: builds the DD table -- an Array of Code indexed by dd_slot,
++  // stored in the object store. Theirs has no symbol of its own because it is
++  // inlined into DoCompileAll; the name is from the DDTableBuilder symbols it
++  // leaves behind (Precompiler::FinalizeIndirectStaticCallTable()::
++  // DDTableBuilder::VisitCode).
++  //
++  // Must run before DropFunctions(): its second phase calls AddTypesOf on every
++  // function the table can dispatch to, which is what keeps them alive.
++  void FinalizeIndirectStaticCallTable();
++
+   void ReplaceFunctionStaticCallEntries();
+   void DropFunctions();
+   void DropFields();
+diff --git a/runtime/vm/object_store.h b/runtime/vm/object_store.h
+index 4034fd85ebd..9a615e987fd 100644
+--- a/runtime/vm/object_store.h
++++ b/runtime/vm/object_store.h
+@@ -303,6 +303,18 @@ class ObjectPointerVisitor;
+   RW(Code, suspend_sync_star_at_start_stub)                                    \
+   RW(Code, suspend_sync_star_at_yield_stub)                                    \
+   RW(Array, dispatch_table_code_entries)                                       \
++  /* Shorebird: the DD table, an Array of Code indexed by dd_slot, built by  */ \
++  /* Precompiler::FinalizeIndirectStaticCallTable. Placed here rather than   */ \
++  /* appended because this is where theirs sits: their gen_snapshot stores   */ \
++  /* it at object_store + 0x810, and dispatch_table_code_entries_ is at      */ \
++  /* 0x808 on both sides, so this slot reproduces their offset exactly. That */ \
++  /* is possible here and not for Thread only because the five ObjectStore   */ \
++  /* fields CheckOffsets pins all live far earlier in this list, so nothing  */ \
++  /* shifts underneath them.                                                 */ \
++  /* The name is borrowed from Thread::indirect_static_call_table_, which IS */ \
++  /* theirs (engine dSYM, by name). The ObjectStore field's own name is not  */ \
++  /* recoverable from a stripped gen_snapshot, so this spelling is ours.     */ \
++  RW(Array, indirect_static_call_table)                                        \
+   RW(GrowableObjectArray, instructions_tables)                                 \
+   RW(GrowableObjectArray, tag_table)                                           \
+   RW(Array, obfuscation_map)                                                   \
+-- 
+2.53.0
+

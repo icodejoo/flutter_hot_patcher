@@ -1,0 +1,29 @@
+From 9101e9b3c24584c51587ef9085b6ce248c69dc3c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 2 Sep 2026 17:22:55 +0800
+Subject: [PATCH 127/206] fix(dart_api_impl): cast uint32_t to size_t before
+ SIZE_MAX comparison
+
+Clang -Werror triggers on tautological-constant-out-of-range-compare:
+n_entries is uint32_t (max ~4B) but (SIZE_MAX-4)/8 on 64-bit is ~2.3e18,
+so the comparison was always false. Cast to size_t to make it well-formed.
+The guard is a no-op on 64-bit but documents the intent for 32-bit.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index 732d4789894..c6eacff48fb 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7279,7 +7279,7 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+   uint32_t n_entries = 0;
+   if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return false; }
+   // Only an overflow guard; LinkOracle applies the real limit.
+-  if (n_entries > (SIZE_MAX - 4) / 8) { fclose(f); return false; }
++  if (static_cast<size_t>(n_entries) > (SIZE_MAX - 4) / 8) { fclose(f); return false; }
+ 
+   const size_t header_size = 4 + static_cast<size_t>(n_entries) * 8;
+   std::unique_ptr<uint8_t[]> header(new uint8_t[header_size]);
+-- 
+2.53.0
+

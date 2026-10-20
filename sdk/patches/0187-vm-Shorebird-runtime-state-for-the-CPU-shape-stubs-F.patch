@@ -1,0 +1,271 @@
+From f5b94e5b4392859d5bc4b759efaad8db5ffd71e9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 30 Sep 2026 14:42:53 +0800
+Subject: [PATCH 187/206] [vm] Shorebird: runtime state for the CPU-shape
+ stubs; FFI hypercall resume (F160)
+
+thread.cc: Thread::enter/exit_safepoint_entry_point_ = EnterSafepoint /
+ExitSafepoint, not the Simulator* variants. GenerateSimulatorSafepointStub
+ends in an unconditional brk #kCallRuntimeOnCPUCode, so a stub running on
+the CPU -- the F155 FFI trampoline's slow path, CallNativeThroughSafepoint
+-- that calls it dies there. Observed on native ReleaseARM64 dartvm:
+callback_unwind_error_test and
+vmspecific_callback_unwind_error_through_handle_test were SIGKILLed 4/4 at
+that brk (lldb); with this change 8/8 pass; reverting only this hunk brings
+back 4/4 rc 137.
+
+isolate.cc / dart_entry.cc / simulator_arm64.cc / exceptions.cc: when a
+simulator-including build runs Dart on the CPU, each isolate has a
+Simulator, InvokeDartCode and the kRunDartOnCPUCode transition set
+dart_state_is_on_cpu_ and simulator_csp_, and the exception path takes
+StubCode::JumpToFrame when not simulating. (Design: agy, from our source;
+dart_entry.cc needed an #endif to close the existing block.)
+
+simulator_arm64.cc: after a redirected FFI call, resume past the blr even
+when a CallFFIOnCPU guard sits between hlt and blr; carry on at the guard
+itself only when the next blr targets a known redirection, FATAL otherwise.
+
+run_vm_tests (same script, before -> after, both on this branch):
+DebugSIMARM64 harness selection 162/1 -> 163/0, FFI/deopt/exception 9/4 ->
+12/1 (FfiCallbackMetadata_TrampolineRecycling, UNREACHABLE upstream by
+design); ReleaseARM64 153/0 and 13/0 unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_entry.cc b/runtime/vm/dart_entry.cc
+index a0fa05f8131..c19d7a7dee4 100644
+--- a/runtime/vm/dart_entry.cc
++++ b/runtime/vm/dart_entry.cc
+@@ -118,11 +118,29 @@ static ObjectPtr InvokeDartCode(uword entry_point,
+             static_cast<uword>(arguments.ptr()),
+             reinterpret_cast<uword>(thread))));
+   }
++#endif
++#if defined(DART_INCLUDE_SIMULATOR)
++  // When running Dart natively on CPU in a simulator-enabled build,
++  // AOT runtime stubs (CallOnClangStack, JumpToFrame) expect:
++  // 1. Thread::dart_state_is_on_cpu_ == 1
++  // 2. Thread::simulator_csp_ points to the C stack
++  // 3. Isolate::simulator_ is allocated
++  const uword saved_on_cpu = thread->dart_state_is_on_cpu();
++  const uword saved_sim_csp = thread->simulator_csp();
++  if (thread->isolate()->simulator() == nullptr) {
++    thread->isolate()->set_simulator(new Simulator());
++  }
++  thread->set_dart_state_is_on_cpu(1);
++  thread->set_simulator_csp(OSThread::GetCurrentStackPointer());
+ #endif
+   auto invoke = reinterpret_cast<invokestub>(stub);
+   uword result =
+       invoke(entry_point, static_cast<uword>(arguments_descriptor.ptr()),
+              static_cast<uword>(arguments.ptr()), thread);
++#if defined(DART_INCLUDE_SIMULATOR)
++  thread->set_dart_state_is_on_cpu(saved_on_cpu);
++  thread->set_simulator_csp(saved_sim_csp);
++#endif
+   return static_cast<ObjectPtr>(result);
+ }
+ 
+diff --git a/runtime/vm/exceptions.cc b/runtime/vm/exceptions.cc
+index 9adf2ed8e2f..a2791991ea9 100644
+--- a/runtime/vm/exceptions.cc
++++ b/runtime/vm/exceptions.cc
+@@ -627,7 +627,7 @@ NO_SANITIZE_SAFE_STACK  // This function manipulates the safestack pointer.
+   // exception object in the kExceptionObjectReg register and the stacktrace
+   // object (may be raw null) in the kStackTraceObjectReg register.
+ 
+-  if (FLAG_use_simulator) {
++  if (FLAG_use_simulator && thread->is_simulating() != 0) {
+     Simulator::Current()->JumpToFrame(program_counter, stack_pointer,
+                                       frame_pointer, thread);
+     UNREACHABLE();
+diff --git a/runtime/vm/isolate.cc b/runtime/vm/isolate.cc
+index d18015dae1e..95361cfab53 100644
+--- a/runtime/vm/isolate.cc
++++ b/runtime/vm/isolate.cc
+@@ -1944,6 +1944,15 @@ Isolate* Isolate::InitIsolate(const char* name_prefix,
+ 
+   ASSERT(result != nullptr);
+ 
++#if defined(DART_INCLUDE_SIMULATOR)
++  // Shorebird CPU runtime-call stubs (CallOnClangStack, JumpToFrame) park Dart
++  // registers in Isolate::simulator_. Ensure a Simulator instance is allocated
++  // for every isolate even when Dart execution is native on the CPU.
++  if (result->simulator() == nullptr) {
++    result->set_simulator(new Simulator());
++  }
++#endif
++
+ #if !defined(PRODUCT)
+ // Initialize metrics.
+ #define ISOLATE_METRIC_INIT(type, variable, name, unit)                        \
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index a8952ae4a2f..815d676bf86 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -1894,6 +1894,47 @@ struct CalloutContext {
+ 
+ extern "C" void SimulatorFfiCalloutTrampoline(CalloutContext*);
+ 
++static bool IsBlrInstruction(Instr* instr) {
++  constexpr int32_t kRnMask = 0x1f << kRnShift;
++  return (instr->InstructionBits() & ~kRnMask) == BLR;
++}
++
++#if defined(HOST_ARCH_ARM64)
++// Where to continue after DoRedirectedFfiCall has made the call on the CPU:
++// past the blr that would otherwise make it again. Upstream always emits
++// `hlt #kSimulatorFfiRedirectCode ; blr x9`, and CallNativeThroughSafepoint
++// still does. FfiCallInstr's leaf path, in a DART_INCLUDE_SIMULATOR build, puts
++// the is_simulating_ guard between the two (il_arm64.cc):
++//
++//   hlt #0xca12 ; ldr tmp, [THR, #is_simulating_] ; cbz tmp, L
++//               ; brk #kCallFFIOnCPUCode ; L: blr x9
++//
++// (cbz is `cbnz tmp, +8 ; b L` with far branches). Resuming at hlt + 8 lands
++// on that cbz, which tests a register ClobberVolatileRegisters has just
++// randomised, so it falls into the brk.
++static uword FfiRedirectResumePc(uword hlt_pc) {
++  // At most ldr, cbnz, b, brk before the blr.
++  constexpr intptr_t kMaxGuardInstructions = 4;
++  for (intptr_t i = 1; i <= kMaxGuardInstructions + 1; i++) {
++    Instr* instr = Instr::At(hlt_pc + i * Instr::kInstrSize);
++    if (!IsBlrInstruction(instr)) continue;
++    if (i > 1) {
++      Instr* guard = Instr::At(hlt_pc + (i - 1) * Instr::kInstrSize);
++      if ((guard->InstructionBits() & ~kImm16Mask) != BRK ||
++          guard->Imm16Field() != Instr::kCallFFIOnCPUCode) {
++        FATAL("FFI redirect at 0x%" Px
++              ": blr at +%" Pd " is not preceded by brk #0x%x",
++              hlt_pc, i * Instr::kInstrSize, Instr::kCallFFIOnCPUCode);
++      }
++    }
++    return hlt_pc + (i + 1) * Instr::kInstrSize;
++  }
++  FATAL("FFI redirect at 0x%" Px ": no blr within %" Pd " instructions",
++        hlt_pc, kMaxGuardInstructions + 1);
++  return 0;
++}
++#endif  // defined(HOST_ARCH_ARM64)
++
+ void Simulator::DoRedirectedFfiCall(Instr* instr) {
+ #if !defined(HOST_ARCH_ARM64)
+   FATAL("Unsupported FFI call");
+@@ -1945,8 +1986,8 @@ void Simulator::DoRedirectedFfiCall(Instr* instr) {
+     set_vregisterd(V2, 0, ctxt.double_arguments[2]);
+     set_vregisterd(V3, 0, ctxt.double_arguments[3]);
+ 
+-    // Skip over hlt and blr.
+-    set_pc(saved_pc + 2 * Instr::kInstrSize);
++    // Skip over hlt and blr (and the simulator guard between them, if any).
++    set_pc(FfiRedirectResumePc(static_cast<uword>(saved_pc)));
+   } else {
+     // Coming via long jump from a throw. Continue to exception handler.
+   }
+@@ -1991,8 +2032,9 @@ const char* Simulator::NameOfSimToCpuHypercall(int32_t imm16) {
+ // simulator, and when it says "already on the CPU" the br takes it directly.
+ // Both arms therefore agree that the target lives in R16.
+ //
+-// Of the nine imm16 values in their block only kRunDartOnCPUCode is implemented
+-// here; see the constants in constants_arm64.h for why.
++// Of the nine imm16 values in their block kRunDartOnCPUCode is implemented
++// here, and the two guards in front of a blr (kCallLeafRuntimeOnCPUCode,
++// kCallFFIOnCPUCode) carry on; see the constants in constants_arm64.h.
+ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+   const int32_t imm = instr->Imm16Field();
+   if (imm < Instr::kFirstSimToCpuHypercallCode ||
+@@ -2008,6 +2050,30 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+   if (imm == Instr::kCallLeafRuntimeOnCPUCode) {
+     return true;
+   }
++  // kCallFFIOnCPUCode guards the blr of LeafRuntimeCallInstr and of
++  // FfiCallInstr's leaf path (il_arm64.cc); their handler takes the target
++  // from that blr and calls it on the CPU. Here neither needs that:
++  //  - LeafRuntimeCallInstr's target is a Thread leaf entry, i.e. a
++  //    RuntimeEntry::GetEntryPoint() redirection, so the simulated blr already
++  //    reaches the runtime natively (DoRedirectedCall) -- carry on, as for the
++  //    leaf-runtime guard above;
++  //  - FfiCallInstr's leaf path has hlt #kSimulatorFfiRedirectCode ahead of the
++  //    guard, and DoRedirectedFfiCall resumes past the blr, so it never gets
++  //    here.
++  // A blr to anything but a redirection would have the simulator interpret
++  // host code, so that is refused rather than carried on.
++  if (imm == Instr::kCallFFIOnCPUCode) {
++    Instr* call = Instr::At(reinterpret_cast<uword>(instr) + Instr::kInstrSize);
++    if (IsBlrInstruction(call) &&
++        Redirection::FunctionForRedirect(
++            static_cast<uword>(get_register(call->RnField()))) != 0) {
++      return true;
++    }
++    FATAL("%s at 0x%" Px ": next instruction 0x%08x is not a blr to a "
++          "simulator redirection; calling a native target on the CPU from "
++          "this hypercall is not implemented",
++          name, reinterpret_cast<uword>(instr), call->InstructionBits());
++  }
+   if (imm != Instr::kRunDartOnCPUCode) {
+     FATAL("Simulator->CPU hypercall %s (brk #0x%x) is not implemented", name,
+           imm);
+@@ -2045,11 +2111,31 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+   {
+     SimulatorSetjmpBuffer buffer(this);
+     if (!setjmp(buffer.buffer_)) {
++      Thread* const sim_thread =
++          (current_thr != nullptr) ? current_thr : Thread::Current();
++      const uword saved_on_cpu =
++          (sim_thread != nullptr) ? sim_thread->dart_state_is_on_cpu() : 0;
++      const uword saved_csp =
++          (sim_thread != nullptr) ? sim_thread->simulator_csp() : 0;
++      const bool was_simulating =
++          (sim_thread != nullptr && sim_thread->is_simulating() != 0);
++      if (sim_thread != nullptr) {
++        sim_thread->set_is_simulating(0);
++        sim_thread->set_dart_state_is_on_cpu(1);
++        sim_thread->set_simulator_csp(OSThread::GetCurrentStackPointer());
++      }
+       const int64_t result =
+           InvokeWithTHR(target, static_cast<uword>(thr_val),
+                         static_cast<uword>(pp_val), a0, a1, a2, a3, a4, a5, a6,
+                         a7);
+       set_register(instr, R0, result);
++      if (sim_thread != nullptr) {
++        sim_thread->set_dart_state_is_on_cpu(saved_on_cpu);
++        sim_thread->set_simulator_csp(saved_csp);
++        if (was_simulating) {
++          sim_thread->set_is_simulating(1);
++        }
++      }
+     }
+     // else: a Dart exception was thrown out of the target; JumpToFrame has
+     // already moved PC/SP/FP to the handler.
+diff --git a/runtime/vm/thread.cc b/runtime/vm/thread.cc
+index 06f9df99bd5..b04717a7c73 100644
+--- a/runtime/vm/thread.cc
++++ b/runtime/vm/thread.cc
+@@ -243,18 +243,14 @@ void Thread::InitVMConstants() {
+ 
+   // Shorebird: Thread+0x920 / +0x928, the safepoint slow paths of
+   // CallNativeThroughSafepoint (Shorebird shape, see
+-  // UseShorebirdCpuRuntimeCallShape) and SimulatorCallNativeThroughSafepoint.
+-  // Their InitVMConstants fills both from its table of stub Code handles; the
+-  // two slots it reads sit directly after ResumeOnCPU's and
+-  // ResumeOnSimulator's, which in their stub declaration order (ours since
+-  // F148) are SimulatorEnterSafepoint and SimulatorExitSafepoint. Until this
+-  // change nothing wrote these fields, so SimulatorCallNativeThroughSafepoint's
+-  // slow path called address 0.
++  // UseShorebirdCpuRuntimeCallShape), SimulatorCallNativeThroughSafepoint,
++  // and the arm64 FfiCallbackTrampoline inline safepoint slow path (F155).
++  // The entry points must be EnterSafepoint and ExitSafepoint: both execute
++  // natively on the CPU without triggering simulator brk traps.
+   ASSERT(enter_safepoint_entry_point_ == 0);
+   ASSERT(exit_safepoint_entry_point_ == 0);
+-  enter_safepoint_entry_point_ =
+-      StubCode::SimulatorEnterSafepoint().EntryPoint();
+-  exit_safepoint_entry_point_ = StubCode::SimulatorExitSafepoint().EntryPoint();
++  enter_safepoint_entry_point_ = StubCode::EnterSafepoint().EntryPoint();
++  exit_safepoint_entry_point_ = StubCode::ExitSafepoint().EntryPoint();
+ 
+ // Setup the thread specific reusable handles.
+ #define REUSABLE_HANDLE_ALLOCATION(object)                                     \
+-- 
+2.53.0
+

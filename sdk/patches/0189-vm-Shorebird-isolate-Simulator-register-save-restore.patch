@@ -1,0 +1,95 @@
+From 8cd798e180487b9c14cba99db67f7afd9a5b7e54 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 11:56:06 +0800
+Subject: [PATCH 189/206] [vm] Shorebird: isolate Simulator register
+ save/restore and nested simulator_csp for CPU execution
+
+When running Dart natively on CPU in a simulator-including AOT build (--no-use_simulator),
+runtime stubs (CallToRuntime, Call*Native, CallNativeThroughSafepoint) use Shorebird's
+CallOnClangStack, which parks Dart callee-saved registers (SPREG, R19..R30, CSP, V8..V15)
+in Isolate::simulator_ and switches CSP to Thread::simulator_csp_.
+
+Two issues caused crashes when executing AOT programs without simulator:
+1. In dart_entry.cc, simulator_csp_ was originally set to OSThread::GetCurrentStackPointer().
+   Because Dart code also executes on the host OS thread stack, CallOnClangStack switched
+   CSP onto the active Dart stack frames, overwriting saved FP/LR and return addresses,
+   causing ret to jump to address 0x0 (SEGV_ACCERR si_addr=0x0).
+   Setting simulator_csp_ to sim->stack_base() - 0xd0 moves the C runtime frames onto
+   the Isolate's allocated Simulator stack, preventing any collision with Dart frames.
+
+2. During re-entrant Dart invocations (e.g. Field::InitializeStatic -> Field::EvaluateInitializer
+   -> DartEntry::InvokeFunction -> InvokeDartCode), nested Dart execution or nested runtime
+   calls stomped on the single shared Isolate::simulator_ register file, clobbering outer Dart
+   return addresses (LR in registers_[30]), and nested CallOnClangStack would collide with
+   outer C runtime stack frames if simulator_csp_ was unconditionally reset.
+
+Fix:
+- In simulator_arm64.h, add SaveClangState() and RestoreClangState() to Simulator.
+- In dart_entry.cc, save and restore the Simulator register state across InvokeDartCode.
+- For nested invocations (saved_sim_csp != 0), allocate simulator_csp_ below the current
+  active C stack pointer (Utils::RoundDown(current_csp - 0xd0 - 0x100, 16)).
+
+Verification:
+- hi.dart, p1..p7.dart, and p8.dart all pass with expected outputs under --no-use_simulator.
+- All 8 programs pass in default simulator mode.
+- Negative control verifies hi.so crashes at address 0x0 without this fix.
+
+Co-Authored-By: agy (Antigravity CLI)
+
+diff --git a/runtime/vm/dart_entry.cc b/runtime/vm/dart_entry.cc
+index c19d7a7dee4..7ecb0af80bd 100644
+--- a/runtime/vm/dart_entry.cc
++++ b/runtime/vm/dart_entry.cc
+@@ -131,13 +131,22 @@ static ObjectPtr InvokeDartCode(uword entry_point,
+     thread->isolate()->set_simulator(new Simulator());
+   }
+   thread->set_dart_state_is_on_cpu(1);
+-  thread->set_simulator_csp(OSThread::GetCurrentStackPointer());
++  Simulator* sim = thread->isolate()->simulator();
++  Simulator::ClangCallSavedState saved_sim_state;
++  sim->SaveClangState(&saved_sim_state);
++  if (saved_sim_csp == 0) {
++    thread->set_simulator_csp(sim->stack_base() - 0xd0);
++  } else {
++    uword current_csp = OSThread::GetCurrentStackPointer();
++    thread->set_simulator_csp(Utils::RoundDown(current_csp - 0xd0 - 0x100, 16));
++  }
+ #endif
+   auto invoke = reinterpret_cast<invokestub>(stub);
+   uword result =
+       invoke(entry_point, static_cast<uword>(arguments_descriptor.ptr()),
+              static_cast<uword>(arguments.ptr()), thread);
+ #if defined(DART_INCLUDE_SIMULATOR)
++  sim->RestoreClangState(saved_sim_state);
+   thread->set_dart_state_is_on_cpu(saved_on_cpu);
+   thread->set_simulator_csp(saved_sim_csp);
+ #endif
+diff --git a/runtime/vm/simulator_arm64.h b/runtime/vm/simulator_arm64.h
+index c725f2c7886..31220314df3 100644
+--- a/runtime/vm/simulator_arm64.h
++++ b/runtime/vm/simulator_arm64.h
+@@ -91,6 +91,21 @@ class Simulator {
+   // Call on program start.
+   static void Init();
+ 
++  struct ClangCallSavedState {
++    int64_t registers[kNumberOfCpuRegisters];
++    simd_value_t vregisters[kNumberOfVRegisters];
++  };
++
++  void SaveClangState(ClangCallSavedState* state) const {
++    memcpy(state->registers, registers_, sizeof(registers_));
++    memcpy(state->vregisters, vregisters_, sizeof(vregisters_));
++  }
++
++  void RestoreClangState(const ClangCallSavedState& state) {
++    memcpy(registers_, state.registers, sizeof(registers_));
++    memcpy(vregisters_, state.vregisters, sizeof(vregisters_));
++  }
++
+   // flutter_hot_patcher A2: Shorebird-equivalent Simulator↔CPU link table.
+   // Populated at patch load time from the .vmcode header.
+   // Key: sim_offset (patch instruction offset), Value: cpu_offset (base instruction offset).
+-- 
+2.53.0
+

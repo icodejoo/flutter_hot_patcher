@@ -1,0 +1,69 @@
+From 98f48610559a13808a330f5c3e117a5f109dbedd Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 17:44:53 +0800
+Subject: [PATCH 011/206] feat(shorebird): field table link info -- content now
+ exactly matches theirs
+
+All 622 entries, max_field_id, and every (id, name, hash) triple are identical to
+Shorebird's output; the multiset compares equal and sorting both sides makes them
+match element for element. Output size is also exactly 47426 bytes.
+
+Two encoding details were wrong before and are now recovered from their data:
+
+  * kind_bits is masked. Bits 16 (NoSanitizeThreadBit) and 17
+    (HasDeeplyImmutableTypeBit) never appear in their output -- we had 5 entries
+    with bit 17 and 1 with bit 16 -- and masking exactly those two reconciles all
+    11 previously differing entries. They describe the thread/memory model rather
+    than field identity, so excluding them keeps the link info stable.
+    NB: this supersedes the earlier guess that Shorebird builds with
+    deeply-immutable disabled. That was wrong -- EnsureDeeplyImmutable and
+    CheckedStoreIntoShared both appear in their binary, and those stubs are not
+    conditionally compiled. The earlier assembly-size difference was a build mode
+    difference, not a missing feature.
+
+  * Duplicates repeat " 1" instead of incrementing a counter. ClassID's 93 field
+    names each occur twice, emitted as "ClassID.cidNull 3 1" (id 0) and
+    "ClassID.cidNull 3 1 1" (id 94). All 529 three-segment entries carry a
+    constant trailing 1, so the first is always present and each further
+    occurrence appends another.
+
+The remaining difference is ordering within equal field_ids. Their order is not
+alphabetical and not by owner class id (checked: owner cids run 501, 521, 187,
+442, ... for id 1), so it is heap iteration order -- a function of heap layout,
+not of this algorithm. Aligning it requires the two VMs to allocate identically,
+which is the same class of constraint as the snapshot version hash.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index a1d8c442efb..558d9420034 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -266,9 +266,21 @@ FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread) {
+ 
+     std::string hash = qualified;
+     hash += ' ';
+-    hash += std::to_string(field.kind_bits());
+-    hash += ' ';
+-    hash += std::to_string(occurrence);
++    // Shorebird masks out NoSanitizeThreadBit (16) and
++    // HasDeeplyImmutableTypeBit (17): they describe the thread/memory model, not
++    // field identity, so leaving them in would make the link info depend on
++    // properties irrelevant to matching. Verified against their output -- those
++    // two bits never appear in it, and masking them reconciles all 11
++    // previously differing entries.
++    constexpr uint32_t kUnstableKindBits = (1u << 16) | (1u << 17);
++    hash += std::to_string(field.kind_bits() & ~kUnstableKindBits);
++    // Duplicates are marked by REPEATING " 1", not by an incrementing counter:
++    // ClassID's 93 field names each appear twice, emitted as "... 3 1" and
++    // "... 3 1 1". The first " 1" is therefore always present, and each further
++    // occurrence appends another one.
++    for (intptr_t n = 0; n < occurrence; n++) {
++      hash += " 1";
++    }
+ 
+     const intptr_t id = field.field_id();
+     max_field_id = Utils::Maximum(max_field_id, id);
+-- 
+2.53.0
+

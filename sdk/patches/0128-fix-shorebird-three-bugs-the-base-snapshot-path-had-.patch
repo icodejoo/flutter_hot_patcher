@@ -1,0 +1,289 @@
+From 11dcd2b4c9c285e5802ea5779440764a8041ea31 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 3 Sep 2026 15:40:07 +0800
+Subject: [PATCH 128/206] fix(shorebird): three bugs the base-snapshot path had
+ been hiding
+
+Registering the base snapshots was enough to segfault at the first await.
+Nothing on the host ever registered them, so everything gated on
+BaseSnapshotsAreSet() had zero coverage until an iPhone ran it.
+
+Resume stub jumped to address 0. Its have_base_range arm ends in
+Jump(resume_on_{cpu,simulator}_entry_point), and the setters for both Thread
+fields have no callers anywhere in the tree -- they are initialised to 0 and
+never written. Control only ever reached the other arm, where
+base_instructions_entry_point_ == 0 and the parked pc is jumped to directly.
+The comment three lines up says the base_instructions pair "were never written
+by anything; this is the writer"; the resume pair was missed. Write them in the
+same place, from StubCode::ResumeOnCPU()/ResumeOnSimulator().
+
+This also narrows the earlier "gen_kernel async crash is not a regression"
+verdict: that investigation exercised the == 0 arm and was right about it. The
+bug is in the arm it could not reach.
+
+LinkOracle::ReadHeaderSize did not page-align. The value it returns is handed
+to the loader as the ELF's file offset, and Dart_LoadELF rejects an offset that
+is not page-aligned. tools/linker.py rounds up to 16384; the reader did not, so
+for the b5 app's 8686 entries it answered 69492 while the ELF sat at 81920 --
+pointing the loader at the zero pad. The header comment directly above the
+function already documented the pad. Documentation right, code wrong, tests
+following the code.
+
+entry_count() derived the count from header_size_, which only worked while
+header_size_ was exactly 4 + 8n. With the pad it answers 2047 for every table
+that fits in a page. Read the stored count instead. This one is only reachable
+once the alignment is fixed.
+
+Two tests asserted the unpadded size, one of them in its own name
+(ReadHeaderSizeIsCountTimesEight), and stayed green on the wrong
+implementation because the fixture was wrong the same way: MakeHeader emitted
+4 + 8n bytes with no pad and no ELF, so a correct reader and one that stops at
+the end of the table were indistinguishable on it. Fixture now builds a real
+vmcode prefix; add ReadHeaderSizeSpansSeveralPages for the multi-page case that
+actually broke. The truncated-input case had to be re-cut too -- with a padded
+fixture, dropping trailing bytes leaves the declared table inside the buffer
+and proves nothing.
+
+Add an FHP_SETBASE gate to dartaotruntime so the base-snapshot path has a host
+repro at all. Same binary, same snapshot, one env var apart: unset exits 0,
+set crashed with pc=0 before this change and exits 0 after.
+
+LinkOracle|Shorebird: 34 passed, 0 failed. Note that run_vm_tests takes one
+test name and silently ignores the rest, so a single invocation with 34 names
+runs one of them and still exits 0.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/bin/main_impl.cc b/runtime/bin/main_impl.cc
+index 36edb4552da..66eed664802 100644
+--- a/runtime/bin/main_impl.cc
++++ b/runtime/bin/main_impl.cc
+@@ -1339,6 +1339,20 @@ void main(int argc, char** argv) {
+       app_snapshot->SetBuffers(&vm_snapshot_data, &vm_snapshot_instructions,
+                                &app_isolate_snapshot_data,
+                                &app_isolate_snapshot_instructions);
++      // flutter_hot_patcher: host repro harness for the Shorebird base-snapshot
++      // path. The engine registers the base snapshots from ConfigureShorebird
++      // before the isolate exists; nothing on the host ever did, so everything
++      // gated on BaseSnapshotsAreSet() -- ReadBaseInstructionsTable() above all
++      // -- had zero coverage outside a device. Setting FHP_SETBASE registers the
++      // app's own snapshot as its base, which is exactly the unpatched case the
++      // engine hits on every boot once a shorebird.yaml is present.
++      // Argument order is the engine's: isolate data, isolate instructions,
++      // vm data, vm instructions (shell/common/shorebird/shorebird.cc).
++      if (getenv("FHP_SETBASE") != nullptr) {
++        Shorebird_SetBaseSnapshots(app_isolate_snapshot_data,
++                                   app_isolate_snapshot_instructions,
++                                   vm_snapshot_data, vm_snapshot_instructions);
++      }
+     } else if (app_snapshot == nullptr && Dart_IsPrecompiledRuntime()) {
+       Syslog::PrintErr(
+           "%s is not an AOT snapshot,"
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+index 01c8f82f79d..6e5d8cce673 100644
+--- a/runtime/vm/shorebird.cc
++++ b/runtime/vm/shorebird.cc
+@@ -40,6 +40,14 @@ static constexpr size_t kEntrySize = 8;
+ // in a product build, so this is a plain `if`.
+ static constexpr int64_t kMaxEntries = 1 << 24;
+ 
++// The pad the header comment above describes. It is not cosmetic: the value
++// ReadHeaderSize returns is handed straight to the loader as the ELF's file
++// offset, and Dart_LoadELF rejects an offset that is not page-aligned with
++// "File offset must be page-aligned." (measured on device 2026-08-14, recorded
++// in tools/linker.py). 16384 rather than 4096 because that is the iOS arm64
++// page size, and the writer rounds to it.
++static constexpr size_t kSnapshotAlignment = 16384;
++
+ int32_t LinkOracle::int32_in(const uint8_t* buffer, size_t offset) {
+   int32_t value;
+   memcpy(&value, buffer + offset, sizeof(value));
+@@ -57,10 +65,21 @@ size_t LinkOracle::ReadHeaderSize(const uint8_t* buffer, size_t size) {
+   const int32_t count = int32_in(buffer, 0);
+   if (count < 0 || count > kMaxEntries) return 0;
+ 
+-  const size_t header_size =
++  const size_t table_size =
+       kEntryCountSize + static_cast<size_t>(count) * kEntrySize;
+   // The declared table has to fit in what we were actually handed.
+-  if (header_size > size) return 0;
++  if (table_size > size) return 0;
++
++  // Round up to where the writer actually put the ELF. Reading this back
++  // unpadded was a real bug, not a hypothetical: it pointed the loader at the
++  // zero pad instead of the ELF, and the only symptom was the engine reporting
++  // "patch N failed to launch" while it silently fell back to the base. At
++  // least one page even when the table is empty, matching the writer.
++  const size_t pages =
++      (table_size + kSnapshotAlignment - 1) / kSnapshotAlignment;
++  const size_t header_size = (pages == 0 ? 1 : pages) * kSnapshotAlignment;
++  // And the ELF has to start inside the buffer, not past its end.
++  if (header_size >= size) return 0;
+   return header_size;
+ }
+ 
+@@ -83,8 +102,14 @@ std::unique_ptr<LinkOracle> LinkOracle::fromBuffer(const uint8_t* buffer,
+ }
+ 
+ intptr_t LinkOracle::entry_count() const {
+-  if (header_size_ < kEntryCountSize) return 0;
+-  return static_cast<intptr_t>((header_size_ - kEntryCountSize) / kEntrySize);
++  // Read the stored count, do not derive it from header_size_. It used to be
++  // derivable because header_size_ was exactly 4 + 8n; now that it is rounded
++  // up to the page the ELF starts on, (header_size_ - 4) / 8 answers 2047 for
++  // every table that fits in one page.
++  if (backing_ == nullptr || header_size_ < kEntryCountSize) return 0;
++  const int32_t count = int32_at(0);
++  if (count < 0) return 0;
++  return static_cast<intptr_t>(count);
+ }
+ 
+ void LinkOracle::BuildCaches() {
+diff --git a/runtime/vm/shorebird/shorebird.h b/runtime/vm/shorebird/shorebird.h
+index 73d9194d6a2..3b84566b5d7 100644
+--- a/runtime/vm/shorebird/shorebird.h
++++ b/runtime/vm/shorebird/shorebird.h
+@@ -70,8 +70,11 @@ class LinkOracle {                                         // their :27
+   static std::unique_ptr<LinkOracle> fromBuffer(const uint8_t* buffer,
+                                                 size_t size);
+ 
+-  // their :63. `4 + 8 * entry_count`, or 0 when `size` cannot even hold the
+-  // count or cannot hold the table the count declares.
++  // their :63. The ELF's file offset: `4 + 8 * entry_count` rounded up to the
++  // snapshot alignment, because that is where the writer puts the ELF and
++  // Dart_LoadELF refuses an offset that is not page-aligned. 0 when `size`
++  // cannot even hold the count, cannot hold the table the count declares, or
++  // leaves no room for the ELF after the pad.
+   static size_t ReadHeaderSize(const uint8_t* buffer, size_t size);
+ 
+   // their :56. False for a table that pairs nothing -- a patch in which every
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index eadb2922093..a45cae4e3e9 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -19,15 +19,29 @@ namespace dart {
+ 
+ // Builds a `.vmcode` header the way tools/linker.py does: a little-endian
+ // uint32 count followed by that many (patch, base) uint32 pairs.
++// A well-formed `.vmcode` prefix: the table, the zero pad up to the snapshot
++// alignment, then the first bytes of where the ELF would be. The pad is not
++// decoration -- ReadHeaderSize returns the offset the loader uses for the ELF,
++// so a fixture without it cannot tell a correct reader from one that stops at
++// the end of the table. It could not, and did not: this helper used to emit
++// exactly 4 + 8n bytes, and two tests below asserted that unpadded number.
++static constexpr size_t kTestSnapshotAlignment = 16384;
++
+ static std::vector<uint8_t> MakeHeader(
+     const std::vector<std::pair<int32_t, int32_t>>& pairs) {
+-  std::vector<uint8_t> bytes(4 + 8 * pairs.size());
++  const size_t table_size = 4 + 8 * pairs.size();
++  const size_t pages =
++      (table_size + kTestSnapshotAlignment - 1) / kTestSnapshotAlignment;
++  const size_t padded = (pages == 0 ? 1 : pages) * kTestSnapshotAlignment;
++  // Four bytes standing in for the ELF, so the ELF offset lands inside.
++  std::vector<uint8_t> bytes(padded + 4);
+   const int32_t count = static_cast<int32_t>(pairs.size());
+   memcpy(bytes.data(), &count, 4);
+   for (size_t i = 0; i < pairs.size(); i++) {
+     memcpy(bytes.data() + 4 + 8 * i, &pairs[i].first, 4);
+     memcpy(bytes.data() + 8 + 8 * i, &pairs[i].second, 4);
+   }
++  memcpy(bytes.data() + padded, "\x7f" "ELF", 4);
+   return bytes;
+ }
+ 
+@@ -139,17 +153,38 @@ VM_UNIT_TEST_CASE(LinkOracle_RunTargetOffsetPredicates) {
+   EXPECT(!on_sim.is_cpu());
+ }
+ 
+-VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeIsCountTimesEight) {
++VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeIsPageAlignedNotCountTimesEight) {
++  // The value is the ELF's file offset, and Dart_LoadELF rejects one that is
++  // not page-aligned. The old name and the old expectation (4 + 8n) were both
++  // wrong, and wrong in a way no unit test could see while the fixture was
++  // also unpadded -- it took a device reporting "patch 1 failed to launch".
+   const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}, {256, 52100}});
+-  EXPECT_EQ(static_cast<size_t>(4 + 16),
++  EXPECT_EQ(kTestSnapshotAlignment,
+             LinkOracle::ReadHeaderSize(bytes.data(), bytes.size()));
+ 
+-  // An empty table is well-formed: every function changed.
++  // An empty table is well-formed: every function changed. Still one page.
+   const std::vector<uint8_t> empty = MakeHeader({});
+-  EXPECT_EQ(static_cast<size_t>(4),
++  EXPECT_EQ(kTestSnapshotAlignment,
+             LinkOracle::ReadHeaderSize(empty.data(), empty.size()));
+ }
+ 
++VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeSpansSeveralPages) {
++  // The regression that mattered. A real app's table is far bigger than one
++  // page -- the b5 test app links 8686 entries, so 4 + 8 * 8686 = 69492 and
++  // the ELF sits at 81920, five pages in. Reading it back as 69492 pointed the
++  // loader into the zero pad.
++  const size_t count = 8686;
++  std::vector<std::pair<int32_t, int32_t>> pairs;
++  pairs.reserve(count);
++  for (size_t i = 0; i < count; i++) {
++    pairs.emplace_back(static_cast<int32_t>(128 + 8 * i),
++                       static_cast<int32_t>(52016 + 8 * i));
++  }
++  const std::vector<uint8_t> bytes = MakeHeader(pairs);
++  EXPECT_EQ(static_cast<size_t>(81920),
++            LinkOracle::ReadHeaderSize(bytes.data(), bytes.size()));
++}
++
+ VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeRejectsMalformed) {
+   EXPECT_EQ(static_cast<size_t>(0), LinkOracle::ReadHeaderSize(nullptr, 100));
+ 
+@@ -158,9 +193,11 @@ VM_UNIT_TEST_CASE(LinkOracle_ReadHeaderSizeRejectsMalformed) {
+   EXPECT_EQ(static_cast<size_t>(0), LinkOracle::ReadHeaderSize(stub, 3));
+ 
+   // Declares two entries but carries one. Reading this as a header would walk
+-  // eight bytes past the buffer.
++  // eight bytes past the buffer. Cut back to the table, not off the end of the
++  // pad -- with a padded fixture, dropping trailing bytes leaves the declared
++  // table entirely inside the buffer and proves nothing.
+   std::vector<uint8_t> truncated = MakeHeader({{128, 52016}, {256, 52100}});
+-  truncated.resize(truncated.size() - 8);
++  truncated.resize(4 + 8);
+   EXPECT_EQ(static_cast<size_t>(0),
+             LinkOracle::ReadHeaderSize(truncated.data(), truncated.size()));
+ 
+@@ -187,7 +224,7 @@ VM_UNIT_TEST_CASE(LinkOracle_FromBufferParsesTheTable) {
+   std::unique_ptr<LinkOracle> oracle =
+       LinkOracle::fromBuffer(bytes.data(), bytes.size());
+   EXPECT(oracle != nullptr);
+-  EXPECT_EQ(static_cast<size_t>(4 + 24), oracle->header_size());
++  EXPECT_EQ(kTestSnapshotAlignment, oracle->header_size());
+   EXPECT_EQ(static_cast<intptr_t>(3), oracle->entry_count());
+   EXPECT(oracle->HasPatch());
+ }
+diff --git a/runtime/vm/thread.cc b/runtime/vm/thread.cc
+index 846c887ef32..908c7af826b 100644
+--- a/runtime/vm/thread.cc
++++ b/runtime/vm/thread.cc
+@@ -1674,6 +1674,21 @@ void Thread::SetupDartMutatorStateDependingOnSnapshot(IsolateGroup* group) {
+     // is not a patched app.
+     base_instructions_entry_point_ = BaseSnapshotInstructions();
+     base_instructions_end_ = BaseSnapshotInstructionsEnd();
++
++    // Shorebird: the two stubs the Resume stub dispatches to once a base range
++    // exists. Same situation the pair above was in -- accessors, setters and
++    // offset getters all present, nothing ever writing them -- except these are
++    // *read by generated code on a live path*: with a base set, Resume's
++    // have_base_range arm ends in `Jump(resume_on_{cpu,simulator}_entry_point)`.
++    // Left at zero that is a jump to 0, and the only reason it never showed up
++    // is that every test so far ran with no base snapshot, so control took the
++    // no-base fast path instead. Registering the base snapshots was enough to
++    // segfault at the first await (2026-09-03, host repro FHP_SETBASE=1).
++    // Where the write belongs is our choice, not recovered from theirs; here is
++    // where the range it guards is computed, so the two cannot disagree.
++    resume_on_cpu_entry_point_ = StubCode::ResumeOnCPU().EntryPoint();
++    resume_on_simulator_entry_point_ =
++        StubCode::ResumeOnSimulator().EntryPoint();
+ #define INIT_ENTRY_POINT(name)                                                 \
+   if (object_store->name() != Object::null()) {                                \
+     name##_entry_point_ = Function::EntryPointOf(object_store->name());        \
+-- 
+2.53.0
+

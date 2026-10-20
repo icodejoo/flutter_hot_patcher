@@ -23821,3 +23821,12 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - fhpb：`release --split-debug-info` 从 App 的特性串读模式，写入 `release.json`，调试符号归档；`patch` 按 release 的模式构建，模式不一致拒绝发布。测试 56/56，4 道新增检查各做过删改测试。
 - 提交时只提交了 `cli.py` 中属于本功能的改动。工作区里原有的公钥 SPKI→PKCS#1 改动（`gen_keypair`、`updater_public_key`、`verify`）不是本次做的，原样留在工作区未提交。已在只含 HEAD + 本次改动的隔离树里跑过测试，56/56。
 - 未完成：LocalSend（改用 build ios 重跑中）；用 `.symbols` 还原崩溃栈未实测；已发布的 release 要从下一个 split 构建的版本才生效。
+
+### 2026-10-20 晚：复刻的 SDK 以补丁序列放进本仓库（操作者选方案 3）
+
+操作者要求把复刻的 SDK 代码提交。可选方案有：私有仓库放补丁、私有仓库推整个分支、本公开仓库放补丁。操作者选了**方案 3：放进本公开仓库**。
+- 这一决定**取代** 2026-08-19 的「自研 VM 改动不推公开仓库」（见 `archive/dartsdk_backup/README.md`）。从此，复刻的闭源部分是公开的。
+- 内容：`sdk/patches/`，206 个 `format-patch` 文件，2.5 MB，范围是 `d684a576a6a..41693e90584`（分支 `agent/sdk-phase-c1`），附 `sdk/README.md`。审过：没有二进制补丁，十六进制常量是 SHA-1 算法常量和我们自己的指令编码，提到参考的地方都是逆向分析时写的注释。
+- 验证：在干净的上游基点上执行 `git am --empty=keep`，206/206 应用成功，树哈希 `0f33054c…` 与原分支逐字节相同。第 166 个补丁（F37 erratum）是空提交，所以必须加 `--empty=keep`。
+- 另存了一份离线备份 `archive/dartsdk_backup/fhp-dartsdk-3122-20261020.bundle`（795 KB，已被 gitignore；`git bundle verify` 通过，还原测试 206 个提交）。
+- 遗留：做还原测试时，我在 SDK 仓库建了一个临时分支 `fhp-bundle-base`（指向上游基点），删除时被 reference-transaction 钩子拦下，需要操作者手动删：`git -C ~/dart-3122/sdk branch -D fhp-bundle-base`。

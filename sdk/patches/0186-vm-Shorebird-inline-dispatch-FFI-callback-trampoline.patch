@@ -1,0 +1,573 @@
+From 76a02f2df501035988c936b84719b3603296c92e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 30 Sep 2026 11:59:03 +0800
+Subject: [PATCH 186/206] [vm] Shorebird: inline-dispatch FFI callback
+ trampoline on arm64 (F155)
+
+Restores upstream's pre-shrink shared stub layout (our ancestor
+4679c040c63, before ec77e28f266 / 91cef061c78) on non-Fuchsia arm64 with
+Shorebird's additions: per-FfiCallbackKind inline dispatch, inline
+safepoint compare-and-swap with a slow path through
+Thread::enter_safepoint_entry_point_, runtime-function table slots 1-3
+filled. kNativeCallbackSharedStubSize 232 -> 560 (1978 trampolines per
+page), kNativeCallbackTrampolineStackDelta 4 -> 2 with the marshaller and
+simulator frame following. FfiCallbackTrampoline 16364 B on all three
+fixtures, equal to theirs; sdk_phase_checklist C1 2 -> 0 (the last stub's
+tail padding follows).
+
+The thread.cc initialiser from this patch is dropped: F156/F157 already
+sets enter_safepoint_entry_point_ (to SimulatorEnterSafepoint, where this
+patch expected EnterSafepoint). Which value the FFI slow path needs at
+runtime is NOT VERIFIED. Nothing here has run yet.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 659238fbbae..4854d46fb21 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -672,7 +672,10 @@ void StubCodeCompiler::GenerateLoadFfiCallbackMetadataRuntimeFunction(
+   __ LoadFromOffset(dst, dst,
+                     FfiCallbackMetadata::RuntimeFunctionOffset(function_index));
+ }
+-
++#if defined(DART_TARGET_OS_FUCHSIA)
++// Fuchsia keeps the upstream (post-ec77e28f266) two-path stub: it gets a single
++// trampoline page and cannot duplicate it, so it never runs the Shorebird
++// simulator routing. Left as upstream.
+ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+   Label body;
+ 
+@@ -680,8 +683,6 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+   COMPILE_ASSERT(!IsCalleeSavedRegister(R9) && !IsArgumentRegister(R9));
+   for (intptr_t i = 0; i < FfiCallbackMetadata::NumCallbackTrampolinesPerPage();
+        ++i) {
+-    // The FfiCallbackMetadata table is keyed by the trampoline entry point. So
+-    // look up the current PC, then jump to the shared section.
+     __ adr(R9, Immediate(0));
+     __ b(&body);
+   }
+@@ -694,8 +695,6 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+ 
+   const intptr_t shared_stub_start = __ CodeSize();
+ 
+-  // Save THR (callee-saved) and LR on the real C stack (CSP). Keeps it
+-  // aligned.
+   COMPILE_ASSERT(FfiCallbackMetadata::kNativeCallbackTrampolineStackDelta == 4);
+   SPILLS_LR_TO_FRAME(__ stp(
+       FP, LR, Address(CSP, -2 * target::kWordSize, Address::PairPreIndex)));
+@@ -709,22 +708,16 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+   argument_registers.Add(Location::RegisterLocation(
+       CallingConventions::kPointerToReturnStructRegisterCall));
+ 
+-  // Load the thread, verify the callback ID and exit the safepoint.
+-  //
+-  // We exit the safepoint inside DLRT_GetFfiCallbackMetadata in order to save
+-  // code size on this shared stub.
+   {
+     __ mov(SP, CSP);
+-    // This saves too much: we only need the D half of Q registers.
+     __ PushRegistersAligned(argument_registers, 3 * target::kWordSize);
+     __ mov(R0, R9);
+     __ mov(R1, SP);
+ 
+-#if defined(DART_TARGET_OS_FUCHSIA)
+-    // TODO(https://dartbug.com/52579): Remove.
++    // Fuchsia only gets one trampoline page and cannot duplicate it, so the
++    // runtime-function table is never populated; load the pointer directly.
+     if (FLAG_precompiled_mode) {
+-      GenerateLoadBSSEntry(BSS::Relocation::DLRT_GetFfiCallbackMetadata, R4,
+-                           R9);
++      GenerateLoadBSSEntry(BSS::Relocation::DLRT_GetFfiCallbackMetadata, R4, R9);
+     } else {
+       Label call;
+       __ ldr(R4, Address::PC(2 * Instr::kInstrSize));
+@@ -732,10 +725,6 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+       __ Emit64(reinterpret_cast<int64_t>(&DLRT_GetFfiCallbackMetadata));
+       __ Bind(&call);
+     }
+-#else
+-    GenerateLoadFfiCallbackMetadataRuntimeFunction(
+-        FfiCallbackMetadata::kGetFfiCallbackMetadata, R4);
+-#endif  // defined(DART_TARGET_OS_FUCHSIA)
+ 
+     __ mov(CSP, SP);
+     __ blr(R4);  // DLRT_GetFfiCallbackMetadata
+@@ -777,7 +766,7 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+   }
+ 
+   {
+-    SPILLS_LR_TO_FRAME();  //...
++    SPILLS_LR_TO_FRAME();  // Match tracked LR state on the other path.
+     __ Bind(&tail);
+     __ blr(R10);
+     __ mov(R0, THR);
+@@ -786,9 +775,6 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+            Address(CSP, 2 * target::kWordSize, Address::PairPostIndex));
+     RESTORES_LR_FROM_FRAME(__ ldp(
+         FP, LR, Address(CSP, 2 * target::kWordSize, Address::PairPostIndex)));
+-    // Tail-call DLRT_ExitTemporaryIsolate. It is not safe to return to this
+-    // stub, since it might be deleted once DLRT_ExitTemporaryIsolate proceeds
+-    // enough for VM shutdown.
+     __ br(R1);  // DLRT_ExitTemporaryIsolate.
+     __ brk(0);
+   }
+@@ -803,7 +789,261 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+   }
+ #endif
+ }
++#else   // !defined(DART_TARGET_OS_FUCHSIA)
++// Shorebird. The shared stub dispatches on the FfiCallbackKind itself and calls
++// each kind's exit function out of the trampoline page's runtime-function table
++// -- the shape upstream had before ec77e28f266 ("Shrink the FFI callback stub")
++// replaced it with a single runtime-selected function pointer. We restore that
++// shape on arm64 (from our own history at 4679c040c63) and layer three changes
++// on top, all of them forced by our fork:
++//   * the metadata call hands back a third word, out_call_target: when nonzero,
++//     the stub calls it with the Dart entry point left in R10 -- the contract of
++//     CallSimulatorFromFfiTrampoline -- so a patch callback runs on the
++//     simulator instead of the CPU;
++//   * the exit runtime functions take Thread* (our 3.12.2 ABI, from
++//     ec77e28f266) and return void, so we pass THR in R0 and drop the
++//     `THR = result` move;
++//   * the sync (already-entered) case re-enters the safepoint inline, reading
++//     the cached entry point Thread::enter_safepoint_entry_point_ instead of
++//     loading the enter-safepoint stub Code and dereferencing it.
++// The runtime-function table is filled in FfiCallbackMetadata (arm64 branch).
++void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
++  Label body;
++
++  // R9 is volatile and not used for passing any arguments.
++  COMPILE_ASSERT(!IsCalleeSavedRegister(R9) && !IsArgumentRegister(R9));
++  for (intptr_t i = 0; i < FfiCallbackMetadata::NumCallbackTrampolinesPerPage();
++       ++i) {
++    __ adr(R9, Immediate(0));
++    __ b(&body);
++  }
++
++  ASSERT_EQUAL(__ CodeSize(),
++               FfiCallbackMetadata::kNativeCallbackTrampolineSize *
++                   FfiCallbackMetadata::NumCallbackTrampolinesPerPage());
++
++  __ Bind(&body);
++
++  const intptr_t shared_stub_start = __ CodeSize();
++
++  // Save THR (callee-saved) and LR on the real C stack (CSP). Keeps it aligned.
++  COMPILE_ASSERT(FfiCallbackMetadata::kNativeCallbackTrampolineStackDelta == 2);
++  SPILLS_LR_TO_FRAME(__ stp(
++      THR, LR, Address(CSP, -2 * target::kWordSize, Address::PairPreIndex)));
+ 
++  COMPILE_ASSERT(!IsArgumentRegister(THR));
++
++  RegisterSet all_registers;
++  all_registers.AddAllArgumentRegisters();
++  all_registers.Add(Location::RegisterLocation(
++      CallingConventions::kPointerToReturnStructRegisterCall));
++
++  // R10 = entry_point, R9 = trampoline type, R12 = call_target.
++  COMPILE_ASSERT(!IsCalleeSavedRegister(R10) && !IsArgumentRegister(R10));
++  COMPILE_ASSERT(!IsCalleeSavedRegister(R12) && !IsArgumentRegister(R12));
++
++  // Look up the thread, entry point, kind and (Shorebird) call target. The
++  // safepoint exit is done inside the runtime call to save stub code size.
++  {
++    __ SetupDartSP();
++
++    __ EnterFrame(0);
++    __ PushRegisters(all_registers);
++
++    __ mov(R0, R9);
++
++    // Three reserved stack slots for the by-pointer results, aimed at R1/R2/R3.
++    __ AddImmediate(SP, SP, -compiler::target::kWordSize);
++    __ mov(R1, SP);  // out_entry_point
++    __ AddImmediate(SP, SP, -compiler::target::kWordSize);
++    __ mov(R2, SP);  // out_trampoline_type
++    __ AddImmediate(SP, SP, -compiler::target::kWordSize);
++    __ mov(R3, SP);  // out_call_target (Shorebird)
++
++    __ EnterFrame(0);
++    __ ReserveAlignedFrameSpace(0);
++
++    GenerateLoadFfiCallbackMetadataRuntimeFunction(
++        FfiCallbackMetadata::kGetFfiCallbackMetadata, R4);
++
++    __ mov(CSP, SP);
++    __ blr(R4);  // DLRT_GetFfiCallbackMetadataForInlineDispatch
++    __ mov(SP, CSP);
++    __ mov(THR, R0);
++
++    __ LeaveFrame();
++
++    // Pop the three results in reverse reservation order: call_target
++    // (Shorebird), then trampoline type, then entry point.
++    __ Pop(R12);  // out_call_target
++    __ Pop(R9);   // out_trampoline_type
++    __ Pop(R10);  // out_entry_point
++
++    __ PopRegisters(all_registers);
++    __ LeaveFrame();
++
++    __ RestoreCSP();
++  }
++
++  Label async_callback;
++  Label sync_isolate_group_bound_callback;
++  Label sync_callback_isolate_ownership;
++  Label done;
++
++  // A null thread means an async callback was invoked after deletion.
++  __ cmp(THR, Operand(0));
++  __ b(&done, EQ);
++
++  // Dispatch on the callback kind.
++  __ cmp(
++      R9,
++      Operand(static_cast<uword>(FfiCallbackMetadata::TrampolineType::kAsync)));
++  __ b(&async_callback, EQ);
++
++  __ cmp(R9, Operand(static_cast<uword>(
++                 FfiCallbackMetadata::TrampolineType::kSyncIsolateGroupBound)));
++  __ b(&sync_isolate_group_bound_callback, EQ);
++
++  __ tsti(R9,
++          Immediate(FfiCallbackMetadata::kSyncCallbackIsolateOwnershipFlag));
++  __ b(&sync_callback_isolate_ownership, NOT_ZERO);
++
++  // Sync callback, thread already entered. Call the target -- on the simulator
++  // if out_call_target routed us there -- then re-enter the safepoint.
++  {
++    Label direct;
++    __ cmp(R12, Operand(0));
++    __ b(&direct, NE);
++    __ mov(R12, R10);
++    __ Bind(&direct);
++    __ blr(R12);
++  }
++
++  // Restore the Dart SP the target reset before re-entering the safepoint.
++  __ mov(SP, CSP);
++
++  // EnterFullSafepoint, inlined so the slow path uses the cached entry point
++  // (Thread::enter_safepoint_entry_point_) instead of the enter-safepoint stub
++  // Code object and a field dereference.
++  {
++    Label retry, slow_path, sp_done;
++    __ movz(R17, Immediate(target::Thread::safepoint_state_offset()), 0);
++    __ add(R17, THR, Operand(R17));
++    __ Bind(&retry);
++    __ ldxr(R9, R17);
++    __ cmp(R9, Operand(target::Thread::native_safepoint_state_unacquired()));
++    __ b(&slow_path, NE);
++    __ movz(R9, Immediate(target::Thread::native_safepoint_state_acquired()),
++            0);
++    __ stxr(R16, R9, R17);
++    __ cbz(&sp_done, R16);
++    __ b(&retry);
++    __ Bind(&slow_path);
++    __ ldr(R17,
++           Address(THR, dart::Thread::enter_safepoint_entry_point_offset()));
++    __ blr(R17);
++    __ Bind(&sp_done);
++  }
++
++  __ b(&done);
++
++  // Sync callback: this thread owns, but has not entered, the target isolate.
++  __ Bind(&sync_callback_isolate_ownership);
++  {
++    Label direct;
++    __ cmp(R12, Operand(0));
++    __ b(&direct, NE);
++    __ mov(R12, R10);
++    __ Bind(&direct);
++    __ blr(R12);
++  }
++  {
++    __ SetupDartSP();
++    __ EnterFrame(0);
++    __ ReserveAlignedFrameSpace(0);
++
++    const RegisterSet return_registers(
++        (1 << CallingConventions::kReturnReg) |
++            (1 << CallingConventions::kSecondReturnReg),
++        1 << CallingConventions::kReturnFpuReg);
++    __ PushRegisters(return_registers);
++
++    GenerateLoadFfiCallbackMetadataRuntimeFunction(
++        FfiCallbackMetadata::kExitSyncCallbackTargetIsolate, R4);
++    __ mov(R0, THR);  // Thread* argument (3.12.2 exit ABI).
++    __ mov(CSP, SP);
++    __ blr(R4);
++    __ mov(SP, CSP);
++
++    __ PopRegisters(return_registers);
++    __ LeaveFrame();
++    __ RestoreCSP();
++  }
++  __ b(&done);
++
++  // Sync callback bound to an isolate group. Never routed to the simulator, so
++  // no call_target select here.
++  __ Bind(&sync_isolate_group_bound_callback);
++  __ blr(R10);
++  {
++    __ SetupDartSP();
++    __ EnterFrame(0);
++    __ ReserveAlignedFrameSpace(0);
++
++    const RegisterSet return_registers(
++        (1 << CallingConventions::kReturnReg) |
++            (1 << CallingConventions::kSecondReturnReg),
++        1 << CallingConventions::kReturnFpuReg);
++    __ PushRegisters(return_registers);
++
++    GenerateLoadFfiCallbackMetadataRuntimeFunction(
++        FfiCallbackMetadata::kExitIsolateGroupBoundIsolate, R4);
++    __ mov(R0, THR);  // Thread* argument (3.12.2 exit ABI).
++    __ mov(CSP, SP);
++    __ blr(R4);
++    __ mov(SP, CSP);
++
++    __ PopRegisters(return_registers);
++    __ LeaveFrame();
++    __ RestoreCSP();
++  }
++  __ b(&done);
++
++  // Async callback: run the entrypoint (marshals + sends), then tail-call the
++  // temporary-isolate exit -- not safe to return to this stub afterwards.
++  __ Bind(&async_callback);
++  {
++    Label direct;
++    __ cmp(R12, Operand(0));
++    __ b(&direct, NE);
++    __ mov(R12, R10);
++    __ Bind(&direct);
++    __ blr(R12);
++  }
++  GenerateLoadFfiCallbackMetadataRuntimeFunction(
++      FfiCallbackMetadata::kExitTemporaryIsolate, R4);
++  __ mov(R0, THR);  // Thread* argument (3.12.2 exit ABI).
++  CLOBBERS_LR(__ ldp(
++      THR, LR, Address(CSP, 2 * target::kWordSize, Address::PairPostIndex)));
++  __ br(R4);  // DLRT_ExitTemporaryIsolate.
++  __ brk(0);
++
++  __ Bind(&done);
++  RESTORES_LR_FROM_FRAME(__ ldp(
++      THR, LR, Address(CSP, 2 * target::kWordSize, Address::PairPostIndex)));
++  __ ret();
++
++  ASSERT_LESS_OR_EQUAL(__ CodeSize() - shared_stub_start,
++                       FfiCallbackMetadata::kNativeCallbackSharedStubSize);
++  ASSERT_LESS_OR_EQUAL(__ CodeSize(), FfiCallbackMetadata::kPageSize);
++
++#if defined(DEBUG)
++  while (__ CodeSize() < FfiCallbackMetadata::kPageSize) {
++    __ Breakpoint();
++  }
++#endif
++}
++#endif  // defined(DART_TARGET_OS_FUCHSIA)
+ // Emits the landing-pad array that is the mechanical, fully-known half of a
+ // Shorebird wrapper stub. Each pad captures its own PC via adr and then jumps
+ // to the shared body -- identical in structure to GenerateFfiCallbackTrampolineStub.
+diff --git a/runtime/vm/ffi_callback_metadata.cc b/runtime/vm/ffi_callback_metadata.cc
+index a7eee874eea..35ba629b64a 100644
+--- a/runtime/vm/ffi_callback_metadata.cc
++++ b/runtime/vm/ffi_callback_metadata.cc
+@@ -228,8 +228,29 @@ void FfiCallbackMetadata::EnsureFreeListNotEmptyLocked() {
+   trampoline_pages_.Add(new_page);
+ 
+   // Fill in the runtime functions.
++#if defined(TARGET_ARCH_ARM64) && !defined(DART_TARGET_OS_FUCHSIA)
++  // Shorebird: the arm64 stub dispatches on the callback kind itself and
++  // calls each kind's exit function out of this table (the table layout is
++  // upstream's, only the entries past the first were unused since
++  // ec77e28f266). kExitSyncCallback is filled for completeness; the stub
++  // re-enters the safepoint inline instead of calling it.
++  FillRuntimeFunction(
++      new_page, kGetFfiCallbackMetadata,
++      reinterpret_cast<void*>(DLRT_GetFfiCallbackMetadataForInlineDispatch));
++  FillRuntimeFunction(new_page, kExitTemporaryIsolate,
++                      reinterpret_cast<void*>(DLRT_ExitTemporaryIsolate));
++  FillRuntimeFunction(
++      new_page, kExitIsolateGroupBoundIsolate,
++      reinterpret_cast<void*>(DLRT_ExitIsolateGroupBoundIsolate));
++  FillRuntimeFunction(
++      new_page, kExitSyncCallbackTargetIsolate,
++      reinterpret_cast<void*>(DLRT_ExitSyncCallbackTargetIsolate));
++  FillRuntimeFunction(new_page, kExitSyncCallback,
++                      reinterpret_cast<void*>(DLRT_ExitSyncCallback));
++#else
+   FillRuntimeFunction(new_page, kGetFfiCallbackMetadata,
+                       reinterpret_cast<void*>(DLRT_GetFfiCallbackMetadata));
++#endif
+ 
+   // Add all the trampolines to the free list.
+   const intptr_t trampolines_per_page = NumCallbackTrampolinesPerPage();
+diff --git a/runtime/vm/ffi_callback_metadata.h b/runtime/vm/ffi_callback_metadata.h
+index 0b762e78cef..e73d91214c4 100644
+--- a/runtime/vm/ffi_callback_metadata.h
++++ b/runtime/vm/ffi_callback_metadata.h
+@@ -341,8 +341,16 @@ class FfiCallbackMetadata {
+   static constexpr intptr_t kNativeCallbackTrampolineStackDelta = 4;
+ #elif defined(TARGET_ARCH_ARM64)
+   static constexpr intptr_t kNativeCallbackTrampolineSize = 8;
+-  static constexpr intptr_t kNativeCallbackSharedStubSize = 232;
++  // Shorebird: 560, not upstream's 232. Their shared stub is the per-kind
++  // inline dispatch (see GenerateFfiCallbackTrampolineStub), 540 bytes, and
++  // their trampoline page holds 1978 trampolines: (16K - 560) / 8.
++  static constexpr intptr_t kNativeCallbackSharedStubSize = 560;
++#if defined(DART_TARGET_OS_FUCHSIA)
+   static constexpr intptr_t kNativeCallbackTrampolineStackDelta = 4;
++#else
++  // Shorebird: the inline-dispatch stub saves only THR and LR on the C stack.
++  static constexpr intptr_t kNativeCallbackTrampolineStackDelta = 2;
++#endif
+ #elif defined(TARGET_ARCH_RISCV32)
+   static constexpr intptr_t kNativeCallbackTrampolineSize = 8;
+   static constexpr intptr_t kNativeCallbackSharedStubSize = 190;
+diff --git a/runtime/vm/runtime_entry.cc b/runtime/vm/runtime_entry.cc
+index 342a3847b84..6a657caac99 100644
+--- a/runtime/vm/runtime_entry.cc
++++ b/runtime/vm/runtime_entry.cc
+@@ -5178,6 +5178,63 @@ extern "C" Thread* DLRT_GetFfiCallbackMetadata(
+   return thread;
+ }
+ 
++#if defined(TARGET_ARCH_ARM64) && !defined(DART_TARGET_OS_FUCHSIA)
++// See runtime_entry.h. The isolate/safepoint work is DLRT_GetFfiCallbackMetadata
++// unchanged; this only re-expresses its answer in the form the arm64 stub
++// dispatches on. The epilogue it picks identifies the case one-to-one.
++extern "C" Thread* DLRT_GetFfiCallbackMetadataForInlineDispatch(
++    uword trampoline,
++    uword* out_entry_point,
++    uword* out_trampoline_type,
++    uword* out_call_target) {
++  ASSERT(out_entry_point != nullptr);
++  ASSERT(out_trampoline_type != nullptr);
++  ASSERT(out_call_target != nullptr);
++
++  CallbackMetadata out = {};
++  Thread* const thread = DLRT_GetFfiCallbackMetadata(trampoline, &out);
++
++  using TT = FfiCallbackMetadata::TrampolineType;
++  uword type;
++  bool uses_call_target = false;
++  if (out.epilogue == reinterpret_cast<uword>(&DLRT_ExitTemporaryIsolate)) {
++    type = static_cast<uword>(TT::kAsync);
++    uses_call_target = true;
++  } else if (out.epilogue ==
++             reinterpret_cast<uword>(&DLRT_ExitIsolateGroupBoundIsolate)) {
++    type = static_cast<uword>(TT::kSyncIsolateGroupBound);
++  } else if (out.epilogue ==
++             reinterpret_cast<uword>(&DLRT_ExitSyncCallbackTargetIsolate)) {
++    type = static_cast<uword>(TT::kSync) |
++           FfiCallbackMetadata::kSyncCallbackIsolateOwnershipFlag;
++    uses_call_target = true;
++  } else {
++    RELEASE_ASSERT(out.epilogue ==
++                   reinterpret_cast<uword>(&DLRT_ExitSyncCallback));
++    // The stub re-enters the safepoint inline for this case, which is what
++    // DLRT_ExitSyncCallback would otherwise do.
++    type = static_cast<uword>(TT::kSync);
++    uses_call_target = true;
++  }
++
++  // Route into the simulator only when the target is patch code and the
++  // simulator entry the CallSimulatorFromFfiTrampoline stub calls through has
++  // been installed; otherwise call the entry point on the CPU, as upstream
++  // does. The isolate-group-bound path in the stub never consults this word.
++  uword call_target = 0;
++  if (uses_call_target && thread != nullptr &&
++      thread->simulator_call_from_ffi() != 0 &&
++      InPatchSnapshot(thread->isolate_group(), out.entry_point)) {
++    call_target = StubCode::CallSimulatorFromFfiTrampoline().EntryPoint();
++  }
++
++  *out_entry_point = out.entry_point;
++  *out_trampoline_type = type;
++  *out_call_target = call_target;
++  return thread;
++}
++#endif  // defined(TARGET_ARCH_ARM64) && !defined(DART_TARGET_OS_FUCHSIA)
++
+ #if defined(USING_MEMORY_SANITIZER)
+ // There is a __msan_unpoison_param but no __msan_unpoison_retval. Trick MSAN
+ // into unpoisoning the largest value that an FFI callback might return. The
+diff --git a/runtime/vm/runtime_entry.h b/runtime/vm/runtime_entry.h
+index f03eda52d4b..550e24de836 100644
+--- a/runtime/vm/runtime_entry.h
++++ b/runtime/vm/runtime_entry.h
+@@ -112,6 +112,26 @@ extern "C" void* DLRT_ExitIsolateGroupBoundIsolate(Thread*);
+ extern "C" void* DLRT_ExitSyncCallbackTargetIsolate(Thread*);
+ extern "C" void* DLRT_ExitSyncCallback(Thread*);
+ 
++#if defined(TARGET_ARCH_ARM64) && !defined(DART_TARGET_OS_FUCHSIA)
++// Shorebird. The arm64 trampoline stub dispatches on the callback kind itself
++// (the pre-ec77e28f266 shape), so its metadata call hands back three words
++// through three out-pointers instead of one CallbackMetadata:
++//   out_entry_point      the Dart entry point (as CallbackMetadata)
++//   out_trampoline_type  FfiCallbackMetadata::TrampolineType, with
++//                        kSyncCallbackIsolateOwnershipFlag ORed in when the
++//                        call entered the target isolate
++//   out_call_target      nonzero: call this instead of the entry point, with
++//                        the entry point left in R10 (the contract of the
++//                        CallSimulatorFromFfiTrampoline stub); zero: call the
++//                        entry point directly
++// Installed in the kGetFfiCallbackMetadata slot of each trampoline page.
++extern "C" Thread* DLRT_GetFfiCallbackMetadataForInlineDispatch(
++    uword trampoline,
++    uword* out_entry_point,
++    uword* out_trampoline_type,
++    uword* out_call_target);
++#endif
++
+ const char* DeoptReasonToCString(ICData::DeoptReasonId deopt_reason);
+ 
+ void DeoptimizeAt(Thread* mutator_thread,
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index f50baa547d2..a8952ae4a2f 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -2100,13 +2100,13 @@ void Simulator::DoRedirectedFfiCallback(Thread* thread,
+     for (intptr_t i = kStackSlotsCopied - 1; i >= 0; i--) {
+       *--sp = sp_in[i];
+     }
+-    *--sp = get_register(THR);
++    // Shorebird: the arm64 callback trampoline saves only THR and LR (the
++    // pre-ec77e28f266 shape), so the simulated frame does too.
+     *--sp = get_register(LR);
+-    *--sp = get_register(R20);
+-    *--sp = get_register(R21);
++    *--sp = get_register(THR);
+     set_register(nullptr, R31, reinterpret_cast<uword>(sp));
+     COMPILE_ASSERT(FfiCallbackMetadata::kNativeCallbackTrampolineStackDelta ==
+-                   4);
++                   2);
+   }
+ 
+   set_register(nullptr, R0, ctxt->integer_arguments[0]);
+@@ -2143,14 +2143,12 @@ void Simulator::DoRedirectedFfiCallback(Thread* thread,
+     // ldp lr, thr, [sp], 16!
+     // <drop arguments>
+     uword* sp = reinterpret_cast<uword*>(get_register(R31, R31IsSP));
+-    set_register(nullptr, R21, *sp++);
+-    set_register(nullptr, R20, *sp++);
+-    set_register(nullptr, LR, *sp++);
+     set_register(nullptr, THR, *sp++);
++    set_register(nullptr, LR, *sp++);
+     sp += kStackSlotsCopied;
+     set_register(nullptr, R31, reinterpret_cast<uword>(sp));
+     COMPILE_ASSERT(FfiCallbackMetadata::kNativeCallbackTrampolineStackDelta ==
+-                   4);
++                   2);
+   }
+ 
+   auto epilogue = reinterpret_cast<void* (*)(Thread*)>(out->epilogue);
+-- 
+2.53.0
+

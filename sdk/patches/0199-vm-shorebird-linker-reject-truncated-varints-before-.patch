@@ -1,0 +1,72 @@
+From 00ebb88ef5f8640088f3e7289a2df6f94c9620dd Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 2 Oct 2026 16:11:19 +0800
+Subject: [PATCH 199/206] [vm] shorebird linker: reject truncated varints
+ before reading past end_
+
+ReadClassTableLinkInfo_AbsurdCountIsRejected aborted (rc 134) in Debug
+builds with "datastream.h: 318: expected: current_ < end_", not a
+simulator brk. TryReadUnsigned only refused to *start* a read at the end
+of the buffer; a varint made of continuation bytes (0x7F 0x7F 0x7F 0x7F)
+then ran off the logical end. The 0xFF slack keeps that overread inside
+the allocation in Release, but ReadStream::ReadByte ASSERTs current_ <
+end_ in Debug, so the guard design only held where ASSERTs compile out.
+
+Check, before each varint read (TryReadUnsigned and the per-character
+Read<int32_t> in TryReadString), that a terminating byte (> 127) lies
+inside [current, end) within the type's maximum encoded width (10 bytes
+for intptr_t, 5 for int32_t). The now-unused AtEnd() helper is removed.
+
+Negative control: reverting this change and rebuilding DebugSIMARM64
+run_vm_tests brings the test back to rc 134 on the same ASSERT; with it,
+all 34 tests in shorebird/linker_test.cc pass.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 7f252e89fe3..a2461758421 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -705,13 +705,26 @@ bool ReadFileIntoBuffer(const char* path, uint8_t** buf, intptr_t* size) {
+   return true;
+ }
+ 
+-bool AtEnd(ReadStream* stream) {
+-  return stream->PendingBytes() <= 0;
++// True only if a complete varint of at most `max_bytes` lies inside the
++// logical buffer: some byte in [current, end) terminates it (> 127, the stop
++// condition of ReadStream::Read for both signed and unsigned forms) within
++// `max_bytes`. The slack above keeps an overread inside the allocation in
++// Release, but ReadStream::ReadByte ASSERTs current_ < end_ in Debug, so a
++// truncated varint must be rejected before the read rather than read into the
++// slack.
++bool VarintFits(ReadStream* stream, intptr_t max_bytes) {
++  const uint8_t* p = stream->AddressOfCurrentPosition();
++  const intptr_t n = std::min(stream->PendingBytes(), max_bytes);
++  for (intptr_t i = 0; i < n; i++) {
++    if (p[i] > kMaxUnsignedDataPerByte) return true;
++  }
++  return false;
+ }
+ 
+-// Reads one unsigned varint, refusing to start a read at the end of the buffer.
++// Reads one unsigned varint, refusing any read that would run past the end of
++// the buffer.
+ bool TryReadUnsigned(ReadStream* stream, intptr_t* out) {
+-  if (AtEnd(stream)) return false;
++  if (!VarintFits(stream, 10)) return false;
+   *out = stream->ReadUnsigned<intptr_t>();
+   return true;
+ }
+@@ -737,7 +750,7 @@ bool TryReadString(ReadStream* stream, std::string* out) {
+   out->clear();
+   out->reserve(static_cast<size_t>(len));
+   for (intptr_t i = 0; i < len; i++) {
+-    if (AtEnd(stream)) return false;
++    if (!VarintFits(stream, 5)) return false;
+     out->push_back(static_cast<char>(stream->Read<int32_t>()));
+   }
+   return true;
+-- 
+2.53.0
+

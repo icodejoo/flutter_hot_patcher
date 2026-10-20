@@ -1,0 +1,86 @@
+From 52a498586ccb40d7ac26280db1d3e5b927664cc1 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 28 Sep 2026 13:50:12 +0800
+Subject: [PATCH 177/206] analyze_snapshot --shorebird: print Shorebird's
+ snapshot_data schema (F145)
+
+Replace the four ASLR load addresses with the six keys their tool prints,
+in their order and as strings: dart_version, snapshot_version,
+adjusted_vm_instructions_length, vm_data_length,
+adjusted_vm_instructions_hash, vm_data_hash. Definitions were recovered
+from their analyze_snapshot and checked by perturbing their .so through
+their own tool; on our three fixtures every numeric field equals the
+independent Python model. The <64 KiB branch of the adjusted length is
+unobserved on either side.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index e808aeb888c..186504658e8 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -20,6 +20,7 @@
+ #include "vm/dart_api_impl.h"
+ #include "vm/globals.h"
+ #include "vm/json_writer.h"
++#include "vm/version.h"
+ #include <algorithm>
+ #include <string>
+ #include <vector>
+@@ -2556,13 +2557,46 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+   js.OpenObject();
+   js.PrintProperty("shorebird", "true");
+   
+-  // snapshot_data section
+-  js.OpenObject("snapshot_data");
+-  js.PrintfProperty("vm_data", "%p", info.vm_snapshot_data);
+-  js.PrintfProperty("vm_instructions", "%p", info.vm_snapshot_instructions);
+-  js.PrintfProperty("isolate_data", "%p", info.vm_isolate_data);
+-  js.PrintfProperty("isolate_instructions", "%p", info.vm_isolate_instructions);
+-  js.CloseObject();
++  // snapshot_data section, in Shorebird's schema and key order. Reverse-
++  // engineered from their analyze_snapshot (F145): lengths are ELF region
++  // distances, hashes are Jenkins one-at-a-time seeded with the length and
++  // without the final avalanche, and every value is printed as a string.
++  // The VM instructions hash skips the first 256 bytes and stops at 64 KiB;
++  // only regions longer than 64 KiB have been observed, so the formula below
++  // is unverified for shorter ones.
++  {
++    const uint8_t* vm_data = info.vm_snapshot_data;
++    const uint8_t* vm_instr = info.vm_snapshot_instructions;
++    const intptr_t vm_data_length = info.vm_isolate_data - vm_data;
++    const intptr_t vm_instr_length = info.vm_isolate_instructions - vm_instr;
++    constexpr intptr_t kAdjustedStart = 256;
++    constexpr intptr_t kAdjustedLimit = 64 * KB;
++    const intptr_t adjusted_length = Utils::Maximum<intptr_t>(
++        Utils::Minimum(vm_instr_length, kAdjustedLimit) - kAdjustedStart, 0);
++    auto hash = [](const uint8_t* bytes, intptr_t length) {
++      uint32_t h = static_cast<uint32_t>(length);
++      for (intptr_t i = 0; i < length; i++) {
++        h += bytes[i];
++        h += h << 10;
++        h ^= h >> 6;
++      }
++      return h;
++    };
++    constexpr intptr_t kVersionOffset = 20;
++    constexpr intptr_t kVersionLength = 32;
++    js.OpenObject("snapshot_data");
++    js.PrintProperty("dart_version", Version::String());
++    js.PrintfProperty("snapshot_version", "%.*s",
++                      static_cast<int>(kVersionLength),
++                      reinterpret_cast<const char*>(vm_data + kVersionOffset));
++    js.PrintfProperty("adjusted_vm_instructions_length", "%" Pd,
++                      adjusted_length);
++    js.PrintfProperty("vm_data_length", "%" Pd, vm_data_length);
++    js.PrintfProperty("adjusted_vm_instructions_hash", "%u",
++                      hash(vm_instr + kAdjustedStart, adjusted_length));
++    js.PrintfProperty("vm_data_hash", "%u", hash(vm_data, vm_data_length));
++    js.CloseObject();
++  }
+   
+   // One scan up front, because the callee edges need every entry's targets
+   // resolved against every entry's extent.
+-- 
+2.53.0
+

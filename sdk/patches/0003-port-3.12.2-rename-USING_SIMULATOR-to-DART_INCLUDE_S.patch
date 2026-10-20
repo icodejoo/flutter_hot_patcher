@@ -1,0 +1,52 @@
+From ea9eaed145a5eff17673c96d1138604765e7d021 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:16:25 +0800
+Subject: [PATCH 003/206] port(3.12.2): rename USING_SIMULATOR to
+ DART_INCLUDE_SIMULATOR
+
+Upstream renamed this macro globally between our 3.7 baseline and 3.12.2
+(3.7: USING_SIMULATOR in 42 files, DART_INCLUDE_SIMULATOR in 0;
+ 3.12.2: the reverse). Without this the ported sources compile out silently.
+
+Note upstream also added TARGET_HOST_MISMATCH, but it is only used by
+cpu_arm.cc for IS_SIMARM_HOST64 and is unrelated to FFI -- so it is NOT the
+codegen-vs-availability split that C3 needs. C3 still has to be written, now
+against the new macro name.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+index 1375d3b5b45..cb113610089 100644
+--- a/runtime/vm/shorebird_sim_to_cpu_test.cc
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -3,7 +3,7 @@
+ // Tests that Simulator BLR to a linked address calls native code and returns the right value.
+ 
+ #include "vm/globals.h"
+-#if defined(TARGET_ARCH_ARM64) && defined(USING_SIMULATOR)
++#if defined(TARGET_ARCH_ARM64) && defined(DART_INCLUDE_SIMULATOR)
+ 
+ #include "vm/simulator.h"
+ #include "vm/unit_test.h"
+@@ -61,4 +61,4 @@ ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_BasicCall) {
+ }
+ 
+ }  // namespace dart
+-#endif  // TARGET_ARCH_ARM64 && USING_SIMULATOR
++#endif  // TARGET_ARCH_ARM64 && DART_INCLUDE_SIMULATOR
+diff --git a/runtime/vm/sim_bridge.h b/runtime/vm/sim_bridge.h
+index 9dc5996b881..6325b3099d5 100644
+--- a/runtime/vm/sim_bridge.h
++++ b/runtime/vm/sim_bridge.h
+@@ -6,7 +6,7 @@
+ // BLR to a function that linked back to the base snapshot escapes into real
+ // native code. The reverse is missing, and without it the only way to reach
+ // simulated code is to start the whole isolate in the Simulator -- which is why
+-// A1 force-enables USING_SIMULATOR unconditionally, and why unpatched code pays
++// A1 force-enables DART_INCLUDE_SIMULATOR unconditionally, and why unpatched code pays
+ // interpretation cost it should not.
+ //
+ // This class supplies the missing direction. Given a target address inside a
+-- 
+2.53.0
+

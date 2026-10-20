@@ -1,0 +1,107 @@
+From 50c8136cc5fde541b03dd9310d2fdbabf5dd482f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 3 Sep 2026 23:30:55 +0800
+Subject: [PATCH 129/206] fix(elf_loader,app_snapshot): iOS PROT_EXEC denial
+ and B6 wrapper crash
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+elf_loader.cc: Map PF_R|PF_X segments read-only on iOS — iOS denies
+PROT_EXEC on data-container files. dart_force_simulator=true means
+the Simulator interprets instructions without execute permission.
+
+app_snapshot.cc: In WrapCode, use identity wrapper for all patch
+functions in Simulator mode instead of Sim->CPU or CPU->Sim stubs.
+The stubs crash when interpreted by the Simulator (BRK #kRunDartOnCPUCode
+or brk(0)), because they contain CPU-only transitions. Identity lets
+the Simulator interpret patch bytecode directly.
+
+Verified on device: PATCHED_V2 appears in launch log.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 3ffbcfe5413..9737835bac3 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -662,7 +662,10 @@ static void GenerateEnterSimulator(Assembler* assembler,
+   constexpr intptr_t kSimCFrameSize = 0xd0;
+ 
+   __ ldr(R10, Address(THR, target::Thread::isolate_offset()), kEightBytes);
+-  __ ldr(R10, Address(R10, 0x20), kEightBytes);
++  // In Shorebird's binary the Simulator sits at Isolate+0x20 because they
++  // reorganised Isolate's private members.  In our Dart fork the field is
++  // further down.  Use the real host offset so both binaries are correct.
++  __ ldr(R10, Address(R10, dart::Isolate::simulator_offset()), kEightBytes);
+   __ str(R11, Address(R10, kSimPc), kEightBytes);
+   // Their CPU->Sim stub stores the PC twice -- once in the stub generator and
+   // once inside RunOnSimulator. ResumeOnSimulator stores it once. Reproducing
+@@ -909,7 +912,7 @@ void StubCodeCompiler::GenerateCallSimulatorFromFfiTrampolineStub() {
+ 
+   __ ldr(R11, Address(THR, compiler::target::Thread::isolate_offset()),
+          kEightBytes);
+-  __ ldr(R11, Address(R11, 0x20), kEightBytes);
++  __ ldr(R11, Address(R11, dart::Isolate::simulator_offset()), kEightBytes);
+ 
+   __ stp(R0, R1, Address::Pair(R11, 0 * kSimReg));
+   __ stp(R2, R3, Address::Pair(R11, 2 * kSimReg));
+@@ -1393,7 +1396,7 @@ void StubCodeCompiler::GenerateRunDartOnCPUStub() {
+   // Write everything back through the isolate's simulator pointer; x1 was
+   // consumed as an argument.
+   __ ldr(R10, Address(THR, target::Thread::isolate_offset()), kEightBytes);
+-  __ ldr(R10, Address(R10, 0x20), kEightBytes);
++  __ ldr(R10, Address(R10, dart::Isolate::simulator_offset()), kEightBytes);
+   __ stp(R0, R1, Address::Pair(R10, 0 * kSimReg));
+   __ stp(R2, R3, Address::Pair(R10, 2 * kSimReg));
+   __ stp(R4, R5, Address::Pair(R10, 4 * kSimReg));
+diff --git a/runtime/vm/isolate.h b/runtime/vm/isolate.h
+index 0de6cb46d5d..09d515c3051 100644
+--- a/runtime/vm/isolate.h
++++ b/runtime/vm/isolate.h
+@@ -1321,6 +1321,7 @@ class Isolate : public IntrusiveDListEntry<Isolate> {
+ 
+   Simulator* simulator() const { return simulator_; }
+   void set_simulator(Simulator* value) { simulator_ = value; }
++  static intptr_t simulator_offset() { return OFFSET_OF(Isolate, simulator_); }
+ 
+   void IncrementSpawnCount();
+   void DecrementSpawnCount();
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 8a33ca5c9b1..7b4763cd10c 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -4311,6 +4311,19 @@ void Simulator::InstructionDecode(Instr* instr) {
+ }
+ 
+ void Simulator::Execute() {
++  // Set is_simulating_ = 1 while the Simulator is running so that the
++  // TransitionDartToSimulatorIfNeeded stub body, when interpreted by the
++  // Simulator, takes the fast path (br x11) instead of re-entering the
++  // Simulator via the enter_simulator branch.  Without this, the stub always
++  // sees is_simulating_=0 and tries to nest Simulator::Execute(), which
++  // crashes when it loads isolate->simulator_ at an incorrect offset.
++  Thread* const sim_thread = Thread::Current();
++  const bool was_simulating =
++      (sim_thread != nullptr && sim_thread->is_simulating() != 0);
++  if (sim_thread != nullptr && !was_simulating) {
++    sim_thread->set_is_simulating(1);
++  }
++
+   if (FLAG_stop_sim_at == ULLONG_MAX && FLAG_trace_sim_after == ULLONG_MAX)
+       [[unlikely]] {
+     ExecuteNoTrace();
+@@ -4320,6 +4333,10 @@ void Simulator::Execute() {
+ 
+   // We can't instrument the runtime.
+   memory_.FlushAll();
++
++  if (sim_thread != nullptr && !was_simulating) {
++    sim_thread->set_is_simulating(0);
++  }
+ }
+ 
+ void Simulator::ExecuteNoTrace() {
+-- 
+2.53.0
+

@@ -1,0 +1,92 @@
+From d0ffb337b6db7f4e5c5b22f076243137ff4e7b7b Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 7 Sep 2026 18:16:37 +0800
+Subject: [PATCH 143/206] analyze_snapshot: fix JSON key order and stub-name
+ double-prefix (F4/F21)
+
+Two correctness fixes for --shorebird output:
+
+1. JSON key order: emit subgraph_hash, op_subgraph_hash, self_hash (matching
+   theirs), and callees after subgraph_selectors (matching theirs). Key order
+   was verified against their base.so output (all 1380 entries).
+
+2. Stub name prefix: the old condition (strcmp == "[unknown stub]") only guarded
+   against the exact string "[unknown stub]". The runtime's code.Name() already
+   emits "[Stub] ..." for _iso_stub_* stubs, producing "[Stub] [Stub] ...".
+   Fixed by checking stub_name[0] == '[' instead.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index e429af34413..998c90987bc 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1369,8 +1369,10 @@ void CollectAllCodes(
+             NameFormattingParams(Object::kScrubbedName));
+       } else if (code.IsStubCode()) {
+         const char* stub_name = code.Name();
+-        // [unknown stub] already starts with "["; don't double-bracket it.
+-        entry.name = (strcmp(stub_name, "[unknown stub]") == 0)
++        // Some stubs (e.g. _iso_stub_SlowTypeTestStub, [unknown stub]) are
++        // already named with a "[..." prefix by the runtime; don't add "[Stub] "
++        // a second time.
++        entry.name = (stub_name[0] == '[')
+                          ? stub_name
+                          : std::string("[Stub] ") + stub_name;
+       } else {
+@@ -2276,22 +2278,12 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     }
+ 
+     const ShorebirdCodeFacts& facts = all_facts[ci];
+-    js.PrintProperty("self_hash", classified.self_hash[ci].c_str());
+-    // The walk is implemented, so subgraph_hash is back -- and it is back
+-    // because it is checked against their artifact rather than because it is
+-    // plausible: ShorebirdSubgraphHashes reproduces the subgraph_hash of all
+-    // 1380 functions of their own base.so exactly. See the comment on that
+-    // function for the disassembly it came from.
++    // Key order matches theirs: subgraph_hash, op_subgraph_hash, self_hash.
++    // Measured from their base.so output -- all 1380 entries have this order.
+     js.PrintProperty("subgraph_hash", subgraph_hashes[ci].c_str());
+-    // op_subgraph_hash is present now, and for the same reason subgraph_hash
+-    // is: ShorebirdSelfAndOpHashes reproduces all 1380 of theirs on their own
+-    // base.so, as digests. It was withheld for three rounds while the
+-    // classifier was right for only five functions in six -- a hash that is
+-    // usually right is worse than a missing key, because tools/linker.py
+-    // silently excludes functions it cannot match.
+-
+     js.PrintProperty("op_subgraph_hash",
+                      classified.op_subgraph_hash[ci].c_str());
++    js.PrintProperty("self_hash", classified.self_hash[ci].c_str());
+ 
+     js.OpenArray("self_pp");
+     for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
+@@ -2314,20 +2306,18 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("subgraph_field_table");
+     for (intptr_t slot : classified.subgraph_field_table[ci]) js.PrintValue64(slot);
+     js.CloseArray();
+-    // callees is now computed, and unlike the other absentees it is checked
+-    // against theirs rather than merely plausible: on their own base.so the
+-    // `b`/`bl` predicate ShorebirdCallGraph uses reproduces all 1380 of their
+-    // callee sets, 3629 of 3629 edges, nothing extra and nothing missing.
+-    // Ascending, which is the order theirs come out in.
+-    js.OpenArray("callees");
+-    for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
+-    js.CloseArray();
++    // Key order matches theirs: self_selectors, subgraph_selectors, callees.
+     js.OpenArray("self_selectors");
+     for (intptr_t sel : classified.self_selectors[ci]) js.PrintValue64(sel);
+     js.CloseArray();
+     js.OpenArray("subgraph_selectors");
+     for (intptr_t sel : classified.subgraph_selectors[ci]) js.PrintValue64(sel);
+     js.CloseArray();
++    // callees is verified against theirs: `b`/`bl` predicate ShorebirdCallGraph
++    // reproduces all 1380 callee sets, 3629/3629 edges, ascending order.
++    js.OpenArray("callees");
++    for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
++    js.CloseArray();
+     js.CloseObject();
+   }
+   js.CloseArray();
+-- 
+2.53.0
+

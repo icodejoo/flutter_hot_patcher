@@ -1,0 +1,320 @@
+From e44d126dde0e4e90f3d8283683503211e1b40a1b Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 14:14:28 +0800
+Subject: [PATCH 057/206] feat(shorebird): RunDartOnCPU, the mirror of the
+ CPU->Sim body
+
+Fourteen of sixteen. 87 instructions / 348 bytes, matching theirs, 80 of 87 words
+byte-identical with the seven exceptions all encoding a Thread offset.
+
+Where TransitionDartToSimulatorIfNeeded takes the CPU into the simulator, this
+takes the simulator out onto the CPU: save the simulator's own C-frame state,
+adopt the Dart register state out of the simulator's register file, flip
+dart_state_is_on_cpu_ 0 -> 1, park the simulator's C stack pointer in
+Thread::simulator_csp_ where the transition stubs look for it, call, write the
+results back through the isolate's simulator pointer, and undo all of it. The
+0xd0 frame displacement is the same constant the CPU->Sim body uses.
+
+Needed no new Thread fields: isolate_, dart_state_is_on_cpu_ and simulator_csp_
+were all already there, the last two added when the CPU->Sim body landed.
+
+Build-dependent set checked first, {25,30,31,66,71,72}; the derived set is that
+plus 43, which is isolate_ -- stable across our own two builds but still shifted
+against theirs.
+
+Verified: 90 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures. Negative control, PATCH_OK confirmed
+first: adding 8 to the frame displacement exits 255, reverting returns 0.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 020d700fbb1..3ffbcfe5413 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -1317,6 +1317,134 @@ void StubCodeCompiler::GenerateSimulatorExitSafepointStub() {
+       assembler, dart::Thread::ExitSafepoint_entry_point_offset());
+ }
+ 
++// Shorebird. The mirror of the CPU->Sim body: leave the simulator and run real
++// Dart on the CPU. 87 instructions / 348 bytes, transcribed from their emitted
++// stub. On entry x0 is the target and x1 the Simulator*.
++//
++// It saves the simulator's own C-frame state, adopts the Dart register state out
++// of the simulator's register file, flips dart_state_is_on_cpu_ 0 -> 1, parks the
++// simulator's C stack pointer in Thread::simulator_csp_ so the transition stubs
++// can find it, calls, writes the results back into the register file, and undoes
++// all of it.
++void StubCodeCompiler::GenerateRunDartOnCPUStub() {
++  constexpr intptr_t kSimReg = 8;           // registers_[r]  == r * 8
++  constexpr intptr_t kSimVRegBase = 0x100;  // vregisters_[v] == 0x100 + v * 16
++  constexpr intptr_t kSimVReg = 16;
++  constexpr intptr_t kSimCFrameSize = 0xd0;
++
++  static const Register kSaved[][2] = {
++      {R19, R20}, {R21, R22}, {R23, R24}, {R25, R26}, {R27, R28}};
++  constexpr intptr_t kNumSaved = ARRAY_SIZE(kSaved);
++
++  __ stp(R29, R30, Address::Pair(CSP, -16, Address::PairPreIndex));
++  __ mov(R29, CSP);
++  __ set_lr_state(compiler::LRState::Clobbered());
++  for (intptr_t i = 3; i >= 0; i--) {
++    __ fstp(static_cast<VRegister>(8 + 2 * i),
++            static_cast<VRegister>(9 + 2 * i),
++            Address::Pair(CSP, -32, Address::PairPreIndex), kQWord);
++  }
++  for (intptr_t i = kNumSaved - 1; i >= 0; i--) {
++    __ stp(kSaved[i][0], kSaved[i][1],
++           Address::Pair(CSP, -16, Address::PairPreIndex));
++  }
++  // The simulator's C stack pointer, handed to the Thread further down.
++  __ mov(R11, CSP);
++
++  // Adopt the Dart register state the simulator was holding.
++  __ ldr(SPREG, Address(R1, 15 * kSimReg), kEightBytes);
++  __ ldp(R19, R20, Address::Pair(R1, 19 * kSimReg));
++  __ ldp(R21, R22, Address::Pair(R1, 21 * kSimReg));
++  __ ldp(R23, R24, Address::Pair(R1, 23 * kSimReg));
++  __ ldp(R25, R26, Address::Pair(R1, 25 * kSimReg));
++  __ ldp(R27, R28, Address::Pair(R1, 27 * kSimReg));
++  __ ldp(R29, R30, Address::Pair(R1, 29 * kSimReg));
++  __ ldr(TMP, Address(R1, 31 * kSimReg), kEightBytes);
++  __ mov(CSP, TMP);
++  __ fldp(V8, V9, Address::Pair(R1, kSimVRegBase + 8 * kSimVReg), kQWord);
++  __ fldp(V10, V11, Address::Pair(R1, kSimVRegBase + 10 * kSimVReg), kQWord);
++  __ fldp(V12, V13, Address::Pair(R1, kSimVRegBase + 12 * kSimVReg), kQWord);
++  __ fldp(V14, V15, Address::Pair(R1, kSimVRegBase + 14 * kSimVReg), kQWord);
++
++  Label was_on_simulator;
++  __ ldr(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ CompareImmediate(TMP, 0);
++  __ b(&was_on_simulator, EQ);
++  __ brk(0);
++  __ Bind(&was_on_simulator);
++  __ eori(TMP, TMP, Immediate(1));
++  __ str(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ str(R11, Address(THR, dart::Thread::simulator_csp_offset()), kEightBytes);
++
++  __ fldp(V0, V1, Address::Pair(R1, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fldp(V2, V3, Address::Pair(R1, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fldp(V4, V5, Address::Pair(R1, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fldp(V6, V7, Address::Pair(R1, kSimVRegBase + 6 * kSimVReg), kQWord);
++  __ ldp(R8, R9, Address::Pair(R1, 8 * kSimReg));
++  __ ldp(R6, R7, Address::Pair(R1, 6 * kSimReg));
++  __ ldp(R4, R5, Address::Pair(R1, 4 * kSimReg));
++  __ ldp(R2, R3, Address::Pair(R1, 2 * kSimReg));
++  __ mov(TMP, R0);
++  __ ldp(R0, R1, Address::Pair(R1, 0 * kSimReg));
++  __ blr(TMP);
++
++  // Write everything back through the isolate's simulator pointer; x1 was
++  // consumed as an argument.
++  __ ldr(R10, Address(THR, target::Thread::isolate_offset()), kEightBytes);
++  __ ldr(R10, Address(R10, 0x20), kEightBytes);
++  __ stp(R0, R1, Address::Pair(R10, 0 * kSimReg));
++  __ stp(R2, R3, Address::Pair(R10, 2 * kSimReg));
++  __ stp(R4, R5, Address::Pair(R10, 4 * kSimReg));
++  __ stp(R6, R7, Address::Pair(R10, 6 * kSimReg));
++  __ fstp(V0, V1, Address::Pair(R10, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fstp(V2, V3, Address::Pair(R10, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fstp(V4, V5, Address::Pair(R10, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fstp(V6, V7, Address::Pair(R10, kSimVRegBase + 6 * kSimVReg), kQWord);
++  __ str(SPREG, Address(R10, 15 * kSimReg), kEightBytes);
++  __ stp(R19, R20, Address::Pair(R10, 19 * kSimReg));
++  __ stp(R21, R22, Address::Pair(R10, 21 * kSimReg));
++  __ stp(R23, R24, Address::Pair(R10, 23 * kSimReg));
++  __ stp(R25, R26, Address::Pair(R10, 25 * kSimReg));
++  __ stp(R27, R28, Address::Pair(R10, 27 * kSimReg));
++  __ stp(R29, R30, Address::Pair(R10, 29 * kSimReg));
++  __ mov(TMP, CSP);
++  __ str(TMP, Address(R10, 31 * kSimReg), kEightBytes);
++  __ fstp(V8, V9, Address::Pair(R10, kSimVRegBase + 8 * kSimVReg), kQWord);
++  __ fstp(V10, V11, Address::Pair(R10, kSimVRegBase + 10 * kSimVReg), kQWord);
++  __ fstp(V12, V13, Address::Pair(R10, kSimVRegBase + 12 * kSimVReg), kQWord);
++  __ fstp(V14, V15, Address::Pair(R10, kSimVRegBase + 14 * kSimVReg), kQWord);
++
++  Label was_on_cpu;
++  __ ldr(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ CompareImmediate(TMP, 1);
++  __ b(&was_on_cpu, EQ);
++  __ brk(0);
++  __ Bind(&was_on_cpu);
++  __ eori(TMP, TMP, Immediate(1));
++  __ str(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++
++  __ ldr(TMP, Address(THR, dart::Thread::simulator_csp_offset()), kEightBytes);
++  __ mov(CSP, TMP);
++  __ AddImmediate(FP, CSP, kSimCFrameSize);
++  for (intptr_t i = 0; i < kNumSaved; i++) {
++    __ ldp(kSaved[i][0], kSaved[i][1],
++           Address::Pair(CSP, 16, Address::PairPostIndex));
++  }
++  for (intptr_t i = 0; i < 4; i++) {
++    __ fldp(static_cast<VRegister>(8 + 2 * i),
++            static_cast<VRegister>(9 + 2 * i),
++            Address::Pair(CSP, 32, Address::PairPostIndex), kQWord);
++  }
++  __ mov(CSP, R29);
++  __ ldp(R29, R30, Address::Pair(CSP, 16, Address::PairPostIndex));
++  __ set_lr_state(compiler::LRState::OnEntry());
++  __ ret();
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index b25fdf67787..09eeada3cf5 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -835,6 +835,131 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSafepointStubsMatchTheirBytes) {
+                               Thread::ExitSafepoint_entry_point_offset());
+ }
+ 
++// Shorebird RunDartOnCPU, 87 instructions / 348 bytes -- the mirror of the
++// CPU->Sim body, leaving the simulator to run real Dart. 80 of 87 words are
++// identical to theirs; the seven that are not all encode a Thread offset.
++//
++// The product-vs-release differing set is {25,30,31,66,71,72}, a subset of the
++// seven, so the derived set is that plus index 43, which is isolate_ -- stable
++// across our own builds but still shifted against theirs.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdRunDartOnCPUMatchesTheirBytes) {
++  const Code& stub = StubCode::RunDartOnCPU();
++  EXPECT_EQ(static_cast<intptr_t>(348), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[87] = {
++      0xa9bf7bfdu,  // [0]
++      0x910003fdu,  // [1]
++      0xadbf3feeu,  // [2]
++      0xadbf37ecu,  // [3]
++      0xadbf2feau,  // [4]
++      0xadbf27e8u,  // [5]
++      0xa9bf73fbu,  // [6]
++      0xa9bf6bf9u,  // [7]
++      0xa9bf63f7u,  // [8]
++      0xa9bf5bf5u,  // [9]
++      0xa9bf53f3u,  // [10]
++      0x910003ebu,  // [11]
++      0xf9403c2fu,  // [12]
++      0xa949d033u,  // [13]
++      0xa94ad835u,  // [14]
++      0xa94be037u,  // [15]
++      0xa94ce839u,  // [16]
++      0xa94df03bu,  // [17]
++      0xa94ef83du,  // [18]
++      0xf9407c30u,  // [19]
++      0x9100021fu,  // [20]
++      0xad4c2428u,  // [21]
++      0xad4d2c2au,  // [22]
++      0xad4e342cu,  // [23]
++      0xad4f3c2eu,  // [24]
++      0u,  // [25]  derived
++      0xf100021fu,  // [26]
++      0x54000040u,  // [27]
++      0xd4200000u,  // [28]
++      0xd2400210u,  // [29]
++      0u,  // [30]  derived
++      0u,  // [31]  derived
++      0xad480420u,  // [32]
++      0xad490c22u,  // [33]
++      0xad4a1424u,  // [34]
++      0xad4b1c26u,  // [35]
++      0xa9442428u,  // [36]
++      0xa9431c26u,  // [37]
++      0xa9421424u,  // [38]
++      0xa9410c22u,  // [39]
++      0xaa0003f0u,  // [40]
++      0xa9400420u,  // [41]
++      0xd63f0200u,  // [42]
++      0u,  // [43]  derived
++      0xf940114au,  // [44]
++      0xa9000540u,  // [45]
++      0xa9010d42u,  // [46]
++      0xa9021544u,  // [47]
++      0xa9031d46u,  // [48]
++      0xad080540u,  // [49]
++      0xad090d42u,  // [50]
++      0xad0a1544u,  // [51]
++      0xad0b1d46u,  // [52]
++      0xf9003d4fu,  // [53]
++      0xa909d153u,  // [54]
++      0xa90ad955u,  // [55]
++      0xa90be157u,  // [56]
++      0xa90ce959u,  // [57]
++      0xa90df15bu,  // [58]
++      0xa90ef95du,  // [59]
++      0x910003f0u,  // [60]
++      0xf9007d50u,  // [61]
++      0xad0c2548u,  // [62]
++      0xad0d2d4au,  // [63]
++      0xad0e354cu,  // [64]
++      0xad0f3d4eu,  // [65]
++      0u,  // [66]  derived
++      0xf100061fu,  // [67]
++      0x54000040u,  // [68]
++      0xd4200000u,  // [69]
++      0xd2400210u,  // [70]
++      0u,  // [71]  derived
++      0u,  // [72]  derived
++      0x9100021fu,  // [73]
++      0x910343fdu,  // [74]
++      0xa8c153f3u,  // [75]
++      0xa8c15bf5u,  // [76]
++      0xa8c163f7u,  // [77]
++      0xa8c16bf9u,  // [78]
++      0xa8c173fbu,  // [79]
++      0xacc127e8u,  // [80]
++      0xacc12feau,  // [81]
++      0xacc137ecu,  // [82]
++      0xacc13feeu,  // [83]
++      0x910003bfu,  // [84]
++      0xa8c17bfdu,  // [85]
++      0xd65f03c0u,  // [86]
++  };
++
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  const intptr_t on_cpu = Thread::dart_state_is_on_cpu_offset();
++  const intptr_t csp = Thread::simulator_csp_offset();
++  EXPECT_EQ(ldst_thr(kLdr, on_cpu, 16), w[25]);
++  EXPECT_EQ(ldst_thr(kStr, on_cpu, 16), w[30]);
++  EXPECT_EQ(ldst_thr(kStr, csp, 11), w[31]);
++  EXPECT_EQ(ldst_thr(kLdr, compiler::target::Thread::isolate_offset(), 10),
++            w[43]);
++  EXPECT_EQ(ldst_thr(kLdr, on_cpu, 16), w[66]);
++  EXPECT_EQ(ldst_thr(kStr, on_cpu, 16), w[71]);
++  EXPECT_EQ(ldst_thr(kLdr, csp, 16), w[72]);
++
++  for (intptr_t i = 0; i < 87; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index b96fa756968..2ecdae43356 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -169,6 +169,7 @@ namespace dart {
+   V(CallClangCodeWithSimulatorArgs)                                            \
+   V(SimulatorEnterSafepoint)                                                   \
+   V(SimulatorExitSafepoint)                                                    \
++  V(RunDartOnCPU)                                                              \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

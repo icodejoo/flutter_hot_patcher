@@ -1,0 +1,244 @@
+From 3cb35b791d977eb50de25d35f5402452a9833704 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 13:55:50 +0800
+Subject: [PATCH 056/206] feat(shorebird): SimulatorEnterSafepoint and
+ SimulatorExitSafepoint
+
+Thirteen of sixteen. 73 instructions / 292 bytes each, matching theirs, with
+72 of 73 words byte-identical -- the single exception is the load of the cached
+leaf entry point, and only its displacement differs.
+
+The two stubs differ from each other in exactly that one instruction, so they
+share a generator: spill the whole register file onto the Dart stack, 16-align,
+trap into the runtime through EnterSafepoint_entry_point_ or
+ExitSafepoint_entry_point_, restore. Both are ordinary upstream leaf runtime
+entries whose Thread accessors are macro-generated, which is why an initial grep
+for them found nothing and why they need dart::Thread rather than the
+compiler-side target::Thread.
+
+The register pairing looks wrong until you notice which registers are missing:
+the X pairs run (x14,x16) and (x17,x19) because x15 is SPREG -- the stack being
+pushed to -- and x18 is reserved by the platform ABI.
+
+Checked for build-dependent words first: the product-vs-release differing set is
+empty for both, so everything except the entry-point load is pinned.
+
+Verified: 89 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures. Negative control, PATCH_OK confirmed
+first: changing the last saved pair from (x28,x30) to (x28,x29) exits 255,
+reverting returns 0.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 704535c0a01..020d700fbb1 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -1249,6 +1249,74 @@ void StubCodeCompiler::GenerateCallClangCodeWithSimulatorArgsStub() {
+   __ ret();
+ }
+ 
++// Shorebird. The simulator's safepoint transitions: spill the entire register
++// file onto the Dart stack, 16-align, trap into the runtime through the cached
++// leaf entry point, then restore everything.
++//
++// 73 instructions / 292 bytes each, transcribed from their emitted stubs. The
++// two differ in exactly one instruction -- which leaf entry point is loaded --
++// so they share a generator.
++//
++// The X pairs skip x15 and x18: x15 is SPREG, which is the stack being pushed
++// to, and x18 is reserved by the platform ABI. That is why the pairs run
++// (x14,x16) and (x17,x19) rather than in sequence.
++static void GenerateSimulatorSafepointStub(Assembler* assembler,
++                                           intptr_t entry_point_offset) {
++  // Pushed high-to-low, popped low-to-high.
++  static const Register kXPairs[][2] = {
++      {R0, R1},   {R2, R3},   {R4, R5},   {R6, R7},   {R8, R9},
++      {R10, R11}, {R12, R13}, {R14, R16}, {R17, R19}, {R20, R21},
++      {R22, R23}, {R24, R25}, {R26, R27}, {R28, R30}};
++  constexpr intptr_t kNumXPairs = ARRAY_SIZE(kXPairs);
++  constexpr intptr_t kNumVPairs = 16;
++
++  __ stp(R29, R30, Address::Pair(SPREG, -16, Address::PairPreIndex));
++  __ mov(R29, SPREG);
++
++  for (intptr_t i = kNumVPairs - 1; i >= 0; i--) {
++    __ fstp(static_cast<VRegister>(2 * i), static_cast<VRegister>(2 * i + 1),
++            Address::Pair(SPREG, -32, Address::PairPreIndex), kQWord);
++  }
++  for (intptr_t i = kNumXPairs - 1; i >= 0; i--) {
++    __ stp(kXPairs[i][0], kXPairs[i][1],
++           Address::Pair(SPREG, -16, Address::PairPreIndex));
++  }
++
++  // Keep the unaligned Dart SP in a callee-saved register while the C stack
++  // pointer takes its aligned value.
++  __ mov(R19, CSP);
++  __ mov(R20, SPREG);
++  __ andi(SPREG, SPREG, Immediate(~static_cast<int64_t>(15)));
++  __ mov(CSP, SPREG);
++  __ ldr(R5, Address(THR, entry_point_offset), kEightBytes);
++  __ brk(Instr::kCallRuntimeOnCPUCode);
++  __ mov(SPREG, R20);
++  __ mov(CSP, R19);
++
++  for (intptr_t i = 0; i < kNumXPairs; i++) {
++    __ ldp(kXPairs[i][0], kXPairs[i][1],
++           Address::Pair(SPREG, 16, Address::PairPostIndex));
++  }
++  for (intptr_t i = 0; i < kNumVPairs; i++) {
++    __ fldp(static_cast<VRegister>(2 * i), static_cast<VRegister>(2 * i + 1),
++            Address::Pair(SPREG, 32, Address::PairPostIndex), kQWord);
++  }
++
++  __ mov(SPREG, R29);
++  __ ldp(R29, R30, Address::Pair(SPREG, 16, Address::PairPostIndex));
++  __ ret();
++}
++
++void StubCodeCompiler::GenerateSimulatorEnterSafepointStub() {
++  GenerateSimulatorSafepointStub(
++      assembler, dart::Thread::EnterSafepoint_entry_point_offset());
++}
++
++void StubCodeCompiler::GenerateSimulatorExitSafepointStub() {
++  GenerateSimulatorSafepointStub(
++      assembler, dart::Thread::ExitSafepoint_entry_point_offset());
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 7d3ec8dc9bd..b25fdf67787 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -729,6 +729,112 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCallClangCodeMatchesTheirBytesExactly)
+   }
+ }
+ 
++// Shorebird SimulatorEnterSafepoint / SimulatorExitSafepoint: 73 instructions /
++// 292 bytes each, and the two differ in exactly one word -- which cached leaf
++// entry point they load -- so one checker serves both. 72 of 73 are identical to
++// theirs; the odd one out is that load, and only its displacement differs.
++//
++// Product and release emit the same bytes, checked by diffing the stubs out of
++// both builds before pinning anything.
++static void CheckSimulatorSafepointStub(const Code& stub,
++                                        intptr_t entry_point_offset) {
++  EXPECT_EQ(static_cast<intptr_t>(292), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[73] = {
++      0xa9bf79fdu,  // [0]
++      0xaa0f03fdu,  // [1]
++      0xadbf7dfeu,  // [2]
++      0xadbf75fcu,  // [3]
++      0xadbf6dfau,  // [4]
++      0xadbf65f8u,  // [5]
++      0xadbf5df6u,  // [6]
++      0xadbf55f4u,  // [7]
++      0xadbf4df2u,  // [8]
++      0xadbf45f0u,  // [9]
++      0xadbf3deeu,  // [10]
++      0xadbf35ecu,  // [11]
++      0xadbf2deau,  // [12]
++      0xadbf25e8u,  // [13]
++      0xadbf1de6u,  // [14]
++      0xadbf15e4u,  // [15]
++      0xadbf0de2u,  // [16]
++      0xadbf05e0u,  // [17]
++      0xa9bf79fcu,  // [18]
++      0xa9bf6dfau,  // [19]
++      0xa9bf65f8u,  // [20]
++      0xa9bf5df6u,  // [21]
++      0xa9bf55f4u,  // [22]
++      0xa9bf4df1u,  // [23]
++      0xa9bf41eeu,  // [24]
++      0xa9bf35ecu,  // [25]
++      0xa9bf2deau,  // [26]
++      0xa9bf25e8u,  // [27]
++      0xa9bf1de6u,  // [28]
++      0xa9bf15e4u,  // [29]
++      0xa9bf0de2u,  // [30]
++      0xa9bf05e0u,  // [31]
++      0x910003f3u,  // [32]
++      0xaa0f03f4u,  // [33]
++      0x927cedefu,  // [34]
++      0x910001ffu,  // [35]
++      0u,  // [36]  derived
++      0xd43625c0u,  // [37]
++      0xaa1403efu,  // [38]
++      0x9100027fu,  // [39]
++      0xa8c105e0u,  // [40]
++      0xa8c10de2u,  // [41]
++      0xa8c115e4u,  // [42]
++      0xa8c11de6u,  // [43]
++      0xa8c125e8u,  // [44]
++      0xa8c12deau,  // [45]
++      0xa8c135ecu,  // [46]
++      0xa8c141eeu,  // [47]
++      0xa8c14df1u,  // [48]
++      0xa8c155f4u,  // [49]
++      0xa8c15df6u,  // [50]
++      0xa8c165f8u,  // [51]
++      0xa8c16dfau,  // [52]
++      0xa8c179fcu,  // [53]
++      0xacc105e0u,  // [54]
++      0xacc10de2u,  // [55]
++      0xacc115e4u,  // [56]
++      0xacc11de6u,  // [57]
++      0xacc125e8u,  // [58]
++      0xacc12deau,  // [59]
++      0xacc135ecu,  // [60]
++      0xacc13deeu,  // [61]
++      0xacc145f0u,  // [62]
++      0xacc14df2u,  // [63]
++      0xacc155f4u,  // [64]
++      0xacc15df6u,  // [65]
++      0xacc165f8u,  // [66]
++      0xacc16dfau,  // [67]
++      0xacc175fcu,  // [68]
++      0xacc17dfeu,  // [69]
++      0xaa1d03efu,  // [70]
++      0xa8c179fdu,  // [71]
++      0xd65f03c0u,  // [72]
++  };
++
++  EXPECT_EQ(0xf9400000u |
++                (static_cast<uint32_t>(entry_point_offset / 8) << 10) |
++                (static_cast<uint32_t>(THR) << 5) | 5u,
++            w[36]);
++
++  for (intptr_t i = 0; i < 73; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSafepointStubsMatchTheirBytes) {
++  CheckSimulatorSafepointStub(StubCode::SimulatorEnterSafepoint(),
++                              Thread::EnterSafepoint_entry_point_offset());
++  CheckSimulatorSafepointStub(StubCode::SimulatorExitSafepoint(),
++                              Thread::ExitSafepoint_entry_point_offset());
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 6f48fe682f3..b96fa756968 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -167,6 +167,8 @@ namespace dart {
+   V(ResumeOnSimulator)                                                         \
+   V(SimulatorCallNativeThroughSafepoint)                                       \
+   V(CallClangCodeWithSimulatorArgs)                                            \
++  V(SimulatorEnterSafepoint)                                                   \
++  V(SimulatorExitSafepoint)                                                    \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

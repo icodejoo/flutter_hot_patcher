@@ -1,0 +1,39 @@
+From d60a1605b2ce61108a53f398d028191dd893af43 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 18:24:59 +0800
+Subject: [PATCH 117/206] fix(api): include <stddef.h> in dart_api.h for size_t
+
+Shorebird_ReadLinkHeader takes a size_t, matching the open-source engine
+caller (flutter/runtime/shorebird/patch_cache.cc:39 passes
+fml::Mapping::GetSize(), which returns size_t), but dart_api.h only
+included <inttypes.h>, which does not declare size_t. C++ translation
+units happened to get it transitively; the C17 targets that include this
+header did not, so both dart_api_dl.c objects failed with
+"error: unknown type name 'size_t'":
+
+  clang_arm64_shared/obj/runtime/include/libffi_test_functions.dart_api_dl.o
+  obj/runtime/include/dart_api.dart_api_dl.o
+
+Keep the size_t signature (rule 2: match their open-source caller) and
+add the missing standard include.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/include/dart_api.h b/runtime/include/dart_api.h
+index b88c07389dd..b87bd6577a3 100644
+--- a/runtime/include/dart_api.h
++++ b/runtime/include/dart_api.h
+@@ -24,6 +24,10 @@
+ #include <assert.h>
+ #include <inttypes.h>
+ #include <stdbool.h>
++/* Shorebird: needed for size_t in Shorebird_ReadLinkHeader below. <inttypes.h>
++ * does not provide it, so the C targets that include this header (e.g.
++ * dart_api_dl.c, built as C17) fail without this. */
++#include <stddef.h>
+ 
+ #if defined(__Fuchsia__)
+ #include <zircon/types.h>
+-- 
+2.53.0
+

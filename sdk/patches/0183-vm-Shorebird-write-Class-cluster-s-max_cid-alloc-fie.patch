@@ -1,0 +1,56 @@
+From de660deeae5af1004d3ec7eeb38961871e817edd Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 29 Sep 2026 22:58:21 +0800
+Subject: [PATCH 183/206] [vm] Shorebird: write Class cluster's max_cid alloc
+ field (F151)
+
+ClassDeserializationCluster::ReadAlloc reads max_cid = NumCids()-1 as
+its first field and pre-sizes the class table via
+ClassTable::AllocateIndex(max_cid) before any classes are allocated,
+matching Shorebird's ClassSerializationCluster::WriteAlloc /
+ClassDeserializationCluster::ReadAlloc. Our serializer previously did
+not write this field at all, contributing a 2-byte length gap in the
+R2 (IsolateSnapshotData) region relative to Shorebird's output.
+
+Round-trip verified: our gen_snapshot writes the field, our
+analyze_snapshot/dartaotruntime read it back and load the snapshot
+correctly (hello fixture, isolated ProductSimARM64 build).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 4af2d6fc851..6cc1262865e 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -1173,6 +1173,12 @@ class ClassSerializationCluster : public SerializationCluster {
+   }
+ 
+   void WriteAlloc(Serializer* s) {
++    // Shorebird: pre-size the reader's class table before any classes are
++    // allocated into it, so its capacity is known up front rather than
++    // growing incrementally (mirrors the per-cluster FieldTable pre-sizing
++    // pattern used by ProgramDeserializationRoots::ReadRoots).
++    s->WriteUnsigned(s->isolate_group()->class_table()->NumCids() - 1);
++
+     intptr_t count = predefined_.length();
+     s->WriteUnsigned(count);
+     for (intptr_t i = 0; i < count; i++) {
+@@ -1243,9 +1249,14 @@ class ClassDeserializationCluster : public DeserializationCluster {
+   ~ClassDeserializationCluster() {}
+ 
+   void ReadAlloc(Deserializer* d) override {
++    // Shorebird: pre-size the class table's capacity/num_cids from the
++    // writer's max_cid, before any individual class is allocated below.
++    ClassTable* table = d->isolate_group()->class_table();
++    intptr_t max_cid = d->ReadUnsigned();
++    table->AllocateIndex(max_cid);
++
+     predefined_start_index_ = d->next_index();
+     intptr_t count = d->ReadUnsigned();
+-    ClassTable* table = d->isolate_group()->class_table();
+     for (intptr_t i = 0; i < count; i++) {
+       intptr_t class_id = d->ReadCid();
+       ASSERT(table->HasValidClassAt(class_id));
+-- 
+2.53.0
+

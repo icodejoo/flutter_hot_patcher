@@ -1,0 +1,461 @@
+From ccad100b37c43022e5b3dfde0fab49ac24bafdc9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 18:14:40 +0800
+Subject: [PATCH 062/206] feat(shorebird): IndirectStaticCallInstr -- the IL
+ instruction, minus its pass
+
+The other half of DD core. Where StaticCallInstr branches straight to its
+target, this loads Thread::indirect_static_call_table_, indexes it by
+dd_slot, and calls through the entry -- so a patch can repoint the target
+while the call site stays put.
+
+Shape is StaticCallInstr on the same TemplateDartCall<0> base with
+ic_data_ and call_count_ dropped, which is why their function_ sits at
+0xc0 where upstream's is at 0xd0. FIELD_LIST order is the serializer
+order read off their WriteTo: function_, dd_slot_, result_type_, and the
+32-bit field at 0xd8.
+
+That last field is named shorebird_flags_ and deliberately given no
+meaning. It is not a renamed upstream field: dropping the two makes 0xd8
+land on upstream's is_known_list_constructor_ / entry_kind_ / identity_
+span and all three are excluded -- a bool would be ldrb not ldr w,
+entry_kind_ is contradicted by EmitNativeCode passing a hardcoded 0, and
+AliasIdentity wraps an intptr_t so it is 8 bytes. The name says where it
+lives and nothing about what it does.
+
+Three decisions that are judgements rather than transcription:
+
+  ConstantPropagator returns non_constant_. That is the correct answer,
+  not a conservative one -- folding would bake in the pre-patch target and
+  silently defeat the mechanism.
+
+  ComputeType does not sharpen from the target's body, for the same
+  reason: anything inferred from the pre-patch target is a claim about
+  code that may not run.
+
+  The Thread field is appended and reached through
+  indirect_static_call_table_offset(). Their 0x978 is unusable here --
+  their Shorebird block is mid-Thread, ours is appended, and hardcoding it
+  would read an unrelated field while looking like a table-contents bug.
+
+PrintOperandsTo reproduces their format string byte for byte, including
+that theirs ends at the `]` and emits the argument separator only when
+arguments follow, where upstream's format carries a trailing space.
+
+VERIFICATION: ninja exit 0 (Release and Product); 76 of 77 shorebird tests
+exit 0, the odd one being upstream's IsolateReload_ShapeChange_Const_AddSlot
+which needs --dfe and passes with it; verify_reproduction.sh 24 artifacts
+plus 14 stubs, 0 failures -- so adding an entry to FOR_EACH_INSTRUCTION and
+a field to Thread moved neither the class table nor any dump.
+
+NOT VERIFIED, and this is the honest gap: nothing constructs one of these
+yet. The IL pass that rewrites static calls into indirect ones is fully
+inlined in their binary and leaves zero symbols, so it has to be written
+from scratch. Until then the class compiles and is regression-clean but is
+not exercised by any test -- the AllocateMetadata() failure mode. A unit
+test driving the constructor and PrintOperandsTo against their format
+string is the next commit, before the pass.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/constant_propagator.cc b/runtime/vm/compiler/backend/constant_propagator.cc
+index 1a9e68c168a..af360a71594 100644
+--- a/runtime/vm/compiler/backend/constant_propagator.cc
++++ b/runtime/vm/compiler/backend/constant_propagator.cc
+@@ -498,6 +498,17 @@ void ConstantPropagator::VisitDispatchTableCall(DispatchTableCallInstr* instr) {
+   SetValue(instr, non_constant_);
+ }
+ 
++// Shorebird: never fold an indirect static call, even where the recognised-kind
++// machinery in VisitStaticCall below could evaluate the same target. The table
++// entry this dispatches through gets repointed when a patch is linked, so
++// folding the result would bake in the pre-patch answer and quietly defeat the
++// mechanism. Non-constant is the correct answer here, not a conservative
++// placeholder.
++void ConstantPropagator::VisitIndirectStaticCall(
++    IndirectStaticCallInstr* instr) {
++  SetValue(instr, non_constant_);
++}
++
+ void ConstantPropagator::VisitStaticCall(StaticCallInstr* instr) {
+   const auto kind = instr->function().recognized_kind();
+   if (kind != MethodRecognizer::kUnknown) {
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler.h b/runtime/vm/compiler/backend/flow_graph_compiler.h
+index 2f1d48583b4..fe7342c69df 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler.h
++++ b/runtime/vm/compiler/backend/flow_graph_compiler.h
+@@ -772,6 +772,14 @@ class FlowGraphCompiler : public ValueObject {
+   void EmitDispatchTableCall(int32_t selector_offset,
+                              const Array& arguments_descriptor);
+ 
++  // Shorebird: dispatch a static call through the DD table rather than
++  // branching straight to the target, so a patch can repoint the entry.
++  // Loads Thread::indirect_static_call_table_, indexes it by dd_slot, and
++  // calls through the loaded entry.
++  void EmitIndirectStaticCall(intptr_t dd_slot,
++                              const Function& function,
++                              const Array& arguments_descriptor);
++
+   Condition EmitEqualityRegConstCompare(Register reg,
+                                         const Object& obj,
+                                         bool needs_number_check,
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index 0f90cbc2b08..530b035c7c1 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -639,6 +639,47 @@ void FlowGraphCompiler::EmitDispatchTableCall(
+   });
+ }
+ 
++// Shorebird. Their sequence, from IndirectStaticCallInstr::EmitNativeCode at
++// 0x1002a3e28: load the table base out of Thread, scale dd_slot by the word
++// size, add, and call through the resulting address.
++//
++// ⚠️ Thread::indirect_static_call_table_offset() rather than their literal
++// 0x978. Their Shorebird block sits mid-Thread and ours is appended, so 0x978
++// would read an unrelated field here -- and the symptom would look like a
++// corrupt table rather than a wrong offset.
++void FlowGraphCompiler::EmitIndirectStaticCall(
++    intptr_t dd_slot,
++    const Function& function,
++    const Array& arguments_descriptor) {
++  ASSERT(CanCallDart());
++  ASSERT(dd_slot >= 0);
++  if (!arguments_descriptor.IsNull()) {
++    __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
++  }
++  CLOBBERS_LR({
++    // dart::Thread rather than compiler::target::Thread: the offset table the
++    // target mirror reads from is generated and does not know about fields we
++    // added. The existing Shorebird stubs reach their Thread fields the same
++    // way -- see stub_code_compiler_arm64.cc's use of
++    // dart::Thread::simulator_execute_offset().
++    __ LoadFromOffset(TMP, THR,
++                      dart::Thread::indirect_static_call_table_offset());
++    __ AddImmediate(LR, TMP, dd_slot * compiler::target::kWordSize);
++    __ Call(compiler::Address(LR, 0));
++  });
++
++  // Record the original target even though the branch went through the table.
++  // This is what keeps a patched call site attributable: the snapshot's
++  // static-call table still says which function this site was for. Done here
++  // rather than at the IL site because AddStaticCallTarget is private to
++  // FlowGraphCompiler.
++  //
++  // kNormal unconditionally -- theirs passes a hardcoded 0 rather than reading
++  // any field, which is one of the three reasons the 32-bit field at 0xd8 was
++  // ruled out as entry_kind_.
++  AddStaticCallTarget(function, Code::EntryKind::kNormal);
++}
++
+ Condition FlowGraphCompiler::EmitEqualityRegConstCompare(
+     Register reg,
+     const Object& obj,
+diff --git a/runtime/vm/compiler/backend/il.cc b/runtime/vm/compiler/backend/il.cc
+index 0f0f3f994f7..efeeea70d68 100644
+--- a/runtime/vm/compiler/backend/il.cc
++++ b/runtime/vm/compiler/backend/il.cc
+@@ -5478,6 +5478,32 @@ Representation StaticCallInstr::representation() const {
+   return FlowGraph::ReturnRepresentationOf(function());
+ }
+ 
++// Shorebird: an indirect static call keeps the direct call's convention --
++// same arguments, same layout, same return representation. Only the dispatch
++// differs, so these delegate to function() exactly as StaticCallInstr does
++// above. Divergence here would mean a patched target could not satisfy the
++// call site it replaces.
++Representation IndirectStaticCallInstr::RequiredInputRepresentation(
++    intptr_t idx) const {
++  if (type_args_len() > 0 || function().IsFactory()) {
++    if (idx == 0) {
++      return kTagged;
++    }
++    idx--;
++  }
++  return FlowGraph::ParameterRepresentationAt(function(), idx);
++}
++
++intptr_t IndirectStaticCallInstr::ArgumentsSize() const {
++  return FlowGraph::ComputeArgumentsSizeInWords(
++             function(), ArgumentCountWithoutTypeArgs()) +
++         ((type_args_len() > 0) ? 1 : 0);
++}
++
++Representation IndirectStaticCallInstr::representation() const {
++  return FlowGraph::ReturnRepresentationOf(function());
++}
++
+ const CallTargets& StaticCallInstr::Targets() {
+   if (targets_ == nullptr) {
+     Zone* zone = Thread::Current()->zone();
+@@ -5952,6 +5978,39 @@ void StaticCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   }
+ }
+ 
++LocationSummary* IndirectStaticCallInstr::MakeLocationSummary(
++    Zone* zone,
++    bool optimizing) const {
++  return MakeCallSummary(zone, this);
++}
++
++// Shorebird. Their EmitNativeCode at 0x1002a3e28 builds the arguments
++// descriptor and IC data exactly as a static call does, then dispatches through
++// the DD table instead of branching to the target -- and still hands the
++// original function to AddStaticCallTarget.
++//
++// That last line is the load-bearing one. The snapshot's static-call table
++// therefore still records what this call site originally meant, while the DD
++// table entry it dispatches through stays repointable. Drop it and the call
++// becomes patchable but anonymous: nothing downstream could say which function
++// the site was for.
++//
++// The entry kind is kNormal unconditionally. Theirs passes a hardcoded 0 rather
++// than reading a field, which is one of the three reasons the 32-bit field at
++// 0xd8 could be ruled out as entry_kind_.
++void IndirectStaticCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
++  ArgumentsInfo args_info(type_args_len(), ArgumentCount(), ArgumentsSize(),
++                          argument_names());
++  const Array& arguments_descriptor =
++      Array::ZoneHandle(compiler->zone(), args_info.ToArgumentsDescriptor());
++
++  compiler->EmitIndirectStaticCall(dd_slot(), function(),
++                                   arguments_descriptor);
++  compiler->EmitCallsiteMetadata(source(), deopt_id(),
++                                 UntaggedPcDescriptors::kOther, locs(), env());
++  compiler->EmitDropArguments(ArgumentsSize());
++}
++
+ CachableIdempotentCallInstr::CachableIdempotentCallInstr(
+     const InstructionSource& source,
+     Representation representation,
+diff --git a/runtime/vm/compiler/backend/il.h b/runtime/vm/compiler/backend/il.h
+index 673e07fd16f..7be9f2896a2 100644
+--- a/runtime/vm/compiler/backend/il.h
++++ b/runtime/vm/compiler/backend/il.h
+@@ -438,6 +438,9 @@ struct InstrAttrs {
+   M(PolymorphicInstanceCall, _)                                                \
+   M(DispatchTableCall, _)                                                      \
+   M(StaticCall, _)                                                             \
++  /* Shorebird: a static call that dispatches through the DD table instead of */ \
++  /* a direct branch, so the target can be repointed when a patch is linked.  */ \
++  M(IndirectStaticCall, _)                                                     \
+   M(CachableIdempotentCall, _)                                                 \
+   M(LoadLocal, kNoGC)                                                          \
+   M(DropTemps, kNoGC)                                                          \
+@@ -5742,6 +5745,91 @@ class StaticCallInstr : public TemplateDartCall<0> {
+   DISALLOW_COPY_AND_ASSIGN(StaticCallInstr);
+ };
+ 
++// Shorebird: a static call dispatched through the DD table.
++//
++// Where StaticCallInstr emits a direct branch to its target, this loads an
++// entry out of Thread::indirect_static_call_table_ at index dd_slot() and calls
++// through it. The original target is still recorded in the snapshot's
++// static-call table -- EmitNativeCode passes function_ to AddStaticCallTarget
++// -- so the call site still says what it originally meant while the table entry
++// remains repointable. That is what makes a patched target reachable.
++//
++// Shape reproduced from their gen_snapshot; see
++// spikes/shorebird_linkinfo_oracle/README.md. It is StaticCallInstr on the same
++// TemplateDartCall<0> base with ic_data_ and call_count_ dropped -- an AOT-only
++// call has no use for either -- which is why function_ lands at 0xc0 in their
++// binary where upstream's is at 0xd0.
++class IndirectStaticCallInstr : public TemplateDartCall<0> {
++ public:
++  IndirectStaticCallInstr(const InstructionSource& source,
++                          const Function& function,
++                          intptr_t dd_slot,
++                          intptr_t type_args_len,
++                          const Array& argument_names,
++                          InputsArray&& arguments,
++                          intptr_t deopt_id)
++      : TemplateDartCall(deopt_id,
++                         type_args_len,
++                         argument_names,
++                         std::move(arguments),
++                         source),
++        function_(function),
++        dd_slot_(dd_slot),
++        result_type_(nullptr),
++        shorebird_flags_(0) {
++    DEBUG_ASSERT(function.IsNotTemporaryScopedHandle());
++    ASSERT(!function.IsNull());
++    ASSERT(dd_slot >= 0);
++  }
++
++  DECLARE_INSTRUCTION(IndirectStaticCall)
++
++  const Function& function() const { return function_; }
++
++  // Index into Thread::indirect_static_call_table_. The name is theirs: their
++  // PrintOperandsTo formats this field with " %s<%" Pd "> [dd_slot=%" Pd "]".
++  intptr_t dd_slot() const { return dd_slot_; }
++
++  virtual intptr_t ArgumentsSize() const;
++
++  virtual Representation RequiredInputRepresentation(intptr_t idx) const;
++  virtual Representation representation() const;
++
++  virtual bool ComputeCanDeoptimize() const { return false; }
++  virtual bool CanBecomeDeoptimizationTarget() const { return true; }
++  virtual intptr_t DeoptimizationTarget() const { return deopt_id(); }
++  virtual bool HasUnknownSideEffects() const { return true; }
++  virtual bool CanCallDart() const { return true; }
++
++  virtual CompileType ComputeType() const;
++
++  PRINT_OPERANDS_TO_SUPPORT
++
++#define FIELD_LIST(F)                                                          \
++  F(const Function&, function_)                                                \
++  F(const intptr_t, dd_slot_)                                                  \
++  F(CompileType*, result_type_)                                                \
++  F(int32_t, shorebird_flags_)
++
++  DECLARE_INSTRUCTION_SERIALIZABLE_FIELDS(IndirectStaticCallInstr,
++                                          TemplateDartCall,
++                                          FIELD_LIST)
++#undef FIELD_LIST
++
++ private:
++  // shorebird_flags_ is at 0xd8 in their layout and is deliberately NOT given a
++  // meaning. It is not a renamed upstream field: dropping ic_data_/call_count_
++  // makes 0xd8 land on upstream's is_known_list_constructor_/entry_kind_/
++  // identity_ span, and all three are excluded -- the first is a bool where the
++  // load is `ldr w`, the second is contradicted by EmitNativeCode passing a
++  // hardcoded 0 for entry kind, and the third is 8 bytes because AliasIdentity
++  // wraps an intptr_t. So they added it, four oracles decline to name it, and
++  // there is no upstream counterpart to borrow a meaning from. The name says
++  // where it lives and nothing about what it means, on purpose.
++
++  DISALLOW_COPY_AND_ASSIGN(IndirectStaticCallInstr);
++};
++
+ // A call to a function which has no side effects and of which the result can
+ // be cached.
+ //
+diff --git a/runtime/vm/compiler/backend/il_printer.cc b/runtime/vm/compiler/backend/il_printer.cc
+index 54f01fe289c..76e53d04aa3 100644
+--- a/runtime/vm/compiler/backend/il_printer.cc
++++ b/runtime/vm/compiler/backend/il_printer.cc
+@@ -912,6 +912,27 @@ void EqualityCompareInstr::PrintOperandsTo(BaseTextBuffer* f) const {
+   right()->PrintTo(f);
+ }
+ 
++// Shorebird. The format string is theirs byte for byte: it sits at 0x1004cbd3e
++// in their gen_snapshot and reads " %s<%ld> [dd_slot=%ld]". This is where the
++// name `dd_slot` comes from -- it is what their own printer calls the field at
++// 0xc8, which is why that field carries a name and the one at 0xd8 does not.
++//
++// Note the difference from StaticCallInstr below: upstream's format ends in a
++// space, theirs ends at the `]` and emits the separator only when arguments
++// follow. Their disassembly gates it on `cmp x0, #1`.
++void IndirectStaticCallInstr::PrintOperandsTo(BaseTextBuffer* f) const {
++  f->Printf(" %s<%" Pd "> [dd_slot=%" Pd "]",
++            String::Handle(function().name()).ToCString(), type_args_len(),
++            dd_slot());
++  if (ArgumentCount() > 0) {
++    f->AddString(" ");
++  }
++  for (intptr_t i = 0; i < ArgumentCount(); ++i) {
++    if (i > 0) f->AddString(", ");
++    ArgumentValueAt(i)->PrintTo(f);
++  }
++}
++
+ void StaticCallInstr::PrintOperandsTo(BaseTextBuffer* f) const {
+   f->Printf(" %s<%" Pd "> ", String::Handle(function().name()).ToCString(),
+             type_args_len());
+diff --git a/runtime/vm/compiler/backend/type_propagator.cc b/runtime/vm/compiler/backend/type_propagator.cc
+index 92dd13db25e..a7a6f971de3 100644
+--- a/runtime/vm/compiler/backend/type_propagator.cc
++++ b/runtime/vm/compiler/backend/type_propagator.cc
+@@ -1564,6 +1564,46 @@ CompileType StaticCallInstr::ComputeType() const {
+   return result;
+ }
+ 
++// Shorebird: the same inference as StaticCallInstr above, minus the
++// list-factory branch. That branch keys off is_known_list_constructor_, which
++// their instruction does not carry -- it is a bool, and the field at 0xd8 is
++// loaded 32-bit, which is part of how that candidate was ruled out.
++//
++// Note what is deliberately absent: no attempt to sharpen the type from the
++// target's body. The table entry is repointed when a patch is linked, so
++// anything inferred from the pre-patch target would be a claim about code that
++// may not be the code that runs.
++CompileType IndirectStaticCallInstr::ComputeType() const {
++  CompileType* const inferred_type = result_type_;
++
++  intptr_t inferred_cid = kDynamicCid;
++  bool is_nullable = CompileType::kCanBeNull;
++  if (inferred_type != nullptr) {
++    if (inferred_type->IsNullableInt()) {
++      TraceStrongModeType(this, inferred_type);
++      return *inferred_type;
++    }
++    inferred_cid = inferred_type->ToNullableCid();
++    is_nullable = inferred_type->is_nullable();
++  }
++
++  if (function_.has_pragma()) {
++    const intptr_t cid = MethodRecognizer::ResultCidFromPragma(function_);
++    if (cid != kDynamicCid) {
++      return CompileType::FromCid(cid);
++    }
++  }
++
++  const AbstractType& result_type =
++      AbstractType::ZoneHandle(function().result_type());
++  CompileType result(is_nullable && !result_type.IsStrictlyNonNullable(),
++                     CompileType::kCannotBeSentinel,
++                     inferred_cid == kDynamicCid ? kIllegalCid : inferred_cid,
++                     &result_type);
++  TraceStrongModeType(this, &result);
++  return result;
++}
++
+ CompileType LoadLocalInstr::ComputeType() const {
+   if (local().needs_covariant_check_in_method()) {
+     // We may not yet have checked the actual type of the parameter value.
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index a158a229f3e..45aa6a4dd67 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -640,6 +640,26 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, base_instructions_end_);
+   }
+ 
++  // Shorebird: base of the DD table -- the Array that
++  // Precompiler::FinalizeIndirectStaticCallTable builds, indexed by dd_slot.
++  // IndirectStaticCallInstr::EmitNativeCode dispatches through this.
++  //
++  // Theirs is at Thread+0x978. Ours cannot be: their Shorebird block sits in
++  // the middle of Thread and ours is appended, for the reason spelled out at
++  // is_simulating() above. Generated code must go through
++  // indirect_static_call_table_offset() and never a literal -- hardcoding
++  // 0x978 would read an unrelated field of our Thread and the mistake would
++  // look like a table-contents bug rather than an offset bug.
++  uword indirect_static_call_table() const {
++    return indirect_static_call_table_;
++  }
++  void set_indirect_static_call_table(uword v) {
++    indirect_static_call_table_ = v;
++  }
++  static intptr_t indirect_static_call_table_offset() {
++    return OFFSET_OF(Thread, indirect_static_call_table_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1812,6 +1832,7 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   uword resume_on_cpu_entry_point_ = 0;
+   uword base_instructions_entry_point_ = 0;
+   uword base_instructions_end_ = 0;
++  uword indirect_static_call_table_ = 0;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

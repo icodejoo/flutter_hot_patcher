@@ -1,0 +1,395 @@
+From 555cb48abd6edeca413305bf3c8b01fc69547ca8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 09:48:20 +0800
+Subject: [PATCH 045/206] feat(shorebird): --print_dd_function_identity_to,
+ row-set exact on six fixtures
+
+Ninth of their eleven private flags. Our flag surface is now a strict subset of
+theirs: only print_dd_resolution_to and print_shorebird_info remain, both
+genuinely blocked on the DD IL subsystem and the three-stage mapper.
+
+The row predicate was established per entry, not by arithmetic on counts. The
+previous reading -- one row per global object pool entry, keyed by pool index --
+does not survive contact with the data: the raw pool has 1421 entries (1323 obj
++ 92 native + 6 unknown) and no subset of it is 1380. The 1380 index space is
+analyze_snapshot --shorebird's `functions` list, i.e. the serializer's code
+list, which is why their read point sits in Serializer::PrepareInstructions
+where code_index_ is built. Over their base.ddid, with zero exceptions either
+way:
+
+  IsAllocationStubCode() -> row, kind 255                             (87)
+  IsTypeTestStubCode()   -> no row  ([Stub] Type Test Type:)         (110)
+  IsStubCode()           -> no row  ([unknown stub])                   (4)
+  owner is a Function    -> row, kind = Function::kind()            (1179)
+
+library_kernel_offset carries Library::kernel_library_index(), not a byte
+offset -- Library has no kernel_offset at all, so the name is theirs and the
+value is forced. Alloc-stub keys zero kernel_offset and signature_hash, matching
+all 87 of their rows.
+
+Verified against their own gen_snapshot output on six fixtures: row multisets
+equal and file sizes equal (14925/14874/15242 both sides). 73/73 shorebird tests
+pass. Two negative controls: perturbing library_kernel_offset by one moves
+exactly the 1179 function rows and leaves the 87 stub rows alone; giving
+ForAllocStub the natural wrong kernel_offset turns the new test red (255).
+
+KNOWN GAP: emission order is not reproduced, so the files are not byte
+identical. Theirs is one descending run of 1187 rows (1379 -> 29) followed by 79
+rows in ~52 short runs; those tail rows pair up with a constant difference of
+797 (825/28, 824/27, ..., 797/0), which looks like two interleaved descending
+streams. We emit ascending, and sorted(theirs) == ours exactly.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index ee6f700f60a..9b6082acb3b 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -27,6 +27,7 @@
+ #include "vm/object_store.h"
+ #include "vm/program_visitor.h"
+ #include "vm/raw_object_fields.h"
++#include "vm/shorebird/link_info.h"
+ #include "vm/stub_code.h"
+ #include "vm/symbols.h"
+ #include "vm/timeline.h"
+@@ -8291,6 +8292,11 @@ void Serializer::PrepareInstructions(
+       }
+     }
+ 
++    // Shorebird: --print_dd_function_identity_to. code_objects is final here
++    // and its positions are the index space their dump keys off; the walk runs
++    // before relocation so it cannot observe rewritten code.
++    PrintDDFunctionIdentityIfRequested(Thread::Current(), code_objects);
++
+     GrowableArray<ImageWriterCommand> writer_commands;
+     RelocateCodeObjects(vm_, &code_objects, &writer_commands);
+     image_writer_->PrepareForSerialization(&writer_commands);
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index 8f09083b029..e9c23570169 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "platform/assert.h"
+ #include "vm/datastream.h"
++#include "vm/object.h"
+ #include "vm/os.h"
+ 
+ namespace dart {
+@@ -59,6 +60,37 @@ void FunctionKey::WriteToStream(BaseWriteStream* stream) const {
+          num_optional_named * 31u + num_type_params;
+ }
+ 
++/*static*/ FunctionKey FunctionKey::FromFunction(const Function& function) {
++  const Class& owner = Class::Handle(function.Owner());
++  const Library& library =
++      owner.IsNull() ? Library::Handle() : Library::Handle(owner.library());
++
++  FunctionKey key;
++  key.library_kernel_offset =
++      library.IsNull() ? 0 : library.kernel_library_index();
++  key.owner_class_kernel_offset = owner.IsNull() ? 0 : owner.kernel_offset();
++  key.kernel_offset = function.kernel_offset();
++  key.kind = static_cast<uint8_t>(function.kind());
++  key.signature_hash = ComputeSignatureHash(
++      function.num_fixed_parameters(),
++      function.NumOptionalPositionalParameters(),
++      function.NumOptionalNamedParameters(), function.NumTypeParameters());
++  return key;
++}
++
++/*static*/ FunctionKey FunctionKey::ForAllocStub(const Class& cls) {
++  const Library& library = Library::Handle(cls.library());
++
++  FunctionKey key;
++  key.library_kernel_offset =
++      library.IsNull() ? 0 : library.kernel_library_index();
++  key.owner_class_kernel_offset = cls.kernel_offset();
++  key.kernel_offset = 0;
++  key.kind = kAllocStubKind;
++  key.signature_hash = 0;
++  return key;
++}
++
+ size_t FunctionKeyHash::operator()(const FunctionKey& k) const {
+   // Combine the five fields with the same basis used by signature_hash so
+   // that keys with identical signature_hash values still spread across buckets.
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+index 14c2264cf99..b309b7df95a 100644
+--- a/runtime/vm/shorebird/dd_voting.h
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -14,6 +14,9 @@
+ 
+ namespace dart {
+ 
++class Class;
++class Function;
++
+ // FunctionKey: 32-byte identity for a Dart function or allocation stub.
+ //
+ // Source: DWARF from Flutter.framework.dSYM — field names, offsets, and sizes
+@@ -62,6 +65,20 @@ struct FunctionKey {
+                                        uint32_t num_optional_positional,
+                                        uint32_t num_optional_named,
+                                        uint32_t num_type_params);
++
++  // Builds the key for a Dart function.
++  //
++  // library_kernel_offset carries the *library index*, not a byte offset: in
++  // their base.ddid it takes only 15 small dense values (0, 1, 7, 9, 12, 20,
++  // ...) over 1266 rows, with dart:core == 20 and dart:async == 1. A byte
++  // offset into the kernel binary cannot look like that. The field name is
++  // theirs (DWARF); the value is Library::kernel_library_index().
++  static FunctionKey FromFunction(const Function& function);
++
++  // Builds the key for a class allocation stub. Measured over all 87 alloc-stub
++  // rows of their base.ddid: kernel_offset and signature_hash are zero in every
++  // one, and owner_class_kernel_offset is distinct per class (87/87).
++  static FunctionKey ForAllocStub(const Class& cls);
+ };
+ 
+ // Hash functor so FunctionKey can be used as an unordered_map key.
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index 041293a97a1..f12ecbab7cc 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "vm/shorebird/dd_voting.h"
+ 
++#include "vm/object_store.h"
++#include "vm/shorebird/link_info.h"
+ #include "vm/shorebird/linker.h"
+ #include "vm/unit_test.h"
+ 
+@@ -724,4 +726,69 @@ VM_UNIT_TEST_CASE(DDSlotMapping_ReadFromStreamIsStillAStub) {
+   EXPECT_EQ(static_cast<size_t>(0), mapping.size());
+ }
+ 
++// --- DD function identity (--print_dd_function_identity_to) ------------------
++//
++// The load-bearing check for this dump is the six-fixture row-set comparison
++// against their own .ddid files, which cannot live in this binary because it
++// needs their gen_snapshot. These two tests pin what can regress silently
++// in-tree: the wire format, and the alloc-stub key shape.
++
++// index followed by FunctionKey's five varints, count header, no trailer.
++// Decoded by hand rather than through a reader, so writer and reader cannot
++// drift together and still pass.
++VM_UNIT_TEST_CASE(DDFunctionIdentity_RoundTrip) {
++  FunctionKey fn;
++  fn.library_kernel_offset = 20;
++  fn.owner_class_kernel_offset = 44770;
++  fn.kernel_offset = 45250;
++  fn.kind = 5;
++  fn.signature_hash = 89373;
++
++  FunctionKey stub;
++  stub.library_kernel_offset = 1;
++  stub.owner_class_kernel_offset = 59393;
++  stub.kernel_offset = 0;
++  stub.kind = FunctionKey::kAllocStubKind;
++  stub.signature_hash = 0;
++
++  DDFunctionIdentity info({{1379, fn}, {1253, stub}});
++
++  MallocWriteStream ws(/*initial_size=*/256);
++  info.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  EXPECT_EQ(static_cast<intptr_t>(2), rs.ReadUnsigned<intptr_t>());
++
++  EXPECT_EQ(static_cast<intptr_t>(1379), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(20), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(44770), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(45250), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(5), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(89373), rs.ReadUnsigned<intptr_t>());
++
++  EXPECT_EQ(static_cast<intptr_t>(1253), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(1), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(59393), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(255), rs.ReadUnsigned<intptr_t>());
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.ReadUnsigned<intptr_t>());
++
++  // No trailing scalar: the stream must be exactly consumed.
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
++// All 87 alloc-stub rows in their base.ddid carry kernel_offset == 0 and
++// signature_hash == 0. A class with a real kernel_offset must not leak it into
++// either field.
++ISOLATE_UNIT_TEST_CASE(FunctionKey_ForAllocStub_ZeroesOffsetAndSignature) {
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const FunctionKey key = FunctionKey::ForAllocStub(cls);
++
++  EXPECT_EQ(static_cast<intptr_t>(0), key.kernel_offset);
++  EXPECT_EQ(static_cast<uint32_t>(0), key.signature_hash);
++  EXPECT_EQ(FunctionKey::kAllocStubKind, key.kind);
++  EXPECT_EQ(cls.kernel_offset(), key.owner_class_kernel_offset);
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 3e166068738..8e964d7e39b 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -54,6 +54,11 @@ DEFINE_FLAG(charp,
+             nullptr,
+             "Print dispatch table link debug information to the given file");
+ 
++DEFINE_FLAG(charp,
++            print_dd_function_identity_to,
++            nullptr,
++            "Print DD function identity table to the given file");
++
+ // Declared, never read -- and that is not an omission on our side. Their own
+ // arm64 gen_snapshot never reads it either: the flag has zero code references
+ // (verified two ways, see spikes/shorebird_linkinfo_oracle/scripts/xref.py),
+@@ -431,4 +436,62 @@ void PrintDispatchTableLinkInfoIfRequested(
+   }
+ }
+ 
++void DDFunctionIdentity::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(rows_.size()));
++  for (const DDFunctionIdentityRow& row : rows_) {
++    stream->WriteUnsigned<intptr_t>(row.index);
++    row.key.WriteToStream(stream);
++  }
++  // No trailing scalar, like the dispatch table.
++}
++
++void DDFunctionIdentity::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/64 * KB);
++  WriteToStream(&stream);
++
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(stream.buffer(), stream.bytes_written());
++  }
++}
++
++bool WantsDDFunctionIdentity() {
++  return FLAG_print_dd_function_identity_to != nullptr;
++}
++
++void PrintDDFunctionIdentityIfRequested(Thread* thread,
++                                        const GrowableArray<CodePtr>& codes) {
++  if (!WantsDDFunctionIdentity()) return;
++
++  Zone* zone = thread->zone();
++  auto& code = Code::Handle(zone);
++  auto& owner = Object::Handle(zone);
++  auto& function = Function::Handle(zone);
++  auto& cls = Class::Handle(zone);
++
++  std::vector<DDFunctionIdentityRow> rows;
++  rows.reserve(codes.length());
++
++  for (intptr_t i = 0; i < codes.length(); i++) {
++    code = codes[i];
++
++    // Three-way split on Code::owner(), which is exactly the discriminator the
++    // measured row predicate needs: a Class for allocation stubs, a Type for
++    // type-test stubs, null for the remaining VM stubs, otherwise a Function.
++    if (code.IsStubCode() || code.IsTypeTestStubCode()) continue;
++
++    owner = code.owner();
++    if (code.IsAllocationStubCode()) {
++      cls ^= owner.ptr();
++      rows.push_back({i, FunctionKey::ForAllocStub(cls)});
++    } else if (owner.IsFunction()) {
++      function ^= owner.ptr();
++      rows.push_back({i, FunctionKey::FromFunction(function)});
++    }
++  }
++
++  DDFunctionIdentity info(std::move(rows));
++  info.WriteToFile(FLAG_print_dd_function_identity_to);
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 432fda27bcc..9e4aa22629c 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -9,7 +9,11 @@
+ #include <string>
+ #include <vector>
+ 
++#include "vm/allocation.h"
+ #include "vm/globals.h"
++#include "vm/growable_array.h"
++#include "vm/shorebird/dd_voting.h"
++#include "vm/tagged_pointer.h"
+ 
+ namespace dart {
+ 
+@@ -140,6 +144,61 @@ class DispatchTableLinkInfo {
+   std::vector<SelectorRowInfo> selectors_;
+ };
+ 
++// One row of the DD function identity table: a code-entry index paired with the
++// identity of whatever that code belongs to.
++struct DDFunctionIdentityRow {
++  intptr_t index;   // position in the serializer's code list
++  FunctionKey key;
++};
++
++// The table dumped by --print_dd_function_identity_to.
++//
++// Despite the name this does NOT depend on the DD subsystem: it is emitted on a
++// plain base build with no link data and no --dd_slot_mapping. What it needs is
++// the serializer's code list plus FunctionKey, both of which exist.
++//
++// The row predicate was established per-entry against their base.ddid, using
++// `analyze_snapshot --shorebird` (whose `functions` list shares this exact index
++// space -- 1380 entries, index_in_entries 0..1379) rather than by arithmetic on
++// counts. Over that fixture, with zero exceptions in either direction:
++//
++//   Code::IsAllocationStubCode()  -> row, kind = kAllocStubKind       (87)
++//   Code::IsTypeTestStubCode()    -> no row  ([Stub] Type Test Type:) (110)
++//   Code::IsStubCode()            -> no row  ([unknown stub])         (4)
++//   otherwise (owner is Function) -> row, kind = Function::kind()     (1179)
++//
++// KNOWN GAP: the emission ORDER is not reproduced. Theirs is a descending run of
++// 1187 rows (index 1379 -> 29) followed by 79 rows scattered over ~52 short
++// runs; the mechanism behind that is unexplained. We emit in ascending index
++// order, so the file is NOT byte-identical to theirs. The row SET is what is
++// verified. Do not read a passing set comparison as byte-level agreement.
++class DDFunctionIdentity {
++ public:
++  explicit DDFunctionIdentity(std::vector<DDFunctionIdentityRow> rows)
++      : rows_(std::move(rows)) {}
++
++  const std::vector<DDFunctionIdentityRow>& rows() const { return rows_; }
++
++  // count, { index, library_kernel_offset, owner_class_kernel_offset,
++  //          kernel_offset, kind, signature_hash } * count
++  // i.e. the row index followed by FunctionKey's five varints, no trailer.
++  // WriteToStream is the real encoder; see the note on ClassTableLinkInfo.
++  void WriteToStream(BaseWriteStream* stream) const;
++  void WriteToFile(const char* path) const;
++
++ private:
++  std::vector<DDFunctionIdentityRow> rows_;
++};
++
++// True when --print_dd_function_identity_to is set, so the serializer can skip
++// the collection walk otherwise.
++bool WantsDDFunctionIdentity();
++
++// Honour --print_dd_function_identity_to. `codes` is the serializer's code list
++// in index order; row i of the dump keys off position i here.
++void PrintDDFunctionIdentityIfRequested(Thread* thread,
++                                        const GrowableArray<CodePtr>& codes);
++
+ // Honour the dispatch table flags. Called from DispatchTableGenerator, which is
+ // the only place with access to the selector rows.
+ void PrintDispatchTableLinkInfoIfRequested(
+-- 
+2.53.0
+

@@ -1,0 +1,93 @@
+From 8dc0da607c53631d17de1b10d82e9e0f1d6d29c4 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 10:44:42 +0800
+Subject: [PATCH 017/206] refactor(shorebird): review cleanups to wrapper
+ Layout
+
+Four fixes from Task 1 code review:
+
+- wrapper.cc referenced "Task 4" for the empty-range rejection test; that
+  test lives in Task 3.
+- Dropped a premature include of vm/growable_array.h from wrapper.h. Nothing
+  in the header uses it yet -- MallocGrowableArray arrives with
+  WrapperAllocator. Build is clean without it.
+- Copyright line 1 now uses two spaces after "authors." to match the project
+  convention (see shorebird/link_info.h).
+- Renamed WrapperLayout_CountIsDerivedNotHardcoded to
+  WrapperLayout_CountIsConsistentWithPageFields. The old name overclaimed: the
+  test reads all four fields off the Layout that fromTemplate() already
+  populated, so a config hardcoding kNumWrappersPerPage = 2014 would still
+  pass it. It guards internal consistency, not derivation. What actually pins
+  the values is DerivedCountsMatchTheirDwarf, which ties inputs and output to
+  their DWARF literals. Comment now says so.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 64598b6546e..4f1eaf6faec 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
+ // for details. All rights reserved. Use of this source code is governed by a
+ // BSD-style license that can be found in the LICENSE file.
+ 
+@@ -9,7 +9,7 @@ namespace shorebird {
+ 
+ // The real implementations resolve the generated stub's address range. The
+ // stubs do not exist until plan #2, so these report an empty range for now.
+-// Task 4 tests assert that an empty range is rejected rather than remapped.
++// Task 3 tests assert that an empty range is rejected rather than remapped.
+ CodeRange CPUToSimConfig::GetStubCodeRange() {
+   return CodeRange();
+ }
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 799e4622e40..6af3bad16ab 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
+ // for details. All rights reserved. Use of this source code is governed by a
+ // BSD-style license that can be found in the LICENSE file.
+ 
+@@ -8,7 +8,6 @@
+ #include <functional>
+ 
+ #include "platform/globals.h"
+-#include "vm/growable_array.h"
+ 
+ namespace dart {
+ namespace shorebird {
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index afb6464dab5..fa7945312d6 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -1,4 +1,4 @@
+-// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
+ // for details. All rights reserved. Use of this source code is governed by a
+ // BSD-style license that can be found in the LICENSE file.
+ 
+@@ -32,9 +32,14 @@ VM_UNIT_TEST_CASE(WrapperLayout_DerivedCountsMatchTheirDwarf) {
+   EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
+ }
+ 
+-// Guards the relation rather than the literals, so a future config change is
+-// still checked against the rule their two data points establish.
+-VM_UNIT_TEST_CASE(WrapperLayout_CountIsDerivedNotHardcoded) {
++// Guards that num_wrappers_per_page agrees with the three page fields it is
++// computed from, so a future config change cannot silently desync them. This
++// does NOT prove the count is derived rather than hardcoded: a config that
++// spelled out kNumWrappersPerPage = 2014 and had fromTemplate() copy it would
++// still satisfy this, because the division yields the same number. What pins
++// the values themselves is WrapperLayout_DerivedCountsMatchTheirDwarf, which
++// ties both the inputs and the output to their DWARF literals.
++VM_UNIT_TEST_CASE(WrapperLayout_CountIsConsistentWithPageFields) {
+   const Layout a = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+   EXPECT_EQ((a.page_size - a.shared_body_size) / a.landing_pad_size,
+             a.num_wrappers_per_page);
+-- 
+2.53.0
+

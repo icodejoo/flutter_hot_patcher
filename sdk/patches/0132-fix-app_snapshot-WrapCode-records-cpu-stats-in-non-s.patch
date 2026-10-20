@@ -1,0 +1,39 @@
+From cf9ffaaf2e76ad1af5d24ed02d4402b1c66bb317 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 12:25:15 +0800
+Subject: [PATCH 132/206] fix(app_snapshot): WrapCode records cpu stats in
+ non-simulator builds
+
+The !IsLinkingEnabled() path was recording stats as sim since 1f1e51ad16e,
+which fixed the B6 crash but left CPU stats at zero in ProductARM64 builds.
+This was invisible when dartaotruntime was kReadOnly (macOS allowed
+executing read-only pages) but was exposed once dd_runtime_check.sh
+could reach the --print_shorebird_info stats section.
+
+Use DART_INCLUDE_SIMULATOR to distinguish: Simulator builds interpret
+all code (charge sim), non-Simulator builds run natively (charge cpu).
+The identity wrapper and the identity return are unchanged in both cases.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 37a31ebee5d..dd7a69fdc10 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -10033,7 +10033,13 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+   // ARM64 — which is PROT_READ-only and faults immediately (B6 crash).
+   // Identity lets the Simulator interpret the patch bytecode directly.
+   if (!IsLinkingEnabled()) {
++    // In a Simulator build the code will be interpreted, so charge sim.
++    // In a native (ProductARM64) build the code runs on CPU.
++#if defined(DART_INCLUDE_SIMULATOR)
+     stats_.Record(LinkOracle::RunTarget::sim, length);
++#else
++    stats_.Record(LinkOracle::RunTarget::cpu, length);
++#endif
+     return EntryPoints(payload_start, identity, payload_info);
+   }
+ 
+-- 
+2.53.0
+

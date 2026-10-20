@@ -1,0 +1,201 @@
+From 0bf2ef86f1c7e3c66db09e1ff826dd7d7b4f85fc Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 20:54:08 +0800
+Subject: [PATCH 069/206] feat(shorebird): Deserializer::Stats and
+ PrintShorebirdStats
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+--print_shorebird_info has been recorded here as the one blocked flag, on the
+grounds that it needs the three-stage object-pool mapping. That is true of
+gen_snapshot's half. The engine has the same flag and it gates something else
+entirely -- Deserializer::PrintShorebirdStats -- which needs nothing we do not
+have. So the flag is now half implemented, deliberately, rather than absent.
+
+Everything here is transcribed. The four Stats fields and their order are
+their dSYM's (Deserializer+0xd8). Record is the 28 bytes inlined after each
+wrapper site, adding a length and bumping a count. The seven output lines are
+the strings their inlined PrintShorebirdStats prints, in order, including the
+three trailing spaces after the two count labels that line the numbers up. The
+flag's description string is theirs verbatim.
+
+Run on the fixture:
+
+    Shorebird stats:
+      Has shorebird base instructions table: no
+      Has LinkOracle: no
+      CPU instructions length: 267504
+      Sim instructions length: 0
+      CPU entry point count:   1380
+      Sim entry point count:   0
+
+The count is worth something beyond "non-zero": the same dill produces 1266
+rows in a --print_dd_function_identity_to dump, and that dump omits type-test
+stubs and stubs. 1266 + 110 + 4 = 1380, with the two omitted counts taken from
+an earlier measurement on their fixture. Consistent rather than proven, but it
+is the first cross-check between the two dumps.
+
+⚠️ The instructions length is an upper bound, not their number. Theirs walks
+backwards over trailing padding before taking end - start; the padding word has
+not been established, so this is the raw distance to the next entry and
+over-counts. The counts are exact. Said in the code rather than left for
+someone to discover the two numbers disagree.
+
+83 of 83 shorebird tests; dd_runtime_check.sh, dd_pass_check.sh and
+verify_reproduction.sh all clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index cfb287e60e4..f5bdbcdd8fe 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -52,6 +52,10 @@ DEFINE_FLAG(bool,
+             "Print information about clusters written to snapshot");
+ #endif
+ 
++// Shorebird, defined in shorebird/link_info.cc alongside the other private
++// flags. Gates PrintShorebirdStats below, the same way it gates their engine's.
++DECLARE_FLAG(bool, print_shorebird_info);
++
+ #if defined(DART_PRECOMPILER)
+ DEFINE_FLAG(charp,
+             write_v8_snapshot_profile_to,
+@@ -771,6 +775,33 @@ class Deserializer : public ThreadStackResource {
+     const uint32_t unchecked_offset_;
+   };
+ 
++  // Shorebird. What the deserializer saw, split by run target. Theirs sits at
++  // Deserializer+0xd8 with these four fields in this order (engine dSYM), and
++  // Record is inlined right after each wrapper site.
++  struct Stats {
++    void Record(LinkOracle::RunTarget target, intptr_t instructions_length) {
++      switch (target) {
++        case LinkOracle::RunTarget::cpu:
++          cpu_instructions_length_ += instructions_length;
++          cpu_entry_point_count_++;
++          break;
++        case LinkOracle::RunTarget::sim:
++          sim_instructions_length_ += instructions_length;
++          sim_entry_point_count_++;
++          break;
++      }
++    }
++
++    intptr_t cpu_instructions_length_ = 0;
++    intptr_t sim_instructions_length_ = 0;
++    intptr_t cpu_entry_point_count_ = 0;
++    intptr_t sim_entry_point_count_ = 0;
++  };
++
++  // Gated on --print_shorebird_info, as theirs is. Format transcribed from the
++  // seven strings their inlined copy prints.
++  void PrintShorebirdStats();
++
+   // The function EntryPoints applies. Identity for code that runs on the CPU,
+   // which is every case this build reaches today: routing a simulated target
+   // through a CPU->Sim wrapper needs WrapperAllocator wired to the loader, and
+@@ -978,8 +1009,9 @@ class Deserializer : public ThreadStackResource {
+   DeserializationCluster** clusters_;
+   const bool is_non_root_unit_;
+   InstructionsTable& instructions_table_;
+-  // Shorebird, theirs at Deserializer+0xc0 by name.
++  // Shorebird, theirs at Deserializer+0xc0 and +0xd8 by name.
+   const InstructionsType instructions_type_;
++  Stats stats_;
+ };
+ 
+ DART_FORCE_INLINE
+@@ -9569,6 +9601,30 @@ DeserializationCluster* Deserializer::ReadCluster() {
+ // Note that the cpu arm wraps too, rather than returning the address unchanged.
+ // It has to: the wrapper is what lets simulated code reach a native target, and
+ // a target being native says nothing about who calls it.
++// Shorebird. The seven lines their inlined copy prints, in order, with their
++// wording and their column padding -- the two count lines really do carry three
++// trailing spaces after the colon so the numbers line up under the lengths.
++//
++// The base-instructions line always reports "no" here: that table belongs to
++// the patch-loading path, which is not built yet. Printing the line anyway is
++// deliberate -- it is the one place the absence is visible.
++void Deserializer::PrintShorebirdStats() {
++  if (!FLAG_print_shorebird_info) return;
++
++  OS::PrintErr("Shorebird stats:\n");
++  OS::PrintErr("  Has shorebird base instructions table: %s\n", "no");
++  OS::PrintErr("  Has LinkOracle: %s\n",
++               LinkOracle::shared() != nullptr ? "yes" : "no");
++  OS::PrintErr("  CPU instructions length: %zu\n",
++               static_cast<size_t>(stats_.cpu_instructions_length_));
++  OS::PrintErr("  Sim instructions length: %zu\n",
++               static_cast<size_t>(stats_.sim_instructions_length_));
++  OS::PrintErr("  CPU entry point count:   %zu\n",
++               static_cast<size_t>(stats_.cpu_entry_point_count_));
++  OS::PrintErr("  Sim entry point count:   %zu\n",
++               static_cast<size_t>(stats_.sim_entry_point_count_));
++}
++
+ std::function<uword(uword)> Deserializer::WrapperForRunTarget(
+     LinkOracle::RunTarget target) const {
+   auto* const group = thread()->isolate_group();
+@@ -9890,6 +9946,25 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+   // There are no serialized RawInstructions objects in this mode.
+   code->untag()->instructions_ = Instructions::null();
+   entry_points.StoreInto(code);
++
++  // Theirs records right after wrapping, once per entry point, with the run
++  // target it just used. Everything reaching here is cpu until the sim side of
++  // WrapCode exists.
++  //
++  // ⚠️ The length is an upper bound, not their number. Theirs computes it as
++  // `end - start` after walking backwards over trailing padding instructions
++  // (0x73aab4..0x73aad4); reproducing that needs the padding word, which has
++  // not been established. This is the raw distance to the next entry, so it
++  // over-counts by the padding each entry carries. The counts are exact.
++  const auto* const rodata = instructions_table_.rodata();
++  const intptr_t entry = instructions_table_.rodata()->first_entry_with_code +
++                         instructions_index_ - 1;
++  const intptr_t raw_length =
++      (entry + 1 < static_cast<intptr_t>(rodata->length))
++          ? (instructions_table_.EntryPointAt(entry + 1) -
++             instructions_table_.EntryPointAt(entry))
++          : 0;
++  stats_.Record(LinkOracle::RunTarget::cpu, raw_length);
+ #else
+   ASSERT(!deferred);
+   InstructionsPtr instr = image_reader_->GetInstructionsAt(Read<uint32_t>());
+@@ -10476,6 +10551,8 @@ ApiErrorPtr FullSnapshotReader::ReadProgramSnapshot() {
+ 
+   InitializeBSS();
+ 
++  deserializer.PrintShorebirdStats();
++
+   return ApiError::null();
+ }
+ 
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index e1d5f80caf1..447854c81da 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -55,6 +55,18 @@ DEFINE_FLAG(charp,
+             nullptr,
+             "Print dispatch table link debug information to the given file");
+ 
++// Their description string, verbatim. A bool, not a charp: their engine reads
++// it with `ldrb` and compares against 1.
++//
++// Both sides of the fork have one. In gen_snapshot it gates the three-stage
++// object-pool mapping report, which is still blocked -- see the spike README.
++// In the engine it gates Deserializer::PrintShorebirdStats, which is not, so
++// this is half implemented on purpose rather than by omission.
++DEFINE_FLAG(bool,
++            print_shorebird_info,
++            false,
++            "Print shorebird information");
++
+ DEFINE_FLAG(charp,
+             print_dd_function_identity_to,
+             nullptr,
+-- 
+2.53.0
+

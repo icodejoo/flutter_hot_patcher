@@ -1,0 +1,457 @@
+From 516d56e80ef5c0ad7057668320fb5db854a5d179 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 12:19:58 +0800
+Subject: [PATCH 049/206] feat(shorebird): the CPU->Sim wrapper body, 60 of 68
+ words byte-identical
+
+The second of the two wrapper stubs now carries a real body instead of a
+breakpoint, so both are the size theirs are: 16384 and 16380 bytes, which is
+2014 pads + 272 and 2044 pads + 28.
+
+Transcribed from their emitted stub, not their generator. Their gen_snapshot
+writes every stub into the snapshot it produces and the ELF keeps the names, so
+objdump prints <stub TransitionDartToSimulatorIfNeeded> in full. Their generator
+reaches the same bytes through compiler::RunOnSimulator and four private
+Assembler helpers -- 5084 bytes of generator whose entire contribution here is
+272 bytes of output. We reproduce the output.
+
+No displacement in it is a raw number: WRAPPER_STUBS.md sections 9 and 10 resolve
+each one to a named field. That needed four new Thread fields --
+dart_state_is_on_cpu_, simulator_csp_, simulator_async_resume_pc_,
+simulator_execute_, simulator_call_from_ffi_ -- appended rather than placed where
+theirs sit, for the reason in Thread::is_simulating(). The Simulator
+displacements are upstream's layout, which theirs shares, so they are derived
+rather than copied; the str x11,[x10,#0x310] nobody could explain is a store to
+Simulator::pc_, handing the wrapper's target to the simulator as its next PC. It
+is emitted twice, once by the stub generator and once inside RunOnSimulator --
+their redundancy, reproduced.
+
+Measured against their stub: 60 of 68 instructions identical in mnemonic and
+operands. The other eight encode a Thread offset and differ only in the
+displacement field, which is the same structural divergence that already leaves
+word 4 of the Sim->CPU body non-identical and is not closable while our fields
+are appended.
+
+The new test pins the 60 as literals and re-derives the 8 from the offset
+accessors, so a Thread field added later moves the expectation with the code
+rather than breaking it. Negative control run: changing mov x0,x10 to mov x0,x11
+-- a wrong register, the exact bug a size assertion cannot see -- makes it exit
+255; reverting returns it to 0. ASSERT_EQUAL in the generator is compiled out of
+a product build, so the 272 is pinned by the test, not by that assert.
+
+All 81 shorebird cases pass, both builds link, and verify_reproduction.sh still
+reports 24 artifacts with 0 failures.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 32d5a28b2b1..275b8f657b9 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -652,12 +652,160 @@ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+ 
+   Label body;
+   GenerateShorebirdWrapperPads(assembler, layout, &body);
++  const intptr_t body_start = __ CodeSize();
+ 
+-  // Placeholder. Their CPU->Sim body is 272 bytes and calls
+-  // compiler::RunOnSimulator, and it has not been transcribed yet -- that is
+-  // Phase D. Until then CPUToSimConfig::GetStubCodeRange reports an empty range,
+-  // so no page is ever mapped from this stub and no pad can be entered.
+-  __ Breakpoint();
++  // 68 instructions, transcribed from their *emitted* stub rather than from
++  // their generator: their gen_snapshot writes every stub into the snapshot it
++  // produces and the ELF keeps the names, so `objdump -d hello.so` prints
++  // `<stub TransitionDartToSimulatorIfNeeded>` in full. See
++  // spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md sections 9 and 10, where
++  // every displacement below is resolved to a named field of Thread or
++  // Simulator -- nothing here is a raw number copied out of their binary.
++  //
++  // Their generator reaches these bytes through compiler::RunOnSimulator and
++  // four private Assembler helpers, 5084 bytes of generator in all. We
++  // reproduce the output, not that structure, and `cmp` against a freshly
++  // extracted stub is what judges it.
++  //
++  // The eight instructions that touch Thread cannot be byte-identical: their
++  // Shorebird block sits mid-struct at 0x8d8..0x900 while ours is appended, for
++  // the reason in Thread::is_simulating(). Everything else can be.
++  RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
++                 dart::Thread::exit_through_ffi_offset());
++
++  // Simulator field displacements. This is upstream's layout -- registers_ at
++  // 0, vregisters_ at 0x100, pc_ at 0x310 -- which their Simulator also has per
++  // its DWARF, so these are derived rather than copied. They are pinned only
++  // indirectly: StubCode_ShorebirdCpuToSimBodyMatchesTheirBytes compares the
++  // emitted encodings, so a wrong displacement here fails that test. There is
++  // no static_assert against the real Simulator, because this file is compiled
++  // for the target and cannot include simulator_arm64.h.
++  constexpr intptr_t kSimReg = 8;           // registers_[r]  == r * 8
++  constexpr intptr_t kSimVRegBase = 0x100;  // vregisters_[v] == 0x100 + v * 16
++  constexpr intptr_t kSimVReg = 16;
++  constexpr intptr_t kSimPc = 0x310;        // Simulator::pc_
++  // Their frame pointer lands 0xd0 above the simulator's C stack pointer.
++  constexpr intptr_t kSimCFrameSize = 0xd0;
++
++  // The pad left its own address in TMP; the metadata mapping sits one
++  // rx-mapping above it and holds the entry point this wrapper stands for.
++  __ LoadImmediate(TMP2, layout.rx_mapping_size);   // mov x17, #0x8000
++  __ add(TMP, TMP, Operand(TMP2));                  // add x16, x16, x17
++  __ ldr(R11, Address(TMP, 0), kEightBytes);        // ldr x11, [x16]
++
++  // Already simulating -> tail-jump to the target and do nothing else. Running
++  // on the CPU (flag clear) -> fall into the long path. This is the opposite
++  // sense to the Sim->CPU body's cbz under one and the same meaning of the
++  // flag, and that agreement is what makes the polarity trustworthy.
++  Label enter_simulator;
++  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
++         kEightBytes);
++  __ cbz(&enter_simulator, TMP2, kEightBytes);
++  __ br(R11);
++  __ Bind(&enter_simulator);
++
++  // Thread::isolate_ -> the isolate's simulator, then hand it the target as the
++  // PC to resume at. They store it twice, once here and once inside
++  // RunOnSimulator; the redundancy is theirs and is reproduced.
++  __ ldr(R10, Address(THR, target::Thread::isolate_offset()), kEightBytes);
++  __ ldr(R10, Address(R10, 0x20), kEightBytes);
++  __ str(R11, Address(R10, kSimPc), kEightBytes);
++  __ str(R11, Address(R10, kSimPc), kEightBytes);
++
++  // Spill the callee-saved state into the simulator's register file so
++  // simulated code sees what the CPU was holding.
++  __ str(SPREG, Address(R10, 15 * kSimReg), kEightBytes);
++  __ stp(R19, R20, Address::Pair(R10, 19 * kSimReg));
++  __ stp(R21, R22, Address::Pair(R10, 21 * kSimReg));
++  __ stp(R23, R24, Address::Pair(R10, 23 * kSimReg));
++  __ stp(R25, R26, Address::Pair(R10, 25 * kSimReg));
++  __ stp(R27, R28, Address::Pair(R10, 27 * kSimReg));
++  __ stp(R29, R30, Address::Pair(R10, 29 * kSimReg));
++  __ mov(TMP, CSP);
++  __ str(TMP, Address(R10, 31 * kSimReg), kEightBytes);
++  __ fstp(V8, V9, Address::Pair(R10, kSimVRegBase + 8 * kSimVReg), kQWord);
++  __ fstp(V10, V11, Address::Pair(R10, kSimVRegBase + 10 * kSimVReg), kQWord);
++  __ fstp(V12, V13, Address::Pair(R10, kSimVRegBase + 12 * kSimVReg), kQWord);
++  __ fstp(V14, V15, Address::Pair(R10, kSimVRegBase + 14 * kSimVReg), kQWord);
++
++  // Assert we were on the CPU, then flip the flag. A stub entered in the wrong
++  // state traps here instead of corrupting the switch.
++  Label was_on_cpu;
++  __ ldr(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ CompareImmediate(TMP, 1);
++  __ b(&was_on_cpu, EQ);
++  __ brk(0);
++  __ Bind(&was_on_cpu);
++  __ eori(TMP, TMP, Immediate(1));
++  __ str(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++
++  // Move onto the simulator's own C stack before calling into it.
++  __ ldr(TMP, Address(THR, dart::Thread::simulator_csp_offset()), kEightBytes);
++  __ mov(CSP, TMP);
++  __ AddImmediate(FP, CSP, kSimCFrameSize);
++
++  // Spill the argument and volatile registers too.
++  __ stp(R0, R1, Address::Pair(R10, 0 * kSimReg));
++  __ stp(R2, R3, Address::Pair(R10, 2 * kSimReg));
++  __ stp(R4, R5, Address::Pair(R10, 4 * kSimReg));
++  __ stp(R6, R7, Address::Pair(R10, 6 * kSimReg));
++  __ stp(R8, R9, Address::Pair(R10, 8 * kSimReg));
++  __ fstp(V0, V1, Address::Pair(R10, kSimVRegBase + 0 * kSimVReg), kQWord);
++  __ fstp(V2, V3, Address::Pair(R10, kSimVRegBase + 2 * kSimVReg), kQWord);
++  __ fstp(V4, V5, Address::Pair(R10, kSimVRegBase + 4 * kSimVReg), kQWord);
++  __ fstp(V6, V7, Address::Pair(R10, kSimVRegBase + 6 * kSimVReg), kQWord);
++
++  // Simulator::Execute(simulator, source), reached through the Thread so the
++  // stub needs no relocation. Source 0 is what their generator passes.
++  __ mov(R0, R10);
++  __ LoadImmediate(R1, 0);
++  __ ldr(TMP, Address(THR, dart::Thread::simulator_execute_offset()),
++         kEightBytes);
++  // The assembler tracks whether LR still holds a return address and refuses a
++  // blr while it does. Ours was spilled with x29/x30 into the register file a
++  // few instructions ago, so the call is safe; tell the tracker that, and tell
++  // it again once the reload below has put LR back, or the closing ret is
++  // rejected in turn.
++  __ set_lr_state(compiler::LRState::Clobbered());
++  __ blr(TMP);
++
++  // The simulator hands back its register file; reload the mirror image.
++  __ mov(R10, R0);
++  __ ldr(SPREG, Address(R10, 15 * kSimReg), kEightBytes);
++  __ ldp(R19, R20, Address::Pair(R10, 19 * kSimReg));
++  __ ldp(R21, R22, Address::Pair(R10, 21 * kSimReg));
++  __ ldp(R23, R24, Address::Pair(R10, 23 * kSimReg));
++  __ ldp(R25, R26, Address::Pair(R10, 25 * kSimReg));
++  __ ldp(R27, R28, Address::Pair(R10, 27 * kSimReg));
++  __ ldp(R29, R30, Address::Pair(R10, 29 * kSimReg));
++  __ set_lr_state(compiler::LRState::OnEntry());
++  __ ldr(TMP, Address(R10, 31 * kSimReg), kEightBytes);
++  __ mov(CSP, TMP);
++  __ fldp(V8, V9, Address::Pair(R10, kSimVRegBase + 8 * kSimVReg), kQWord);
++  __ fldp(V10, V11, Address::Pair(R10, kSimVRegBase + 10 * kSimVReg), kQWord);
++  __ fldp(V12, V13, Address::Pair(R10, kSimVRegBase + 12 * kSimVReg), kQWord);
++  __ fldp(V14, V15, Address::Pair(R10, kSimVRegBase + 14 * kSimVReg), kQWord);
++
++  // Mirror of the check above, with the opposite expected value.
++  Label was_on_simulator;
++  __ ldr(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ CompareImmediate(TMP, 0);
++  __ b(&was_on_simulator, EQ);
++  __ brk(0);
++  __ Bind(&was_on_simulator);
++  __ eori(TMP, TMP, Immediate(1));
++  __ str(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++
++  // Only the return-value registers come back; the rest were restored above.
++  __ fldrq(V0, Address(R10, kSimVRegBase));
++  __ ldp(R0, R1, Address::Pair(R10, 0 * kSimReg));
++  __ ret();
++
++  ASSERT_EQUAL(__ CodeSize() - body_start, layout.shared_body_size);
+ }
+ 
+ void StubCodeCompiler::GenerateTransitionDartToCpuIfNeededStub() {
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 0922258e60b..fef879585ca 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -54,8 +54,6 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
+ // exactly means this breaks loudly the moment that body lands, which is what
+ // should happen: the assertion has to be updated in the same change that makes
+ // it wrong. Sim->CPU no longer uses it and is checked against their real 28.
+-static constexpr intptr_t kPlaceholderBodySize = Instr::kInstrSize;
+-
+ // The landing pad array is the half we can reproduce exactly today: their pad count
+ // and pad size are both known, so pads * pad_size is a byte-level oracle.
+ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+@@ -65,8 +63,10 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+   EXPECT_EQ(static_cast<intptr_t>(2014), cpu_to_sim.num_wrappers_per_page);
+   EXPECT_EQ(static_cast<intptr_t>(16112),
+             cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size);
++  // CPU->Sim carries their real body now too: 2014 pads plus 272 bytes.
++  EXPECT_EQ(static_cast<intptr_t>(272), cpu_to_sim.shared_body_size);
+   EXPECT_EQ(cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size +
+-                kPlaceholderBodySize,
++                cpu_to_sim.shared_body_size,
+             static_cast<intptr_t>(StubCode::TransitionDartToSimulatorIfNeeded().Size()));
+ 
+   const Layout sim_to_cpu = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
+@@ -119,6 +119,133 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimToCpuBodyMatchesTheirBytes) {
+   EXPECT_EQ(0xd61f0200u, w[6]);  // br   x16
+ }
+ 
++// The 68 words of the CPU->Sim shared body. Unlike the Sim->CPU body, these were
++// transcribed from their *emitted* stub rather than from their generator: their
++// gen_snapshot writes every stub into the snapshot it produces and the ELF keeps
++// the names, so `objdump -d <snapshot>.so` prints
++// `<stub TransitionDartToSimulatorIfNeeded>` in full. WRAPPER_STUBS.md sections
++// 9 and 10 resolve every displacement in it to a named Thread or Simulator
++// field.
++//
++// 60 of the 68 are position independent and are pinned as literals. The other
++// eight encode a Thread offset; theirs sit at 0x8d8..0x900 mid-struct and ours
++// are appended, so those are re-derived from the offset accessors instead. A
++// literal there would break the moment anyone adds a Thread field, and would be
++// pinning our layout rather than their instruction.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdCpuToSimBodyMatchesTheirBytes) {
++  using Layout = WrapperAllocator::Layout;
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++
++  // Their body is 272 bytes; ASSERT_EQUAL in the generator is compiled out of a
++  // product build, so the size is pinned here.
++  EXPECT_EQ(static_cast<intptr_t>(272), l.shared_body_size);
++  EXPECT_EQ(l.num_wrappers_per_page * l.landing_pad_size + l.shared_body_size,
++            static_cast<intptr_t>(
++                StubCode::TransitionDartToSimulatorIfNeeded().Size()));
++
++  const uword body_start =
++      StubCode::TransitionDartToSimulatorIfNeeded().EntryPoint() +
++      l.num_wrappers_per_page * l.landing_pad_size;
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(body_start);
++
++  static const uint32_t kExpected[68] = {
++      0xd2900011u,  // [0]
++      0x8b110210u,  // [1]
++      0xf940020bu,  // [2]
++      0u,  // [3] derived below
++      0xb4000051u,  // [4]
++      0xd61f0160u,  // [5]
++      0u,  // [6] derived below
++      0xf940114au,  // [7]
++      0xf901894bu,  // [8]
++      0xf901894bu,  // [9]
++      0xf9003d4fu,  // [10]
++      0xa909d153u,  // [11]
++      0xa90ad955u,  // [12]
++      0xa90be157u,  // [13]
++      0xa90ce959u,  // [14]
++      0xa90df15bu,  // [15]
++      0xa90ef95du,  // [16]
++      0x910003f0u,  // [17]
++      0xf9007d50u,  // [18]
++      0xad0c2548u,  // [19]
++      0xad0d2d4au,  // [20]
++      0xad0e354cu,  // [21]
++      0xad0f3d4eu,  // [22]
++      0u,  // [23] derived below
++      0xf100061fu,  // [24]
++      0x54000040u,  // [25]
++      0xd4200000u,  // [26]
++      0xd2400210u,  // [27]
++      0u,  // [28] derived below
++      0u,  // [29] derived below
++      0x9100021fu,  // [30]
++      0x910343fdu,  // [31]
++      0xa9000540u,  // [32]
++      0xa9010d42u,  // [33]
++      0xa9021544u,  // [34]
++      0xa9031d46u,  // [35]
++      0xa9042548u,  // [36]
++      0xad080540u,  // [37]
++      0xad090d42u,  // [38]
++      0xad0a1544u,  // [39]
++      0xad0b1d46u,  // [40]
++      0xaa0a03e0u,  // [41]
++      0xd2800001u,  // [42]
++      0u,  // [43] derived below
++      0xd63f0200u,  // [44]
++      0xaa0003eau,  // [45]
++      0xf9403d4fu,  // [46]
++      0xa949d153u,  // [47]
++      0xa94ad955u,  // [48]
++      0xa94be157u,  // [49]
++      0xa94ce959u,  // [50]
++      0xa94df15bu,  // [51]
++      0xa94ef95du,  // [52]
++      0xf9407d50u,  // [53]
++      0x9100021fu,  // [54]
++      0xad4c2548u,  // [55]
++      0xad4d2d4au,  // [56]
++      0xad4e354cu,  // [57]
++      0xad4f3d4eu,  // [58]
++      0u,  // [59] derived below
++      0xf100021fu,  // [60]
++      0x54000040u,  // [61]
++      0xd4200000u,  // [62]
++      0xd2400210u,  // [63]
++      0u,  // [64] derived below
++      0x3dc04140u,  // [65]
++      0xa9400540u,  // [66]
++      0xd65f03c0u,  // [67]
++  };
++
++  // ldr/str Xt, [THR, #off]: 64-bit scaled unsigned immediate, imm12 = off / 8.
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++
++  EXPECT_EQ(ldst_thr(kLdr, Thread::is_simulating_offset(), 17), w[3]);
++  EXPECT_EQ(ldst_thr(kLdr, compiler::target::Thread::isolate_offset(), 10), w[6]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::dart_state_is_on_cpu_offset(), 16), w[23]);
++  EXPECT_EQ(ldst_thr(kStr, Thread::dart_state_is_on_cpu_offset(), 16), w[28]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::simulator_csp_offset(), 16), w[29]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::simulator_execute_offset(), 16), w[43]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::dart_state_is_on_cpu_offset(), 16), w[59]);
++  EXPECT_EQ(ldst_thr(kStr, Thread::dart_state_is_on_cpu_offset(), 16), w[64]);
++
++  // The same expression with their offsets reproduces their words, which is
++  // what says the eight above differ only in the displacement field.
++  EXPECT_EQ(0xf9446f51u, ldst_thr(kLdr, 0x8d8, 17));
++
++  for (intptr_t i = 0; i < 68; i++) {
++    if (kExpected[i] == 0u) continue;  // checked by derivation above
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index 55a3f125f6c..82d17c0fe2a 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -529,6 +529,54 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, is_simulating_);
+   }
+ 
++  // The rest of their Shorebird block. Names and order are theirs, from the
++  // Flutter dSYM; only the offsets differ, for the reason above.
++  //
++  //   dart_state_is_on_cpu_       1 while Dart is running on the real CPU. The
++  //                               transition stubs assert its value and toggle
++  //                               it, so a stub entered in the wrong state
++  //                               traps rather than corrupting the switch.
++  //   simulator_csp_              C stack the CPU->Sim body switches SP to
++  //                               before calling into the simulator.
++  //   simulator_async_resume_pc_  where an async resume re-enters. Their
++  //                               Resume* stubs read it; nothing here does yet.
++  //   simulator_execute_          Simulator::Execute, called through the
++  //                               Thread so the stub needs no relocation.
++  //   simulator_call_from_ffi_    the FFI trampoline's entry into the
++  //                               simulator, used by their
++  //                               CallSimulatorFromFfiTrampoline stub.
++  uword dart_state_is_on_cpu() const { return dart_state_is_on_cpu_; }
++  void set_dart_state_is_on_cpu(uword v) { dart_state_is_on_cpu_ = v; }
++  static intptr_t dart_state_is_on_cpu_offset() {
++    return OFFSET_OF(Thread, dart_state_is_on_cpu_);
++  }
++
++  uword simulator_csp() const { return simulator_csp_; }
++  void set_simulator_csp(uword v) { simulator_csp_ = v; }
++  static intptr_t simulator_csp_offset() {
++    return OFFSET_OF(Thread, simulator_csp_);
++  }
++
++  uword simulator_async_resume_pc() const { return simulator_async_resume_pc_; }
++  void set_simulator_async_resume_pc(uword v) {
++    simulator_async_resume_pc_ = v;
++  }
++  static intptr_t simulator_async_resume_pc_offset() {
++    return OFFSET_OF(Thread, simulator_async_resume_pc_);
++  }
++
++  uword simulator_execute() const { return simulator_execute_; }
++  void set_simulator_execute(uword v) { simulator_execute_ = v; }
++  static intptr_t simulator_execute_offset() {
++    return OFFSET_OF(Thread, simulator_execute_);
++  }
++
++  uword simulator_call_from_ffi() const { return simulator_call_from_ffi_; }
++  void set_simulator_call_from_ffi(uword v) { simulator_call_from_ffi_ = v; }
++  static intptr_t simulator_call_from_ffi_offset() {
++    return OFFSET_OF(Thread, simulator_call_from_ffi_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1684,9 +1732,17 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+ 
+   std::unique_ptr<VirtualMemory> regexp_backtracking_stack_cache_ = nullptr;
+ 
+-  // Shorebird. Deliberately last -- see is_simulating() for why this is
+-  // appended rather than placed where theirs sits.
++  // Shorebird. Deliberately last -- see is_simulating() for why these are
++  // appended rather than placed where theirs sit. Theirs form one contiguous
++  // run at 0x8d8..0x900 (is_simulating_, dart_state_is_on_cpu_,
++  // simulator_csp_, simulator_async_resume_pc_, simulator_execute_,
++  // simulator_call_from_ffi_); ours keep that order but not those offsets.
+   uword is_simulating_ = 0;
++  uword dart_state_is_on_cpu_ = 0;
++  uword simulator_csp_ = 0;
++  uword simulator_async_resume_pc_ = 0;
++  uword simulator_execute_ = 0;
++  uword simulator_call_from_ffi_ = 0;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

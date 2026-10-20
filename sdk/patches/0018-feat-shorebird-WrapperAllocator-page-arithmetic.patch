@@ -1,0 +1,193 @@
+From e25482e8d0b2a66b74a51407e6e6ddaf47d49b7b Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 10:49:52 +0800
+Subject: [PATCH 018/206] feat(shorebird): WrapperAllocator page arithmetic
+
+MetadataOffset / MetadataForWrapper / WrapperOfMetadata / ContainsEntryPoint.
+A wrapper and its metadata are the same index in two parallel arrays exactly
+rx_mapping_size apart, so the mapping is index arithmetic in both directions;
+the round-trip test walks every index on both configs rather than just index 0.
+Field order and offsets match their DWARF (0x98 total).
+
+Measured sizeof(WrapperAllocator) == 152 == 0x98, matching their
+DW_AT_byte_size. Verified by temporary assertion, not committed as a test:
+the per-field offsetof version cannot be written because the five fields are
+private, which is presumably why the plan omits it.
+
+Negative control on WrapperMetadataRoundTrips: flipping the expectation to
+wrapper + 1 failed with exit 255 on many successive indices, confirming the
+loop body executes rather than passing vacuously.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 4f1eaf6faec..827c5ec610e 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -18,5 +18,43 @@ CodeRange SimToCPUConfig::GetStubCodeRange() {
+   return CodeRange();
+ }
+ 
++WrapperAllocator::WrapperAllocator(const Layout& layout)
++    : offset_of_first_wrapper_in_page_(layout.shared_body_size),
++      wrappers_left_in_current_page_(0),
++      layout_(layout) {}
++
++WrapperAllocator::~WrapperAllocator() {}
++
++intptr_t WrapperAllocator::MetadataOffset(uword page, uword wrapper) const {
++  const intptr_t index = static_cast<intptr_t>(
++      (wrapper - page - offset_of_first_wrapper_in_page_) /
++      layout_.landing_pad_size);
++  return index * layout_.metadata_size;
++}
++
++uword WrapperAllocator::MetadataForWrapper(uword page, uword wrapper) const {
++  return page + layout_.rx_mapping_size + MetadataOffset(page, wrapper);
++}
++
++uword WrapperAllocator::WrapperOfMetadata(uword page, uword metadata) const {
++  const intptr_t index = static_cast<intptr_t>(
++      (metadata - page - layout_.rx_mapping_size) / layout_.metadata_size);
++  return page + offset_of_first_wrapper_in_page_ +
++         index * layout_.landing_pad_size;
++}
++
++bool WrapperAllocator::ContainsEntryPoint(uword page, uword entry_point) const {
++  const uword first = page + offset_of_first_wrapper_in_page_;
++  if (entry_point < first) {
++    return false;
++  }
++  const uword delta = entry_point - first;
++  if ((delta % layout_.landing_pad_size) != 0) {
++    return false;
++  }
++  return (delta / layout_.landing_pad_size) <
++         static_cast<uword>(layout_.num_wrappers_per_page);
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 6af3bad16ab..262015f6060 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -8,6 +8,7 @@
+ #include <functional>
+ 
+ #include "platform/globals.h"
++#include "vm/growable_array.h"
+ 
+ namespace dart {
+ namespace shorebird {
+@@ -97,6 +98,36 @@ struct SimToCPUConfig : public WrapperConfigBase {
+ template <typename Config>
+ struct WrapperLayout : public Config {};
+ 
++// Hands out fixed-size landing pads from COW-remapped pages. Field order,
++// offsets and the 0x98 total size mirror their DWARF.
++class WrapperAllocator {
++ public:
++  explicit WrapperAllocator(const Layout& layout);
++  ~WrapperAllocator();
++
++  // Byte offset of a wrapper's metadata within the RW half of its page.
++  intptr_t MetadataOffset(uword page, uword wrapper) const;
++
++  // Address of the metadata belonging to a wrapper, and the inverse.
++  uword MetadataForWrapper(uword page, uword wrapper) const;
++  uword WrapperOfMetadata(uword page, uword metadata) const;
++
++  // Whether an address is a wrapper entry point on the given page: inside the
++  // landing-pad array, and correctly aligned to a pad boundary.
++  bool ContainsEntryPoint(uword page, uword entry_point) const;
++
++  const Layout& layout() const { return layout_; }
++
++ private:
++  uword stub_page_ = 0;                            // 0x00
++  MallocGrowableArray<uword> wrapper_pages_;       // 0x08
++  intptr_t offset_of_first_wrapper_in_page_ = 0;   // 0x28
++  intptr_t wrappers_left_in_current_page_ = 0;     // 0x30
++  Layout layout_;                                  // 0x38
++
++  DISALLOW_COPY_AND_ASSIGN(WrapperAllocator);
++};
++
+ }  // namespace shorebird
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index fa7945312d6..9fcaa2d4b42 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -62,5 +62,66 @@ VM_UNIT_TEST_CASE(WrapperLayout_StructMatchesTheirDwarfSize) {
+   EXPECT_EQ(static_cast<size_t>(0x40), offsetof(Layout, get_stub_code_range));
+ }
+ 
++// The metadata half sits exactly one rx_mapping_size above the wrapper half,
++// so a wrapper and its metadata are the same index in two parallel arrays.
++VM_UNIT_TEST_CASE(WrapperAllocator_MetadataIsOneMappingAbove) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  WrapperAllocator allocator(l);
++
++  const uword page = static_cast<uword>(0x100000000);
++  const uword first = page + l.shared_body_size;
++
++  EXPECT_EQ(page + l.rx_mapping_size, allocator.MetadataForWrapper(page, first));
++  EXPECT_EQ(first, allocator.WrapperOfMetadata(page, page + l.rx_mapping_size));
++}
++
++VM_UNIT_TEST_CASE(WrapperAllocator_MetadataOffsetTracksWrapperIndex) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  WrapperAllocator allocator(l);
++
++  const uword page = static_cast<uword>(0x100000000);
++  // Wrapper i lives at shared_body_size + i * landing_pad_size.
++  for (intptr_t i : {static_cast<intptr_t>(0), static_cast<intptr_t>(1),
++                     static_cast<intptr_t>(2013)}) {
++    const uword wrapper = page + l.shared_body_size + i * l.landing_pad_size;
++    EXPECT_EQ(i * l.metadata_size, allocator.MetadataOffset(page, wrapper));
++    EXPECT_EQ(page + l.rx_mapping_size + i * l.metadata_size,
++              allocator.MetadataForWrapper(page, wrapper));
++  }
++}
++
++// Round-tripping every wrapper index is what proves the two directions of the
++// mapping are actually inverse, not merely consistent at index 0.
++VM_UNIT_TEST_CASE(WrapperAllocator_WrapperMetadataRoundTrips) {
++  for (const Layout& l : {Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>(),
++                          Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>()}) {
++    WrapperAllocator allocator(l);
++    const uword page = static_cast<uword>(0x200000000);
++    for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
++      const uword wrapper = page + l.shared_body_size + i * l.landing_pad_size;
++      const uword metadata = allocator.MetadataForWrapper(page, wrapper);
++      EXPECT_EQ(wrapper, allocator.WrapperOfMetadata(page, metadata));
++    }
++  }
++}
++
++VM_UNIT_TEST_CASE(WrapperAllocator_ContainsEntryPointBoundaries) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  WrapperAllocator allocator(l);
++  const uword page = static_cast<uword>(0x300000000);
++
++  const uword first = page + l.shared_body_size;
++  const uword last = first + (l.num_wrappers_per_page - 1) * l.landing_pad_size;
++
++  EXPECT(allocator.ContainsEntryPoint(page, first));
++  EXPECT(allocator.ContainsEntryPoint(page, last));
++  // The shared body is not a wrapper entry point.
++  EXPECT(!allocator.ContainsEntryPoint(page, page));
++  // One landing pad past the last is off the end.
++  EXPECT(!allocator.ContainsEntryPoint(page, last + l.landing_pad_size));
++  // A misaligned address inside the range is not an entry point either.
++  EXPECT(!allocator.ContainsEntryPoint(page, first + 1));
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+-- 
+2.53.0
+

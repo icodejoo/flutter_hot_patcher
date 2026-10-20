@@ -1,0 +1,47 @@
+From f3c2eff07c1de2df40f6a98c815d01699c0c05f9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 11:29:40 +0800
+Subject: [PATCH 085/206] docs(shorebird): the flag's own comment said it was
+ still blocked
+
+print_shorebird_info's DEFINE_FLAG carried a comment explaining that the
+gen_snapshot half was blocked and pointing at the spike README for why. Both
+halves are implemented now and their eight lines match theirs, so the comment
+was asserting the opposite of the truth to anyone reading the flag's
+definition.
+
+Rewritten to say where each half lives -- LinkClassTables and LinkObjectPools
+in gen_snapshot, PrintShorebirdStats in the engine -- and to name the check
+that holds the output there. The fact that it used to be blocked is kept in one
+line, because a reader coming from the older notes will want to know the
+verdict moved rather than wonder which is current.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index d7da72eb668..7b8f63440df 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -58,10 +58,15 @@ DEFINE_FLAG(charp,
+ // Their description string, verbatim. A bool, not a charp: their engine reads
+ // it with `ldrb` and compares against 1.
+ //
+-// Both sides of the fork have one. In gen_snapshot it gates the three-stage
+-// object-pool mapping report, which is still blocked -- see the spike README.
+-// In the engine it gates Deserializer::PrintShorebirdStats, which is not, so
+-// this is half implemented on purpose rather than by omission.
++// Both sides of the fork have one, and both are now implemented. In
++// gen_snapshot it gates the three-stage mapping report, printed once for the
++// class table and once for the object pool by ShorebirdLinker::LinkClassTables
++// and LinkObjectPools; in the engine it gates
++// Deserializer::PrintShorebirdStats.
++//
++// The gen_snapshot half was blocked for a long time and this comment used to
++// say so. Its eight lines now match theirs exactly on their own link-info
++// files -- see shorebird_info_check.sh in the spike.
+ DEFINE_FLAG(bool,
+             print_shorebird_info,
+             false,
+-- 
+2.53.0
+

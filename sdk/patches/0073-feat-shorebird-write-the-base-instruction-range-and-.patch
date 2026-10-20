@@ -1,0 +1,168 @@
+From 03bc51a3938aa16903e9c7e2ea177280b9ee980a Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 22:03:08 +0800
+Subject: [PATCH 073/206] feat(shorebird): write the base instruction range,
+ and a trap worth recording
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Thread::base_instructions_entry_point_ and base_instructions_end_ have had
+getters, setters and offset getters since they were ported, and nothing had
+ever written to either. SetupDartMutatorStateDependingOnSnapshot writes them
+now, next to the dispatch table and the DD table, from the image
+Shorebird_SetBaseSnapshots was given.
+
+Both bounds need only the instructions image -- upstream's
+GetBareInstructionsAt(0) is the buffer itself and GetBareInstructionsEnd is an
+Image away -- so no ImageReader and no data image. BaseSnapshotInstructions is
+their name for the first (runtime/vm/shorebird.cc:161).
+
+⚠️ The interesting part is how this nearly shipped broken. The first version
+called shorebird::BaseSnapshotInstructions() while the functions are in dart,
+and `ninja run_vm_tests` returned zero. It compiled because it was not
+compiled: the body sits inside #if defined(DART_PRECOMPILED_RUNTIME) and
+run_vm_tests is a precompiler build, which does not define it. Building
+dartaotruntime produced the error immediately.
+
+That is the same failure mode this repo already records for symbol counts --
+"absent from the artifact" and "never compiled" look identical -- reached from
+a different direction. A green build of the wrong configuration says nothing.
+
+Two tests. The zero case is the one that matters: every unpatched app takes it,
+and a non-zero range there would tell generated code that arbitrary pcs belong
+to a base that is not there. The second measures a real Image, and asserts the
+image is present rather than returning early, so it cannot pass without
+measuring anything.
+
+90 of 90 shorebird tests; dd_runtime_check.sh and verify_reproduction.sh clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+index e3ccf8bf364..e104a662e3b 100644
+--- a/runtime/vm/shorebird.cc
++++ b/runtime/vm/shorebird.cc
+@@ -9,6 +9,7 @@
+ #include "vm/shorebird/shorebird.h"
+ 
+ #include "include/dart_api.h"
++#include "vm/image_snapshot.h"
+ 
+ #include <cstring>
+ #include <utility>
+@@ -147,6 +148,21 @@ static const uint8_t* base_app_snapshot_instructions = nullptr;
+ static const uint8_t* base_vm_snapshot_data = nullptr;
+ static const uint8_t* base_vm_snapshot_instructions = nullptr;
+ 
++// Their name, from the DWARF (runtime/vm/shorebird.cc:161), returning uword.
++// The base instructions image starts at its own buffer: upstream's
++// ImageReader::GetBareInstructionsAt(0) is exactly `instructions_image + 0`.
++uword BaseSnapshotInstructions() {
++  return reinterpret_cast<uword>(base_app_snapshot_instructions);
++}
++
++// The other end of the same range. Upstream's GetBareInstructionsEnd, which
++// needs only the instructions image -- no data image, no ImageReader state.
++uword BaseSnapshotInstructionsEnd() {
++  if (base_app_snapshot_instructions == nullptr) return 0;
++  Image image(base_app_snapshot_instructions);
++  return reinterpret_cast<uword>(image.object_start()) + image.object_size();
++}
++
+ static bool BaseSnapshotsAreSet() {
+   return base_app_snapshot_data != nullptr &&
+          base_app_snapshot_instructions != nullptr &&
+diff --git a/runtime/vm/shorebird/shorebird.h b/runtime/vm/shorebird/shorebird.h
+index 73743a15508..d5b6fec17bf 100644
+--- a/runtime/vm/shorebird/shorebird.h
++++ b/runtime/vm/shorebird/shorebird.h
+@@ -33,6 +33,12 @@ namespace dart {
+ // `RunTargetFromPatchOffset`, and `Deserializer::WrapperForRunTarget`
+ // (`app_snapshot.cc:894`, called from 944/951/993) turns the answer into the
+ // entry-point wrapper that `WrapperAllocator::AllocateMetadata` hands out.
++// The base snapshot's instruction image bounds. Set by
++// Shorebird_SetBaseSnapshots; zero until then. Their DWARF names the first of
++// these BaseSnapshotInstructions (runtime/vm/shorebird.cc:161).
++uword BaseSnapshotInstructions();
++uword BaseSnapshotInstructionsEnd();
++
+ class LinkOracle {                                         // their :27
+  public:
+   // their :77. A 4-byte enum, not a bool: the DWARF gives the underlying type
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index 65b1eb81fa7..4da8727f899 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -332,4 +332,40 @@ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeEmptyTableLoadsButHasNoPatch) {
+ }
+ 
+ 
++// The base instruction range. Thread::base_instructions_entry_point_ and
++// _end_ have had accessors and an offset getter since they were ported and
++// nothing ever wrote to them; SetupDartMutatorStateDependingOnSnapshot does
++// now, from these.
++//
++// Zero when no base is set is the case that matters: every unpatched app takes
++// it, and a non-zero range there would tell generated code that arbitrary pcs
++// belong to a base that is not there.
++VM_UNIT_TEST_CASE(Shorebird_BaseInstructionRangeIsZeroWithoutABase) {
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++  EXPECT_EQ(static_cast<uword>(0), BaseSnapshotInstructions());
++  EXPECT_EQ(static_cast<uword>(0), BaseSnapshotInstructionsEnd());
++}
++
++// With a base set, the start is the image itself and the end is past it. The
++// image here is the running process's own isolate instructions, which is a
++// real Image the reader can measure rather than a fabricated buffer.
++VM_UNIT_TEST_CASE(Shorebird_BaseInstructionRangeSpansTheImage) {
++  const uint8_t* const instructions =
++      dart::bin::vm_snapshot_instructions;
++  // Asserted rather than skipped: an early return here would pass without
++  // measuring anything, which is the same as not having the test.
++  EXPECT(instructions != nullptr);
++  if (instructions == nullptr) return;
++  Shorebird_SetBaseSnapshots(instructions, instructions, instructions,
++                             instructions);
++
++  const uword start = BaseSnapshotInstructions();
++  const uword end = BaseSnapshotInstructionsEnd();
++  EXPECT_EQ(reinterpret_cast<uword>(instructions), start);
++  EXPECT(end > start);
++
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++}
++
++
+ }  // namespace dart
+diff --git a/runtime/vm/thread.cc b/runtime/vm/thread.cc
+index 0e8e5a62027..846c887ef32 100644
+--- a/runtime/vm/thread.cc
++++ b/runtime/vm/thread.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "vm/thread.h"
+ 
++#include "vm/shorebird/shorebird.h"
++
+ #include "vm/cpu.h"
+ #include "vm/dart_api_state.h"
+ #include "vm/deopt_instructions.h"
+@@ -1664,6 +1666,14 @@ void Thread::SetupDartMutatorStateDependingOnSnapshot(IsolateGroup* group) {
+     // their emitted sequence indexes it as table[dd_slot] with the slot folded
+     // straight into the load's immediate, so element 0 is the origin.
+     indirect_static_call_table_ = group->indirect_static_call_table();
++
++    // The base snapshot's instruction range, so generated code can ask whether
++    // a pc belongs to the base without a call. Both fields already existed with
++    // accessors and an offset getter and were never written by anything; this
++    // is the writer. Zero when no base has been set, which is every case that
++    // is not a patched app.
++    base_instructions_entry_point_ = BaseSnapshotInstructions();
++    base_instructions_end_ = BaseSnapshotInstructionsEnd();
+ #define INIT_ENTRY_POINT(name)                                                 \
+   if (object_store->name() != Object::null()) {                                \
+     name##_entry_point_ = Function::EntryPointOf(object_store->name());        \
+-- 
+2.53.0
+

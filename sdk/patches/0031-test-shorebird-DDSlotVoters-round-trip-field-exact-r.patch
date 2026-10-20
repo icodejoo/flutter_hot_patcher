@@ -1,0 +1,486 @@
+From 61b55e88196df79b91066bd2446891062f4cd9ea Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 13:56:50 +0800
+Subject: [PATCH 031/206] =?UTF-8?q?test(shorebird):=20DDSlotVoters=20round?=
+ =?UTF-8?q?-trip=20=E2=80=94=20field-exact=20reader=20validation?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+AddVoter / WriteToStream so round-trip tests drive the REAL encoder into memory
+rather than hand-assembled bytes (a test carrying its own copy of the format
+passes even when the writer disagrees with both it and the reader).
+
+Eight tests: single slot / two voters (all 20 key fields), multiple slots with
+slot_id verification, bad magic, bad version, truncated header, oracle
+empty-slots shape, oracle golden vector, and encoder-vs-oracle byte equality.
+PendingBytes()==0 asserted after every successful parse; the reject paths also
+assert no state was recorded, so a failed parse cannot corrupt a retry.
+
+Oracle is embedded, not env-var gated: kOracleVotersBin is the exact 185 bytes
+of spikes/shorebird_linkinfo_oracle/out_dd/voters.bin, the file their
+gen_snapshot consumed to log "7 resolved / DD table: 8 slots, 7 retained".
+Expected field values cross-checked against parse_link_info.py. Embedding
+removes the skip path an env-var fixture would need — a test that early-returns
+when the fixture is absent is indistinguishable from a passing test.
+
+Negative control: swapping caller_key/target_key read order in the decoder
+leaves the stream perfectly aligned — ReadFromStream returns true,
+PendingBytes()==0, slot_count()==8, every voters_for_slot() non-null and
+sized 1 all still pass. 4 of 6 applicable tests went to exit 255 and the
+first failing assertion was the first field compare, confirming only
+field-exact comparison catches it.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index e37fa97d2ce..303135e2bd3 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -83,6 +83,40 @@ const std::vector<size_t>* DDSlotVoters::voters_for_slot(
+   return &it->second;
+ }
+ 
++void DDSlotVoters::AddVoter(intptr_t slot_id,
++                            const FunctionKey& caller,
++                            const FunctionKey& target) {
++  const size_t idx = voters_.size();
++  voters_.push_back({caller, target});
++  slots_[slot_id].push_back(idx);
++}
++
++void DDSlotVoters::WriteToStream(BaseWriteStream* stream) const {
++  // Fixed-width magic + version as raw LE u32, not varints. This is the only
++  // fixed-width header in the link-info file family. The magic bytes include
++  // 0xCA, 0xDD, 0x7E which are > 127 and so MUST be raw, not varint-encoded.
++  //
++  // WriteBytes() does a raw memcpy, mirroring ReadBytes() on the read side.
++  // The little-endian host assumption (ARM64 macOS) is explicit: the in-memory
++  // representation of the uint32_t is already the on-disk LE byte order.
++  const uint32_t magic = kMagic;
++  const uint32_t version = kVersion;
++  stream->WriteBytes(&magic, sizeof(magic));
++  stream->WriteBytes(&version, sizeof(version));
++
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(slots_.size()));
++  for (const auto& entry : slots_) {
++    const intptr_t slot_id = entry.first;
++    const std::vector<size_t>& indices = entry.second;
++    stream->WriteUnsigned<intptr_t>(slot_id);
++    stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(indices.size()));
++    for (size_t idx : indices) {
++      voters_[idx].caller_key.WriteToStream(stream);
++      voters_[idx].target_key.WriteToStream(stream);
++    }
++  }
++}
++
+ bool DDSlotVoters::ReadFromStream(ReadStream* stream) {
+   // Fixed-width magic + version — u32 LE, not varints.
+   // This is the only fixed-width header in this file family (README §DDSlotVoters).
+@@ -139,6 +173,12 @@ bool DDSlotVoters::ReadFromStream(ReadStream* stream) {
+     for (intptr_t v = 0; v < num_voters; v++) {
+       if (stream->PendingBytes() < 10) return false;
+       SlotVoter voter;
++      // Order is load-bearing: caller_key precedes target_key on the wire.
++      // Swapping these leaves the stream perfectly aligned — PendingBytes()==0,
++      // all counts valid, all slots present — and is caught ONLY by field-exact
++      // comparison. Verified by negative control: 4 of 6 tests went to exit 255,
++      // and the first failing assertion was the first field compare, not any
++      // count or consumption check.
+       voter.caller_key.ReadFromStream(stream);
+       voter.target_key.ReadFromStream(stream);
+       indices.push_back(voters_.size());
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+index da3d5855087..14c2264cf99 100644
+--- a/runtime/vm/shorebird/dd_voting.h
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -111,6 +111,21 @@ class DDSlotVoters {
+   // On failure, leaves *this in a defined empty state.
+   bool ReadFromStream(ReadStream* stream);
+ 
++  // Adds a (caller, target) voter for slot_id. Used by tests and by any future
++  // producer code. Records the voter in voters_ and adds its index to slots_.
++  void AddVoter(intptr_t slot_id,
++                const FunctionKey& caller,
++                const FunctionKey& target);
++
++  // Serialises to stream in the wire format (magic + version as raw u32 LE,
++  // then varints). This is the REAL encoder — round-trip tests must drive this
++  // rather than hand-assembling bytes, so that a writer/reader disagreement is
++  // caught instead of being masked by the test carrying its own copy of the
++  // format. Format cross-checked against
++  // spikes/shorebird_linkinfo_oracle/write_dd_slot_voters.py, whose output
++  // their gen_snapshot accepts.
++  void WriteToStream(BaseWriteStream* stream) const;
++
+   // Number of distinct slot ids recorded.
+   size_t slot_count() const { return slots_.size(); }
+ 
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index 376f7ff2bb1..bf7f5ffb0d5 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -69,4 +69,359 @@ VM_UNIT_TEST_CASE(FunctionKey_IsZero) {
+   EXPECT(!kind_nonzero.IsZero());
+ }
+ 
++// ===========================================================================
++// Task 2: DDSlotVoters round-trip
++// ===========================================================================
++
++// Writes one DDSlotVoters structure via the REAL encoder (WriteToStream) into a
++// MallocWriteStream, then reads it back. The bytes are never hand-assembled
++// here: a test carrying its own copy of the wire format tests the test against
++// the reader and still passes when the real writer disagrees with both.
++//
++// Asserts every field of every key — all five of caller_key and all five of
++// target_key. A voter-count assertion alone passes on a reader that returns the
++// right NUMBER of WRONG voters, which is the bug shape that ships.
++VM_UNIT_TEST_CASE(DDSlotVoters_RoundTrip_SingleSlot_TwoVoters) {
++  // Distinct values in every field of every key, so that any cross-wiring
++  // (caller/target swap, field transposition) changes at least one assertion.
++  FunctionKey caller0{100, 200, 300, 0, 29791u};  // kind=RegularFunction
++  FunctionKey target0{400, 500, 600, 3, 961u};    // kind=GetterFunction
++  FunctionKey caller1{700, 800, 900, 5, 0u};      // kind=Constructor
++  FunctionKey target1{0, 0, 0, FunctionKey::kAllocStubKind, 0u};
++
++  DDSlotVoters voters_out;
++  voters_out.AddVoter(3, caller0, target0);
++  voters_out.AddVoter(3, caller1, target1);
++
++  MallocWriteStream ws(512);
++  voters_out.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotVoters voters_in;
++  EXPECT(voters_in.ReadFromStream(&rs));
++
++  // The only assertion that constrains stream CONSUMPTION rather than decoded
++  // values. Catches a reader that stops early or ignores trailing bytes.
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  EXPECT_EQ(static_cast<size_t>(1), voters_in.slot_count());
++  const std::vector<size_t>* idxs = voters_in.voters_for_slot(3);
++  EXPECT(idxs != nullptr);
++  EXPECT_EQ(static_cast<size_t>(2), idxs->size());
++
++  // Voter 0 — all ten fields.
++  const SlotVoter& v0 = voters_in.voters()[(*idxs)[0]];
++  EXPECT_EQ(100L, v0.caller_key.library_kernel_offset);
++  EXPECT_EQ(200L, v0.caller_key.owner_class_kernel_offset);
++  EXPECT_EQ(300L, v0.caller_key.kernel_offset);
++  EXPECT_EQ(0, static_cast<int>(v0.caller_key.kind));
++  EXPECT_EQ(29791u, v0.caller_key.signature_hash);
++  EXPECT_EQ(400L, v0.target_key.library_kernel_offset);
++  EXPECT_EQ(500L, v0.target_key.owner_class_kernel_offset);
++  EXPECT_EQ(600L, v0.target_key.kernel_offset);
++  EXPECT_EQ(3, static_cast<int>(v0.target_key.kind));
++  EXPECT_EQ(961u, v0.target_key.signature_hash);
++
++  // Voter 1 — all ten fields.
++  const SlotVoter& v1 = voters_in.voters()[(*idxs)[1]];
++  EXPECT_EQ(700L, v1.caller_key.library_kernel_offset);
++  EXPECT_EQ(800L, v1.caller_key.owner_class_kernel_offset);
++  EXPECT_EQ(900L, v1.caller_key.kernel_offset);
++  EXPECT_EQ(5, static_cast<int>(v1.caller_key.kind));
++  EXPECT_EQ(0u, v1.caller_key.signature_hash);
++  EXPECT_EQ(0L, v1.target_key.library_kernel_offset);
++  EXPECT_EQ(0L, v1.target_key.owner_class_kernel_offset);
++  EXPECT_EQ(0L, v1.target_key.kernel_offset);
++  EXPECT_EQ(255, static_cast<int>(v1.target_key.kind));  // kAllocStubKind
++  EXPECT_EQ(0u, v1.target_key.signature_hash);
++  // kind=255 is the alloc-stub sentinel, so this key is NOT zero. A reader
++  // that dropped `kind` would make this key compare zero and let alloc stubs
++  // collide with real functions.
++  EXPECT(!v1.target_key.IsZero());
++}
++
++// Multiple slots, verifies the slot_id keys are correct and that an unwritten
++// slot is genuinely absent (not defaulted into existence by operator[]).
++VM_UNIT_TEST_CASE(DDSlotVoters_RoundTrip_MultipleSlots) {
++  FunctionKey k0{10, 11, 12, 1, 31u};
++  FunctionKey k1{20, 21, 22, 2, 62u};
++  FunctionKey k2{30, 31, 32, 3, 93u};
++
++  DDSlotVoters voters_out;
++  voters_out.AddVoter(0, k0, k0);
++  voters_out.AddVoter(7, k1, k2);
++
++  MallocWriteStream ws(512);
++  voters_out.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotVoters voters_in;
++  EXPECT(voters_in.ReadFromStream(&rs));
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  EXPECT_EQ(static_cast<size_t>(2), voters_in.slot_count());
++  EXPECT(voters_in.voters_for_slot(0) != nullptr);
++  EXPECT(voters_in.voters_for_slot(7) != nullptr);
++  EXPECT(voters_in.voters_for_slot(5) == nullptr);  // never added
++
++  const std::vector<size_t>* idxs = voters_in.voters_for_slot(7);
++  EXPECT(idxs != nullptr);
++  EXPECT_EQ(static_cast<size_t>(1), idxs->size());
++  const SlotVoter& v = voters_in.voters()[(*idxs)[0]];
++  // caller is k1, target is k2 — asserted separately so a caller/target swap
++  // in the decoder cannot pass.
++  EXPECT_EQ(20L, v.caller_key.library_kernel_offset);
++  EXPECT_EQ(21L, v.caller_key.owner_class_kernel_offset);
++  EXPECT_EQ(22L, v.caller_key.kernel_offset);
++  EXPECT_EQ(2, static_cast<int>(v.caller_key.kind));
++  EXPECT_EQ(62u, v.caller_key.signature_hash);
++  EXPECT_EQ(30L, v.target_key.library_kernel_offset);
++  EXPECT_EQ(31L, v.target_key.owner_class_kernel_offset);
++  EXPECT_EQ(32L, v.target_key.kernel_offset);
++  EXPECT_EQ(3, static_cast<int>(v.target_key.kind));
++  EXPECT_EQ(93u, v.target_key.signature_hash);
++}
++
++// Slots with ZERO voters must parse as present-but-empty, not be rejected.
++// This is the shape `write_dd_slot_voters.py --empty --slots 3` produces, which
++// their gen_snapshot accepts as a header probe. AddVoter cannot express a
++// zero-voter slot, so this uses the oracle's own bytes rather than the encoder.
++//
++// It also pins the num_slots plausibility guard at its exact boundary: after
++// the header and num_slots there are 6 bytes left for 3 slots, and the minimum
++// encoding is 2 bytes per slot, so `num_slots > PendingBytes()/2` must NOT
++// reject 3 > 6/2. A tighter guard would break a file their binary accepts.
++VM_UNIT_TEST_CASE(DDSlotVoters_OracleEmptySlots) {
++  static const uint8_t kEmpty3[] = {0x55, 0x7E, 0xCA, 0xDD, 0x02, 0x00, 0x00,
++                                    0x00, 0x83, 0x80, 0x80, 0x81, 0x80, 0x82,
++                                    0x80};
++  ReadStream rs(kEmpty3, static_cast<intptr_t>(sizeof(kEmpty3)));
++  DDSlotVoters voters;
++  EXPECT(voters.ReadFromStream(&rs));
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  // Three slots present, each with no voters.
++  EXPECT_EQ(static_cast<size_t>(3), voters.slot_count());
++  EXPECT_EQ(static_cast<size_t>(0), voters.voters().size());
++  for (intptr_t slot = 0; slot < 3; slot++) {
++    const std::vector<size_t>* idxs = voters.voters_for_slot(slot);
++    EXPECT(idxs != nullptr);
++    if (idxs != nullptr) {
++      EXPECT_EQ(static_cast<size_t>(0), idxs->size());
++    }
++  }
++  // A slot that was never present must still be absent.
++  EXPECT(voters.voters_for_slot(3) == nullptr);
++}
++
++// Verifies the fixed-width magic is checked: a bad magic must return false.
++VM_UNIT_TEST_CASE(DDSlotVoters_BadMagicReturnsFailure) {
++  FunctionKey k{1, 1, 1, 0, 0};
++  DDSlotVoters voters_out;
++  voters_out.AddVoter(0, k, k);
++
++  MallocWriteStream ws(256);
++  voters_out.WriteToStream(&ws);
++
++  // Flip the first byte of the magic.
++  ws.buffer()[0] ^= 0xFF;
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotVoters voters_in;
++  EXPECT(!voters_in.ReadFromStream(&rs));
++  // Reject loudly: nothing must have been recorded. A reader that returned
++  // false but had already populated state would corrupt a later retry.
++  EXPECT_EQ(static_cast<size_t>(0), voters_in.slot_count());
++  EXPECT_EQ(static_cast<size_t>(0), voters_in.voters().size());
++}
++
++// Verifies the version field is checked: version != 2 must return false.
++VM_UNIT_TEST_CASE(DDSlotVoters_BadVersionReturnsFailure) {
++  FunctionKey k{1, 1, 1, 0, 0};
++  DDSlotVoters voters_out;
++  voters_out.AddVoter(0, k, k);
++
++  MallocWriteStream ws(256);
++  voters_out.WriteToStream(&ws);
++
++  // Corrupt the version field (bytes 4-7 LE). Version 3 != kVersion 2.
++  ws.buffer()[4] = 0x03;
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotVoters voters_in;
++  EXPECT(!voters_in.ReadFromStream(&rs));
++  EXPECT_EQ(static_cast<size_t>(0), voters_in.slot_count());
++  EXPECT_EQ(static_cast<size_t>(0), voters_in.voters().size());
++}
++
++// A truncated header (< 8 bytes) must be rejected, not read out of bounds.
++VM_UNIT_TEST_CASE(DDSlotVoters_TruncatedHeaderReturnsFailure) {
++  // Only 4 bytes: the magic, no version. Sentinel is 0xFF, never 0x00 —
++  // datastream.h continues a varint `while (b <= 127)`, so 0x00 is a
++  // CONTINUATION byte and zero-padding invites the very overrun it looks
++  // like it prevents (measured: 4831 bytes OOB with 0x00, 1 with 0xFF).
++  const uint8_t buf[4] = {0x55, 0x7E, 0xCA, 0xDD};
++  ReadStream rs(buf, sizeof(buf));
++  DDSlotVoters voters_in;
++  EXPECT(!voters_in.ReadFromStream(&rs));
++}
++
++// ---------------------------------------------------------------------------
++// Golden vector from the oracle.
++//
++// These are the exact 185 bytes of
++// spikes/shorebird_linkinfo_oracle/out_dd/voters.bin — the file their
++// gen_snapshot actually consumed to log
++// "DD resolution: 7 resolved ..." / "DD table: 8 slots, 7 retained".
++// Produced by write_dd_slot_voters.py (an independent producer), accepted by
++// their binary (an independent consumer). Our reader must agree with both.
++//
++// Embedded rather than read via an env var on purpose: an env-var fixture test
++// that early-returns when the variable is unset is indistinguishable from a
++// passing test, which is the exact false-signal mode this project has been
++// bitten by. Embedding removes the skip path entirely.
++// ---------------------------------------------------------------------------
++static const uint8_t kOracleVotersBin[] = {
++    0x55, 0x7E, 0xCA, 0xDD, 0x02, 0x00, 0x00, 0x00, 0x88, 0x80, 0x81, 0x94,
++    0x62, 0x5D, 0x82, 0x42, 0x61, 0x82, 0x85, 0x1D, 0x3A, 0x85, 0x94, 0x80,
++    0x17, 0x15, 0x90, 0x80, 0x3E, 0x51, 0x83, 0x81, 0x81, 0x94, 0x80, 0x02,
++    0x16, 0x90, 0x80, 0x5F, 0x68, 0x81, 0x94, 0x80, 0x56, 0x16, 0x90, 0x80,
++    0x5F, 0x68, 0x81, 0x82, 0x81, 0x87, 0x3A, 0x85, 0x44, 0x86, 0x85, 0x3A,
++    0x74, 0x8A, 0x87, 0x7A, 0x87, 0x4C, 0x8B, 0x82, 0x7C, 0x22, 0x87, 0x83,
++    0x81, 0x87, 0x7A, 0x87, 0x4C, 0x8B, 0x80, 0x1D, 0x3A, 0x85, 0x94, 0x7C,
++    0x13, 0x8A, 0x6B, 0x14, 0x8A, 0x80, 0x5F, 0x68, 0x81, 0x84, 0x81, 0x94,
++    0x7C, 0x13, 0x8A, 0x12, 0x19, 0x8A, 0x80, 0x5F, 0x68, 0x81, 0x94, 0x71,
++    0x27, 0x89, 0x6C, 0x29, 0x89, 0x80, 0x3E, 0x51, 0x83, 0x85, 0x81, 0x87,
++    0x7D, 0x9F, 0x23, 0xA0, 0x80, 0x5F, 0x68, 0x81, 0x87, 0x7D, 0x9F, 0x2A,
++    0xA3, 0x80, 0x5F, 0x68, 0x81, 0x86, 0x81, 0x94, 0x72, 0x78, 0x82, 0x1D,
++    0x7D, 0x82, 0x80, 0x3E, 0x51, 0x83, 0x94, 0x72, 0x78, 0x82, 0x7A, 0x7D,
++    0x82, 0x80, 0x7C, 0x22, 0x87, 0x87, 0x81, 0x94, 0x72, 0x78, 0x82, 0x4E,
++    0x7E, 0x82, 0x80, 0x3E, 0x51, 0x83, 0x94, 0x72, 0x78, 0x82, 0x10, 0x7F,
++    0x82, 0x80, 0x3E, 0x51, 0x83,
++};
++
++// Parses the oracle's own bytes and checks every field of every key against
++// the values an independent Python parser extracted from the same file.
++VM_UNIT_TEST_CASE(DDSlotVoters_OracleGoldenVector) {
++  EXPECT_EQ(static_cast<size_t>(185), sizeof(kOracleVotersBin));
++
++  ReadStream rs(kOracleVotersBin,
++                static_cast<intptr_t>(sizeof(kOracleVotersBin)));
++  DDSlotVoters voters;
++  EXPECT(voters.ReadFromStream(&rs));
++
++  // The file is exactly the voters section with no DDSlotMapping following:
++  // 185 = 8 header + 177 body, all consumed.
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  // "DD table: 8 slots" from their own log.
++  EXPECT_EQ(static_cast<size_t>(8), voters.slot_count());
++  EXPECT_EQ(static_cast<size_t>(8), voters.voters().size());
++
++  // Expected keys, field-for-field, as extracted by parse_link_info.py.
++  // {library, owner_class, kernel_offset, kind, signature_hash}
++  struct Expected {
++    intptr_t slot;
++    FunctionKey caller;
++    FunctionKey target;
++  };
++  const Expected expected[] = {
++      {0, {20, 44770, 45250, 5, 89373u}, {20, 0, 264855, 0, 59582u}},
++      {1, {20, 0, 264962, 0, 29791u}, {20, 0, 265046, 0, 29791u}},
++      {2, {7, 698, 836, 5, 178746u}, {7, 1018, 1484, 2, 119164u}},
++      {3, {7, 1018, 1484, 0, 89373u}, {20, 166396, 166507, 0, 29791u}},
++      {4, {20, 166396, 167058, 0, 29791u}, {20, 152561, 152812, 0, 59582u}},
++      {5, {7, 4093, 4131, 0, 29791u}, {7, 4093, 4522, 0, 29791u}},
++      {6, {20, 48242, 48797, 0, 59582u}, {20, 48242, 48890, 0, 119164u}},
++      {7, {20, 48242, 48974, 0, 59582u}, {20, 48242, 49040, 0, 59582u}},
++  };
++
++  for (const Expected& e : expected) {
++    const std::vector<size_t>* idxs = voters.voters_for_slot(e.slot);
++    EXPECT(idxs != nullptr);
++    if (idxs == nullptr) continue;
++    EXPECT_EQ(static_cast<size_t>(1), idxs->size());
++    const SlotVoter& v = voters.voters()[(*idxs)[0]];
++
++    // Field-by-field on both keys. Whole-struct operator== would report a
++    // single boolean and hide WHICH field diverged.
++    EXPECT_EQ(e.caller.library_kernel_offset, v.caller_key.library_kernel_offset);
++    EXPECT_EQ(e.caller.owner_class_kernel_offset,
++              v.caller_key.owner_class_kernel_offset);
++    EXPECT_EQ(e.caller.kernel_offset, v.caller_key.kernel_offset);
++    EXPECT_EQ(static_cast<int>(e.caller.kind),
++              static_cast<int>(v.caller_key.kind));
++    EXPECT_EQ(e.caller.signature_hash, v.caller_key.signature_hash);
++
++    EXPECT_EQ(e.target.library_kernel_offset, v.target_key.library_kernel_offset);
++    EXPECT_EQ(e.target.owner_class_kernel_offset,
++              v.target_key.owner_class_kernel_offset);
++    EXPECT_EQ(e.target.kernel_offset, v.target_key.kernel_offset);
++    EXPECT_EQ(static_cast<int>(e.target.kind),
++              static_cast<int>(v.target_key.kind));
++    EXPECT_EQ(e.target.signature_hash, v.target_key.signature_hash);
++  }
++}
++
++// Our encoder must reproduce the oracle's bytes exactly for the same input.
++// This is the strongest available check that WriteToStream agrees with the
++// format their gen_snapshot accepts — not merely self-consistent with our
++// own reader.
++VM_UNIT_TEST_CASE(DDSlotVoters_EncoderMatchesOracleBytes) {
++  // Read the oracle bytes in, write them back out, compare byte-for-byte.
++  // Slot iteration order over an unordered_map is unspecified, so a direct
++  // re-encode of all 8 slots need not match the oracle's slot ordering.
++  // Instead encode a single slot and compare against that slot's exact
++  // oracle byte range, which is order-independent.
++  ReadStream rs(kOracleVotersBin,
++                static_cast<intptr_t>(sizeof(kOracleVotersBin)));
++  DDSlotVoters in;
++  EXPECT(in.ReadFromStream(&rs));
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  // Re-encode slot 1 alone and check the header plus body bytes.
++  const std::vector<size_t>* idxs = in.voters_for_slot(1);
++  EXPECT(idxs != nullptr);
++  if (idxs == nullptr) return;
++  const SlotVoter& v = in.voters()[(*idxs)[0]];
++
++  DDSlotVoters one;
++  one.AddVoter(1, v.caller_key, v.target_key);
++  MallocWriteStream ws(128);
++  one.WriteToStream(&ws);
++
++  // Expected: 8-byte header, uvar(1) num_slots, uvar(1) slot_id,
++  // uvar(1) num_voters, then the two keys' varints. The oracle's slot-1
++  // record starts at offset 31 (0x1F) in kOracleVotersBin: byte 0x81 = slot 1.
++  EXPECT_EQ(0x55, static_cast<int>(ws.buffer()[0]));
++  EXPECT_EQ(0x7E, static_cast<int>(ws.buffer()[1]));
++  EXPECT_EQ(0xCA, static_cast<int>(ws.buffer()[2]));
++  EXPECT_EQ(0xDD, static_cast<int>(ws.buffer()[3]));
++  EXPECT_EQ(0x02, static_cast<int>(ws.buffer()[4]));
++  EXPECT_EQ(0x00, static_cast<int>(ws.buffer()[5]));
++  EXPECT_EQ(0x00, static_cast<int>(ws.buffer()[6]));
++  EXPECT_EQ(0x00, static_cast<int>(ws.buffer()[7]));
++  EXPECT_EQ(0x81, static_cast<int>(ws.buffer()[8]));   // uvar(1) num_slots
++  EXPECT_EQ(0x81, static_cast<int>(ws.buffer()[9]));   // uvar(1) slot_id = 1
++  EXPECT_EQ(0x81, static_cast<int>(ws.buffer()[10]));  // uvar(1) num_voters
++
++  // The 20 varint bytes of the two keys must match the oracle's slot-1 body,
++  // which begins at oracle offset 33 (after 0x81 slot_id, 0x81 num_voters at
++  // offsets 31 and 32).
++  const intptr_t kOracleSlot1Body = 33;
++  const intptr_t body_len = ws.bytes_written() - 11;
++  // Pin the exact body length so the comparison loop below can never go
++  // vacuous. 18 bytes = two keys: caller {20,0,264962,0,29791} encodes as
++  // 94 80 02 16 90 80 5F 68 81 (9 bytes) and target {20,0,265046,0,29791} as
++  // 94 80 56 16 90 80 5F 68 81 (9 bytes). Hand-computed from the uvar rule
++  // (7 bits/byte LSB-first, terminator |= 0x80) and confirmed against the
++  // oracle file's slot-1 record at offset 33.
++  EXPECT_EQ(18, body_len);
++  EXPECT(body_len > 0);
++  for (intptr_t i = 0; i < body_len; i++) {
++    EXPECT_EQ(static_cast<int>(kOracleVotersBin[kOracleSlot1Body + i]),
++              static_cast<int>(ws.buffer()[11 + i]));
++  }
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

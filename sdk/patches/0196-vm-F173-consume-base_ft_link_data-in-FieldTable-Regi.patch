@@ -1,0 +1,231 @@
+From f5d9e96e23187d9c883618186d5063379f818707 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 23:04:55 +0800
+Subject: [PATCH 196/206] [vm] F173: consume --base_ft_link_data in
+ FieldTable::Register
+
+The base field-table link info was parsed and stored in
+ShorebirdLinker::base_field_table_ but never read, so
+--base_ft_link_data produced a snapshot byte-identical to a run
+without it.
+
+Their consumer is FieldTable::Register (0x1000b6e9c..0x1000b7130),
+which inlines ShorebirdLinker::shared() and reads +0x30:
+  - first registration into an empty table reserves every base id
+    (Grow(trunc(max/256)*256+256), top_ = max+1);
+  - a field whose DuplicateAwareHash is in the base reuses that id;
+  - everything else appends at top_.
+FieldTable gains the per-table FieldHasher they keep at +0x40, and
+FieldTableLinkInfo gains the hash->id index their constructor builds
+(std::map at +0x20, first wins).
+
+Field ids are assigned during kernel loading, so the link data must
+be loaded before that: move InitializeShorebirdLinkData() from
+CreateAndWritePrecompiledSnapshot to main(), right after
+Dart_SetVMFlags and before Dart_Initialize, which is where their
+_main does it (0x10000d374..0x10000d550, Dart_Initialize 0x10000d6a4).
+
+Measured on out_dd/patch.dill with their base.ft
+(ProductSimIosARM64/clang_arm64/gen_snapshot):
+  no flag: unchanged (sha 54b9cccc..., same as before the fix)
+  with flag: 133,885 differing bytes vs no flag (theirs: 133,879)
+  one byte flipped in a base.ft hash: 2,543 bytes further change
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index e85bd2a2b3c..b47405499cb 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -904,9 +904,8 @@ static void InitializeShorebirdLinkData() {
+ static void CreateAndWritePrecompiledSnapshot() {
+   ASSERT(IsSnapshottingForPrecompilation());
+ 
+-  // Before any compilation, and before the kVMAOTAssembly early return below,
+-  // so both snapshot paths see the same linker state.
+-  InitializeShorebirdLinkData();
++  // Shorebird link data is loaded in main(), before Dart_Initialize; see the
++  // comment there.
+ 
+   if (snapshot_kind == kVMAOTAssembly) {
+     File* file = OpenFile(assembly_filename);
+@@ -1194,6 +1193,18 @@ int main(int argc, char** argv) {
+     return kErrorExitCode;
+   }
+ 
++  // Their _main reads every link-data file right after Dart_SetVMFlags and
++  // before Dart_Initialize (0x10000d374..0x10000d550, then Dart_Initialize at
++  // 0x10000d6a4). The order is load-bearing for --base_ft_link_data: field ids
++  // are assigned by FieldTable::Register while the kernel is loaded, long
++  // before precompilation starts, so loading the base field table any later
++  // (we used to do it in CreateAndWritePrecompiledSnapshot) means it is never
++  // consulted. Doing it here also keeps both AOT snapshot paths on the same
++  // linker state, which is what the old call site was for.
++  if (IsSnapshottingForPrecompilation()) {
++    InitializeShorebirdLinkData();
++  }
++
+   Dart_InitializeParams init_params;
+   memset(&init_params, 0, sizeof(init_params));
+   init_params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
+diff --git a/runtime/vm/field_table.cc b/runtime/vm/field_table.cc
+index 8dc5549ea98..91b1779d1f4 100644
+--- a/runtime/vm/field_table.cc
++++ b/runtime/vm/field_table.cc
+@@ -12,6 +12,8 @@
+ #include "vm/object_graph.h"
+ #include "vm/object_store.h"
+ #include "vm/raw_object.h"
++#include "vm/shorebird/link_info.h"
++#include "vm/shorebird/linker.h"
+ #include "vm/visitor.h"
+ 
+ namespace dart {
+@@ -59,18 +61,63 @@ bool FieldTable::Register(const Field& field, intptr_t expected_field_id) {
+ 
+   if (free_head_ < 0) {
+     bool grown_backing_store = false;
+-    if (top_ == capacity_) {
+-      const intptr_t new_capacity = capacity_ + kCapacityIncrement;
+-      Grow(new_capacity);
++
++    // flutter_hot_patcher: Shorebird's field-table linking. Transcribed from
++    // their FieldTable::Register (0x1000b6e9c..0x1000b7130), which inlines
++    // ShorebirdLinker::shared() and reads base_field_table_ (+0x30):
++    //   - on the first registration into an empty table, reserve every id the
++    //     base used: Grow(trunc(max_field_id / 256) * 256 + 256), top_ =
++    //     max_field_id + 1;
++    //   - a field whose DuplicateAwareHash is in the base takes the base's id
++    //     (top_ is not advanced -- the id is already below it);
++    //   - anything else falls through to append-at-top_.
++    // Without --base_ft_link_data base_field_table() is null and this is the
++    // upstream path unchanged.
++    const FieldTableLinkInfo* base =
++        ShorebirdLinker::shared()->base_field_table();
++    if (base != nullptr) {
++      if (capacity_ == 0) {
++        const intptr_t max_field_id = base->max_field_id();
++        Grow((max_field_id / kCapacityIncrement) * kCapacityIncrement +
++             kCapacityIncrement);
++        top_ = max_field_id + 1;
++        grown_backing_store = true;
++      }
++      if (expected_field_id == -1) {
++        const intptr_t base_id =
++            base->LookupFieldId(shorebird_hasher_.DuplicateAwareHash(field));
++        if (base_id != -1) {
++          // Theirs has no bound check here; the reservation above makes it
++          // unnecessary in the gen_snapshot flow. Kept as a guard only, so a
++          // table that was already populated before the base was supplied
++          // cannot write past table_.
++          if (base_id >= capacity_) {
++            Grow(base_id + kCapacityIncrement);
++            grown_backing_store = true;
++          }
++          field.set_field_id(base_id);
++          table_[base_id] = Object::sentinel().ptr();
++          if (base_id >= top_) top_ = base_id + 1;
++          return grown_backing_store;
++        }
++      }
++    }
++
++    // Theirs takes expected_field_id as the slot when given (upstream only
++    // asserts it equals top_), and bumps top_ only when the slot is top_.
++    ASSERT(base != nullptr || expected_field_id == -1 ||
++           expected_field_id == top_);
++    const intptr_t id = expected_field_id == -1 ? top_ : expected_field_id;
++    if (id == capacity_) {
++      Grow(id + kCapacityIncrement);
+       grown_backing_store = true;
+     }
+ 
+-    ASSERT(top_ < capacity_);
+-    ASSERT(expected_field_id == -1 || expected_field_id == top_);
+-    field.set_field_id(top_);
+-    table_[top_] = Object::sentinel().ptr();
++    ASSERT(id < capacity_);
++    field.set_field_id(id);
++    table_[id] = Object::sentinel().ptr();
+ 
+-    ++top_;
++    if (id == top_) ++top_;
+     return grown_backing_store;
+   }
+ 
+diff --git a/runtime/vm/field_table.h b/runtime/vm/field_table.h
+index 3f6e753ee01..e60139e3610 100644
+--- a/runtime/vm/field_table.h
++++ b/runtime/vm/field_table.h
+@@ -12,6 +12,7 @@
+ #include "vm/class_id.h"
+ #include "vm/globals.h"
+ #include "vm/growable_array.h"
++#include "vm/shorebird/field_hasher.h"
+ #include "vm/tagged_pointer.h"
+ 
+ namespace dart {
+@@ -122,6 +123,12 @@ class FieldTable {
+   // fields.
+   bool is_ready_to_use_ = false;
+ 
++  // flutter_hot_patcher: their FieldTable carries a FieldHasher at +0x40
++  // (`add x1, x19, #0x40` before DuplicateAwareHash in their
++  // FieldTable::Register, 0x1000b6f18). Per table, so duplicate counting
++  // restarts for each table exactly as the base dump's own hasher did.
++  FieldHasher shorebird_hasher_;
++
+   DISALLOW_COPY_AND_ASSIGN(FieldTable);
+ };
+ 
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index af718cf8cfb..faf9f1ae738 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -5,6 +5,7 @@
+ #ifndef RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+ #define RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+ 
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <vector>
+@@ -108,12 +109,26 @@ struct FieldInfo {
+ // Not a ZoneObject -- see the note on ClassTableLinkInfo.
+ class FieldTableLinkInfo {
+  public:
++  // Their constructor also builds a hash -> id index (a std::map at +0x20,
++  // node value at +0x38, built inline in make_unique<FieldTableLinkInfo> at
++  // 0x100194e30..0x100195168: find, insert only if absent -- first wins).
+   FieldTableLinkInfo(std::vector<FieldInfo> fields, intptr_t max_field_id)
+-      : fields_(std::move(fields)), max_field_id_(max_field_id) {}
++      : fields_(std::move(fields)), max_field_id_(max_field_id) {
++    for (const FieldInfo& field : fields_) {
++      id_by_hash_.emplace(field.hash, field.id);
++    }
++  }
+ 
+   const std::vector<FieldInfo>& fields() const { return fields_; }
+   intptr_t max_field_id() const { return max_field_id_; }
+ 
++  // The base field id recorded for `hash`, or -1 if the base has none.
++  // Consulted by FieldTable::Register (their 0x1000b6f18..0x1000b7070).
++  intptr_t LookupFieldId(const std::string& hash) const {
++    auto it = id_by_hash_.find(hash);
++    return it == id_by_hash_.end() ? -1 : it->second;
++  }
++
+   // count, { id, name, hash }, max_field_id -- the scalar is again a trailer.
+   // WriteToStream is the real encoder; see the note on ClassTableLinkInfo.
+   void WriteToStream(BaseWriteStream* stream) const;
+@@ -123,6 +138,7 @@ class FieldTableLinkInfo {
+  private:
+   std::vector<FieldInfo> fields_;
+   intptr_t max_field_id_;
++  std::map<std::string, intptr_t> id_by_hash_;
+ };
+ 
+ // Link information describing one dispatch-table selector row.
+-- 
+2.53.0
+

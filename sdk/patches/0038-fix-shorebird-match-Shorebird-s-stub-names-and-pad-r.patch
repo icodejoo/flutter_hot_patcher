@@ -1,0 +1,145 @@
+From ffa01cf4fbd38fe94fb7fd6ab0f561278301884b Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 16:59:10 +0800
+Subject: [PATCH 038/206] fix(shorebird): match Shorebird's stub names and pad
+ register exactly
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two corrections from a reverse-engineering pass on Shorebird's
+unstripped gen_snapshot_arm64:
+
+1. Rename stubs to their actual symbol names:
+   - ShorebirdCpuToSimWrapper  → TransitionDartToSimulatorIfNeeded
+   - ShorebirdSimToCpuWrapper  → TransitionDartToCpuIfNeeded
+   Updated in stub_code_list.h (V(...) entries),
+   stub_code_compiler_arm64.cc (Generate...Stub definitions),
+   and wrapper_stub_test.cc (StubCode:: accessor calls).
+   Test case names (StubCode_ShorebirdWrappersExist,
+   StubCode_ShorebirdWrapperPadArraysAreExact) are ours, not theirs,
+   and are unchanged.
+
+2. Change pad register from R9 to IP0 (x16):
+   Shorebird emits 0x10000010 as the first pad word, which decodes to
+   `adr x16, #0`. Verified by assembling `adr x16, .` with clang and
+   comparing the encoding. The old R9 choice came from upstream's
+   GenerateFfiCallbackTrampolineStub; Shorebird diverges, and we must
+   match them. Comment documents this to prevent future "fix" back to R9.
+
+Neither change alters code size (same instruction, same slot count),
+so the size test cannot detect either one. Verification was direct:
+- Names: `nm -a xcodebuild/ProductARM64/gen_snapshot | c++filt` shows
+  GenerateTransitionDartToSimulatorIfNeededStub and
+  GenerateTransitionDartToCpuIfNeededStub; no Shorebird...Wrapper names.
+- Register: a temporary ISOLATE_UNIT_TEST_CASE asserted
+  first_pad_word == 0x10000010u, ran with exit 0 and no error:, then
+  was removed before this commit.
+- Suite: 57/57 shorebird tests PASS.
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 82090d09200..f9b6bf47be7 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -621,16 +621,23 @@ static void GenerateShorebirdWrapperPads(
+     const dart::shorebird::WrapperAllocator::Layout& layout) {
+   Label body;
+ 
+-  // R9 is volatile and not used for passing any arguments.
+-  COMPILE_ASSERT(!IsCalleeSavedRegister(R9) && !IsArgumentRegister(R9));
++  // IP0 (TMP / R16) is used here because that is what Shorebird uses: the
++  // emitted pad word is 0x10000010, which decodes to `adr x16, #0` (x16 ==
++  // IP0), verified by assembling `adr x16, .` with clang and comparing the
++  // encoding. This diverges from upstream's GenerateFfiCallbackTrampolineStub,
++  // which uses R9 -- do not "fix" it back to R9.
++  // IP0 is the assembler scratch register (TMP); it is volatile and is neither
++  // a callee-saved nor an argument register.
++  COMPILE_ASSERT(!IsCalleeSavedRegister(IP0) && !IsArgumentRegister(IP0));
+ 
+   const intptr_t num_pads = layout.num_wrappers_per_page;
+   const intptr_t pad_size = layout.landing_pad_size;
+ 
+   for (intptr_t i = 0; i < num_pads; ++i) {
+-    // The wrapper table is keyed by the landing pad entry point. Capture the
+-    // current PC into R9, then jump to the shared body.
+-    __ adr(R9, Immediate(0));
++    // Each pad captures its own entry-point PC into IP0 so the shared body can
++    // identify which wrapper was entered. IP0 is Shorebird's choice (encoding
++    // 0x10000010 = `adr x16, #0`); the shared body reads it from there.
++    __ adr(IP0, Immediate(0));
+     __ b(&body);
+   }
+ 
+@@ -650,7 +657,7 @@ static void GenerateShorebirdWrapperPads(
+   __ Breakpoint();
+ }
+ 
+-void StubCodeCompiler::GenerateShorebirdCpuToSimWrapperStub() {
++void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+   using dart::shorebird::CPUToSimConfig;
+   using dart::shorebird::WrapperAllocator;
+   using dart::shorebird::WrapperLayout;
+@@ -659,7 +666,7 @@ void StubCodeCompiler::GenerateShorebirdCpuToSimWrapperStub() {
+   GenerateShorebirdWrapperPads(assembler, layout);
+ }
+ 
+-void StubCodeCompiler::GenerateShorebirdSimToCpuWrapperStub() {
++void StubCodeCompiler::GenerateTransitionDartToCpuIfNeededStub() {
+   using dart::shorebird::SimToCPUConfig;
+   using dart::shorebird::WrapperAllocator;
+   using dart::shorebird::WrapperLayout;
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index ff16dee1a9f..e13db203c0d 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -13,10 +13,10 @@ namespace shorebird {
+ // Stubs are generated at VM startup, so this needs an isolate -- VM_UNIT_TEST_CASE
+ // runs without one and StubCode would not be initialized.
+ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
+-  EXPECT(!StubCode::ShorebirdCpuToSimWrapper().IsNull());
+-  EXPECT(!StubCode::ShorebirdSimToCpuWrapper().IsNull());
+-  EXPECT(StubCode::ShorebirdCpuToSimWrapper().Size() > 0);
+-  EXPECT(StubCode::ShorebirdSimToCpuWrapper().Size() > 0);
++  EXPECT(!StubCode::TransitionDartToSimulatorIfNeeded().IsNull());
++  EXPECT(!StubCode::TransitionDartToCpuIfNeeded().IsNull());
++  EXPECT(StubCode::TransitionDartToSimulatorIfNeeded().Size() > 0);
++  EXPECT(StubCode::TransitionDartToCpuIfNeeded().Size() > 0);
+ }
+ 
+ // Size of the placeholder shared body: one Breakpoint instruction. The real bodies
+@@ -37,7 +37,7 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+             cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size);
+   EXPECT_EQ(cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size +
+                 kPlaceholderBodySize,
+-            static_cast<intptr_t>(StubCode::ShorebirdCpuToSimWrapper().Size()));
++            static_cast<intptr_t>(StubCode::TransitionDartToSimulatorIfNeeded().Size()));
+ 
+   const Layout sim_to_cpu = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
+   EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
+@@ -45,7 +45,7 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+             sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size);
+   EXPECT_EQ(sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size +
+                 kPlaceholderBodySize,
+-            static_cast<intptr_t>(StubCode::ShorebirdSimToCpuWrapper().Size()));
++            static_cast<intptr_t>(StubCode::TransitionDartToCpuIfNeeded().Size()));
+ }
+ 
+ }  // namespace shorebird
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 183b2506c2c..fd9b0678b70 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -156,8 +156,8 @@ namespace dart {
+   V(CallNativeThroughSafepoint)                                                \
+   V(FfiCallTrampoline)                                                         \
+   V(FfiCallbackTrampoline)                                                     \
+-  V(ShorebirdCpuToSimWrapper)                                                  \
+-  V(ShorebirdSimToCpuWrapper)                                                  \
++  V(TransitionDartToSimulatorIfNeeded)                                         \
++  V(TransitionDartToCpuIfNeeded)                                               \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

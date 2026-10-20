@@ -1,0 +1,151 @@
+From ac76610139a847906f28ed3052c257690bf02bd2 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 21:48:29 +0800
+Subject: [PATCH 072/206] refactor(shorebird): one reader for the link header,
+ one bound
+
+Dart_ShorebirdLoadVmcode parsed the header itself -- read the count, size the
+buffer, call fromBuffer, install -- which is exactly what
+Shorebird_ReadLinkHeader now does. Two readers is one too many, and they did
+not agree: this one capped the table at 65536 entries and LinkOracle caps it at
+1 << 24, so a file between the two was rejected here and accepted there.
+
+The count still sizes the read, because that is file I/O. Everything past that
+is delegated, and the only bound left here guards the multiplication.
+
+Dart_ShorebirdLoadVmcode itself stays ours. It is not in their DWARF and their
+open engine source never calls it; it exists because the Simulator needs the
+path, and Shorebird_ReadLinkHeader does not take one.
+
+It also had no test, which is how a duplicate parse survived. Two now, against
+real files on disk: a three-entry table loads and installs, and an empty table
+loads but reports nothing to link. The first asserting `true` is what proves
+the simulator-guarded body is the one being compiled -- the #else can only
+return false.
+
+86 of 86 shorebird tests before, 88 after.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index e687c53948a..fa3d88ad801 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7272,14 +7272,15 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+   FILE* f = fopen(vmcode_path, "rb");
+   if (f == nullptr) return false;
+ 
++  // The entry count sizes the read; parsing and installing is
++  // Shorebird_ReadLinkHeader's job. This used to do all of it inline, with its
++  // own 65536-entry bound that disagreed with LinkOracle's -- a file between the
++  // two limits was rejected here and accepted there. One reader, one bound.
+   uint32_t n_entries = 0;
+   if (fread(&n_entries, 4, 1, f) != 1) { fclose(f); return false; }
+-  if (n_entries > 65536) { fclose(f); return false; }
++  // Only an overflow guard; LinkOracle applies the real limit.
++  if (n_entries > (SIZE_MAX - 4) / 8) { fclose(f); return false; }
+ 
+-  // Read the whole header back and hand it to LinkOracle, which is how they
+-  // consume this table: LinkOracle::shared() answers, per code offset, whether
+-  // that function runs the base's native code or has to be simulated. Their
+-  // deserializer queries it -- see runtime/vm/shorebird/shorebird.h.
+   const size_t header_size = 4 + static_cast<size_t>(n_entries) * 8;
+   std::unique_ptr<uint8_t[]> header(new uint8_t[header_size]);
+   rewind(f);
+@@ -7287,16 +7288,15 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+   fclose(f);
+   if (!header_read) return false;
+ 
+-  std::unique_ptr<LinkOracle> oracle =
+-      LinkOracle::fromBuffer(header.get(), header_size);
+-  if (oracle == nullptr) return false;
+-  LinkOracle::Install(std::move(oracle));
++  if (Shorebird_ReadLinkHeader(header.get(), header_size) == 0) return false;
+ 
+   // Store the vmcode path; the Simulator will read and apply it lazily
+   // when the first isolate creates its Simulator via Simulator::Current().
+   Simulator::SetPendingVmcodeFile(vmcode_path);
+ 
+-  return n_entries > 0;
++  // A well-formed header that pairs nothing is a patch in which every function
++  // changed -- loadable, but there is nothing to link.
++  return LinkOracle::shared()->HasPatch();
+ #else
+   return false;
+ #endif
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index b10fca7b28b..65b1eb81fa7 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -8,6 +8,8 @@
+ #include <utility>
+ #include <vector>
+ 
++#include <unistd.h>
++
+ #include "include/dart_api.h"
+ #include "vm/unit_test.h"
+ 
+@@ -275,4 +277,59 @@ VM_UNIT_TEST_CASE(Shorebird_UsingLinkingNeedsBothHalves) {
+ }
+ 
+ 
++// Dart_ShorebirdLoadVmcode is ours, not theirs -- it is the hook the Simulator
++// needs and has no counterpart in their DWARF. What it must not do is parse the
++// header a second time, which it used to, with a 65536-entry bound that
++// disagreed with LinkOracle's. This exercises the whole path against a real
++// file so that the delegation is checked rather than assumed.
++VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeGoesThroughReadLinkHeader) {
++  LinkOracle::Install(nullptr);
++
++  const std::vector<uint8_t> header =
++      MakeHeader({{128, 52016}, {256, 52100}, {384, 52184}});
++
++  char path[] = "/tmp/fhp_vmcode_XXXXXX";
++  const int fd = mkstemp(path);
++  EXPECT(fd >= 0);
++  if (fd < 0) return;
++  // The header, then something standing in for the ELF that follows it.
++  const std::vector<uint8_t> tail(4096, 0x7f);
++  EXPECT(write(fd, header.data(), header.size()) ==
++         static_cast<ssize_t>(header.size()));
++  EXPECT(write(fd, tail.data(), tail.size()) ==
++         static_cast<ssize_t>(tail.size()));
++  close(fd);
++
++  EXPECT(Dart_ShorebirdLoadVmcode(path));
++  EXPECT(LinkOracle::shared() != nullptr);
++  EXPECT_EQ(static_cast<intptr_t>(3), LinkOracle::shared()->entry_count());
++  EXPECT(LinkOracle::shared()->HasPatch());
++
++  unlink(path);
++  LinkOracle::Install(nullptr);
++}
++
++// A header that pairs nothing is well-formed. It loads, and the return value
++// says there is nothing to link rather than that the file was bad.
++VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeEmptyTableLoadsButHasNoPatch) {
++  LinkOracle::Install(nullptr);
++
++  const std::vector<uint8_t> header = MakeHeader({});
++  char path[] = "/tmp/fhp_vmcode_XXXXXX";
++  const int fd = mkstemp(path);
++  EXPECT(fd >= 0);
++  if (fd < 0) return;
++  EXPECT(write(fd, header.data(), header.size()) ==
++         static_cast<ssize_t>(header.size()));
++  close(fd);
++
++  EXPECT(!Dart_ShorebirdLoadVmcode(path));
++  EXPECT(LinkOracle::shared() != nullptr);
++  EXPECT(!LinkOracle::shared()->HasPatch());
++
++  unlink(path);
++  LinkOracle::Install(nullptr);
++}
++
++
+ }  // namespace dart
+-- 
+2.53.0
+

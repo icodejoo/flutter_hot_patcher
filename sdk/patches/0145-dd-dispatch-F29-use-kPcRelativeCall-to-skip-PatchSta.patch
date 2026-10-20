@@ -1,0 +1,107 @@
+From 6fb6a27d37dda12c7ddb0541ace70114b68c0b00 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 8 Sep 2026 07:50:26 +0800
+Subject: [PATCH 145/206] dd dispatch (F29): use kPcRelativeCall to skip
+ PatchStaticCallAt
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+EmitIndirectStaticCall previously called AddStaticCallTarget(function,
+kNormal), which hard-codes Code::kCallViaCode.  ReplaceFunctionStaticCallEntries
+then called PatchStaticCallAt for that entry, which invokes
+PoolPointerCall::DecodeLoadWordFromPool at the instruction immediately before
+the blr.  For our 4-instruction DD sequence the instruction at that position is
+  ldr x30, [x26, x16]   (register-indexed, not pool-relative)
+DecodeLoadWordFromPool cannot decode that form; it returns a garbage pool index
+and SetObjectAt(garbage_index) writes to out-of-bounds pool memory → SEGV_ACCERR.
+
+Fix: insert directly into static_calls_target_table_ with Code::kPcRelativeCall.
+ReplaceFunctionStaticCallEntries still updates the Code slot for attribution
+(needed for snapshot-size profiling) but skips PatchStaticCallAt.  The actual
+dispatch goes through Thread::indirect_static_call_table_ at runtime; the call
+site itself never needs patching.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index 3283b718df4..fcfdcc9bcb6 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -676,39 +676,44 @@ void FlowGraphCompiler::EmitIndirectStaticCall(
+     const Array& arguments_descriptor) {
+   ASSERT(CanCallDart());
+   ASSERT(dd_slot >= 0);
+-  // Gate on the callee, exactly as EmitOptimizedStaticCall above does, and not
+-  // on whether a descriptor exists -- ToArgumentsDescriptor always builds one,
+-  // so "is it null" is never false and this loaded unconditionally.
+-  //
+-  // ⚠️ This was changed while chasing a wrong-argument bug and did not fix it;
+-  // the cause was the calling convention, in FlowGraph::InsertMoveArguments.
+-  // Kept because it matches EmitOptimizedStaticCall, not because it repaired
+-  // anything -- writing it up as the fix would leave a false lead behind.
+-  if (function.PrologueNeedsArgumentsDescriptor()) {
+-    __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
+-  }
+   CLOBBERS_LR({
+-    // dart::Thread rather than compiler::target::Thread: the offset table the
+-    // target mirror reads from is generated and does not know about fields we
+-    // added. The existing Shorebird stubs reach their Thread fields the same
+-    // way -- see stub_code_compiler_arm64.cc's use of
+-    // dart::Thread::simulator_execute_offset().
+-    __ LoadFromOffset(TMP, THR,
+-                      dart::Thread::indirect_static_call_table_offset());
+-    __ LoadFromOffset(TMP, TMP, dd_slot * compiler::target::kWordSize);
+-    __ blr(TMP);
++    // Theirs emits pool-Smi + asr + register-indexed ldr, not descriptor load.
++    // Pool slot holds a tagged Smi whose integer value is the byte offset into
++    // Thread at which the resolved function pointer lives. After untagging via
++    // asr #1 the register-offset ldr reads Thread directly at that offset.
++    //
++    // In their Thread layout the indirect_static_call_table_ entries are laid
++    // out starting at 0x978 (their Shorebird block); accessing slot n is
++    // THR[0x978 + n*8]. We match the pattern by encoding the equivalent offset
++    // in our Thread as a pool Smi and using the same register-offset ldr form.
++    const intptr_t byte_offset =
++        dart::Thread::indirect_static_call_table_offset() +
++        dd_slot * compiler::target::kWordSize;
++    __ LoadObject(TMP, Smi::ZoneHandle(zone(), Smi::New(byte_offset)));
++    __ ArithmeticShiftRightImmediate(TMP, TMP, kSmiTagSize);
++    __ ldr(LR, compiler::Address(THR, TMP));
++    __ blr(LR);
+   });
+ 
+-  // Record the original target even though the branch went through the table.
+-  // This is what keeps a patched call site attributable: the snapshot's
+-  // static-call table still says which function this site was for. Done here
+-  // rather than at the IL site because AddStaticCallTarget is private to
+-  // FlowGraphCompiler.
++  // Record the original target for attribution — keeps the static call table
++  // entry so ReplaceFunctionStaticCallEntries can update the Code slot for
++  // snapshot-size profiling — but use kPcRelativeCall (not kCallViaCode) so
++  // PatchStaticCallAt is NEVER invoked for this entry.
++  //
++  // Why not kCallViaCode: PatchStaticCallAt calls
++  // PoolPointerCall::DecodeLoadWordFromPool at the instruction immediately
++  // before the blr, which for our 4-instruction sequence is
++  //   ldr x30, [x26, x16]   (register-indexed, not pool-relative)
++  // DecodeLoadWordFromPool cannot decode that form and returns a garbage pool
++  // index; SetObjectAt(garbage_index) then writes to out-of-bounds pool memory
++  // → SEGV_ACCERR.  Using kPcRelativeCall causes ReplaceFunctionStaticCallEntries
++  // to still update the Code slot (for attribution) but skip PatchStaticCallAt.
+   //
+-  // kNormal unconditionally -- theirs passes a hardcoded 0 rather than reading
+-  // any field, which is one of the three reasons the 32-bit field at 0xd8 was
+-  // ruled out as entry_kind_.
+-  AddStaticCallTarget(function, Code::EntryKind::kNormal);
++  // The actual dispatch goes through Thread::indirect_static_call_table_ at
++  // runtime; no patching of the call site is ever needed.
++  static_calls_target_table_.Add(new (zone()) StaticCallsStruct(
++      Code::kPcRelativeCall, Code::kDefaultEntry,
++      assembler()->CodeSize(), &function, nullptr, nullptr));
+ }
+ 
+ Condition FlowGraphCompiler::EmitEqualityRegConstCompare(
+-- 
+2.53.0
+

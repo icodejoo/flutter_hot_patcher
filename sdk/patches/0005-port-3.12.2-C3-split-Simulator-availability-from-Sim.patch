@@ -1,0 +1,101 @@
+From 628eeb74a1fd1a699c9d99be67e7a19e0c7cae8d Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:35:25 +0800
+Subject: [PATCH 005/206] port(3.12.2): C3 -- split Simulator availability from
+ Simulator codegen
+
+DART_INCLUDE_SIMULATOR changes code generation: RuntimeEntry::GetEntryPoint()
+returns a redirection address that gets baked into stubs and compiled code,
+which can then no longer execute natively. Hot patching needs base code to stay
+natively executable while only patch code is interpreted, so introduce
+SIMULATOR_AVAILABLE for 'the Simulator class is compiled in' and gate the
+codegen half behind FHP_NO_SIMULATOR_CODEGEN.
+
+Rewritten rather than cherry-picked because upstream renamed the macro. Checked
+that upstream's new TARGET_HOST_MISMATCH is not this split: it is consumed only
+by cpu_arm.cc for IS_SIMARM_HOST64 and has nothing to do with FFI.
+
+SIMULATOR_HOST_ARCH_MATCH marks the arm64-host-on-arm64-target case where the
+ABIs are identical, so features upstream disables purely because of the ABI
+barrier -- dart:ffi above all -- must stay on.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/platform/globals.h b/runtime/platform/globals.h
+index 66c3f273fc7..dc65c9aedfc 100644
+--- a/runtime/platform/globals.h
++++ b/runtime/platform/globals.h
+@@ -401,9 +401,36 @@ struct simd128_value_t {
+ #endif
+ #endif
+ #elif defined(TARGET_ARCH_ARM64)
+-#if !defined(HOST_ARCH_ARM64)
++// flutter_hot_patcher A1/C3: on an arm64 host targeting arm64 we still want the
++// Simulator, but "the Simulator is compiled in" and "code generation targets the
++// Simulator" are two different things that upstream conflates under one macro:
++//
++//   DART_INCLUDE_SIMULATOR  changes CODE GENERATION. RuntimeEntry::GetEntryPoint()
++//                           returns a redirection address, and that address is
++//                           baked into stubs and compiled code, which then
++//                           CANNOT execute natively.
++//   SIMULATOR_AVAILABLE     only compiles the Simulator class in.
++//
++// Hot patching needs the latter without the former: base code must stay natively
++// executable at full speed, while patch code -- mapped read-only, so not
++// natively executable -- is run by the Simulator, entered through SimBridge.
++//
++// FHP_NO_SIMULATOR_CODEGEN selects the split build. Without it behaviour is
++// unchanged from A1, so existing configurations keep working.
++//
++// NB: upstream 3.12.2 renamed USING_SIMULATOR -> DART_INCLUDE_SIMULATOR and added
++// TARGET_HOST_MISMATCH, but that new macro is only consumed by cpu_arm.cc for
++// IS_SIMARM_HOST64 and is unrelated to FFI -- it is NOT this split.
++#if !defined(FHP_NO_SIMULATOR_CODEGEN)
+ #define DART_INCLUDE_SIMULATOR 1
+ #endif
++#define SIMULATOR_AVAILABLE 1
++#if defined(HOST_ARCH_ARM64)
++// flutter_hot_patcher: upstream disables some features purely because host and
++// target ABIs differ under a simulator build. Here the ABIs are identical, so
++// anything gated only by that barrier (notably dart:ffi) must stay enabled.
++#define SIMULATOR_HOST_ARCH_MATCH 1
++#endif
+ #elif defined(TARGET_ARCH_RISCV32)
+ #if !defined(HOST_ARCH_RISCV32)
+ #define DART_INCLUDE_SIMULATOR 1
+@@ -416,6 +443,11 @@ struct simd128_value_t {
+ #error Unknown architecture.
+ #endif
+ 
++// Wherever code generation targets the Simulator, the Simulator is compiled in.
++#if defined(DART_INCLUDE_SIMULATOR) && !defined(SIMULATOR_AVAILABLE)
++#define SIMULATOR_AVAILABLE 1
++#endif
++
+ #if !defined(DART_TARGET_OS_ANDROID) && !defined(DART_TARGET_OS_FUCHSIA) &&    \
+     !defined(DART_TARGET_OS_MACOS_IOS) && !defined(DART_TARGET_OS_LINUX) &&    \
+     !defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_WINDOWS)
+diff --git a/runtime/vm/simulator.h b/runtime/vm/simulator.h
+index 0b8c8cc294b..677a96534cd 100644
+--- a/runtime/vm/simulator.h
++++ b/runtime/vm/simulator.h
+@@ -7,7 +7,7 @@
+ 
+ #include "vm/globals.h"
+ 
+-#if defined(DART_INCLUDE_SIMULATOR)
++#if defined(SIMULATOR_AVAILABLE)
+ #if defined(TARGET_ARCH_IA32)
+ #error Simulator not implemented.
+ #elif defined(TARGET_ARCH_X64)
+@@ -21,6 +21,6 @@
+ #else
+ #error Unknown architecture.
+ #endif  // defined(TARGET_ARCH_...)
+-#endif  // defined(DART_INCLUDE_SIMULATOR)
++#endif  // defined(SIMULATOR_AVAILABLE)
+ 
+ #endif  // RUNTIME_VM_SIMULATOR_H_
+-- 
+2.53.0
+

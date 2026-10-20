@@ -1,0 +1,41 @@
+From dd75946f81a8c0f40e652fbc4b5b15814112cd0f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 13:57:19 +0800
+Subject: [PATCH 191/206] Correct three errors in the message of f24498a3740
+ (no code change)
+
+The ref-transaction hook refuses a non-fast-forward update of this
+branch, so f24498a3740's message cannot be amended; this empty commit
+carries the correction instead. The code in f24498a3740 is unchanged
+and is what was verified.
+
+1. "Keeping the narrower upstream condition means the CPU branch stays
+   reachable for a thread that is genuinely not simulating." -- wrong,
+   and backwards. Upstream, and the state restored by f24498a3740, is
+   the WIDER condition "if (FLAG_use_simulator)". f5b94e5b439 was the
+   one that narrowed it to
+   "FLAG_use_simulator && thread->is_simulating() != 0". Restoring the
+   wider condition makes the CPU branch LESS reachable in simulator
+   mode, not more. That sentence should be struck; it is not an
+   argument for the revert and nothing was measured to support it.
+
+2. "the added disjunct" -- it is a conjunct, and it was added by
+   f5b94e5b439, not by f24498a3740.
+
+3. "the simulator branch at exceptions.cc:630 ... the CPU branch at
+   :646" -- the line numbers are 631 (Simulator::Current()->JumpToFrame)
+   and 676 (StubCode::JumpToFrame). :646 is HWASAN/ASAN bookkeeping, not
+   a branch. The counts themselves, 102 and 0 on p4 in simulator mode,
+   were re-measured on the build of f24498a3740 with
+   "lldb -b" and "br set -f exceptions.cc -l 631 -G true" /
+   "-l 676 -G true", and are correct.
+
+What stands unchanged: both reverted hunks are not load-bearing. On the
+build of f24498a3740, xcodebuild/ProductSimARM64_cpu with 0 pending
+ninja steps, hi + p1..p8 give 9 PASS 0 FAIL under --no-use_simulator
+and 9 PASS 0 FAIL in default simulator mode.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+-- 
+2.53.0
+

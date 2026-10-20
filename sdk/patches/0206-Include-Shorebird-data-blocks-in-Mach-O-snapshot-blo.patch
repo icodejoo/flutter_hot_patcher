@@ -1,0 +1,44 @@
+From 41693e90584a86ca9cf5025c6021f3db3ddd5fac Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 19 Oct 2026 18:20:54 +0800
+Subject: [PATCH 206/206] Include Shorebird data blocks in Mach-O snapshot blob
+ dumps
+
+
+diff --git a/runtime/bin/snapshot_utils.cc b/runtime/bin/snapshot_utils.cc
+index 1f496844063..0515f6b5067 100644
+--- a/runtime/bin/snapshot_utils.cc
++++ b/runtime/bin/snapshot_utils.cc
+@@ -16,6 +16,7 @@
+ #include "bin/macho_loader.h"
+ #include "bin/platform.h"
+ #include "include/dart_api.h"
++#include "include/dart_native_api.h"
+ #if defined(DART_TARGET_OS_MACOS)
+ #include <platform/mach_o.h>
+ #endif
+@@ -413,6 +414,21 @@ class MachODylibAppSnapshot : public AppSnapshot {
+     *isolate_instructions_buffer = isolate_snapshot_instructions_;
+   }
+ 
++  void SetDataSizes(intptr_t* vm_data_size,
++                    intptr_t* isolate_data_size) override {
++    // The Mach-O loader resolves symbols but does not report data-region
++    // lengths. The Shorebird block follows the Dart snapshot at its next
++    // 64-byte boundary; the runtime uses these same sizes when it exposes
++    // the base byte stream to the updater. Without them --dump_blobs omits
++    // the extra block for Mach-O while retaining it for ELF.
++    *vm_data_size = vm_snapshot_data_ != nullptr
++                        ? Dart_SnapshotDataSize(vm_snapshot_data_)
++                        : 0;
++    *isolate_data_size = isolate_snapshot_data_ != nullptr
++                             ? Dart_SnapshotDataSize(isolate_snapshot_data_)
++                             : 0;
++  }
++
+  private:
+   Dart_LoadedMachODylib* macho_;
+   const uint8_t* vm_snapshot_data_;
+-- 
+2.53.0
+

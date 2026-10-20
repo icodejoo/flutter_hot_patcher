@@ -1,0 +1,62 @@
+From d10ab819892dddea3ce7d95ba54fcf9f7746d62e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 15:35:37 +0800
+Subject: [PATCH 193/206] [vm] F162: same stack-collision guard for the
+ CPU-shape native-call escape
+
+simulator_arm64.cc's native-call escape (used when a trap is caught
+during CPU-shape execution so a native target can be invoked directly,
+independent of InvokeDartCode) has the identical hazard: it sets
+simulator_csp_ to the OS C stack pointer at that exact moment with zero
+margin checked at all, and InvokeWithTHR's eventual native call then
+runs on top of it. This path is reachable by the same deep-recursion
+repro used for the dart_entry.cc fix in the previous commit, and was
+still crashing after that fix landed until this site was found and
+patched too (confirmed by rebuilding with only the dart_entry.cc fix
+and observing the repro still SIGSEGV at depth ~500).
+
+Apply the same check against sim->overflow_stack_limit() before
+accepting the new simulator_csp_, FATAL with a diagnostic if it would
+leave less headroom than that.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 144e1280033..a7454887a33 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -2162,7 +2162,30 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+       if (sim_thread != nullptr) {
+         sim_thread->set_is_simulating(0);
+         sim_thread->set_dart_state_is_on_cpu(1);
+-        sim_thread->set_simulator_csp(OSThread::GetCurrentStackPointer());
++        // Same hazard as dart_entry.cc's InvokeDartCode reentry (F162): this
++        // escape sets simulator_csp_ to the real OS C stack pointer *right
++        // now*, and the native call it is about to make (InvokeWithTHR,
++        // which in turn runs CallOnClangStack-generated stubs) will treat
++        // that as the base of a C frame. If this escape is hit repeatedly
++        // by deep recursion (e.g. a self-recursive noSuchMethod chain that
++        // keeps tripping this native-call trap), it marches the real CSP
++        // down with zero margin checked, and eventually collides with the
++        // thread's stack guard page. Refuse rather than silently corrupt.
++        OSThread* os_thread = OSThread::Current();
++        const uword current_csp = OSThread::GetCurrentStackPointer();
++        const uword floor =
++            (os_thread != nullptr) ? os_thread->overflow_stack_limit() : 0;
++        if (os_thread != nullptr && current_csp < floor) {
++          FATAL(
++              "F162: CPU-shape native-call escape would set simulator_csp_ "
++              "at or below the real OS C stack floor (current_csp=0x%" Pp
++              ", overflow_stack_limit=0x%" Pp
++              "). This indicates runaway recursion through this escape "
++              "under CPU-shape execution. Aborting to avoid silent stack "
++              "corruption instead of crashing at an unrelated address.",
++              current_csp, floor);
++        }
++        sim_thread->set_simulator_csp(current_csp);
+       }
+       const int64_t result =
+           InvokeWithTHR(target, static_cast<uword>(thr_val),
+-- 
+2.53.0
+

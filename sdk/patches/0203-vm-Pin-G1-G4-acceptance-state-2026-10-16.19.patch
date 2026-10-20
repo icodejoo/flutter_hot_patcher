@@ -1,0 +1,1382 @@
+From b93028d6307f466762ef6e3963e245d9d1a66c9c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 19 Oct 2026 14:07:17 +0800
+Subject: [PATCH 203/206] [vm] Pin G1/G4 acceptance state (2026-10-16..19)
+
+Working-tree changes accumulated while closing G1 (option/fixture parity)
+and G4 (malformed-patch handling), committed together so device and
+host evidence can name one SDK revision.
+
+G1:
+- precompiler: reorder the global object pool by the
+  --base_op_link_data mapping after renumbering pool accesses, and print
+  "Sorted ObjectPool, moved N of M entries." (RC8/RC12).
+- linker/precompiler: DD voting tallies all votes and picks the winner in
+  hash-table order; ScoreVoter checks the target before the caller; the
+  first ResolveDDSlots pass runs before DispatchTableGenerator::Initialize
+  (RC9).
+- JIT: object-pool load padding, Thread-offset lazy native dispatch, the
+  is_simulating guard for leaf runtime calls, the native-entry Thread
+  offsets in the kFullJIT features string, and a deserialization reset for
+  linked trampolines (RC11).
+- analyze_snapshot: load_obfuscation_map coverage (RC7) and related
+  dump fixes.
+
+G4:
+- elf_loader: reject bad magic, out-of-file segments, p_filesz > p_memsz
+  and address overflow instead of crashing.
+- app_snapshot: drop the WrapCode RELEASE_ASSERT that compared ELF patch
+  bytes with the Mach-O base; the simulator runs the patch's own bytes.
+- Dart_SnapshotDataSize: include the Shorebird extra block that follows
+  the snapshot at the next 64-byte boundary. Shorebird's public engine
+  passes this size straight to the updater's base stream, and patches are
+  diffed against --dump_blobs, which counts that block.
+
+Tests: wrapper_stub_test Resume count, dd_voting_test, link_info_test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/BUILD.gn b/runtime/BUILD.gn
+index 8cd05ff445c..cf4a69ba281 100644
+--- a/runtime/BUILD.gn
++++ b/runtime/BUILD.gn
+@@ -361,6 +361,14 @@ config("dart_libfuzzer_config") {
+   ldflags = [ "-fsanitize=address,fuzzer" ]
+ }
+ 
++config("dart_snapshot_analyzer_config") {
++  # The product analyzer exposes the disassembler; deployed AOT runtimes do not.
++  defines = [
++    "DART_SNAPSHOT_ANALYZER",
++    "FORCE_INCLUDE_DISASSEMBLER",
++  ]
++}
++
+ source_set("dart_api") {
+   public_configs = [ ":dart_public_config" ]
+   sources = [
+diff --git a/runtime/bin/BUILD.gn b/runtime/bin/BUILD.gn
+index 2da0cf47ff5..d0b610e5019 100644
+--- a/runtime/bin/BUILD.gn
++++ b/runtime/bin/BUILD.gn
+@@ -1084,9 +1084,10 @@ if (build_analyze_snapshot) {
+     extra_configs = [ "..:dart_aotruntime_config" ]
+ 
+     if (use_product_mode) {
++      extra_configs += [ "..:dart_snapshot_analyzer_config" ]
+       extra_deps = [
+-        "..:libdart_aotruntime_product",
+-        "../platform:libdart_platform_aotruntime_product",
++        "..:libdart_aotruntime_analyzer",
++        "../platform:libdart_platform_aotruntime_analyzer",
+       ]
+     } else {
+       extra_deps = [
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 762fe403bfe..b25c40948c3 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -8,6 +8,9 @@
+ 
+ #include "bin/options.h"
+ #include "bin/platform.h"
++#if defined(DART_SNAPSHOT_ANALYZER)
++#include "vm/flags.h"
++#endif
+ 
+ #if defined(TARGET_ARCH_IS_64_BIT) && defined(DART_PRECOMPILED_RUNTIME)
+ #define SUPPORT_ANALYZE_SNAPSHOT
+@@ -18,6 +21,14 @@
+ #endif
+ 
+ namespace dart {
++#if defined(DART_SNAPSHOT_ANALYZER)
++// Registered by the reference analyzer, with no observable read in any mode.
++DEFINE_FLAG(charp,
++            load_obfuscation_map,
++            nullptr,
++            "Path to a JSON obfuscation map file to load before kernel "
++            "translation. Used for consistent obfuscation across patch builds.");
++#endif
+ namespace bin {
+ #ifdef SUPPORT_ANALYZE_SNAPSHOT
+ // --compute_dd_table and --dd_max_bytes are deliberately absent from
+@@ -58,6 +69,8 @@ namespace bin {
+ //                            the slot mapping carries no voters.
+ #define STRING_OPTIONS_LIST(V)                                                 \
+   V(out, out_path)                                                             \
++  /* Accepted but not read by the reference analyzer, including missing paths. */ \
++  V(base_snapshot, base_snapshot_path)                                         \
+   V(compute_dd_table, compute_dd_table_path)                                   \
+   V(dd_max_bytes, dd_max_bytes_arg)                                            \
+   V(compute_dd_slot_mapping, compute_dd_slot_mapping_path)                     \
+@@ -317,10 +330,13 @@ int RunAnalyzer(int argc, char** argv) {
+   // default of 10000 bytes."
+   int64_t dd_max_bytes = 10000;
+   if (dd_max_bytes_arg != nullptr) {
+-    char* end = nullptr;
+-    const int64_t parsed = strtoll(dd_max_bytes_arg, &end, 10);
+-    if (end == dd_max_bytes_arg || *end != '\0' || parsed < 0) {
+-      Syslog::PrintErr("Error: --dd_max_bytes must be a non-negative integer\n");
++    // The reference accepts a positive decimal prefix (e.g. "1x" and "1.5").
++    const int64_t parsed = strtoll(dd_max_bytes_arg, nullptr, 10);
++    if (parsed <= 0) {
++      Syslog::PrintErr(
++          "Error: --dd_max_bytes must be > 0 (got '%s'). "
++          "Omit the flag to use the default of 10000 bytes.\n",
++          dd_max_bytes_arg);
+       return kErrorExitCode;
+     }
+     dd_max_bytes = parsed;
+@@ -334,7 +350,17 @@ int RunAnalyzer(int argc, char** argv) {
+     vm_options.AddArgument("--precompilation");
+   }
+ 
+-  char* error = Dart_SetVMFlags(vm_options.count(), vm_options.arguments());
++  CommandLineOptions effective_vm_options(vm_options.count() + 1);
++#if defined(DART_SNAPSHOT_ANALYZER)
++  // The reference analyzer defaults to relative PCs, unlike gen_snapshot.
++  // Put the default first so an explicit --no_disassemble_relative wins.
++  effective_vm_options.AddArgument("--disassemble_relative");
++#endif
++  for (int i = 0; i < vm_options.count(); i++) {
++    effective_vm_options.AddArgument(vm_options.GetArgument(i));
++  }
++  char* error = Dart_SetVMFlags(effective_vm_options.count(),
++                              effective_vm_options.arguments());
+   if (error != nullptr) {
+     Syslog::PrintErr("Setting VM flags failed: %s\n", error);
+     free(error);
+@@ -401,14 +427,8 @@ int RunAnalyzer(int argc, char** argv) {
+   intptr_t out_len = 0;
+ 
+   Dart_EnterScope();
+-  // --compute_dd_table has its own destination, so it is not part of the
+-  // either/or below: theirs accepts it alongside --out and the other dumps.
+-  // ⚠️ Correction, 2026-10-01 (measured): "accepts" is all it does. Their main is one
+-  // else-if chain -- compute_dd_table, then compute_dd_slot_mapping, then
+-  // dump_object_pool_link_data, then the --out dumps -- so
+-  //   theirs --compute_dd_table=T --out=J hello.so  -> rc 0, J NOT written.
+-  // Ours still runs the later outputs after the table; that pre-existing
+-  // divergence is left as it was. The slot mapping below does follow theirs.
++  // Output modes have priority: DD table, slot mapping, object-pool link data,
++  // then the --out dumps. Accepting multiple options does not write each file.
+   bool slot_mapping_ran = false;
+   if (compute_dd_table_path != nullptr) {
+     // Theirs reads --dd_table_data here with errors suppressed and passes it
+@@ -476,17 +496,7 @@ int RunAnalyzer(int argc, char** argv) {
+     free(mapping);
+     slot_mapping_ran = true;
+   }
+-  if (dd_table_data_path != nullptr && compute_dd_table_path == nullptr &&
+-      !slot_mapping_ran && out_path != nullptr) {
+-    // ⚠️ Known gap, said out loud rather than silently ignored: theirs also
+-    // reads --dd_table_data for the --out dumps (0x100004630) and its
+-    // --shorebird JSON changes with it (hello: 698828 -> 704596 bytes). That
+-    // consumer is not reproduced, so the output below is the one WITHOUT it.
+-    Syslog::PrintErr(
+-        "Warning: --dd_table_data is not applied to --out outputs by this "
+-        "analyze_snapshot.\n");
+-  }
+-  if (slot_mapping_ran) {
++  if (compute_dd_table_path != nullptr || slot_mapping_ran) {
+     Dart_ExitScope();
+     Dart_ShutdownIsolate();
+     delete app_snapshot;
+@@ -499,8 +509,7 @@ int RunAnalyzer(int argc, char** argv) {
+     Dart_DumpObjectPool(info, &op, &op_len);
+     WriteFile(dump_object_pool_link_data_path, op, op_len);
+     free(op);
+-  }
+-  if (out_path != nullptr) {
++  } else if (out_path != nullptr) {
+     if (dump_blobs) {
+       Dart_DumpBlobs(info, &out, &out_len);
+     } else if (dump_object_pool) {
+@@ -508,8 +517,16 @@ int RunAnalyzer(int argc, char** argv) {
+     } else if (dump_class_table) {
+       Dart_DumpClassTableAsJson(info, &out, &out_len);
+     } else if (shorebird_mode) {
+-      Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len,
+-                                                  disassemble_mode);
++      char* table = nullptr;
++      intptr_t table_len = 0;
++      if (dd_table_data_path != nullptr) {
++        ReadFileFully(dd_table_data_path, "DD table", &table, &table_len,
++                      /*report=*/false);
++      }
++      const bool ok = Dart_DumpSnapshotInformationShorebirdAsJson(
++          info, &out, &out_len, disassemble_mode, table, table_len);
++      free(table);
++      if (!ok) PrintErrAndExit("Error: --dd_table_data: input rejected\n");
+     } else {
+       // --disassemble is deliberately NOT forwarded here. Theirs ignores it
+       // outside --shorebird: their plain JSON is 878599 bytes with the flag and
+diff --git a/runtime/bin/elf_loader.cc b/runtime/bin/elf_loader.cc
+index c023450d4a9..97c4d57dc27 100644
+--- a/runtime/bin/elf_loader.cc
++++ b/runtime/bin/elf_loader.cc
+@@ -5,6 +5,7 @@
+ #include "bin/elf_loader.h"
+ 
+ #include <memory>
++#include <limits>
+ #include <utility>
+ 
+ #include "platform/globals.h"
+@@ -67,6 +68,9 @@ class LoadedElf {
+ 
+  private:
+   bool ReadHeader();
++  bool FileRangeValid(uint64_t start, uint64_t length) const {
++    return start <= file_length_ && length <= file_length_ - start;
++  }
+   bool ReadProgramTable();
+   bool LoadSegments();
+   bool ReadSectionTable();
+@@ -83,6 +87,7 @@ class LoadedElf {
+   // Initialized on a successful Load().
+   std::unique_ptr<Mappable> mappable_;
+   const uint64_t elf_data_offset_;
++  uint64_t file_length_ = 0;
+   const File::MapType exec_segment_map_type_;
+ 
+   // Initialized on error.
+@@ -153,6 +158,10 @@ bool LoadedElf::Load() {
+               "File offset must be page-aligned.");
+ 
+   ASSERT(mappable_ != nullptr);
++  const int64_t length = mappable_->Length();
++  CHECK_ERROR(length >= 0 && elf_data_offset_ <= static_cast<uint64_t>(length),
++              "Invalid ELF file length or offset.");
++  file_length_ = static_cast<uint64_t>(length) - elf_data_offset_;
+   CHECK_ERROR(mappable_->SetPosition(elf_data_offset_), "Invalid file offset.");
+ 
+   CHECK(ReadHeader());
+@@ -188,6 +197,10 @@ bool LoadedElf::ReadHeader() {
+   CHECK_ERROR(mappable_->ReadFully(&header_, sizeof(dart::elf::ElfHeader)),
+               "Could not read ELF file.");
+ 
++  CHECK_ERROR(memcmp(header_.ident, dart::elf::ELFMAG,
++                     sizeof(dart::elf::ELFMAG)) == 0,
++              "Invalid ELF magic.");
++
+   CHECK_ERROR(header_.ident[dart::elf::EI_DATA] == dart::elf::ELFDATA2LSB,
+               "Expected little-endian ELF object.");
+ 
+@@ -260,6 +273,7 @@ bool LoadedElf::ReadSectionStringTable() {
+ }
+ 
+ bool LoadedElf::LoadSegments() {
++  constexpr uword max_address = std::numeric_limits<uword>::max();
+   // Calculate the total amount of virtual memory needed.
+   uword total_memory = 0;
+   for (uword i = 0; i < header_.num_program_headers; ++i) {
+@@ -268,12 +282,22 @@ bool LoadedElf::LoadSegments() {
+     // Only PT_LOAD segments need to be loaded.
+     if (header.type != dart::elf::ProgramHeaderType::PT_LOAD) continue;
+ 
++    CHECK_ERROR(FileRangeValid(header.file_offset, header.file_size),
++                "ELF segment extends beyond the file.");
++    CHECK_ERROR(header.file_size <= header.memory_size,
++                "ELF segment file size exceeds its memory size.");
++    CHECK_ERROR(header.memory_offset <= max_address &&
++                    header.memory_size <= max_address - header.memory_offset,
++                "ELF segment address overflow.");
++
+     total_memory = Utils::Maximum(
+         static_cast<uword>(header.memory_offset + header.memory_size),
+         total_memory);
+     CHECK_ERROR(Utils::IsPowerOfTwo(header.alignment),
+                 "Alignment must be a power of two.");
+   }
++  CHECK_ERROR(total_memory <= max_address - (PageSize() - 1),
++              "ELF image size overflow.");
+   total_memory = Utils::RoundUp(total_memory, PageSize());
+ 
+   base_.reset(VirtualMemory::Allocate(total_memory,
+@@ -415,6 +439,10 @@ MappedMemory* LoadedElf::MapFilePiece(uword file_start,
+                                       uword file_length,
+                                       const void** mem_start) {
+   const uword adjustment = (elf_data_offset_ + file_start) % PageSize();
++  if (!FileRangeValid(file_start, file_length)) {
++    error_ = "ELF table extends beyond the file.";
++    return nullptr;
++  }
+   const uword mapping_offset = elf_data_offset_ + file_start - adjustment;
+   const uword mapping_length =
+       Utils::RoundUp(elf_data_offset_ + file_start + file_length, PageSize()) -
+diff --git a/runtime/bin/mappable.h b/runtime/bin/mappable.h
+index 607348392af..0ef63cfe59a 100644
+--- a/runtime/bin/mappable.h
++++ b/runtime/bin/mappable.h
+@@ -28,6 +28,7 @@ class Mappable {
+ 
+   virtual bool SetPosition(uint64_t position) = 0;
+   virtual bool ReadFully(void* dest, int64_t length) = 0;
++  virtual int64_t Length() const = 0;
+ 
+   virtual ~Mappable() {}
+ 
+@@ -59,6 +60,8 @@ class FileMappable : public Mappable {
+     return file_->ReadFully(dest, length);
+   }
+ 
++  int64_t Length() const override { return file_->Length(); }
++
+  private:
+   File* const file_;
+   DISALLOW_COPY_AND_ASSIGN(FileMappable);
+@@ -71,6 +74,8 @@ class MemoryMappable : public Mappable {
+ 
+   ~MemoryMappable() override {}
+ 
++  int64_t Length() const override { return static_cast<int64_t>(size_); }
++
+   MappedMemory* Map(File::MapType type,
+                     uint64_t position,
+                     uint64_t length,
+diff --git a/runtime/configs.gni b/runtime/configs.gni
+index 6233cf8d622..b896165d4de 100644
+--- a/runtime/configs.gni
++++ b/runtime/configs.gni
+@@ -104,6 +104,14 @@ _all_configs = [
+     compiler = false
+     is_product = true
+   },
++  {
++    suffix = "_aotruntime_analyzer"
++    configs = _aotruntime_product_config +
++              [ "$_dart_runtime:dart_snapshot_analyzer_config" ]
++    snapshot = true
++    compiler = false
++    is_product = true
++  },
+   {
+     suffix = "_precompiler"
+     configs = _precompiler_config
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index 347cc306ccb..3b9fe3f093b 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -36,11 +36,13 @@ void Dart_DumpSnapshotInformationAsJson(
+ // binary, --disassemble changes the --shorebird JSON and leaves the plain JSON
+ // byte-identical (878599 bytes either way), so plumbing it any wider would
+ // invent a behaviour they do not have.
+-void Dart_DumpSnapshotInformationShorebirdAsJson(
++bool Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+     intptr_t* out_len,
+-    bool include_disassembly = false);
++    bool include_disassembly = false,
++    const char* dd_table = nullptr,
++    intptr_t dd_table_len = 0);
+ 
+ // flutter_hot_patcher: Shorebird's --dump_class_table. The JSON is
+ // {"num_cids": N, "classes": [{"id", "name", "hash"}, ...]}, which is the same
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 6ad78d2a049..0d96857ae9c 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -2915,11 +2915,39 @@ static std::vector<std::string> ShorebirdDisassembleEntry(uword start,
+   return lines;
+ }
+ 
+-void Dart_DumpSnapshotInformationShorebirdAsJson(
++bool Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+     intptr_t* out_len,
+-    bool include_disassembly) {
++    bool include_disassembly,
++    const char* dd_table,
++    intptr_t dd_table_len) {
++  *out = nullptr;
++  *out_len = 0;
++  std::map<int64_t, std::string> slot_hashes;
++  std::unordered_map<std::string, int64_t> hash_slots;
++  if (dd_table != nullptr) {
++    DDInputReader reader(dd_table, dd_table_len);
++    int64_t count;
++    if (!reader.Unsigned(&count) || !reader.Plausible(count, 3)) {
++      OS::PrintErr("Error: DD table: bad entry count\n");
++      return false;
++    }
++    for (int64_t i = 0; i < count; i++) {
++      std::string hash;
++      int64_t slot, size;
++      if (!reader.String(&hash) || !reader.Unsigned(&slot) ||
++          !reader.Unsigned(&size)) {
++        OS::PrintErr("Error: DD table: truncated at entry %" Pd64 " of %" Pd64
++                     "\n", i, count);
++        return false;
++      }
++      // The two maps have independent last-write semantics: duplicate slots
++      // replace the table row; duplicate hashes replace a function's dd_slot.
++      slot_hashes[slot] = hash;
++      hash_slots[hash] = slot;
++    }
++  }
+   Thread* thread = Thread::Current();
+   IsolateGroup* ig = thread->isolate_group();
+   DARTSCOPE(thread);
+@@ -3021,6 +3049,10 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.PrintProperty("op_subgraph_hash",
+                      classified.op_subgraph_hash[ci].c_str());
+     js.PrintProperty("self_hash", classified.self_hash[ci].c_str());
++    const auto dd_slot = hash_slots.find(classified.self_hash[ci]);
++    if (dd_slot != hash_slots.end()) {
++      js.PrintProperty64("dd_slot", dd_slot->second);
++    }
+ 
+     js.OpenArray("self_pp");
+     for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
+@@ -3058,9 +3090,20 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.CloseObject();
+   }
+   js.CloseArray();
++  if (!slot_hashes.empty()) {
++    js.OpenArray("dd_table");
++    for (const auto& entry : slot_hashes) {
++      js.OpenObject();
++      js.PrintProperty64("slot_index", entry.first);
++      js.PrintProperty("self_hash", entry.second.c_str());
++      js.CloseObject();
++    }
++    js.CloseArray();
++  }
+   js.CloseObject();
+-  
++
+   js.Steal(out, out_len);
++  return true;
+ }
+ 
+ }  // namespace snapshot_analyzer
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index ec2c1ffa9df..32000acc0fd 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -3466,6 +3466,13 @@ class ObjectPoolDeserializationCluster : public DeserializationCluster {
+           case ObjectPool::SnapshotBehavior::kResetToBootstrapNative:
+             entry.raw_obj_ = StubCode::CallBootstrapNative().ptr();
+             continue;
++#if defined(TARGET_ARCH_ARM64)
++          case ObjectPool::SnapshotBehavior::
++              kResetToBootstrapNativeThreadOffset:
++            entry.raw_obj_ = Smi::New(
++                Thread::call_bootstrap_native_entry_point_offset());
++            continue;
++#endif
+ #if defined(DART_PRECOMPILED_RUNTIME)
+           case ObjectPool::SnapshotBehavior::
+               kResetToSwitchableCallMissEntryPoint:
+@@ -10099,18 +10106,11 @@ Deserializer::EntryPoints Deserializer::WrapCode(CodePtr code,
+   // InvokeWithTHR(base_entry). That transition crashes on iOS because the
+   // Simulator's calling-convention adapter is not compatible with Dart AOT
+   // ARM64 entry points in a mixed-ownership (App.framework + patch) binary.
+-  // Identity lets the Simulator interpret the patch's own bytecode directly,
+-  // which is safe and correct since patch and base bytes are provably identical
+-  // for every is_cpu() function.
+-#if defined(DART_INCLUDE_SIMULATOR)
+-  // Assert the premise: link%=100% means patch and base bytes are identical
+-  // for every is_cpu() function. If this fires, the patch was accepted with
+-  // link < 100%, which would give the Simulator wrong bytecode silently.
+-  RELEASE_ASSERT(
+-      ::memcmp(reinterpret_cast<const void*>(payload_start),
+-               reinterpret_cast<const void*>(base_entry),
+-               static_cast<size_t>(length)) == 0);
+-#endif
++  // Identity lets the Simulator interpret the patch's own bytecode directly.
++  // The simulator executes the patch's own instructions at payload_start.
++  // A linked function can differ byte-for-byte between the ELF patch and the
++  // installed Mach-O base because their code layout differs. There is no need
++  // to require equality with base_entry when this path uses payload_start.
+   // base_entry lives in the base app image, which is normally-executable
+   // memory -- not the PROT_READ-only patch payload that made identity the
+   // right call on the two misses above. So the B6 hazard (Sim->CPU wrapper
+diff --git a/runtime/vm/code_comments.h b/runtime/vm/code_comments.h
+index 3ba519486eb..7a9e2bed7f3 100644
+--- a/runtime/vm/code_comments.h
++++ b/runtime/vm/code_comments.h
+@@ -6,7 +6,7 @@
+ #define RUNTIME_VM_CODE_COMMENTS_H_
+ 
+ #include "vm/globals.h"  // For INCLUDE_IL_PRINTER
+-#if defined(INCLUDE_IL_PRINTER)
++#if defined(INCLUDE_IL_PRINTER) || defined(FORCE_INCLUDE_DISASSEMBLER)
+ 
+ namespace dart {
+ 
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index ce1858643fb..c3945108d85 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -63,6 +63,8 @@
+ 
+ namespace dart {
+ 
++DECLARE_FLAG(bool, print_shorebird_info);
++
+ #define T (thread())
+ #define IG (isolate_group())
+ #define Z (zone())
+@@ -493,6 +495,11 @@ void Precompiler::DoCompileAll() {
+       // as well as other type checks.
+       HierarchyInfo hierarchy_info(T);
+ 
++      // Resolve the first DD pass before dispatch-table initialization creates
++      // method extractors. The reference's first key map excludes those
++      // functions; the second pass below sees them and preserves prior slots.
++      ShorebirdLinker::shared()->ResolveDDSlots(T, Z);
++
+       dispatch_table_generator_ = new compiler::DispatchTableGenerator(Z);
+       dispatch_table_generator_->Initialize(IG->class_table());
+ 
+@@ -562,13 +569,6 @@ void Precompiler::DoCompileAll() {
+       AddTypeArguments(TypeArguments::Handle(
+           Z, IG->object_store()->type_argument_string_string()));
+ 
+-      // Shorebird: pass 1 of DD slot resolution. Their report prints twice per
+-      // run with key maps of 2878 then 2983; ours reads 2896 then 2983, so the
+-      // verify pass lines up exactly and this one sits within 18 functions of
+-      // theirs. The exact point they snapshot the key map is not pinned down --
+-      // every resolution counter matches, only this diagnostic count differs.
+-      ShorebirdLinker::shared()->ResolveDDSlots(T, Z);
+-
+       // Compile newly found targets and add their callees until we reach a
+       // fixed point.
+       Iterate();
+@@ -581,11 +581,59 @@ void Precompiler::DoCompileAll() {
+         // Now we generate the actual object pool instance and attach it to the
+         // object store. The AOT runtime will use it from there in the enter
+         // dart code stub.
+-        const auto& pool = ObjectPool::Handle(
+-            ObjectPool::NewFromBuilder(*global_object_pool_builder()));
++        const auto* mapping = ShorebirdLinker::shared()->object_pool_mapping();
++        const intptr_t length = global_object_pool_builder()->CurrentLength();
++        intptr_t moved = 0;
++        if (mapping != nullptr) {
++          if (mapping->size() != static_cast<size_t>(length)) {
++            FATAL("Object pool mapping has %zu entries, expected %" Pd,
++                  mapping->size(), length);
++          }
++          // A rewritten access uses mapping[old] as its pool index. Check that
++          // every destination exists exactly once before creating a snapshot.
++          std::vector<bool> assigned(static_cast<size_t>(length), false);
++          for (intptr_t i = 0; i < length; i++) {
++            const intptr_t destination = (*mapping)[static_cast<size_t>(i)];
++            if (destination < 0 || destination >= length ||
++                assigned[static_cast<size_t>(destination)]) {
++              FATAL("Invalid object pool mapping: %" Pd " -> %" Pd, i,
++                    destination);
++            }
++            assigned[static_cast<size_t>(destination)] = true;
++            moved += destination != i;
++          }
++        }
++
++        ObjectPool& pool = ObjectPool::Handle(
++            Z, ObjectPool::NewFromBuilder(*global_object_pool_builder()));
++        if (moved != 0) {
++          // The image writer renumbers code's pool accesses. Move the entries
++          // by the same old-to-new mapping before the pool is serialized.
++          const ObjectPool& sorted =
++              ObjectPool::Handle(Z, ObjectPool::New(length));
++          Object& value = Object::Handle(Z);
++          for (intptr_t i = 0; i < length; i++) {
++            const intptr_t destination = (*mapping)[static_cast<size_t>(i)];
++            const auto type = pool.TypeAt(i);
++            sorted.SetTypeAt(destination, type, pool.PatchableAt(i),
++                             pool.SnapshotBehaviorAt(i), pool.PairPositionAt(i));
++            if (type == ObjectPool::EntryType::kTaggedObject) {
++              value = pool.ObjectAt(i);
++              sorted.SetObjectAt(destination, value);
++            } else {
++              sorted.SetRawValueAt(destination, pool.RawValueAt(i));
++            }
++          }
++          pool = sorted.ptr();
++        }
+         IG->object_store()->set_global_object_pool(pool);
+         global_object_pool_builder()->Reset();
+ 
++        if (mapping != nullptr && FLAG_print_shorebird_info) {
++          OS::Print("Sorted ObjectPool, moved %" Pd " of %" Pd " entries.\n",
++                    moved, pool.Length());
++        }
++
+         if (FLAG_disassemble) {
+           THR_Print("Global object pool:\n");
+           pool.DebugPrint();
+@@ -2122,10 +2170,17 @@ void Precompiler::FinalizeDispatchTable() {
+ void Precompiler::FinalizeIndirectStaticCallTable() {
+   HANDLESCOPE(T);
+ 
+-  // No mapping file means no table at all -- `cbz x19` at 0x10021b414 skips the
+-  // whole thing rather than producing an empty Array.
++  // A serialized mapping supplies kernel offsets; a voters-only input supplies
++  // resolved owners instead.
+   const DDSlotMapping* mapping = ShorebirdLinker::shared()->dd_slot_mapping();
+-  if (mapping == nullptr) return;
++  const DDSlotResolution* resolution = ShorebirdLinker::shared()->resolution();
++  // A voters-only file still supplies resolved slot owners. The first AOT
++  // compilation is for the VM isolate; its owners are reused when compiling
++  // the program snapshot, where the DD table belongs.
++  if (mapping == nullptr &&
++      (resolution == nullptr || IG->is_vm_isolate())) {
++    return;
++  }
+ 
+   // Phase 1: walk the program, collecting dd_slot -> Code.
+   class DDTableBuilder : public CodeVisitor {
+@@ -2154,10 +2209,18 @@ void Precompiler::FinalizeIndirectStaticCallTable() {
+       // and use would leave those pointers stale. A zone handle is visited by
+       // the GC, so this closes a hazard rather than reproducing it. Deliberate
+       // deviation, and the only one in this function.
++      AddCodeForSlot(slot, code);
++    }
++
++    void AddCodeForSlot(intptr_t slot, const Code& code) {
+       slot_to_code_[slot] = &Code::ZoneHandle(zone_, code.ptr());
+       if (slot > max_slot_) max_slot_ = slot;
+     }
+ 
++    void IncludeSlot(intptr_t slot) {
++      if (slot > max_slot_) max_slot_ = slot;
++    }
++
+     intptr_t max_slot() const { return max_slot_; }
+     const std::unordered_map<intptr_t, const Code*>& slot_to_code() const {
+       return slot_to_code_;
+@@ -2174,7 +2237,42 @@ void Precompiler::FinalizeIndirectStaticCallTable() {
+   };
+ 
+   DDTableBuilder builder(Z, mapping);
+-  ProgramVisitor::WalkProgram(Z, IG, &builder);
++  if (mapping != nullptr) {
++    ProgramVisitor::WalkProgram(Z, IG, &builder);
++  } else {
++    // The public voters-only fixture has no serialized DDSlotMapping. Use the
++    // resolved slot owners, including allocation stubs, to build the same
++    // table. Its length ends at the highest retained slot; trailing unresolved
++    // voter slots do not extend it.
++    Object& owner = Object::Handle(Z);
++    Function& function = Function::Handle(Z);
++    Code& code = Code::Handle(Z);
++    for (intptr_t slot = 0; slot <= resolution->max_slot(); slot++) {
++      const uword raw_owner = resolution->OwnerForSlot(slot);
++      if (raw_owner == 0) continue;
++      owner = static_cast<ObjectPtr>(raw_owner);
++      if (owner.IsFunction()) {
++        function = Function::RawCast(owner.ptr());
++        if (!function.HasCode()) {
++          FATAL("DD slot %" Pd " has a function without code", slot);
++        }
++        code = function.CurrentCode();
++      } else if (owner.IsCode()) {
++        code = Code::RawCast(owner.ptr());
++      } else {
++        FATAL("DD slot %" Pd " has an invalid owner", slot);
++      }
++      builder.AddCodeForSlot(slot, code);
++    }
++    const DDSlotVoters* voters = ShorebirdLinker::shared()->dd_slot_voters();
++    if (voters != nullptr) {
++      for (const intptr_t slot : voters->sorted_slot_ids()) {
++        if (ShorebirdLinker::DDSlotWasRewritten(slot)) {
++          builder.IncludeSlot(slot);
++        }
++      }
++    }
++  }
+ 
+   // `tbnz x8, #0x3f` at 0x10021b474: nothing matched, so no table.
+   if (builder.max_slot() < 0) return;
+@@ -2230,6 +2328,30 @@ void Precompiler::FinalizeIndirectStaticCallTable() {
+   }
+ 
+   IG->object_store()->set_indirect_static_call_table_code_entries(table);
++
++  const DDSlotVoters* voters = ShorebirdLinker::shared()->dd_slot_voters();
++  if (voters != nullptr && resolution != nullptr && !IG->is_vm_isolate()) {
++    intptr_t retained = 0, rewritten = 0, sentinel_filled = 0;
++    intptr_t rewritten_null = 0;
++    for (intptr_t slot = 0; slot < table.Length(); slot++) {
++      const bool resolved = resolution->HasSlot(slot);
++      const bool was_rewritten = ShorebirdLinker::DDSlotWasRewritten(slot);
++      retained += resolved;
++      rewritten += was_rewritten;
++      if (!resolved) {
++        if (was_rewritten) {
++          rewritten_null++;
++        } else {
++          sentinel_filled++;
++        }
++      }
++    }
++    OS::PrintErr("DD table: %" Pd " slots, %" Pd " retained, %" Pd
++                 " rewritten, %" Pd " unrewritten-null filled with "
++                 "sentinel, %" Pd " rewritten-null missing\n",
++                 table.Length(), retained, rewritten, sentinel_filled,
++                 rewritten_null);
++  }
+ }
+ 
+ // The table is built before DropFunctions, because the retain pass above has to
+diff --git a/runtime/vm/compiler/api/print_filter.cc b/runtime/vm/compiler/api/print_filter.cc
+index 40ab4694860..bc03395a441 100644
+--- a/runtime/vm/compiler/api/print_filter.cc
++++ b/runtime/vm/compiler/api/print_filter.cc
+@@ -2,7 +2,7 @@
+ // for details. All rights reserved. Use of this source code is governed by a
+ // BSD-style license that can be found in the LICENSE file.
+ #include "vm/globals.h"  // For INCLUDE_IL_PRINTER
+-#if defined(INCLUDE_IL_PRINTER)
++#if defined(INCLUDE_IL_PRINTER) || defined(DART_SNAPSHOT_ANALYZER)
+ 
+ #include "vm/compiler/api/print_filter.h"
+ 
+diff --git a/runtime/vm/compiler/api/print_filter.h b/runtime/vm/compiler/api/print_filter.h
+index 9dac1fcee9a..6b3e065af1c 100644
+--- a/runtime/vm/compiler/api/print_filter.h
++++ b/runtime/vm/compiler/api/print_filter.h
+@@ -7,7 +7,7 @@
+ 
+ #include "vm/globals.h"  // For INCLUDE_IL_PRINTER
+ 
+-#if defined(INCLUDE_IL_PRINTER)
++#if defined(INCLUDE_IL_PRINTER) || defined(DART_SNAPSHOT_ANALYZER)
+ 
+ #include "platform/allocation.h"
+ 
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index a035ae2026c..b2814ea742b 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -512,24 +512,8 @@ void Assembler::LoadWordFromPoolIndex(Register dst,
+   ASSERT(dst != pp);
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: padded to a fixed footprint so that renumbering the pool never
+-  // moves the code around it. See PadLoadStore.
+-  //
+-  // ⚠️ Precompiled mode only, and that gate is OURS. The padding exists so the
+-  // object pool editor can renumber entries without moving code, which is only
+-  // ever done to an AOT snapshot; in JIT mode it would cost two words per pool
+-  // access and buy nothing. Their gen_snapshot is precompiler-only, so whether
+-  // their JIT build pads is not observable from anything here.
+-  //
+-  // The gate is no longer load bearing for correctness. It used to be: the
+-  // InstructionPattern decoders read these sequences back from a fixed backward
+-  // distance, so padding crashed unoptimized code loudly, in
+-  // IL_IndirectStaticCall_SerializationRoundTrip and
+-  // IsolateReload_ShapeChange_Const_AddSlot. Those decoders now step over the
+-  // padding -- SkipBackOverObjectPoolLoadPadding in instructions_arm64.cc --
+-  // which is where their build has to handle it too: all 2299 PP loads in their
+-  // own snapshot are followed by nop,nop, including the ones inside call
+-  // sequences, which is precisely the fixed-distance case.
++  // Keep pool loads at a fixed three-instruction footprint in JIT and AOT.
++  // Instruction-pattern decoders skip the trailing padding on readback.
+   const auto emit = [&]() {
+         Operand op;
+         const uint32_t upper20 = offset & 0xfffff000;
+@@ -549,12 +533,8 @@ void Assembler::LoadWordFromPoolIndex(Register dst,
+           ldr(dst, Address(pp, dst));
+         }
+   };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::Offset);
+-  } else {
+-    emit();
+-  }
++  PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
++               Address::Offset);
+ }
+ 
+ void Assembler::StoreWordToPoolIndex(Register src,
+@@ -564,7 +544,7 @@ void Assembler::StoreWordToPoolIndex(Register src,
+   ASSERT(src != pp);
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
++  // Shorebird: see LoadWordFromPoolIndex.
+   const auto emit = [&]() {
+         Operand op;
+         const uint32_t upper20 = offset & 0xfffff000;
+@@ -584,12 +564,8 @@ void Assembler::StoreWordToPoolIndex(Register src,
+           str(src, Address(pp, TMP));
+         }
+   };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::Offset);
+-  } else {
+-    emit();
+-  }
++  PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
++               Address::Offset);
+ }
+ 
+ void Assembler::LoadDoubleWordFromPoolIndex(Register lower,
+@@ -602,9 +578,8 @@ void Assembler::LoadDoubleWordFromPoolIndex(Register lower,
+ 
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
+-  // This one is always PP-relative, so the padding applies whenever the gate is
+-  // open.
++  // Shorebird: see LoadWordFromPoolIndex.
++  // This one is always PP-relative, so the padding always applies.
+   const auto emit = [&]() {
+         Operand op;
+         const uint32_t upper20 = offset & 0xfffff000;
+@@ -645,12 +620,8 @@ void Assembler::LoadDoubleWordFromPoolIndex(Register lower,
+           UNIMPLEMENTED();
+         }
+   };
+-  if (FLAG_precompiled_mode) {
+-    PadLoadStore(emit, PP, static_cast<int32_t>(offset), kEightBytes,
+-                 Address::PairOffset);
+-  } else {
+-    emit();
+-  }
++  PadLoadStore(emit, PP, static_cast<int32_t>(offset), kEightBytes,
++               Address::PairOffset);
+ }
+ 
+ bool Assembler::CanLoadFromObjectPool(const Object& object) const {
+@@ -1310,7 +1281,7 @@ void Assembler::LoadSFromOffset(VRegister dest, Register base, int32_t offset) {
+     auto const type = Address::AddressType::Offset;
+     fldrs(dest, PrepareLargeOffset(base, offset, kSWord, type));
+   };
+-  if (FLAG_precompiled_mode && base == PP) {
++  if (base == PP) {
+     PadLoadStore(emit, base, offset, kSWord, Address::Offset);
+   } else {
+     emit();
+@@ -1322,7 +1293,7 @@ void Assembler::LoadDFromOffset(VRegister dest, Register base, int32_t offset) {
+     auto const type = Address::AddressType::Offset;
+     fldrd(dest, PrepareLargeOffset(base, offset, kDWord, type));
+   };
+-  if (FLAG_precompiled_mode && base == PP) {
++  if (base == PP) {
+     PadLoadStore(emit, base, offset, kEightBytes, Address::Offset);
+   } else {
+     emit();
+@@ -1334,7 +1305,7 @@ void Assembler::LoadQFromOffset(VRegister dest, Register base, int32_t offset) {
+     auto const type = Address::AddressType::Offset;
+     fldrq(dest, PrepareLargeOffset(base, offset, kQWord, type));
+   };
+-  if (FLAG_precompiled_mode && base == PP) {
++  if (base == PP) {
+     PadLoadStore(emit, base, offset, kQWord, Address::Offset);
+   } else {
+     emit();
+diff --git a/runtime/vm/compiler/assembler/disassembler.cc b/runtime/vm/compiler/assembler/disassembler.cc
+index 6b59c0f39d2..6e56cdfdfaf 100644
+--- a/runtime/vm/compiler/assembler/disassembler.cc
++++ b/runtime/vm/compiler/assembler/disassembler.cc
+@@ -152,9 +152,11 @@ void Disassembler::Disassemble(uword start,
+                                DisassemblyFormatter* formatter,
+                                const Code& code,
+                                const CodeComments* comments) {
++#if defined(INCLUDE_IL_PRINTER)
+   if (comments == nullptr) {
+     comments = code.IsNull() ? &Code::Comments::New(0) : &code.comments();
+   }
++#endif
+   ASSERT(formatter != nullptr);
+   char hex_buffer[kHexadecimalBufferSize];  // Instruction in hexadecimal form.
+   char human_buffer[kUserReadableBufferSize];  // Human-readable instruction.
+@@ -165,7 +167,7 @@ void Disassembler::Disassemble(uword start,
+   while (pc < end) {
+     const intptr_t offset = pc - start;
+     const intptr_t old_comment_finger = comment_finger;
+-    while (comment_finger < comments->Length() &&
++    while (comments != nullptr && comment_finger < comments->Length() &&
+            comments->PCOffsetAt(comment_finger) <= offset) {
+       formatter->Print("        ;; %s\n", comments->CommentAt(comment_finger));
+       comment_finger++;
+diff --git a/runtime/vm/compiler/assembler/disassembler.h b/runtime/vm/compiler/assembler/disassembler.h
+index 4fdd1351187..1b71c731cee 100644
+--- a/runtime/vm/compiler/assembler/disassembler.h
++++ b/runtime/vm/compiler/assembler/disassembler.h
+@@ -61,7 +61,7 @@ class DisassembleToStdout : public DisassemblyFormatter {
+   DISALLOW_COPY_AND_ASSIGN(DisassembleToStdout);
+ };
+ 
+-#if !defined(PRODUCT)
++#if defined(INCLUDE_IL_PRINTER)
+ // Disassemble into a JSONStream.
+ class DisassembleToJSONStream : public DisassemblyFormatter {
+  public:
+@@ -144,11 +144,15 @@ class Disassembler : public AllStatic {
+ #if !defined(PRODUCT) || defined(FORCE_INCLUDE_DISASSEMBLER)
+     DisassembleToStdout stdout_formatter;
+     LogBlock lb;
++#if !defined(PRODUCT)
+     if (!code.IsNull()) {
+       Disassemble(start, end, &stdout_formatter, code, &code.comments());
+     } else {
+       Disassemble(start, end, &stdout_formatter, code);
+     }
++#else
++    Disassemble(start, end, &stdout_formatter, code);
++#endif
+ #else
+     UNREACHABLE();
+ #endif
+diff --git a/runtime/vm/compiler/assembler/object_pool_builder.h b/runtime/vm/compiler/assembler/object_pool_builder.h
+index c27385705a0..7700e715b92 100644
+--- a/runtime/vm/compiler/assembler/object_pool_builder.h
++++ b/runtime/vm/compiler/assembler/object_pool_builder.h
+@@ -47,6 +47,10 @@ struct ObjectPoolBuilderEntry {
+ 
+     // Set the value to 0 on snapshot writing.
+     kSetToZero,
++    // Reset an arm64 lazy-native call's Smi-tagged Thread offset. A JIT
++    // snapshot may be written after its trampoline was patched, while the
++    // native-function entry resets to LinkNativeCall when loaded.
++    kResetToBootstrapNativeThreadOffset,
+   };
+ 
+   enum EntryType {
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index c02ca01eb14..b5a9f5cd41f 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1327,9 +1327,9 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   __ LoadNativeEntry(R5, &label,
+                      link_lazily() ? ObjectPool::Patchability::kPatchable
+                                    : ObjectPool::Patchability::kNotPatchable);
+-  if (link_lazily() && FLAG_precompiled_mode) {
++  if (link_lazily()) {
+     // Shorebird "shape A": dispatch through a Thread field instead of a Code*
+-    // pool entry.
++    // pool entry. The reference JIT and AOT generators both emit this shape.
+     //
+     //   ldr x16,[PP,#slot]   (+ object-pool load padding NOPs)
+     //   asr x16,x16,#1
+@@ -1359,8 +1359,8 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     // table cannot establish that (exit_through_ffi_ sits at the same offset in
+     // configurations where these three move), so the guard is instead on the
+     // three offsets themselves: Dart::FeaturesString records them in every
+-    // arm64 AOT snapshot and SnapshotHeaderReader::VerifyFeatures refuses to
+-    // load a snapshot whose recorded offsets differ from the loading VM's.
++    // arm64 full-code snapshot and SnapshotHeaderReader::VerifyFeatures
++    // refuses to load one whose recorded offsets differ from the loading VM's.
+     const intptr_t thr_off =
+         dart::Thread::call_bootstrap_native_entry_point_offset();
+     // The slot is a kTaggedObject holding Smi(thr_off), not a kImmediate
+@@ -1376,9 +1376,16 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     // dedup index table -- so each call site gets its own slot. That is
+     // required: NativeCallPattern::set_target rewrites each site's slot
+     // independently.
++    // An AOT snapshot is made before any native call runs. A JIT snapshot can
++    // capture an already-linked call site; its native-function slot is reset
++    // to LinkNativeCall on load, so its trampoline offset must reset too.
+     const Smi& thr_off_smi = Smi::ZoneHandle(Smi::New(thr_off));
+     const intptr_t idx = __ object_pool_builder().AddObject(
+-        thr_off_smi, compiler::ObjectPoolBuilderEntry::kPatchable);
++        thr_off_smi, compiler::ObjectPoolBuilderEntry::kPatchable,
++        FLAG_precompiled_mode
++            ? compiler::ObjectPoolBuilderEntry::kSnapshotable
++            : compiler::ObjectPoolBuilderEntry::
++                  kResetToBootstrapNativeThreadOffset);
+     __ LoadWordFromPoolIndex(R16, idx);
+     __ AsrImmediate(R16, R16, kSmiTagSize);
+     CLOBBERS_LR({
+@@ -1388,34 +1395,6 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     compiler->EmitCallsiteMetadata(source(), DeoptId::kNone,
+                                    UntaggedPcDescriptors::kOther, locs(),
+                                    /*env=*/nullptr);
+-  } else if (link_lazily()) {
+-    // F79: F37 replaced this, in precompiled mode, with Shorebird's "shape A"
+-    // ldr x16,[PP,#slot]; nop; nop; asr x16,x16,#1; ldr x30,[THR,x16]; blr x30
+-    // where the pool slot held SmiTag(bootstrap_native_wrapper_entry_point_
+-    // offset). That emission was reverted here because it cannot run, and the
+-    // "ours=92 matches theirs" parity it bought was a pure instruction-shape
+-    // count that is invariant to whether the code works. Two facts constrain
+-    // any future attempt; neither was known when F37 landed:
+-    //
+-    //  1. Thread caches no entry point for the CallBootstrapNative *stub* --
+-    //     CACHED_ADDRESSES_LIST (thread.h) only caches the address of the C
+-    //     function NativeEntry::BootstrapNativeCallWrapper. So blr'ing through
+-    //     any existing THR slot lands on a C function with Dart registers in
+-    //     x0/x1 instead of (Dart_NativeArguments, Dart_NativeFunction), and it
+-    //     faults in TransitionSafepointState's ctor reading a garbage Thread*.
+-    //     It also skips the exit frame, vm_tag and NativeArguments setup that
+-    //     GenerateCallNativeWithWrapperStub does.
+-    //  2. NativeCallPattern (instructions_arm64.cc:82) recovers both pool
+-    //     indices by decoding this call site, so LinkNativeCall and
+-    //     CodePatcher::{Get,Patch}NativeCallAt break on shape A even if the
+-    //     branch target were right.
+-    //
+-    // Before re-landing shape A, establish what their pool slot actually
+-    // indexes -- per F35 this instruction pattern has already been misread
+-    // once -- rather than choosing an offset that makes a count match.
+-    compiler->GeneratePatchableCall(
+-        source(), *stub, UntaggedPcDescriptors::kOther, locs(),
+-        compiler::ObjectPoolBuilderEntry::kResetToBootstrapNative);
+   } else {
+     // We can never lazy-deopt here because natives are never optimized.
+     ASSERT(!compiler->is_optimizing());
+@@ -4985,7 +4964,13 @@ static void InvokeDoublePow(FlowGraphCompiler* compiler,
+                                   /*preserve_registers=*/false);
+     ASSERT(base == V0);
+     ASSERT(exp == V1);
++#if defined(DART_INCLUDE_SIMULATOR)
++    rt.Call(instr->TargetFunction(), kInputCount,
++            dart::Thread::is_simulating_offset(),
++            Instr::kCallLeafRuntimeOnCPUCode);
++#else
+     rt.Call(instr->TargetFunction(), kInputCount);
++#endif
+     ASSERT(result == V0);
+   }
+   __ Bind(&skip_call);
+@@ -5004,7 +4989,13 @@ void InvokeMathCFunctionInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   if (InputCount() == 2) {
+     ASSERT(locs()->in(1).fpu_reg() == V1);
+   }
++#if defined(DART_INCLUDE_SIMULATOR)
++  rt.Call(TargetFunction(), InputCount(),
++          dart::Thread::is_simulating_offset(),
++          Instr::kCallLeafRuntimeOnCPUCode);
++#else
+   rt.Call(TargetFunction(), InputCount());
++#endif
+   ASSERT(locs()->out(0).fpu_reg() == V0);
+ }
+ 
+diff --git a/runtime/vm/dart.cc b/runtime/vm/dart.cc
+index 868a27de052..4d4aed24b80 100644
+--- a/runtime/vm/dart.cc
++++ b/runtime/vm/dart.cc
+@@ -1150,8 +1150,9 @@ char* Dart::FeaturesString(IsolateGroup* isolate_group,
+     // and running Thread layouts together: a build-configuration difference
+     // that moves them (e.g. dart_dynamic_modules) would otherwise make the
+     // first native call load an unrelated Thread field. Recording the three
+-    // offsets here makes such a snapshot fail VerifyFeatures instead.
+-    if (kind == Snapshot::kFullAOT) {
++    // offsets here makes such a snapshot fail VerifyFeatures instead. JIT
++    // snapshots can carry the same lazy-native call sites as AOT snapshots.
++    if (kind == Snapshot::kFullAOT || kind == Snapshot::kFullJIT) {
+       buffer.Printf(
+           " shorebird-native-entry-thr-offsets=%" Pd ",%" Pd ",%" Pd,
+           Thread::call_bootstrap_native_entry_point_offset(),
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index 39e25fa8c46..9e6c89334a9 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7315,7 +7315,15 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+ DART_EXPORT size_t Dart_SnapshotDataSize(const uint8_t* snapshot) {
+   const dart::Snapshot* s = dart::Snapshot::SetupFromBuffer(snapshot);
+   if (s == nullptr || !s->check_magic()) return 0;
+-  return static_cast<size_t>(s->length());
++  // Shorebird's engine hands this size to the updater as a base region, and
++  // the patch was diffed against --dump_blobs, which counts the extra block
++  // that follows the snapshot. Its byte count (from the snapshot end) is a LE
++  // uint32 at the next 64-byte boundary; zero when there are no extras.
++  const size_t length = static_cast<size_t>(s->length());
++  const size_t aligned = (length + 63) & ~static_cast<size_t>(63);
++  uint32_t extra = 0;
++  memmove(&extra, snapshot + aligned, sizeof(extra));
++  return length + extra;
+ }
+ 
+ DART_EXPORT size_t Dart_SnapshotInstrSize(const uint8_t* snapshot) {
+diff --git a/runtime/vm/globals.h b/runtime/vm/globals.h
+index a6ced8088ef..f33203450bd 100644
+--- a/runtime/vm/globals.h
++++ b/runtime/vm/globals.h
+@@ -127,7 +127,7 @@ const intptr_t kDefaultNewGenSemiMaxSize = (kWordSize <= 4) ? 8 : 16;
+ // Include IL printer and disassembler functionality into non-PRODUCT builds,
+ // in all AOT compiler builds or when forced.
+ #if !defined(PRODUCT) || defined(DART_PRECOMPILER) ||                          \
+-    defined(FORCE_INCLUDE_DISASSEMBLER)
++    (defined(FORCE_INCLUDE_DISASSEMBLER) && !defined(DART_SNAPSHOT_ANALYZER))
+ #if defined(DART_PRECOMPILED_RUNTIME) && defined(PRODUCT)
+ #error Requested to include IL printer into PRODUCT AOT runtime
+ #endif
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index 32928c8d41c..d3086eff6aa 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -1007,6 +1007,52 @@ ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_PluralityVote_TwoVotersSameTarget) {
+   EXPECT(resolution->OwnerForSlot(0) != static_cast<uword>(caller1.ptr()));
+ }
+ 
++// A tied slot is decided after every vote has been counted, in the hash
++// table's iteration order. The reference chooses B for AB and ABBA, and A
++// for BA and BAAB. ABBA/BAAB also rule out a simple "last vote wins" fix.
++ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_TiedTargetsFollowHashTableOrder) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const Array& functions = Array::Handle(cls.current_functions());
++  EXPECT(functions.Length() >= 3);
++  if (functions.Length() < 3) return;
++
++  Function& caller = Function::Handle();
++  Function& target_a = Function::Handle();
++  Function& target_b = Function::Handle();
++  caller ^= functions.At(0);
++  target_a ^= functions.At(1);
++  target_b ^= functions.At(2);
++  EXPECT(caller.ptr() != target_a.ptr());
++  EXPECT(caller.ptr() != target_b.ptr());
++  EXPECT(target_a.ptr() != target_b.ptr());
++
++  const FunctionKey caller_key = FunctionKey::FromFunction(caller);
++  const FunctionKey target_keys[] = {FunctionKey::FromFunction(target_a),
++                                     FunctionKey::FromFunction(target_b)};
++  const std::vector<int> orders[] = {
++      {0, 1}, {1, 0}, {0, 1, 1, 0}, {1, 0, 0, 1}};
++  const int expected[] = {1, 0, 1, 0};
++  for (intptr_t i = 0; i < 4; i++) {
++    linker->ResetDDSlotsForTest();
++    ShorebirdLinker::ResetDDSlotRewrites();
++    auto voters = std::make_unique<DDSlotVoters>();
++    for (int index : orders[i]) {
++      voters->AddVoter(0, caller_key, target_keys[index]);
++    }
++    linker->InitializeWithDDSlotVoters(std::move(voters));
++    linker->ResolveDDSlots(thread, thread->zone());
++
++    const DDSlotResolution* resolution = linker->resolution();
++    EXPECT(resolution != nullptr);
++    EXPECT(resolution->HasSlot(0));
++    const uword winner = expected[i] == 0 ? static_cast<uword>(target_a.ptr())
++                                          : static_cast<uword>(target_b.ptr());
++    EXPECT_EQ(winner, resolution->OwnerForSlot(0));
++  }
++}
++
+ // (2) Verify-only path: had_previous && winner != 0.
+ //
+ // First ResolveDDSlots resolves slot 0 to `target`.  Then the voters slot is
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+index 9f2c9ff6d76..03375d17e79 100644
+--- a/runtime/vm/shorebird/link_info_test.cc
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -334,7 +334,9 @@ VM_UNIT_TEST_CASE(ObjectPoolPairPosition_LeavesTheOtherFieldsAlone) {
+   using Entry = compiler::ObjectPoolBuilderEntry;
+   for (int type = 0; type <= 2; type++) {
+     for (int patch = 0; patch <= 1; patch++) {
+-      for (int behavior = 0; behavior <= 4; behavior++) {
++      for (int behavior = 0;
++           behavior <= Entry::kResetToBootstrapNativeThreadOffset;
++           behavior++) {
+         for (int pair = 0; pair <= 2; pair++) {
+           const uint8_t bits =
+               Entry::EncodeTraits(static_cast<Entry::EntryType>(type),
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index a2461758421..d2b1edc654f 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -1016,16 +1016,8 @@ struct Tally {
+ // A vote counts only when BOTH keys resolve to exactly one owner. Returns the
+ // target's owner on success and 0 otherwise, recording why on failure.
+ uword ScoreVoter(const KeyMap& key_map, const SlotVoter& voter, Tally* tally) {
+-  const auto caller = key_map.find(voter.caller_key);
+-  if (caller == key_map.end()) {
+-    tally->caller_miss++;
+-    return 0;
+-  }
+-  if (caller->second.size() != 1) {
+-    tally->caller_ambig++;
+-    return 0;
+-  }
+-
++  // A voter with two missing keys is reported as tgt_miss by the reference.
++  // Check target first so each rejected voter lands in the same category.
+   const auto target = key_map.find(voter.target_key);
+   if (target == key_map.end()) {
+     tally->tgt_miss++;
+@@ -1035,6 +1027,15 @@ uword ScoreVoter(const KeyMap& key_map, const SlotVoter& voter, Tally* tally) {
+     tally->tgt_ambig++;
+     return 0;
+   }
++  const auto caller = key_map.find(voter.caller_key);
++  if (caller == key_map.end()) {
++    tally->caller_miss++;
++    return 0;
++  }
++  if (caller->second.size() != 1) {
++    tally->caller_ambig++;
++    return 0;
++  }
+   // The winner is the TARGET, not the caller. Established from the oracle: the
+   // synthesised voters pair (caller=real[2i], target=real[2i+1]) and slot i
+   // resolves to real[2i+1] in their own dd_resolution.tsv.
+@@ -1062,13 +1063,11 @@ void ShorebirdLinker::ResolveDDSlots(Thread* thread, Zone* zone) {
+         dd_slot_voters_->voters_for_slot(slot);
+     if (indices == nullptr) continue;
+ 
+-    // Plurality -- not majority, not lowest id, not first.
+-    //
+-    // UNVERIFIED: every fixture we can build has exactly one voter per slot, so
+-    // the oracle never exercises a tie. Their tie-break is libc++ __hash_table
+-    // insertion order; ours is first-encountered. A passing oracle run does NOT
+-    // confirm this branch.
+-    std::unordered_map<uword, intptr_t> votes;
++    // Count every voter before choosing the winner. A tied slot follows the
++    // hash table's iteration order, as observed with multi-voter inputs.
++    // Choosing while votes arrive would instead favor the first voter that
++    // reaches the final count.
++    std::unordered_map<uword, std::pair<intptr_t, const SlotVoter*>> votes;
+     uword winner = 0;
+     intptr_t best = 0;
+     const SlotVoter* winning_voter = nullptr;
+@@ -1076,11 +1075,15 @@ void ShorebirdLinker::ResolveDDSlots(Thread* thread, Zone* zone) {
+       const SlotVoter& voter = dd_slot_voters_->voters()[index];
+       const uword owner = ScoreVoter(key_map, voter, &tally);
+       if (owner == 0) continue;
+-      const intptr_t count = ++votes[owner];
+-      if (count > best) {
+-        best = count;
+-        winner = owner;
+-        winning_voter = &voter;
++      auto& entry = votes[owner];
++      if (entry.first == 0) entry.second = &voter;
++      entry.first++;
++    }
++    for (const auto& entry : votes) {
++      if (entry.second.first > best) {
++        best = entry.second.first;
++        winner = entry.first;
++        winning_voter = entry.second.second;
+       }
+     }
+ 
+@@ -1162,6 +1165,9 @@ std::string OwnerName(Zone* zone, uword owner) {
+     const Function& function = Function::Cast(object);
+     name = function.name();
+     if (!name.IsNull()) function_name = name.ToCString();
++    if (function_name.rfind("set:", 0) == 0) {
++      function_name[3] = '_';
++    }
+     cls = function.Owner();
+   } else if (object.IsCode()) {
+     // Allocation stub: the owner is the Class itself.
+@@ -1190,7 +1196,14 @@ void ShorebirdLinker::PrintDDResolutionIfRequested(Thread* thread, Zone* zone) {
+   if (FLAG_print_dd_resolution_to == nullptr) return;
+   if (dd_slot_voters_ == nullptr || resolution_ == nullptr) return;
+ 
+-  const std::vector<intptr_t> slots = dd_slot_voters_->sorted_slot_ids();
++  std::vector<intptr_t> slots = dd_slot_voters_->sorted_slot_ids();
++  // The table ends at the highest retained slot. Trailing unresolved voter
++  // slots are omitted, unless generated code actually dispatches through one.
++  const intptr_t max_slot = resolution_->max_slot();
++  slots.erase(std::remove_if(slots.begin(), slots.end(), [max_slot](intptr_t s) {
++                return s > max_slot && !ShorebirdLinker::DDSlotWasRewritten(s);
++              }), slots.end());
++  if (slots.empty()) return;
+ 
+   // The four counters their header carries, and what each one counts. `null`
+   // below means "this slot has no resolved owner", which is the same condition
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index b422eac9c58..92a586cfbcf 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -4,14 +4,80 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++#include "vm/app_snapshot.h"
+ #include "vm/compiler/assembler/assembler.h"
++#include "vm/dart.h"
+ #include "vm/stub_code.h"
+ #include "vm/thread.h"
+ #include "vm/unit_test.h"
++#include "vm/version.h"
+ 
+ namespace dart {
+ namespace shorebird {
+ 
++#if defined(TARGET_ARCH_ARM64)
++ISOLATE_UNIT_TEST_CASE(Shorebird_NativeEntryOffsetsGuardFullCodeSnapshots) {
++  const Snapshot::Kind kinds[] = {Snapshot::kFullAOT, Snapshot::kFullJIT};
++  for (const auto kind : kinds) {
++    char* features = Dart::FeaturesString(thread->isolate_group(), false, kind);
++    const char* marker = " shorebird-native-entry-thr-offsets=";
++    const char* location = strstr(features, marker);
++    EXPECT(location != nullptr);
++    if (location != nullptr) {
++      char expected[128];
++      Utils::SNPrint(expected, sizeof(expected),
++                     "%s%" Pd ",%" Pd ",%" Pd, marker,
++                     Thread::call_bootstrap_native_entry_point_offset(),
++                     Thread::call_no_scope_native_entry_point_offset(),
++                     Thread::call_auto_scope_native_entry_point_offset());
++      EXPECT(strstr(features, expected) != nullptr);
++
++      // Exercise the actual load check with a valid header, then change only
++      // one byte of the recorded Thread layout. No snapshot body is needed:
++      // VerifyVersionAndFeatures stops at the end of this header.
++      const char* version = Version::SnapshotString();
++      const intptr_t version_len = strlen(version);
++      const intptr_t features_len = strlen(features);
++      std::vector<uint8_t> bytes(Snapshot::kHeaderSize + version_len +
++                                 features_len + 1);
++      auto* snapshot = reinterpret_cast<Snapshot*>(bytes.data());
++      snapshot->set_magic();
++      snapshot->set_length(bytes.size());
++      snapshot->set_kind(kind);
++      memcpy(bytes.data() + Snapshot::kHeaderSize, version, version_len);
++      char* stored_features = reinterpret_cast<char*>(
++          bytes.data() + Snapshot::kHeaderSize + version_len);
++      memcpy(stored_features, features, features_len + 1);
++
++      intptr_t offset = 0;
++      SnapshotHeaderReader good(snapshot);
++      char* error = good.VerifyVersionAndFeatures(thread->isolate_group(),
++                                                  &offset);
++      EXPECT(error == nullptr);
++      EXPECT_EQ(static_cast<intptr_t>(bytes.size()), offset);
++      free(error);
++
++      char* stored_marker = strstr(stored_features, marker);
++      EXPECT(stored_marker != nullptr);
++      if (stored_marker != nullptr) {
++        char* first_digit = stored_marker + strlen(marker);
++        *first_digit = *first_digit == '0' ? '1' : '0';
++        SnapshotHeaderReader wrong(snapshot);
++        error = wrong.VerifyVersionAndFeatures(thread->isolate_group(),
++                                               &offset);
++        EXPECT(error != nullptr);
++        free(error);
++      }
++    }
++    free(features);
++  }
++}
++#endif
++
+ // Thread::is_simulating_ exists for the two wrapper stubs and nothing else yet,
+ // so its constraints are tested here rather than in a Thread test.
+ //
+@@ -1073,8 +1139,10 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeCarriesTheSimulatorDispatch) {
+   // Insertion one: park the resume PC, having checked nothing was parked.
+   EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kLdr, pc, 16)));
+   EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kStr, pc, 1)));
+-  // Insertion two: the range dispatch, and the clear on the no-range path.
+-  EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kStr, pc, 31)));
++  // Clear the parked PC on both exits that do not use a resume wrapper:
++  // the no-range direct jump and the runtime path for exceptions/deopt.
++  // The latter is required so a later resume does not find an occupied slot.
++  EXPECT_EQ(static_cast<intptr_t>(2), CountWord(stub, LdStThr(kStr, pc, 31)));
+   EXPECT_EQ(
+       static_cast<intptr_t>(1),
+       CountWord(stub, LdStThr(kLdr,
+-- 
+2.53.0
+

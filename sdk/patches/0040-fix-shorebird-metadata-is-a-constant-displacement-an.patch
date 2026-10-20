@@ -1,0 +1,339 @@
+From d03bc8a1d4735e58fcd7a6087fea0cbbc2428aa6 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 17:26:42 +0800
+Subject: [PATCH 040/206] fix(shorebird): metadata is a constant displacement,
+ and back out the dead-strip hook
+
+Two corrections to 094fc0de070, both coming out of the disassembly of their
+Sim->CPU shared body (spikes WRAPPER_STUBS.md, route-a-research 1838d3d).
+
+**MetadataForWrapper was wrong.** Their body reaches a wrapper's metadata in
+three instructions -- mov x17,#0x8000 / add x16,x16,x17 / ldr x16,[x16] -- with
+no mask and no index arithmetic. It works because landing_pad_size ==
+metadata_size == 8, so a single constant displacement maps pad i onto
+Metadata[i]. Ours recovered the page by masking and indexed from the mapping's
+RW boundary, which differs from theirs by exactly
+offset_of_first_wrapper_in_page_: their metadata array is shifted along with the
+pads. Both versions are internally consistent, which is why every existing test
+passed either way. Restoring the old formula now produces 4088 errors in the
+round-trip test, so the corrected tests do distinguish them.
+
+This also disproves the reason I gave for why their MetadataForWrapper takes no
+page argument. It is not that MappingAlignment() makes the page recoverable by
+masking; it is that the page is not needed at all. MappingStart survives for
+ContainsEntryPoint's ownership test, which is a real use. Three comments that
+asserted the old rationale are corrected rather than deleted.
+
+Added a test that the last pad's metadata still lands inside the mapping. It
+only just does -- offset + 49112 + 8 against 65536 -- so the scheme depends on
+offset staying below one page. That held implicitly; now it is pinned.
+
+**Backed out InitSimToCpuWrapperPage and DART_NOINLINE.** That was a no-op
+function called from StubCode::Init() for no purpose other than to keep symbols
+alive under -dead_strip, and it is not in their API: the name appears 0 times in
+their binary against 34 WrapperAllocator symbols. It also did not work.
+wrapper_symbols_check.sh reported 0 -> 2 and passed, but both symbols were one
+config accessor listed twice (a FUN debug entry plus its text symbol) while
+every WrapperAllocator symbol was still stripped.
+
+So the script was the faulty instrument: its pattern also accepted
+CPUToSimConfig|SimToCPUConfig, which a config getter satisfies on its own. It
+now matches WrapperAllocator and nothing else, and it fails -- honestly -- with
+0. It should keep failing until a caller exists on the CPU<->Sim transition path
+that actually wraps an entry point.
+
+Kept from that commit: SimToCPUConfig::GetStubCodeRange reporting the real stub
+with a StubCode::HasBeenInitialized() guard. That part is correct and is theirs.
+
+59/59 shorebird tests pass. WrapperAllocator symbols in product gen_snapshot: 0,
+unchanged and correctly reported as a failure.
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 4447047751e..c936a03c578 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -26,25 +26,11 @@ void CPUToSimConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+   code_end = 0;
+ }
+ 
+-// Sim->CPU stub body (28 B) is a breakpoint placeholder for now -- the real
+-// body lands in a later commit. Reporting the real range here is still correct:
+-// it makes EnsureStubPage map the page and lets AllocateMetadata hand out pads,
+-// and it is the live reference that prevents the linker from dead-stripping
+-// wrapper.cc out of gen_snapshot. Callers must not actually *enter* a pad until
+-// the real body replaces the breakpoint.
+-//
+-// Sim->CPU stub body (28 B) is a breakpoint placeholder for now -- the real
+-// body lands in a later commit. Reporting the real range here is still correct:
+-// it makes EnsureStubPage map the page and lets AllocateMetadata hand out pads,
+-// and it is the live reference that prevents the linker from dead-stripping
+-// wrapper.cc out of gen_snapshot. Callers must not actually *enter* a pad until
+-// the real body replaces the breakpoint.
+-//
+-// DART_NOINLINE is deliberate: without it the compiler inlines this into
+-// InitSimToCpuWrapperPage (same TU), erasing the inter-section call that the
+-// linker needs to keep every symbol in wrapper.cc alive under -dead_strip.
+-DART_NOINLINE void SimToCPUConfig::GetStubCodeRange(uword& code_start,
+-                                                    uword& code_end) {
++// Sim->CPU. The shared body is still a breakpoint placeholder, but reporting the
++// real range is correct regardless: it is what makes EnsureStubPage map a page
++// and lets AllocateMetadata hand out pads. Nothing may *enter* a pad until the
++// real body replaces the breakpoint.
++void SimToCPUConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+   if (!StubCode::HasBeenInitialized()) {
+     // Consulted before StubCode::Init() -- politely report "no stub yet"
+     // rather than crashing on an uninitialized Code handle.
+@@ -91,22 +77,29 @@ intptr_t WrapperAllocator::MetadataOffset() const {
+   return layout_.rx_mapping_size;
+ }
+ 
++// A landing pad and its metadata are a fixed distance apart -- no page recovery,
++// no index arithmetic. This works because landing_pad_size == metadata_size == 8,
++// so pad i and Metadata[i] advance in lockstep and one constant displacement maps
++// between them.
++//
++// This is not a simplification we chose; it is what their Sim->CPU shared body
++// does, in three instructions:
++//
++//     mov  x17, #0x8000        ; == rx_mapping_size
++//     add  x16, x16, x17       ; x16 held &pad[i] from the pad's own adr x16, #0
++//     ldr  x16, [x16]          ; Metadata::target_entry_point
++//
++// See spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md. Note the corollary that
++// their metadata array is shifted by offset_of_first_wrapper_in_page_ along with
++// the pads, rather than starting at the mapping's RW boundary. The earlier
++// version here recovered the page by masking and indexed from that boundary,
++// which differs from this by exactly that offset -- self-consistent, and wrong.
+ void* WrapperAllocator::MetadataForWrapper(uword wrapper) const {
+-  const uword page = MappingStart(wrapper);
+-  const intptr_t index = static_cast<intptr_t>(
+-      (wrapper - page - offset_of_first_wrapper_in_page_) /
+-      layout_.landing_pad_size);
+-  return reinterpret_cast<void*>(page + MetadataOffset() +
+-                                 index * layout_.metadata_size);
++  return reinterpret_cast<void*>(wrapper + MetadataOffset());
+ }
+ 
+ uword WrapperAllocator::WrapperOfMetadata(void* metadata) const {
+-  const uword address = reinterpret_cast<uword>(metadata);
+-  const uword page = MappingStart(address);
+-  const intptr_t index = static_cast<intptr_t>(
+-      (address - page - MetadataOffset()) / layout_.metadata_size);
+-  return page + offset_of_first_wrapper_in_page_ +
+-         index * layout_.landing_pad_size;
++  return reinterpret_cast<uword>(metadata) - MetadataOffset();
+ }
+ 
+ bool WrapperAllocator::ContainsEntryPoint(uword entry_point, uword* target) {
+@@ -175,8 +168,9 @@ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+     return nullptr;
+   }
+ 
+-  // Aligning to MappingAlignment() is what lets MappingStart() recover a page
+-  // base by masking, so a wrapper address alone is enough to find its metadata.
++  // Aligning to MappingAlignment() lets MappingStart() recover a page base by
++  // masking, which is how ContainsEntryPoint tests page ownership. It is not
++  // needed to find a wrapper's metadata -- that is a constant displacement.
+   VirtualMemory* page = VirtualMemory::AllocateAligned(
+       layout_.MappingSize(), layout_.MappingAlignment(),
+       /*is_executable=*/false, /*is_compressed=*/false,
+@@ -216,23 +210,16 @@ void* WrapperAllocator::AllocateMetadata() {
+   const intptr_t index = layout_.num_wrappers_per_page -
+                          static_cast<intptr_t>(wrappers_left_in_current_page_);
+   wrappers_left_in_current_page_--;
+-  return reinterpret_cast<void*>(CurrentPage()->start() + MetadataOffset() +
+-                                 index * layout_.metadata_size);
+-}
+ 
+-void InitSimToCpuWrapperPage() {
+-  // Confirm the stub is visible and record its range for later use. This is a
+-  // no-op while the shared body is a breakpoint placeholder -- the real work
+-  // happens once the body is transcribed and a WrapperAllocator hands out pads.
+-  // The call itself is what matters architecturally: it is the only live
+-  // reference from stub_code.cc into wrapper.cc, and without it -dead_strip
+-  // removes the entire allocator from gen_snapshot.
+-  uword start = 0;
+-  uword end = 0;
+-  SimToCPUConfig::GetStubCodeRange(start, end);
+-  USE(start);
+-  USE(end);
++  // Reserve the pad, then derive its metadata slot the same way the shared body
++  // will at run time. Deriving it rather than computing a second, parallel
++  // formula is what keeps the two from drifting apart.
++  const uword wrapper = CurrentPage()->start() +
++                        offset_of_first_wrapper_in_page_ +
++                        index * layout_.landing_pad_size;
++  return MetadataForWrapper(wrapper);
+ }
+ 
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 551a4a4de82..7484c1fcd6e 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -131,9 +131,14 @@ class WrapperAllocator {
+     uword CodeSize() const;
+ 
+     // Their wrapper.h:116 and :117. Upstream's MappingSize() and
+-    // MappingAlignment(). The alignment is what makes a page base recoverable
+-    // from any address inside it by masking, which is how their one-argument
+-    // MetadataForWrapper can work without being told the page.
++    // MappingAlignment(). The alignment makes a page base recoverable from any
++    // address inside it by masking, which is how ContainsEntryPoint decides
++    // whether an address belongs to one of our pages.
++    //
++    // It is NOT the reason MetadataForWrapper takes no page argument -- an
++    // earlier version of this comment claimed that, and their disassembled
++    // shared body disproves it: the body never masks anything. A pad and its
++    // metadata are simply a constant distance apart.
+     intptr_t MappingSize() const { return rx_mapping_size + rw_mapping_size; }
+     intptr_t MappingAlignment() const {
+       return Utils::RoundUpToPowerOfTwo(MappingSize());
+@@ -156,8 +161,10 @@ class WrapperAllocator {
+   // They have no WrapEntryPoint -- this pair is the whole allocation API.
+   void* AllocateMetadata();
+ 
+-  // Their wrapper.h:131 and :132. Inverses of each other. Neither is told the
+-  // page: it is recovered by masking with MappingAlignment().
++  // Their wrapper.h:131 and :132. Inverses of each other, and each is a single
++  // add or subtract of MetadataOffset(): a pad and its metadata sit a constant
++  // distance apart because landing_pad_size == metadata_size. Their shared body
++  // does exactly this in three instructions -- see wrapper.cc.
+   uword WrapperOfMetadata(void* metadata) const;
+   void* MetadataForWrapper(uword wrapper) const;
+ 
+@@ -200,14 +207,6 @@ class WrapperAllocator {
+   DISALLOW_COPY_AND_ASSIGN(WrapperAllocator);
+ };
+ 
+-// Called once from StubCode::Init() after InitializationDone(). Queries the
+-// Sim→CPU stub's code range to verify it is reachable and to create a live
+-// reference from stub_code.cc into wrapper.cc. Without this call the linker's
+-// -dead_strip pass removes wrapper.cc from gen_snapshot because nothing else
+-// in the product call graph touches it. The body is a no-op while the real
+-// Sim→CPU shared body is still a breakpoint placeholder; the call becomes
+-// meaningful once the real body lands.
+-void InitSimToCpuWrapperPage();
+ 
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper_symbols_check.sh b/runtime/vm/shorebird/wrapper_symbols_check.sh
+index d9d2aa8bc2d..901a948e6a4 100755
+--- a/runtime/vm/shorebird/wrapper_symbols_check.sh
++++ b/runtime/vm/shorebird/wrapper_symbols_check.sh
+@@ -1,21 +1,35 @@
+ #!/usr/bin/env bash
+-# Fails if wrapper.cc got dead-stripped out of the product gen_snapshot.
++# Is WrapperAllocator actually in the product artifact, or only compiled?
+ #
+-# Compiling is not landing. sim_bridge.cc produced a .o for months while
+-# `nm gen_snapshot` found zero of its symbols, because no call site referenced
+-# it. Expect this check to FAIL until plan #2 wires WrapEntryPoint into the
+-# simulator -- that is the point of it.
++# wrapper.cc builds fine but has no caller, so -dead_strip discards it. This
++# reports whether that is still true.
++#
++# The pattern matches WrapperAllocator and nothing else, on purpose. An earlier
++# version also accepted CPUToSimConfig|SimToCPUConfig, and reported success on a
++# count of 2 that turned out to be one config getter listed twice (a FUN debug
++# entry plus its text symbol) while every allocator symbol was still stripped.
++# A check that a config accessor can satisfy is not a check on the allocator.
+ set -euo pipefail
+ 
+ BIN=${1:-$HOME/dart-3122/sdk/xcodebuild/ProductARM64/gen_snapshot}
+ [ -x "$BIN" ] || { echo "missing binary: $BIN" >&2; exit 2; }
+ 
+-n=$(nm -a "$BIN" 2>/dev/null | c++filt \
+-    | grep -cE 'shorebird::(WrapperAllocator|Layout|CPUToSimConfig|SimToCPUConfig)' || true)
++n=$(nm -a "$BIN" 2>/dev/null | c++filt | sort -u \
++    | grep -c 'shorebird::WrapperAllocator' || true)
++
++echo "WrapperAllocator symbols in $(basename "$BIN"): $n"
+ 
+-echo "wrapper.cc symbols in $(basename "$BIN"): $n"
+ if [ "$n" -eq 0 ]; then
+-  echo "FAIL: dead-stripped -- compiled but not referenced by anything" >&2
++  cat >&2 <<'EOF'
++FAIL: dead-stripped -- compiled, but nothing in the product call graph calls it.
++
++This is the expected state until a real caller exists. A real caller means code
++on the CPU<->Sim transition path that actually wraps an entry point. Calling
++into wrapper.cc from an init hook purely to keep the symbols alive satisfies
++this script without making the allocator reachable from anything that matters,
++so it does not count -- it was tried, and it did not even move this number.
++EOF
+   exit 1
+ fi
+-echo "PASS: wrapper.cc is present in the product artifact"
++
++echo "PASS: WrapperAllocator survives into the product artifact"
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index b8afdc7903b..e1cbae62674 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -193,12 +193,36 @@ VM_UNIT_TEST_CASE(WrapperAllocator_WrapperMetadataRoundTrips) {
+   for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
+     const uword wrapper = page + offset + i * l.landing_pad_size;
+     void* metadata = allocator.MetadataForWrapper(wrapper);
+-    EXPECT_EQ(page + l.rx_mapping_size + i * l.metadata_size,
++    // A pad and its metadata are a constant distance apart -- rx_mapping_size,
++    // which is the 0x8000 their shared body materializes. Note this is measured
++    // from the pad, so the metadata array is shifted by `offset` too; it does
++    // not begin at the mapping's RW boundary.
++    EXPECT_EQ(wrapper + static_cast<uword>(l.rx_mapping_size),
+               reinterpret_cast<uword>(metadata));
+     EXPECT_EQ(wrapper, allocator.WrapperOfMetadata(metadata));
+   }
+ }
+ 
++// The constant-displacement scheme only works if the last pad's metadata is
++// still inside the mapping, and it only just is: with the pads shifted by
++// `offset`, the final metadata word ends at offset + 49112 + 8 against a 65536
++// mapping. That leaves room only while `offset` stays under a page, which is
++// guaranteed because it is a byte offset within one OS page. Worth pinning,
++// because a larger rx_mapping_size or a smaller mapping would silently push the
++// tail of the metadata array out of the allocation.
++VM_UNIT_TEST_CASE(WrapperAllocator_LastMetadataFitsInsideTheMapping) {
++  const Layout l = TestLayout();
++  const uword offset = ExpectedFirstWrapperOffset();
++  EXPECT(offset < static_cast<uword>(l.page_size));
++
++  const uword last_pad = offset + (l.num_wrappers_per_page - 1) * l.landing_pad_size;
++  const uword last_metadata_end =
++      last_pad + l.rx_mapping_size + l.metadata_size;
++  EXPECT(last_metadata_end <= static_cast<uword>(l.MappingSize()));
++  // And it does not collide with the RX half it is measured from.
++  EXPECT(last_pad + l.rx_mapping_size >= static_cast<uword>(l.rx_mapping_size));
++}
++
+ // Distinct allocations must get distinct landing pads, advancing by exactly one
+ // pad each time.
+ VM_UNIT_TEST_CASE(WrapperAllocator_HandsOutDistinctSequentialPads) {
+diff --git a/runtime/vm/stub_code.cc b/runtime/vm/stub_code.cc
+index 191bd12d948..8d081103590 100644
+--- a/runtime/vm/stub_code.cc
++++ b/runtime/vm/stub_code.cc
+@@ -11,7 +11,6 @@
+ #include "vm/heap/safepoint.h"
+ #include "vm/interpreter.h"
+ #include "vm/object_store.h"
+-#include "vm/shorebird/wrapper.h"
+ #include "vm/snapshot.h"
+ #include "vm/virtual_memory.h"
+ #include "vm/visitor.h"
+@@ -67,10 +66,6 @@ void StubCode::Init() {
+ 
+   InitializationDone();
+ 
+-  // Initialize the Sim→CPU wrapper page now that the stubs exist. This also
+-  // keeps wrapper.cc in the product binary: -dead_strip would otherwise remove
+-  // it because no other live call path touches it yet.
+-  shorebird::InitSimToCpuWrapperPage();
+ 
+ #if defined(DART_PRECOMPILER)
+   {
+-- 
+2.53.0
+

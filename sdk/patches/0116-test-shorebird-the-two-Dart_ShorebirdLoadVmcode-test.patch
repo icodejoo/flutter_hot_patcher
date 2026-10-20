@@ -1,0 +1,129 @@
+From 58e56bdca0ab86cae6e9034b5337b87f3ee604d9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 17:45:47 +0800
+Subject: [PATCH 116/206] test(shorebird): the two Dart_ShorebirdLoadVmcode
+ tests asserted the wrong build
+
+Both died of SIGSEGV in xcodebuild/ReleaseARM64 -- the last red in verify_all.sh. Not an
+assertion failure and not a bug in the entry point: the whole body of
+Dart_ShorebirdLoadVmcode sits behind
+
+  #if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
+
+in dart_api_impl.cc, because the last thing it does is hand the path to
+Simulator::SetPendingVmcodeFile, which only the arm64 Simulator declares.
+xcodebuild/ReleaseARM64 has host_cpu == target_cpu == arm64 and no dart_force_simulator,
+so DART_INCLUDE_SIMULATOR and with it SIMULATOR_AVAILABLE are undefined, the
+#else arm is what is compiled, and it can only `return false`. Nothing installs
+an oracle, LinkOracle::shared() is null, and the tests then called
+shared()->entry_count() and shared()->HasPatch() on it -- so the process died
+and took the two EXPECT lines that had already explained why down with it,
+inside a crash dump.
+
+The tests were right when they were written; the configuration was not.
+Measured 2026-08-27: both pass unchanged in xcodebuild/DebugSIMARM64
+(dart_force_simulator = true) and both fail in xcodebuild/ReleaseARM64.
+
+So each test now asserts the contract of the build it is compiled into. The
+simulator arms are the original assertions, with the dereferences guarded so a
+future failure reports instead of crashing. The #else arms are positive
+assertions about the stub -- returns false, installs nothing -- rather than an
+#if that quietly removes the test, because "this configuration does not support
+it" is a claim worth checking too. Both arms discriminate: in the simulator
+build the #else arm would fail (the oracle IS installed there), which is what
+proves the guard is reading a macro that is actually in scope.
+
+Negative control: flipping the #else arm's `shared() == nullptr` to `!=` after
+a ninja that exited 0 turns Shorebird_LoadVmcodeGoesThroughReadLinkHeader red
+at shorebird_test.cc:336, i.e. inside the arm this build compiles; restoring it
+returns the baseline.
+
+verify_all.sh: 17 ran, 0 failed (was 17 ran, 1 failed). run_vm_tests 151 passed
+of 151 selected (was 149 passed, 2 failed). verify_reproduction.sh unchanged at
+28 artifacts, 0 failures.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index abb3567166d..d6237626581 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -284,6 +284,27 @@ VM_UNIT_TEST_CASE(Shorebird_UsingLinkingNeedsBothHalves) {
+ // header a second time, which it used to, with a 65536-entry bound that
+ // disagreed with LinkOracle's. This exercises the whole path against a real
+ // file so that the delegation is checked rather than assumed.
++//
++// Both of the next two tests are per-configuration, and that is not a dodge --
++// the entry point itself is. Its whole body sits behind
++//   #if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
++// in dart_api_impl.cc, because the last thing it does is hand the path to
++// Simulator::SetPendingVmcodeFile, which only that Simulator declares. In a
++// build with no Simulator compiled in, the #else can only `return false`, and
++// nothing installs an oracle. Asserting the linking behaviour there does not
++// test the entry point, it tests the wrong configuration: measured 2026-08-27,
++// both of these pass in xcodebuild/DebugSIMARM64 (dart_force_simulator = true)
++// and both fail in xcodebuild/ReleaseARM64, which is not one.
++//
++// So each test asserts the contract of the build it is compiled into. The #else
++// arms are deliberately positive assertions about the stub -- returns false,
++// installs nothing -- rather than an #if that quietly removes the test, because
++// "this configuration does not support it" is itself a claim worth checking.
++//
++// The dereferences are guarded. Before that, a failed EXPECT on shared() was
++// followed by shared()->entry_count() on a null pointer, so the whole binary
++// died of SIGSEGV and the two EXPECT lines that had already explained why
++// scrolled past inside a crash dump.
+ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeGoesThroughReadLinkHeader) {
+   LinkOracle::Install(nullptr);
+ 
+@@ -302,10 +323,18 @@ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeGoesThroughReadLinkHeader) {
+          static_cast<ssize_t>(tail.size()));
+   close(fd);
+ 
++#if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
+   EXPECT(Dart_ShorebirdLoadVmcode(path));
+   EXPECT(LinkOracle::shared() != nullptr);
+-  EXPECT_EQ(static_cast<intptr_t>(3), LinkOracle::shared()->entry_count());
+-  EXPECT(LinkOracle::shared()->HasPatch());
++  if (LinkOracle::shared() != nullptr) {
++    EXPECT_EQ(static_cast<intptr_t>(3), LinkOracle::shared()->entry_count());
++    EXPECT(LinkOracle::shared()->HasPatch());
++  }
++#else
++  // No Simulator compiled in: the stub refuses the file without reading it.
++  EXPECT(!Dart_ShorebirdLoadVmcode(path));
++  EXPECT(LinkOracle::shared() == nullptr);
++#endif
+ 
+   unlink(path);
+   LinkOracle::Install(nullptr);
+@@ -313,6 +342,10 @@ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeGoesThroughReadLinkHeader) {
+ 
+ // A header that pairs nothing is well-formed. It loads, and the return value
+ // says there is nothing to link rather than that the file was bad.
++//
++// False for two different reasons in the two configurations, which is why the
++// oracle is checked and not just the return value: with a Simulator the file
++// loaded and there is nothing to link, without one the file was never read.
+ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeEmptyTableLoadsButHasNoPatch) {
+   LinkOracle::Install(nullptr);
+ 
+@@ -326,8 +359,14 @@ VM_UNIT_TEST_CASE(Shorebird_LoadVmcodeEmptyTableLoadsButHasNoPatch) {
+   close(fd);
+ 
+   EXPECT(!Dart_ShorebirdLoadVmcode(path));
++#if defined(SIMULATOR_AVAILABLE) && defined(TARGET_ARCH_ARM64)
+   EXPECT(LinkOracle::shared() != nullptr);
+-  EXPECT(!LinkOracle::shared()->HasPatch());
++  if (LinkOracle::shared() != nullptr) {
++    EXPECT(!LinkOracle::shared()->HasPatch());
++  }
++#else
++  EXPECT(LinkOracle::shared() == nullptr);
++#endif
+ 
+   unlink(path);
+   LinkOracle::Install(nullptr);
+-- 
+2.53.0
+

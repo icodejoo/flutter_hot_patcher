@@ -1,0 +1,255 @@
+From d5625eae25c6eaf296458ab60ed605ebe84b0cb1 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 18:24:32 +0800
+Subject: [PATCH 044/206] feat(shorebird): the real Sim->CPU wrapper body --
+ first stub body with real bytes
+
+Task 6b-iii, which needed 6b-i (Thread::is_simulating_) and 6b-ii (the brk
+hypercall block) first. Of their 15 private stub generators this is the first one
+in this fork with a body rather than a Breakpoint placeholder.
+
+Seven instructions, transcribed one at a time from their
+GenerateTransitionDartToCpuIfNeededStub at 0x10046c5f0 (WRAPPER_STUBS.md
+section 7). It is not the masked thunk this plan originally assumed -- it masks
+nothing, and branches on Thread::is_simulating_.
+
+**Six of their seven words come out byte-identical.** That is the real result,
+and it needed its own test: the size assertion is blind to register and opcode
+choice, which is exactly how the pad register (R9 vs their IP0) and the stub
+names slipped through earlier in this work. The new test reads the emitted body
+out of the stub and compares words. The fourth word encodes is_simulating_'s
+offset -- 0x8d8 for them, larger here because our field is appended -- so it is
+checked by re-deriving the encoding, and the test also asserts that the same
+expression reproduces their 0xf9446f51 from 0x8d8.
+
+Three negative controls, run and each red:
+
+  - perturbing the expected brk word by 1 -> "expected: <3560318369> but was:
+    <3560318368>", so the test reads the real bytes rather than restating
+    constants.
+  - an extra nop in the body -> the pad-array test fails with 16380 vs 16384.
+    This one matters: ASSERT_EQUAL in the generator is compiled out in release
+    and product, so it never runs in any build we make. The unit test is what
+    holds the body to 28 bytes, not that assertion.
+  - the earlier 6b-ii controls still apply to the brk arm this body emits.
+
+target::Thread cannot carry is_simulating_ (see thread.h), so the generator uses
+the host offset. That is only the target offset while the layouts agree, which is
+now checked rather than assumed: a RELEASE_ASSERT compares the extracted offset
+for a neighbouring Thread field against its host value, so a cross-architecture
+gen_snapshot fails loudly instead of emitting a wrong displacement.
+
+CPU->Sim keeps its Breakpoint placeholder -- 272 bytes calling
+compiler::RunOnSimulator, which is Phase D -- and CPUToSimConfig::GetStubCodeRange
+still reports an empty range, so no page is mapped from it and no pad of it can
+be entered.
+
+Unchanged and honestly reported: wrapper_symbols_check.sh still prints 0 and
+exits 1. Emitting a body creates no caller of WrapperAllocator; that needs code
+on the transition path actually wrapping an entry point. Nothing here has been
+run on a device, and the "continue from LR" reading of their handler is still
+inference.
+
+76/76 shorebird, sim_bridge, sim_transition and shorebird_sim_to_cpu tests pass
+by exit code and by absence of "error:". Product gen_snapshot links.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index f9b6bf47be7..32d5a28b2b1 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -612,15 +612,12 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+ // The pad count and pad size come from the Layout so that both directions share
+ // this code path.
+ //
+-// The shared body itself (kSharedBodySize bytes for each direction) is
+-// reverse-engineered from Shorebird's binary and not yet emitted; the
+-// Breakpoint placeholder is replaced in the same commit that arrives with the
+-// real body, at which point the body-size assertion is added here.
++// Leaves `body` bound, so the caller emits its direction's shared body straight
++// after and asserts its size.
+ static void GenerateShorebirdWrapperPads(
+     Assembler* assembler,
+-    const dart::shorebird::WrapperAllocator::Layout& layout) {
+-  Label body;
+-
++    const dart::shorebird::WrapperAllocator::Layout& layout,
++    Label* body) {
+   // IP0 (TMP / R16) is used here because that is what Shorebird uses: the
+   // emitted pad word is 0x10000010, which decodes to `adr x16, #0` (x16 ==
+   // IP0), verified by assembling `adr x16, .` with clang and comparing the
+@@ -638,23 +635,12 @@ static void GenerateShorebirdWrapperPads(
+     // identify which wrapper was entered. IP0 is Shorebird's choice (encoding
+     // 0x10000010 = `adr x16, #0`); the shared body reads it from there.
+     __ adr(IP0, Immediate(0));
+-    __ b(&body);
++    __ b(body);
+   }
+ 
+   ASSERT_EQUAL(__ CodeSize(), num_pads * pad_size);
+ 
+-  __ Bind(&body);
+-
+-  // shared_stub_start marks the start of the shared body for this direction.
+-  // The body-size assertion (ASSERT_EQUAL(__ CodeSize() - shared_stub_start,
+-  // layout.shared_body_size)) is added when the real body replaces the
+-  // Breakpoint placeholder below.
+-  const intptr_t shared_stub_start = __ CodeSize();
+-  USE(shared_stub_start);
+-
+-  // Placeholder body: replaced when the real body is reverse-engineered from
+-  // Shorebird's binary.
+-  __ Breakpoint();
++  __ Bind(body);
+ }
+ 
+ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+@@ -663,16 +649,67 @@ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+   using dart::shorebird::WrapperLayout;
+   const WrapperAllocator::Layout layout =
+       WrapperAllocator::Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+-  GenerateShorebirdWrapperPads(assembler, layout);
++
++  Label body;
++  GenerateShorebirdWrapperPads(assembler, layout, &body);
++
++  // Placeholder. Their CPU->Sim body is 272 bytes and calls
++  // compiler::RunOnSimulator, and it has not been transcribed yet -- that is
++  // Phase D. Until then CPUToSimConfig::GetStubCodeRange reports an empty range,
++  // so no page is ever mapped from this stub and no pad can be entered.
++  __ Breakpoint();
+ }
+ 
+ void StubCodeCompiler::GenerateTransitionDartToCpuIfNeededStub() {
++  using dart::shorebird::Metadata;
+   using dart::shorebird::SimToCPUConfig;
+   using dart::shorebird::WrapperAllocator;
+   using dart::shorebird::WrapperLayout;
+   const WrapperAllocator::Layout layout =
+       WrapperAllocator::Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
+-  GenerateShorebirdWrapperPads(assembler, layout);
++
++  Label body;
++  GenerateShorebirdWrapperPads(assembler, layout, &body);
++  const intptr_t body_start = __ CodeSize();
++
++  // Seven instructions, transcribed one by one from their
++  // GenerateTransitionDartToCpuIfNeededStub at 0x10046c5f0 -- see
++  // spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md section 7. It is not a
++  // masked thunk: it masks nothing and branches on Thread::is_simulating_.
++  //
++  // Thread::is_simulating_ cannot be read through target::Thread, because
++  // runtime_offsets_extracted.h is a checked-in table that this machine cannot
++  // regenerate (see thread.h). The host offset stands in for the target offset,
++  // which is only valid while the two layouts agree. Rather than assume that,
++  // check it against a neighbouring Thread field that *is* in the table: if the
++  // extracted offset and the host offset agree there, the layouts agree, and a
++  // cross-architecture gen_snapshot fails loudly here instead of silently
++  // emitting a wrong displacement.
++  RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
++                 dart::Thread::exit_through_ffi_offset());
++
++  // A pad is 8 bytes and a Metadata is 8 bytes, so one constant displacement
++  // carries pad i onto Metadata i -- no mask, no scaling. The pad has already
++  // left its own address in TMP via `adr x16, #0`.
++  __ LoadImmediate(TMP2, layout.rx_mapping_size);          // mov  x17, #0x8000
++  __ add(TMP, TMP, Operand(TMP2));                         // add  x16, x16, x17
++  __ ldr(TMP, Address(TMP, OFFSET_OF(Metadata, target_entry_point)),
++         kEightBytes);                                     // ldr  x16, [x16]
++  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
++         kEightBytes);                                     // ldr  x17, [THR, #_]
++
++  Label already_on_cpu;
++  // Still interpreting -> hand the target, which is in TMP because that is the
++  // register the hypercall handler reads, back to the simulator and do not
++  // return. Already on the CPU -> tail-jump. The polarity is theirs: the same
++  // cbz appears in the CPU->Sim body with the opposite sense under one and the
++  // same meaning of the flag.
++  __ cbz(&already_on_cpu, TMP2, kEightBytes);              // cbz  x17, +8
++  __ brk(Instr::kRunDartOnCPUCode);                        // brk  #0xb12d
++  __ Bind(&already_on_cpu);
++  __ br(TMP);                                              // br   x16
++
++  ASSERT_EQUAL(__ CodeSize() - body_start, layout.shared_body_size);
+ }
+ 
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index ea0415d4b0b..0922258e60b 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -49,11 +49,11 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
+   EXPECT(StubCode::TransitionDartToCpuIfNeeded().Size() > 0);
+ }
+ 
+-// Size of the placeholder shared body: one Breakpoint instruction. The real bodies
+-// are 272 and 28 bytes and get reverse-engineered from Shorebird's binary later;
+-// asserting the placeholder size exactly means this test breaks loudly the moment a
+-// real body lands, which is what should happen -- the assertion has to be updated in
+-// the same change that makes it wrong.
++// Size of the placeholder shared body: one Breakpoint instruction. Only CPU->Sim
++// still uses it -- its 272-byte body is Phase D. Asserting the placeholder size
++// exactly means this breaks loudly the moment that body lands, which is what
++// should happen: the assertion has to be updated in the same change that makes
++// it wrong. Sim->CPU no longer uses it and is checked against their real 28.
+ static constexpr intptr_t kPlaceholderBodySize = Instr::kInstrSize;
+ 
+ // The landing pad array is the half we can reproduce exactly today: their pad count
+@@ -73,11 +73,52 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+   EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
+   EXPECT_EQ(static_cast<intptr_t>(16352),
+             sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size);
++  // Sim->CPU carries their real body now, so the whole stub is pinned to their
++  // number: 2044 pads plus the 28 bytes their kSharedBodySize reports. The seven
++  // instructions have to assemble to exactly that or this fails.
++  EXPECT_EQ(static_cast<intptr_t>(28), sim_to_cpu.shared_body_size);
+   EXPECT_EQ(sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size +
+-                kPlaceholderBodySize,
++                sim_to_cpu.shared_body_size,
+             static_cast<intptr_t>(StubCode::TransitionDartToCpuIfNeeded().Size()));
+ }
+ 
++// The seven words of the Sim->CPU shared body, transcribed instruction by
++// instruction from their stub at 0x10046c5f0 (WRAPPER_STUBS.md section 7.1).
++//
++// The size assertion alone cannot see a wrong register or a wrong opcode -- pad
++// register R9-vs-IP0 and the stub names both slipped past size checks earlier in
++// this work -- so the bytes themselves are compared. Six of the seven are
++// position independent and must equal theirs exactly. The fourth encodes
++// Thread::is_simulating_'s offset, which is 0x8d8 for them and larger here
++// because our field is appended, so it is checked by re-deriving the encoding
++// rather than by equality.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimToCpuBodyMatchesTheirBytes) {
++  using Layout = WrapperAllocator::Layout;
++  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  const uword body_start = StubCode::TransitionDartToCpuIfNeeded().EntryPoint() +
++                           l.num_wrappers_per_page * l.landing_pad_size;
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(body_start);
++
++  EXPECT_EQ(0xd2900011u, w[0]);  // mov  x17, #0x8000
++  EXPECT_EQ(0x8b110210u, w[1]);  // add  x16, x16, x17
++  EXPECT_EQ(0xf9400210u, w[2]);  // ldr  x16, [x16]
++
++  // ldr x17, [THR, #off]: 64-bit scaled unsigned immediate, so imm12 = off / 8.
++  // Theirs is 0xf9446f51, which is this expression with off = 0x8d8.
++  const uint32_t expected_ldr =
++      0xf9400000u |
++      (static_cast<uint32_t>(Thread::is_simulating_offset() / 8) << 10) |
++      (static_cast<uint32_t>(THR) << 5) | 17u;
++  EXPECT_EQ(expected_ldr, w[3]);
++  EXPECT_EQ(0xf9446f51u,
++            0xf9400000u | (uint32_t{0x8d8} / 8 << 10) |
++                (static_cast<uint32_t>(THR) << 5) | 17u);
++
++  EXPECT_EQ(0xb4000051u, w[4]);  // cbz  x17, +8
++  EXPECT_EQ(0xd43625a0u, w[5]);  // brk  #0xb12d
++  EXPECT_EQ(0xd61f0200u, w[6]);  // br   x16
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+-- 
+2.53.0
+

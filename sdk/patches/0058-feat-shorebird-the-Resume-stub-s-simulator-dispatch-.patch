@@ -1,0 +1,260 @@
+From 6db441570b53e8cf0ca1d1c8613c90ccf2fb9d23 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 14:52:43 +0800
+Subject: [PATCH 058/206] feat(shorebird): the Resume stub's simulator dispatch
+ -- sixteen of sixteen
+
+The last of their private stubs, and the only one that is an upstream stub
+Shorebird extended rather than one it added. Upstream emits 30 instructions;
+theirs is 48. The eighteen extra are two insertions, both now reproduced:
+
+- after the resume PC is taken out of the SuspendState, park it in
+  Thread::simulator_async_resume_pc_, trapping if something was already parked;
+- in place of the unconditional jump, dispatch on where that PC lives. Inside
+  the base snapshot's instruction range it is code the CPU compiled and
+  ResumeOnCPU takes it; outside, it came from the patch and only the simulator
+  can interpret it; with no base range recorded, clear the parked PC and jump
+  directly.
+
+Measured against theirs: 48 of 48 instructions, 40 words identical, the eight
+exceptions all Thread displacements. Adds the four Thread fields those
+insertions read.
+
+Both insertions are guarded to TARGET_ARCH_ARM64, because this generator is
+shared with x64 and riscv and the simulator bridge is arm64-only here. The
+copy-loop scratch register is switched to TMP under the same guard, which is the
+only reason the two-instruction copy loop matches theirs.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler.cc b/runtime/vm/compiler/stub_code_compiler.cc
+index 86230d62ace..ca97bb5784d 100644
+--- a/runtime/vm/compiler/stub_code_compiler.cc
++++ b/runtime/vm/compiler/stub_code_compiler.cc
+@@ -2436,7 +2436,14 @@ void StubCodeCompiler::GenerateResumeStub() {
+   __ AddImmediate(kSrcFrame, kSuspendState,
+                   target::SuspendState::payload_offset() - kHeapObjectTag);
+   __ AddImmediate(kDstFrame, SPREG, num_saved_regs * target::kWordSize);
++#if defined(TARGET_ARCH_ARM64)
++  // Shorebird copies with the assembler scratch rather than kTemp here. The
++  // only visible effect is which register the two-instruction copy loop names,
++  // but reproducing it is what makes this stub match theirs word for word.
++  __ CopyMemoryWords(kSrcFrame, kDstFrame, kFrameSize, TMP);
++#else
+   __ CopyMemoryWords(kSrcFrame, kDstFrame, kFrameSize, kTemp);
++#endif
+   if (kDstFrame == CODE_REG) {
+     __ PopRegister(CODE_REG);
+   }
+@@ -2451,6 +2458,23 @@ void StubCodeCompiler::GenerateResumeStub() {
+   __ StoreZero(FieldAddress(kSuspendState, target::SuspendState::pc_offset()),
+                kTemp);
+ 
++#if defined(TARGET_ARCH_ARM64)
++  // Shorebird: park the resume PC where ResumeOnCPU and ResumeOnSimulator
++  // expect to find it. It must not already be set -- two resumes in flight at
++  // once would lose one, so the stub traps rather than overwriting.
++  {
++    Label no_pending_resume;
++    __ LoadFromOffset(TMP, THR,
++                      dart::Thread::simulator_async_resume_pc_offset());
++    __ CompareRegisters(TMP, ZR);
++    __ BranchIf(EQUAL, &no_pending_resume);
++    __ Breakpoint();
++    __ Bind(&no_pending_resume);
++    __ StoreToOffset(kResumePc, THR,
++                     dart::Thread::simulator_async_resume_pc_offset());
++  }
++#endif
++
+ #if defined(TARGET_ARCH_X64) || defined(TARGET_ARCH_IA32)
+   // Adjust resume PC to skip extra epilogue generated on x86
+   // right after the call to suspend stub in order to maintain
+@@ -2491,7 +2515,40 @@ void StubCodeCompiler::GenerateResumeStub() {
+   __ LoadFromOffset(CallingConventions::kReturnReg, FPREG,
+                     param_offset + 3 * target::kWordSize);
+ 
++#if defined(TARGET_ARCH_ARM64)
++  // Shorebird: decide where the resume PC can actually run. Inside the base
++  // snapshot's instruction range it is code the CPU compiled and ResumeOnCPU
++  // takes it; outside, it came from the patch and only the simulator can
++  // interpret it. With no base range recorded there is nothing to compare
++  // against, so clear the parked PC again and jump straight there.
++  {
++    Label have_base_range, on_simulator;
++    __ LoadFromOffset(TMP, THR,
++                      dart::Thread::base_instructions_entry_point_offset());
++    __ CompareImmediate(TMP, 0);
++    __ BranchIf(NOT_EQUAL, &have_base_range);
++    __ StoreZero(
++        Address(THR, dart::Thread::simulator_async_resume_pc_offset()), kTemp);
++    __ Jump(kResumePc);
++
++    __ Bind(&have_base_range);
++    __ CompareRegisters(kResumePc, TMP);
++    __ BranchIf(LESS, &on_simulator);
++    __ LoadFromOffset(TMP, THR, dart::Thread::base_instructions_end_offset());
++    __ CompareRegisters(kResumePc, TMP);
++    __ BranchIf(GREATER_EQUAL, &on_simulator);
++    __ LoadFromOffset(TMP, THR,
++                      dart::Thread::resume_on_cpu_entry_point_offset());
++    __ Jump(TMP);
++
++    __ Bind(&on_simulator);
++    __ LoadFromOffset(TMP, THR,
++                      dart::Thread::resume_on_simulator_entry_point_offset());
++    __ Jump(TMP);
++  }
++#else
+   __ Jump(kResumePc);
++#endif
+ 
+   __ Comment("Call runtime to throw exception or deopt");
+   __ Bind(&call_runtime);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 09eeada3cf5..608d7dc403e 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -960,6 +960,78 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdRunDartOnCPUMatchesTheirBytes) {
+   }
+ }
+ 
++// Resume and ResumeInterpreter are the two stubs on their list that are
++// *upstream* stubs -- Resume one Shorebird extended, ResumeInterpreter one it
++// left alone. That makes them the only two whose size depends on build
++// configuration: upstream's generator emits debug and non-product checks, so a
++// release run_vm_tests sees 312 and 60 bytes where their product gen_snapshot
++// emits 192 and 52. An earlier version of this test asserted the product sizes
++// and failed for that reason, not because anything was wrong with the code.
++//
++// So these tests pin the Shorebird-specific instructions and nothing else. The
++// word-for-word comparison against theirs -- 40 of 48 and 12 of 13, every
++// difference a Thread displacement -- is only meaningful between two product
++// builds, and belongs to the product-build oracle rather than here.
++static intptr_t CountWord(const Code& stub, uint32_t word) {
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++  const intptr_t n = stub.Size() / 4;
++  intptr_t count = 0;
++  for (intptr_t i = 0; i < n; i++) {
++    if (w[i] == word) count++;
++  }
++  return count;
++}
++
++static uint32_t LdStThr(uint32_t base, intptr_t off, uint32_t rt) {
++  return base | (static_cast<uint32_t>(off / 8) << 10) |
++         (static_cast<uint32_t>(THR) << 5) | rt;
++}
++
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeCarriesTheSimulatorDispatch) {
++  const Code& stub = StubCode::Resume();
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  const intptr_t pc = Thread::simulator_async_resume_pc_offset();
++
++  // Insertion one: park the resume PC, having checked nothing was parked.
++  EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kLdr, pc, 16)));
++  EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kStr, pc, 1)));
++  // Insertion two: the range dispatch, and the clear on the no-range path.
++  EXPECT_EQ(static_cast<intptr_t>(1), CountWord(stub, LdStThr(kStr, pc, 31)));
++  EXPECT_EQ(
++      static_cast<intptr_t>(1),
++      CountWord(stub, LdStThr(kLdr,
++                              Thread::base_instructions_entry_point_offset(),
++                              16)));
++  EXPECT_EQ(static_cast<intptr_t>(1),
++            CountWord(stub, LdStThr(kLdr, Thread::base_instructions_end_offset(),
++                                    16)));
++  EXPECT_EQ(static_cast<intptr_t>(1),
++            CountWord(stub, LdStThr(kLdr,
++                                    Thread::resume_on_cpu_entry_point_offset(),
++                                    16)));
++  EXPECT_EQ(
++      static_cast<intptr_t>(1),
++      CountWord(stub, LdStThr(kLdr,
++                              Thread::resume_on_simulator_entry_point_offset(),
++                              16)));
++}
++
++// ResumeInterpreter needed no work at all, which is worth pinning because it was
++// twice recorded as "cannot be transcribed, needs a new runtime entry" and it is
++// neither: an upstream stub calling an upstream runtime entry, already matching
++// theirs 12 of 13 words.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeInterpreterAlreadyMatches) {
++  const Code& stub = StubCode::ResumeInterpreter();
++  EXPECT_EQ(static_cast<intptr_t>(1),
++            CountWord(stub,
++                      LdStThr(0xf9400000u,
++                              Thread::ResumeInterpreter_entry_point_offset(),
++                              5)));
++  EXPECT_EQ(static_cast<intptr_t>(1),
++            CountWord(stub, 0xd2800064u));  // mov x4, #0x3 -- three arguments
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index 566ff5e9ac6..a158a229f3e 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -601,6 +601,45 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+     return OFFSET_OF(Thread, exit_safepoint_entry_point_);
+   }
+ 
++  // Their 0x288 / 0x290 / 0x700 / 0x708, read by the Resume stub. The first two
++  // are the ResumeOnSimulator and ResumeOnCPU entry points; the last two bound
++  // the base snapshot's instruction range, which is how Resume decides whether
++  // a resume PC is base code the CPU can run or patch code the simulator must
++  // interpret.
++  uword resume_on_simulator_entry_point() const {
++    return resume_on_simulator_entry_point_;
++  }
++  void set_resume_on_simulator_entry_point(uword v) {
++    resume_on_simulator_entry_point_ = v;
++  }
++  static intptr_t resume_on_simulator_entry_point_offset() {
++    return OFFSET_OF(Thread, resume_on_simulator_entry_point_);
++  }
++
++  uword resume_on_cpu_entry_point() const { return resume_on_cpu_entry_point_; }
++  void set_resume_on_cpu_entry_point(uword v) {
++    resume_on_cpu_entry_point_ = v;
++  }
++  static intptr_t resume_on_cpu_entry_point_offset() {
++    return OFFSET_OF(Thread, resume_on_cpu_entry_point_);
++  }
++
++  uword base_instructions_entry_point() const {
++    return base_instructions_entry_point_;
++  }
++  void set_base_instructions_entry_point(uword v) {
++    base_instructions_entry_point_ = v;
++  }
++  static intptr_t base_instructions_entry_point_offset() {
++    return OFFSET_OF(Thread, base_instructions_entry_point_);
++  }
++
++  uword base_instructions_end() const { return base_instructions_end_; }
++  void set_base_instructions_end(uword v) { base_instructions_end_ = v; }
++  static intptr_t base_instructions_end_offset() {
++    return OFFSET_OF(Thread, base_instructions_end_);
++  }
++
+   TaskKind task_kind() const {
+     return task_kind_.load(std::memory_order_acquire);
+   }
+@@ -1769,6 +1808,10 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   uword simulator_call_from_ffi_ = 0;
+   uword enter_safepoint_entry_point_ = 0;
+   uword exit_safepoint_entry_point_ = 0;
++  uword resume_on_simulator_entry_point_ = 0;
++  uword resume_on_cpu_entry_point_ = 0;
++  uword base_instructions_entry_point_ = 0;
++  uword base_instructions_end_ = 0;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

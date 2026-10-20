@@ -1,0 +1,154 @@
+From 938222c1920fc8b8ed67134449e2d0a436bca2f3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 16:49:57 +0800
+Subject: [PATCH 037/206] feat(shorebird): emit landing-pad arrays for CpuToSim
+ and SimToCpu wrapper stubs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Oracle: their pad count (2014 and 2044) and pad size (8 bytes each) come from
+DW_AT_const_value entries in Shorebird's shipped dSYM, already encoded in
+WrapperAllocator::Layout::fromTemplate<>. The pad array totals -- 16112 bytes
+for CPU→Sim, 16352 bytes for Sim→CPU -- are byte-level constants derived from
+their binary without any free parameters.
+
+What is verified: StubCode_ShorebirdWrapperPadArraysAreExact asserts both pad
+counts and both pad*size products, then asserts the total stub size equals the
+pad array plus exactly one placeholder Breakpoint instruction. The test goes red
+the moment the shared body lands (breaking loudly so the body-size assertion is
+added in the same commit). Negative-control run (one instruction per pad instead
+of two) produced 8060/8180 -- exactly half -- confirming the size check is live.
+
+Shared bodies remain placeholder Breakpoint instructions; they are
+reverse-engineered from Shorebird's binary in later tasks. No body-size
+ASSERT_EQUAL is added while the bodies are placeholders: that assertion would
+be false in any debug build.
+
+Full suite: 57/57 shorebird tests pass.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 5328547ab41..82090d09200 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -21,6 +21,7 @@
+ #include "vm/compiler/backend/locations.h"
+ #include "vm/constants.h"
+ #include "vm/ffi_callback_metadata.h"
++#include "vm/shorebird/wrapper.h"
+ #include "vm/instructions.h"
+ #include "vm/static_type_exactness_state.h"
+ #include "vm/tags.h"
+@@ -605,12 +606,66 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+ #endif
+ }
+ 
+-void StubCodeCompiler::GenerateShorebirdCpuToSimWrapperStub() {
++// Emits the landing-pad array that is the mechanical, fully-known half of a
++// Shorebird wrapper stub. Each pad captures its own PC via adr and then jumps
++// to the shared body -- identical in structure to GenerateFfiCallbackTrampolineStub.
++// The pad count and pad size come from the Layout so that both directions share
++// this code path.
++//
++// The shared body itself (kSharedBodySize bytes for each direction) is
++// reverse-engineered from Shorebird's binary and not yet emitted; the
++// Breakpoint placeholder is replaced in the same commit that arrives with the
++// real body, at which point the body-size assertion is added here.
++static void GenerateShorebirdWrapperPads(
++    Assembler* assembler,
++    const dart::shorebird::WrapperAllocator::Layout& layout) {
++  Label body;
++
++  // R9 is volatile and not used for passing any arguments.
++  COMPILE_ASSERT(!IsCalleeSavedRegister(R9) && !IsArgumentRegister(R9));
++
++  const intptr_t num_pads = layout.num_wrappers_per_page;
++  const intptr_t pad_size = layout.landing_pad_size;
++
++  for (intptr_t i = 0; i < num_pads; ++i) {
++    // The wrapper table is keyed by the landing pad entry point. Capture the
++    // current PC into R9, then jump to the shared body.
++    __ adr(R9, Immediate(0));
++    __ b(&body);
++  }
++
++  ASSERT_EQUAL(__ CodeSize(), num_pads * pad_size);
++
++  __ Bind(&body);
++
++  // shared_stub_start marks the start of the shared body for this direction.
++  // The body-size assertion (ASSERT_EQUAL(__ CodeSize() - shared_stub_start,
++  // layout.shared_body_size)) is added when the real body replaces the
++  // Breakpoint placeholder below.
++  const intptr_t shared_stub_start = __ CodeSize();
++  USE(shared_stub_start);
++
++  // Placeholder body: replaced when the real body is reverse-engineered from
++  // Shorebird's binary.
+   __ Breakpoint();
+ }
+ 
++void StubCodeCompiler::GenerateShorebirdCpuToSimWrapperStub() {
++  using dart::shorebird::CPUToSimConfig;
++  using dart::shorebird::WrapperAllocator;
++  using dart::shorebird::WrapperLayout;
++  const WrapperAllocator::Layout layout =
++      WrapperAllocator::Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  GenerateShorebirdWrapperPads(assembler, layout);
++}
++
+ void StubCodeCompiler::GenerateShorebirdSimToCpuWrapperStub() {
+-  __ Breakpoint();
++  using dart::shorebird::SimToCPUConfig;
++  using dart::shorebird::WrapperAllocator;
++  using dart::shorebird::WrapperLayout;
++  const WrapperAllocator::Layout layout =
++      WrapperAllocator::Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  GenerateShorebirdWrapperPads(assembler, layout);
+ }
+ 
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 2aafde80a73..ff16dee1a9f 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -19,5 +19,34 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
+   EXPECT(StubCode::ShorebirdSimToCpuWrapper().Size() > 0);
+ }
+ 
++// Size of the placeholder shared body: one Breakpoint instruction. The real bodies
++// are 272 and 28 bytes and get reverse-engineered from Shorebird's binary later;
++// asserting the placeholder size exactly means this test breaks loudly the moment a
++// real body lands, which is what should happen -- the assertion has to be updated in
++// the same change that makes it wrong.
++static constexpr intptr_t kPlaceholderBodySize = Instr::kInstrSize;
++
++// The landing pad array is the half we can reproduce exactly today: their pad count
++// and pad size are both known, so pads * pad_size is a byte-level oracle.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
++  using Layout = WrapperAllocator::Layout;
++
++  const Layout cpu_to_sim = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  EXPECT_EQ(static_cast<intptr_t>(2014), cpu_to_sim.num_wrappers_per_page);
++  EXPECT_EQ(static_cast<intptr_t>(16112),
++            cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size);
++  EXPECT_EQ(cpu_to_sim.num_wrappers_per_page * cpu_to_sim.landing_pad_size +
++                kPlaceholderBodySize,
++            static_cast<intptr_t>(StubCode::ShorebirdCpuToSimWrapper().Size()));
++
++  const Layout sim_to_cpu = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
++  EXPECT_EQ(static_cast<intptr_t>(16352),
++            sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size);
++  EXPECT_EQ(sim_to_cpu.num_wrappers_per_page * sim_to_cpu.landing_pad_size +
++                kPlaceholderBodySize,
++            static_cast<intptr_t>(StubCode::ShorebirdSimToCpuWrapper().Size()));
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+-- 
+2.53.0
+

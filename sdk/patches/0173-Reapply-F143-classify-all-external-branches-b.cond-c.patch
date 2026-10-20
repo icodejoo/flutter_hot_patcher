@@ -1,0 +1,65 @@
+From d146993c313c61ab99db7fc9fe067ab0bf0bc2a9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Sun, 27 Sep 2026 21:24:50 +0800
+Subject: [PATCH 173/206] Reapply "F143: classify all external branches
+ (b.cond/cbz/cbnz/tbz/tbnz), not just b/bl"
+
+This reverts commit a8011deb47f51d20eb718e5d74d269559241b75d.
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 2a474035626..e808aeb888c 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1451,20 +1451,30 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+ 
+   // Classifies the direct branch `w` at word `at`, if it is one. Shared by the
+   // main walk and by the pool form's skip window (F135, below).
++  //
++  // F143 (2026-09-27): an external target used to only get the kCall
++  // treatment for unconditional b/bl (`(w & 0x7C000000) == 0x14000000`). A
++  // conditional form (b.cond/cbz/cbnz/tbz/tbnz) whose target is external fell
++  // through to kRaw -- hashed as a raw instruction word -- while theirs
++  // treats it exactly like an external b/bl: an ordinal into the same
++  // external-branch table, consumed by the same "branch leaving the entry"
++  // path below (self_hash e975549a... etc, probe rows N7/N7b/N7c/N7d/N7f).
++  // DecodeBranchDelta already narrows `w` to a branch form (b/bl/b.cond/
++  // cbz/cbnz/tbz/tbnz), so once local-branch is ruled out there is nothing
++  // left to gate on: every remaining shape is an external branch and gets the
++  // same kCall treatment, regardless of the condition/compare bits.
+   auto classify_branch = [&](intptr_t at, uint32_t w) -> bool {
+     int32_t delta;
+     if (!DecodeBranchDelta(w, &delta)) return false;
+     const int64_t target = at * 4 + static_cast<int64_t>(delta) * 4;
+     if (target >= 0 && target < size) {
+       facts.classified.push_back({ShorebirdClassifiedStep::kLocalBranch, 1, 0});
+-    } else if ((w & 0x7C000000) == 0x14000000) {
++    } else {
+       facts.classified.push_back({ShorebirdClassifiedStep::kCall, 1,
+                                   static_cast<intptr_t>(target)});
+       if (external_seen.insert(static_cast<intptr_t>(target)).second) {
+         facts.external_targets.push_back(static_cast<intptr_t>(target));
+       }
+-    } else {
+-      facts.classified.push_back({ShorebirdClassifiedStep::kRaw, 1, w});
+     }
+     return true;
+   };
+@@ -1507,10 +1517,11 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       //    theirs for local b/bl/b.cond/cbz/tbz and for external b/bl.
+       // Before this, ours swallowed the branch too: callees [19] vs their
+       // [19,25], self_hash c9dafe74 vs d539947c.
+-      // TODO(F135/N7): NOT handled -- a CONDITIONAL branch (b.cond/cbz) whose
+-      // target is outside the function. classify_branch records it as kRaw and
+-      // self_hash still differs from theirs, inside the window or not (probe
+-      // rows N7, N7b-d, N7f). Pre-existing, out of F135 scope, still open.
++      // F143 (2026-09-27): the N7/N7b-d/N7f gap above is closed. classify_branch
++      // now gives every external branch DecodeBranchDelta accepts -- not just
++      // b/bl -- the kCall treatment, so a conditional (b.cond/cbz/cbnz/tbz/tbnz)
++      // landing outside the function matches theirs the same way an external
++      // b/bl already did, inside the window or not.
+       facts.classified.push_back({ShorebirdClassifiedStep::kPool, used, index});
+ #if F67_POOL_SEEN_DEDUP
+       if (pool_seen.insert(index).second) facts.pool_indices.push_back(index);
+-- 
+2.53.0
+

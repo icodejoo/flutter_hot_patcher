@@ -1,0 +1,398 @@
+From ecd1e5b5b20b0a6ba6f41109991a76a931c11892 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 14:59:49 +0800
+Subject: [PATCH 091/206] feat(shorebird): field_hasher.cc, the last of their
+ private files at zero
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Re-measured the private subsystems against their gen_snapshot rather than
+against the ledger, and everything that used to read zero on our side now
+reads non-zero -- ObjectPoolMappings 8 against our 10, LinkedValue 4
+against 12, ObjectPoolEditor 2 against 4 -- except one:
+
+  theirs 2, ours 0   dart::FieldHasher::DuplicateAwareHash(Field const&)
+
+We already produced these hashes; the logic was inline in the field table
+producer and its output matches theirs entry for entry. What was missing
+was the shape, and the shape is the interesting part. Their signature
+takes a Field and nothing else while being duplicate aware, so the
+occurrence count cannot be a parameter -- it has to be state, which is
+why this is an object.
+
+⚠️ Member or function-local static is not decidable from the symbol; a
+static method and a non-static one demangle the same here. A member was
+chosen because it is testable, and because a static would carry counts
+across unrelated dumps in the same process -- the kind of bug that only
+appears in the second dump.
+
+Three tests, all on the one thing the existing byte comparison cannot see
+going wrong quietly: the suffix repeats " 1" per occurrence rather than
+counting, the state is per instance, and the qualified name is what both
+the key and the prefix are built from. FieldHasher also goes into
+verify_all.sh's name filter, which did not match it -- that filter is
+blind to every new subsystem by construction, and this is the third time.
+
+Negative control -- make the suffix count instead of repeat -- turns the
+duplicate test red and, once the Product binary is actually rebuilt,
+verify_reproduction.sh from 24/24 to 6 failures. The first run of that
+check still said 24/24 and it was a stale binary: I had rebuilt Release
+and not Product. Recording it because the wrong conclusion was one step
+away -- "the byte oracle does not cover field hashes" -- and it would have
+been wrong.
+
+verify_all.sh is 7 ran / 0 failed / 140 passed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/field_hasher.cc b/runtime/vm/shorebird/field_hasher.cc
+new file mode 100644
+index 00000000000..0d79feb949d
+--- /dev/null
++++ b/runtime/vm/shorebird/field_hasher.cc
+@@ -0,0 +1,58 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/field_hasher.h"
++
++#include <string>
++#include <utility>
++
++#include "vm/object.h"
++
++namespace dart {
++
++std::string FieldHasher::ScrubbedFieldName(const Field& field) {
++  const String& name = String::Handle(field.name());
++  if (name.IsNull()) return std::string();
++  const bool is_extension =
++      field.is_extension_member() || field.is_extension_type_member();
++  return std::string(String::ScrubName(name, is_extension));
++}
++
++std::string FieldHasher::QualifiedName(const Field& field) {
++  const Class& owner = Class::Handle(field.Owner());
++  std::string owner_name;
++  if (!owner.IsNull()) {
++    const String& name = String::Handle(owner.Name());
++    if (!name.IsNull()) owner_name = String::ScrubName(name);
++  }
++  std::string qualified = std::move(owner_name);
++  qualified += '.';
++  qualified += ScrubbedFieldName(field);
++  return qualified;
++}
++
++std::string FieldHasher::DuplicateAwareHash(const Field& field) {
++  const std::string qualified = QualifiedName(field);
++  const intptr_t occurrence = ++seen_[qualified];
++
++  std::string hash = qualified;
++  hash += ' ';
++  // Shorebird masks out NoSanitizeThreadBit (16) and HasDeeplyImmutableTypeBit
++  // (17): they describe the thread/memory model, not field identity, so leaving
++  // them in would make the link info depend on properties irrelevant to
++  // matching. Verified against their output -- those two bits never appear in
++  // it, and masking them reconciles all 11 previously differing entries.
++  constexpr uint32_t kUnstableKindBits = (1u << 16) | (1u << 17);
++  hash += std::to_string(field.kind_bits() & ~kUnstableKindBits);
++  // Duplicates are marked by REPEATING " 1", not by an incrementing counter:
++  // ClassID's 93 field names each appear twice, emitted as "... 3 1" and
++  // "... 3 1 1". The first " 1" is therefore always present, and each further
++  // occurrence appends another one.
++  for (intptr_t n = 0; n < occurrence; n++) {
++    hash += " 1";
++  }
++  return hash;
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/field_hasher.h b/runtime/vm/shorebird/field_hasher.h
+new file mode 100644
+index 00000000000..ca937a1e133
+--- /dev/null
++++ b/runtime/vm/shorebird/field_hasher.h
+@@ -0,0 +1,74 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_FIELD_HASHER_H_
++#define RUNTIME_VM_SHOREBIRD_FIELD_HASHER_H_
++
++#include <map>
++#include <string>
++
++#include "platform/globals.h"
++
++namespace dart {
++
++class Field;
++
++// Their `dart::FieldHasher`, from runtime/vm/shorebird/field_hasher.cc -- one
++// of the private files the dSYM's assertion strings name.
++//
++// One symbol survives in their gen_snapshot:
++//
++//   0x100194024  dart::FieldHasher::DuplicateAwareHash(dart::Field const&)
++//
++// The signature is the whole design. It takes a Field and nothing else, yet it
++// is "duplicate aware", so the count of names already seen cannot be a
++// parameter -- it has to be state. That is why this is an object rather than a
++// free function.
++//
++// ⚠️ Whether their state is a member or a function-local static is not
++// decidable from the symbol: a static method and a non-static one demangle
++// identically here. A member was chosen because it is testable -- a
++// function-local static would carry duplicate counts across unrelated dumps in
++// the same process, which is exactly the kind of thing that only shows up in
++// the second dump.
++//
++// What the hash is, established earlier by comparing our field table dump
++// against theirs entry by entry:
++//
++//   "<Owner>.<field> <kind_bits>" followed by " 1" once per occurrence
++//
++// so a name seen once ends "... 3 1" and the same name seen again ends
++// "... 3 1 1". It repeats rather than counts, which is why the type here is a
++// string and not a number.
++class FieldHasher {
++ public:
++  FieldHasher() {}
++
++  // Returns the link-info hash for `field`, and records the name so that a
++  // later field with the same qualified name gets a longer suffix.
++  //
++  // Not const, and not reorderable: two fields with the same qualified name
++  // get different answers depending on which is asked first. The field table
++  // producer walks the heap in a fixed order, and this depends on that.
++  std::string DuplicateAwareHash(const Field& field);
++
++  // The qualified name -- "<Owner>.<field>" -- used as the duplicate key and as
++  // the hash's prefix. Exposed because the producer needs the scrubbed field
++  // name for its own FieldInfo entry, and computing it twice would be two
++  // chances to disagree.
++  static std::string QualifiedName(const Field& field);
++
++  // The scrubbed field name on its own, which is what FieldInfo stores.
++  static std::string ScrubbedFieldName(const Field& field);
++
++ private:
++  // How many times each qualified name has been hashed so far.
++  std::map<std::string, intptr_t> seen_;
++
++  DISALLOW_COPY_AND_ASSIGN(FieldHasher);
++};
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_FIELD_HASHER_H_
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 7b8f63440df..207a8319c75 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "vm/shorebird/link_info.h"
+ 
++#include "vm/shorebird/field_hasher.h"
++
+ #include <algorithm>
+ #include <map>
+ #include <memory>
+@@ -299,54 +301,28 @@ std::unique_ptr<FieldTableLinkInfo> GetFieldTableLinkInfo(Thread* thread) {
+   }
+ 
+   Field& field = Field::Handle(zone);
+-  Class& owner = Class::Handle(zone);
+   String& name = String::Handle(zone);
+ 
+   std::vector<FieldInfo> fields;
+-  std::map<std::string, intptr_t> seen;
++  // Holds the duplicate counts, so it must outlive the loop: the second field
++  // with a given qualified name is only distinguishable from the first because
++  // this remembers the first.
++  FieldHasher hasher;
+   intptr_t max_field_id = 0;
+ 
+   for (intptr_t i = 0; i < raw_fields.length(); i++) {
+     field = raw_fields[i];
+     name = field.name();
+     if (name.IsNull()) continue;
+-    const bool is_ext =
+-        field.is_extension_member() || field.is_extension_type_member();
+-    const std::string field_name(String::ScrubName(name, is_ext));
+-
+-    owner = field.Owner();
+-    std::string owner_name;
+-    if (!owner.IsNull()) {
+-      name = owner.Name();
+-      if (!name.IsNull()) owner_name = String::ScrubName(name);
+-    }
+ 
+-    std::string qualified = owner_name;
+-    qualified += '.';
+-    qualified += field_name;
+-    const intptr_t occurrence = ++seen[qualified];
+-
+-    std::string hash = qualified;
+-    hash += ' ';
+-    // Shorebird masks out NoSanitizeThreadBit (16) and
+-    // HasDeeplyImmutableTypeBit (17): they describe the thread/memory model, not
+-    // field identity, so leaving them in would make the link info depend on
+-    // properties irrelevant to matching. Verified against their output -- those
+-    // two bits never appear in it, and masking them reconciles all 11
+-    // previously differing entries.
+-    constexpr uint32_t kUnstableKindBits = (1u << 16) | (1u << 17);
+-    hash += std::to_string(field.kind_bits() & ~kUnstableKindBits);
+-    // Duplicates are marked by REPEATING " 1", not by an incrementing counter:
+-    // ClassID's 93 field names each appear twice, emitted as "... 3 1" and
+-    // "... 3 1 1". The first " 1" is therefore always present, and each further
+-    // occurrence appends another one.
+-    for (intptr_t n = 0; n < occurrence; n++) {
+-      hash += " 1";
+-    }
++    // The hash has to be taken before the name, because taking it is what
++    // records the occurrence.
++    std::string hash = hasher.DuplicateAwareHash(field);
++    std::string field_name = FieldHasher::ScrubbedFieldName(field);
+ 
+     const intptr_t id = field.field_id();
+     max_field_id = Utils::Maximum(max_field_id, id);
+-    fields.push_back(FieldInfo{id, field_name, std::move(hash)});
++    fields.push_back(FieldInfo{id, std::move(field_name), std::move(hash)});
+   }
+ 
+   std::stable_sort(fields.begin(), fields.end(),
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+index 61406454bcd..1810ef4622b 100644
+--- a/runtime/vm/shorebird/link_info_test.cc
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -8,6 +8,9 @@
+ #include <vector>
+ 
+ #include "vm/datastream.h"
++#include "vm/dart_api_impl.h"
++#include "vm/shorebird/field_hasher.h"
++#include "vm/symbols.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -177,4 +180,98 @@ VM_UNIT_TEST_CASE(IntervalInfo_LayoutMatchesTheirs) {
+   EXPECT_EQ(static_cast<intptr_t>(9), interval.end_);
+ }
+ 
++
++// Copied from profiler_test.cc, where these are file-local statics. The three
++// tests below need one real Field, and this is the shortest way to get one.
++static LibraryPtr LoadFieldTestScript(const char* script) {
++  Dart_Handle api_lib;
++  {
++    TransitionVMToNative transition(Thread::Current());
++    api_lib = TestCase::LoadTestScript(script, nullptr);
++    EXPECT_VALID(api_lib);
++  }
++  Library& lib = Library::Handle();
++  lib ^= Api::UnwrapHandle(api_lib);
++  return lib.ptr();
++}
++
++static FieldPtr LookupTestField(const Library& lib,
++                                const char* class_name,
++                                const char* field_name) {
++  Thread* thread = Thread::Current();
++  const Class& cls = Class::Handle(lib.LookupClassAllowPrivate(
++      String::Handle(Symbols::New(thread, class_name))));
++  EXPECT(!cls.IsNull());
++  const Field& field = Field::Handle(
++      cls.LookupField(String::Handle(String::New(field_name))));
++  EXPECT(!field.IsNull());
++  return field.ptr();
++}
++
++// One class, one field -- everything these tests need.
++static const char* kFieldHasherScript =
++    "class Holder {\n"
++    "  var alpha;\n"
++    "}\n"
++    "main() => Holder();\n";
++
++// ---------------------------------------------------------------------------
++// FieldHasher
++//
++// The producer's output is already checked against theirs entry by entry, so
++// what these pin is the one thing that check cannot see going wrong quietly:
++// the duplicate suffix. Their field table has 93 names that each appear twice,
++// and if the suffix incremented instead of repeating, or if the state were
++// per-call, the dump would still have the right number of entries.
++// ---------------------------------------------------------------------------
++
++// The suffix repeats " 1"; it does not count. Asking twice is the whole test,
++// because their DuplicateAwareHash takes a Field and nothing else -- the
++// occurrence count has to come from the hasher's own state, so the same field
++// asked twice must answer differently.
++TEST_CASE(FieldHasher_DuplicateSuffixRepeatsRatherThanCounts) {
++  const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
++  const Field& alpha =
++      Field::Handle(LookupTestField(lib, "Holder", "alpha"));
++
++  FieldHasher hasher;
++  const std::string first = hasher.DuplicateAwareHash(alpha);
++  const std::string second = hasher.DuplicateAwareHash(alpha);
++  const std::string third = hasher.DuplicateAwareHash(alpha);
++
++  // "Holder.alpha <kind_bits>" then one " 1" per occurrence.
++  const std::string prefix = "Holder.alpha ";
++  EXPECT(first.compare(0, prefix.size(), prefix) == 0);
++  EXPECT_STREQ((first + " 1").c_str(), second.c_str());
++  EXPECT_STREQ((second + " 1").c_str(), third.c_str());
++  // Repeating, not counting: no occurrence index ever appears.
++  EXPECT(second.find(" 2") == std::string::npos);
++}
++
++// Two hashers do not share state. Their signature gives no way to reset, so if
++// the count lived in a function-local static instead of the object, a second
++// dump in the same process would inherit the first one's suffixes.
++TEST_CASE(FieldHasher_StateIsPerInstance) {
++  const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
++  const Field& alpha =
++      Field::Handle(LookupTestField(lib, "Holder", "alpha"));
++
++  FieldHasher one;
++  FieldHasher two;
++  EXPECT_STREQ(one.DuplicateAwareHash(alpha).c_str(),
++               two.DuplicateAwareHash(alpha).c_str());
++}
++
++// The qualified name is the duplicate key and the hash's prefix, and the
++// producer also needs the bare field name for its FieldInfo entry. Deriving
++// both from one place is the point of exposing them.
++TEST_CASE(FieldHasher_QualifiedNameIsOwnerDotField) {
++  const Library& lib = Library::Handle(LoadFieldTestScript(kFieldHasherScript));
++  const Field& alpha =
++      Field::Handle(LookupTestField(lib, "Holder", "alpha"));
++
++  EXPECT_STREQ("Holder.alpha", FieldHasher::QualifiedName(alpha).c_str());
++  EXPECT_STREQ("alpha", FieldHasher::ScrubbedFieldName(alpha).c_str());
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 4a6d5460de5..c29fda50ef3 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -299,6 +299,8 @@ vm_sources = [
+   "sim_transition.h",
+   "sim_bridge.cc",
+   "sim_bridge.h",
++  "shorebird/field_hasher.cc",
++  "shorebird/field_hasher.h",
+   "shorebird/link_info.cc",
+   "shorebird/link_info.h",
+   "shorebird/wrapper.cc",
+-- 
+2.53.0
+

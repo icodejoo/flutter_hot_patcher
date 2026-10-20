@@ -1,0 +1,39 @@
+From b2b0724c65ed3f2e45c0261b7e96b3e3d0419609 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 10:52:30 +0800
+Subject: [PATCH 019/206] test(shorebird): static_assert WrapperAllocator is
+ 0x98
+
+Machine-checks the DWARF byte size that was previously only measured by hand.
+A compile-time assert needs no access to the private fields -- the offsetof
+version does not compile -- costs nothing at runtime, and breaks the build the
+moment the layout drifts.
+
+Verified it bites: changing 0x98 to 0x99 fails the build with
+"static assertion failed due to requirement 'sizeof(...) == 153'", ninja
+exit 1. Restored to 0x98, builds clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 827c5ec610e..6cdab1a0904 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -7,6 +7,14 @@
+ namespace dart {
+ namespace shorebird {
+ 
++// Their DW_AT_byte_size for WrapperAllocator. A compile-time assert needs no
++// access to the private fields (which is why the offsetof version won't
++// compile), costs nothing at runtime, and breaks the build the moment the
++// layout drifts. Field *ordering* is covered more meaningfully by the
++// round-trip arithmetic tests than an offset check would be.
++static_assert(sizeof(WrapperAllocator) == 0x98,
++              "WrapperAllocator must match Shorebird's 0x98 layout");
++
+ // The real implementations resolve the generated stub's address range. The
+ // stubs do not exist until plan #2, so these report an empty range for now.
+ // Task 3 tests assert that an empty range is rejected rather than remapped.
+-- 
+2.53.0
+

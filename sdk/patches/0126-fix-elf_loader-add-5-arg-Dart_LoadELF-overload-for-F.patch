@@ -1,0 +1,33 @@
+From 7390cba639858179809c538481b753dc42019202 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 2 Sep 2026 11:27:14 +0800
+Subject: [PATCH 126/206] fix(elf_loader): add 5-arg Dart_LoadELF overload for
+ Flutter embedder compat
+
+
+diff --git a/runtime/bin/elf_loader.h b/runtime/bin/elf_loader.h
+index 39093ed2f63..4ab3d081c04 100644
+--- a/runtime/bin/elf_loader.h
++++ b/runtime/bin/elf_loader.h
+@@ -72,6 +72,18 @@ constexpr int kReadOnly = 0;
+ }  // namespace bin
+ }  // namespace dart
+ 
++// Flutter embedder compat: older Flutter engines call Dart_LoadELF with only
++// 5 args (no separate vm_snapshot pair). Maps to the isolate-only slots.
++inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
++                                     uint64_t file_offset,
++                                     const char** error,
++                                     const uint8_t** vm_isolate_data,
++                                     const uint8_t** vm_isolate_instrs) {
++  return Dart_LoadELF(filename, file_offset, error,
++                      nullptr, nullptr,
++                      vm_isolate_data, vm_isolate_instrs);
++}
++
+ // Shorebird variant of Dart_LoadELF: drops the separate vm snapshot pair
+ // (the VM isolate is folded into the isolate group in modern AOT) and adds a
+ // mode parameter. The mode value is accepted but not consulted -- the mapping
+-- 
+2.53.0
+

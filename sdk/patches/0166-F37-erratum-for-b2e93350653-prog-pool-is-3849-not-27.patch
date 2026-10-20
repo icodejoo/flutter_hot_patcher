@@ -1,0 +1,34 @@
+From 98c95873b7225f0dfe5a72afdc62e570e7fb6136 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 25 Sep 2026 14:10:16 +0800
+Subject: [PATCH 166/206] F37 erratum for b2e93350653: prog pool is 3849, not
+ 2779
+
+b2e93350653's message states "prog 2779 (unchanged)". That number was
+written before it was measured and is wrong. Measured on a private copy of
+the oracle dir after rebuilding from b2e93350653:
+
+  pool size  hello 1421/1421, prog 3849/3849, base_dd 1421/1421
+             (ours/theirs, --dump_object_pool object_pool_size)
+  at their `2312 (obj)` slots, ours now reads `3928 (obj)`
+  (ProductSimARM64, hello 92, prog 178, base_dd 92) and `3968 (obj)`
+  (ReleaseARM64, hello 92); before b2e93350653 these were
+  `0x1eb0 (unknown)` / `0x1f00 (unknown)`.
+
+The negative-control sentence in b2e93350653 was also written before the
+control ran. It has since been run and holds: reverting only the emission
+to AddImmediate (uncommitted) gives op_dump_check.sh rc=1, 1323/1421
+identical, 92 slots `0x1f00 (unknown)` vs their `2312 (obj)`; restored and
+rebuilt, 0 ninja pending in ProductSimARM64, ReleaseARM64, ProductARM64.
+
+measure_dd_emission.sh exits 1 at both 63716223bde and b2e93350653 because
+dd_emission.expected pins ours native_patched=0; the reading is ours 92,
+theirs 92. That pin lives outside this tree and is not changed here.
+
+An amend was refused by the non-fast-forward reference-transaction hook,
+hence this separate commit.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+-- 
+2.53.0
+

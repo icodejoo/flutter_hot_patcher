@@ -1,0 +1,66 @@
+From a30f995b43e5369acc38cf207e7569f616662c30 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 11:02:08 +0800
+Subject: [PATCH 021/206] test(shorebird): sync COW test to the reviewed form
+
+Brings the committed test in line with the plan as patched after review:
+
+- Drops EXPECT_EQ(0, src[0]) as the "did not propagate" check. It was
+  unconditionally true -- the fill sets src[0] = 0 & 0xff = 0 -- so it
+  asserted nothing.
+- Uses before ^ 0xff rather than a fixed 0xAA, so the write always differs
+  from whatever the source byte was.
+- Casts both sides to int. EXPECT_EQ on uint8_t printed values as characters,
+  which made byte mismatches unreadable; failures now read
+  "expected: <210> but was: <45>".
+- Moves the write-through-the-remap block after the metadata block, matching
+  the plan's ordering.
+
+Re-ran the copy=FALSE control as the plan now requires when this test is
+touched: passes at copy=TRUE (exit 0), fails at copy=FALSE (exit 255). The
+test still has power to detect a shared mapping.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index b5b7d900794..3bd4340101b 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -168,24 +168,21 @@ VM_UNIT_TEST_CASE(WrapperAllocator_RxHalfIsCopyOnWrite) {
+   EXPECT_EQ(src[1234], mapped[1234]);
+   EXPECT_EQ(src[source_size - 1], mapped[source_size - 1]);
+ 
+-  // The actual copy-on-write assertion: write THROUGH the remap and confirm
+-  // the source is untouched. Nothing else in this test can detect a shared
+-  // mapping -- verified by control, a copy=FALSE remap passes every other
+-  // assertion here, including the metadata check below, because that write
+-  // lands at rx_mapping_size which is outside the remapped span and so can
+-  // never alias the source regardless of copy semantics.
+-  const uint8_t original = src[1234];
+-  mapped[1234] = static_cast<uint8_t>(0xAA);
+-  EXPECT_EQ(static_cast<uint8_t>(0xAA), mapped[1234]);
+-  EXPECT_EQ(original, src[1234]);
+-
+   // The RW metadata half is writable and starts zeroed.
+   uword* metadata = reinterpret_cast<uword*>(page + l.rx_mapping_size);
+   EXPECT_EQ(static_cast<uword>(0), metadata[0]);
+   metadata[0] = static_cast<uword>(0xdeadbeef);
+   EXPECT_EQ(static_cast<uword>(0xdeadbeef), metadata[0]);
+-  // Writing metadata must not have touched the source.
+-  EXPECT_EQ(static_cast<uint8_t>(0), src[0]);
++
++  // THIS is the assertion that distinguishes copy-on-write from a shared
++  // mapping, and it is the only one here that does. Write *through the remap*,
++  // at an offset inside [0, rx_mapping_size), then prove the source did not
++  // change. Casting to int keeps a byte mismatch readable -- EXPECT_EQ on
++  // uint8_t renders values as characters.
++  const uint8_t before = src[1234];
++  mapped[1234] = static_cast<uint8_t>(before ^ 0xff);
++  EXPECT_EQ(static_cast<int>(before ^ 0xff), static_cast<int>(mapped[1234]));
++  EXPECT_EQ(static_cast<int>(before), static_cast<int>(src[1234]));
+ 
+   vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(source),
+                 source_size);
+-- 
+2.53.0
+

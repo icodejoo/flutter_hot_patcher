@@ -1,0 +1,48 @@
+From 9f168ccb44ba6b09c2b2b88ba755443a3069a4a3 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 17:13:39 +0800
+Subject: [PATCH 008/206] port(3.12.2): fix NO_SANITIZE_UNDEFINED placement for
+ the C++11 attribute
+
+3.7 defined this as a GNU __attribute__((no_sanitize)), which may sit between
+'static' and the return type. 3.12.2 defines it as [[clang::no_sanitize]], a
+C++11 attribute, which may not -- clang rejects it with 'attribute cannot be
+applied to types'. Move it ahead of the declaration and use upstream's own
+NO_SANITIZE_UNDEFINED_FUNCTION convenience macro, matching how simulator_arm.cc
+and simulator_riscv.cc spell it.
+
+Affects our two A2 helpers, InvokeWithTHR and CallHostFunction.
+
+With this, gen_snapshot compiles and links on 3.12.2 and reports
+'3.12.2 (stable) on "macos_simarm64"' -- same version and same platform string
+as Shorebird's own gen_snapshot.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 625273f17f1..372e8325480 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -1756,7 +1756,8 @@ static double InvokeFloatLeafRuntime(SimulatorLeafFloatRuntimeCall target,
+ // This avoids the stack-depth issue of a separate assembly shim by using
+ // inline asm which doesn't allocate its own stack frame.
+ // Sets x26=thr before calling, which is required by Dart functions.
+-static NO_SANITIZE_UNDEFINED("function") int64_t InvokeWithTHR(
++NO_SANITIZE_UNDEFINED_FUNCTION
++static int64_t InvokeWithTHR(
+     uword target, uword thr, uword pp,
+     int64_t r0, int64_t r1, int64_t r2, int64_t r3,
+     int64_t r4, int64_t r5, int64_t r6, int64_t r7) {
+@@ -1840,7 +1841,8 @@ struct HostCallResult {
+ // memory, but the caller clamps it so we never read past stack_base().
+ static constexpr uword kHostCallStackWindow = 256;
+ 
+-static NO_SANITIZE_UNDEFINED("function") HostCallResult
++NO_SANITIZE_UNDEFINED_FUNCTION
++static HostCallResult
+ CallHostFunction(uword target, const int64_t* sim_stack, uword stack_window,
+                  int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+                  int64_t a4, int64_t a5, int64_t a6, int64_t a7,
+-- 
+2.53.0
+

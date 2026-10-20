@@ -1,0 +1,336 @@
+From cd9d3510be8b0d6b18cdbd7aa8d45175f479b136 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 14:05:29 +0800
+Subject: [PATCH 032/206] test(shorebird): DDSlotResolution::SetSlotOwner unit
+ tests
+
+Seven tests covering all three maps SetSlotOwner writes, plus the recorded
+reasoning for reproducing their stale-entry behaviour.
+
+Tests: basic store (all three maps, stored key checked field-by-field on all
+five fields), alloc-stub key (kind=255, owner conceptually a CodePtr),
+overwrite-on-collision, max_slot_ tracking, slot 0 as a legal id that must move
+max_slot_ off the -1 sentinel, missing-slot zero/-1/zero-key returns with no
+accidental insertion, and two slots not aliasing.
+
+STALE owner_to_slot_ ENTRIES: reproduced faithfully, not "fixed", on evidence
+that they are unreachable in their binary. Their symbol table exports only two
+DDSlotResolution methods (SetSlotOwner, dtor) so all reads are inlined; the sole
+observed content read in the production consumption pass is [x23,#0x18], i.e.
+slot_to_owner_.size() on the libc++ __hash_table layout; and all three algorithm
+phases read elsewhere (separate FunctionKey index for the vote, slot_to_key_ for
+carry-over, slot->owner for verify-only). owner_to_slot_ is write-only
+bookkeeping at this stage, so the stale entry cannot affect output. Unlike
+load_obfuscation_map -- where we diverged because their bug demonstrably
+corrupted output -- here the bug is provably inert. Pinned by test so any future
+change is deliberate. Residual risk is confined to our own SlotForOwner()
+accessor, which has no counterpart in their binary and now carries a warning.
+
+The owner FunctionPtr/CodePtr asymmetry is real but both are uword, so no test
+here can catch a caller passing the wrong one; noted rather than implied covered.
+
+Negative controls (the named three-map trap): dropping the slot_to_key_ store
+fails 4 tests and ONLY on key-field assertions -- slot_count, OwnerForSlot,
+SlotForOwner and max_slot all still pass. Dropping the owner_to_slot_ store
+fails 5 tests and only on SlotForOwner assertions. Non-catching tests in each
+case are exactly those that do not probe the dropped map.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index 303135e2bd3..a6b81728b53 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -210,14 +210,63 @@ bool DDSlotMapping::ReadFromStream(ReadStream* /* stream */) {
+ // DDSlotResolution
+ // ===========================================================================
+ 
++// STALE owner_to_slot_ ENTRIES: faithful reproduction, deliberately.
++//
++// Their SetSlotOwner performs three stores and no erase. So when slot A's owner
++// changes from X to Y, owner_to_slot_[X] keeps claiming A even though X no
++// longer owns it. The same applies if two slots ever share one owner: the
++// reverse map holds only the last writer.
++//
++// We reproduce this rather than "fixing" it, on the following evidence:
++//
++//  1. Their symbol table exports exactly TWO DDSlotResolution methods --
++//     SetSlotOwner (0x1001a10a4) and ~DDSlotResolution (0x1001a21d0). There is
++//     no accessor of any kind, so every read is inlined into ResolveDDSlots.
++//  2. The only observed content read of the object in the production
++//     consumption pass is `ldr x23,[x26,#0x50]` then `[x23,#0x18]` -- offset
++//     0x18 within the FIRST map, i.e. slot_to_owner_.size() on the libc++
++//     __hash_table layout (0x00 bucket_list, 0x08 bucket_count, 0x10 head node,
++//     0x18 size, 0x20 load_factor). That is slot_to_owner_, not owner_to_slot_.
++//  3. All three documented algorithm phases read something else: the plurality
++//     vote uses a separate FunctionKey -> vector<uword> index; carry-over/rescue
++//     re-looks-up the FunctionKey from slot_to_key_; the verify-only path asks
++//     whether the previous resolution already owns a slot, which is the
++//     slot -> owner direction.
++//  4. The only other access to +0x28 (owner_to_slot_) is in the destructor's
++//     node-freeing traversal.
++//
++// Conclusion: at this stage of the reproduction, owner_to_slot_ is WRITE-ONLY
++// bookkeeping. No read of its contents exists in their binary, so the stale
++// entry is inert there and cannot change any output.
++//
++// Contrast with load_obfuscation_map, where this project deliberately did NOT
++// reproduce a Shorebird bug: there, their bug (re-issuing already-taken
++// renames) demonstrably corrupted output. The test for divergence is "can we
++// show it is harmful", and here we can show the opposite -- it is unreachable.
++// Erasing would also cost a lookup+erase per call in ResolveDDSlots' hot path
++// for no observable benefit, and would put our container state out of step with
++// theirs in a way that a future comparison could not explain.
++//
++// The residual risk is confined to OUR OWN SlotForOwner() accessor, which does
++// not exist in their binary; see the warning on it below. Revisit if Slice 2b
++// finds a genuine reverse-direction consumer.
+ void DDSlotResolution::SetSlotOwner(long slot,
+                                     uword owner,
+                                     const FunctionKey& key) {
+   // Overwrite-on-collision: if a slot already has a winner from a previous
+   // call, this replaces it. The actual collision logic (verify-only path) is
+   // in ResolveDDSlots, which decides whether to call SetSlotOwner at all.
++  //
++  // `owner` is a raw FunctionPtr for real functions but a raw CodePtr for
++  // allocation stubs -- a genuine asymmetry, not a misread. Both are uword, so
++  // nothing here can validate which one arrived.
++  // All three stores are load-bearing and independently pinned. Verified by
++  // negative control: dropping the slot_to_key_ store fails 4 tests (and only
++  // on key-field assertions -- slot_count, OwnerForSlot, SlotForOwner and
++  // max_slot all still pass), and dropping the owner_to_slot_ store fails 5
++  // (only on SlotForOwner assertions).
+   slot_to_owner_[slot] = owner;
+-  owner_to_slot_[owner] = slot;
++  owner_to_slot_[owner] = slot;  // no erase of any prior owner: see above
+   slot_to_key_[slot] = key;
+   if (slot > max_slot_) max_slot_ = slot;
+ }
+@@ -236,6 +285,15 @@ FunctionKey DDSlotResolution::KeyForSlot(long slot) const {
+   return it != slot_to_key_.end() ? it->second : FunctionKey{0, 0, 0, 0, 0};
+ }
+ 
++// WARNING: may return a STALE slot. owner_to_slot_ is never pruned (see the
++// analysis above SetSlotOwner), so if `owner` previously owned a slot that has
++// since been reassigned, this returns that old slot id. A non-negative result
++// therefore means "this owner was recorded against this slot at some point",
++// NOT "this owner currently owns this slot".
++//
++// This accessor has no counterpart in their binary -- it exists for tests and
++// diagnostics. Before using it from production code, confirm against
++// slot_to_owner_ (OwnerForSlot(result) == owner) or prune on write.
+ long DDSlotResolution::SlotForOwner(uword owner) const {
+   auto it = owner_to_slot_.find(owner);
+   return it != owner_to_slot_.end() ? it->second : -1L;
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index bf7f5ffb0d5..d91b89da5e5 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -424,4 +424,204 @@ VM_UNIT_TEST_CASE(DDSlotVoters_EncoderMatchesOracleBytes) {
+   }
+ }
+ 
++// ===========================================================================
++// Task 3: DDSlotResolution::SetSlotOwner
++// ===========================================================================
++//
++// SetSlotOwner writes THREE maps. The vacuity trap for a three-map write is
++// asserting only that the primary map (slot_to_owner_) took the value: an
++// implementation that silently skipped owner_to_slot_ or slot_to_key_ would
++// pass such a test. Every test below therefore probes all three, and the
++// stored FunctionKey is checked field-by-field (all five), never by presence.
++//
++// NOTE ON THE `owner` TYPE ASYMMETRY: `owner` is a raw FunctionPtr for real
++// functions but a raw CodePtr for allocation stubs. Both are uword here, so
++// NOTHING IN THE TYPE SYSTEM OR IN THESE TESTS CAN CATCH A CALLER PASSING THE
++// WRONG ONE. These tests treat `owner` as an opaque integer token; they
++// establish that the value round-trips, and nothing more. Distinguishing
++// FunctionPtr from CodePtr requires a live heap and belongs to Slice 2b.
++
++VM_UNIT_TEST_CASE(DDSlotResolution_SetSlotOwner_Basic) {
++  DDSlotResolution res;
++  FunctionKey key{1, 2, 3, 4, 29791u};
++  const uword owner = 0xDEADBEEF00000000UL;
++
++  res.SetSlotOwner(4L, owner, key);
++
++  EXPECT_EQ(4L, res.max_slot());
++  EXPECT_EQ(static_cast<size_t>(1), res.slot_count());
++
++  // Map 1 of 3: slot_to_owner_.
++  EXPECT(res.HasSlot(4L));
++  EXPECT_EQ(owner, res.OwnerForSlot(4L));
++
++  // Map 2 of 3: owner_to_slot_ (the reverse direction).
++  EXPECT_EQ(4L, res.SlotForOwner(owner));
++
++  // Map 3 of 3: slot_to_key_ — field-by-field, all five. Presence alone would
++  // pass on a default-constructed key.
++  FunctionKey got = res.KeyForSlot(4L);
++  EXPECT_EQ(1L, got.library_kernel_offset);
++  EXPECT_EQ(2L, got.owner_class_kernel_offset);
++  EXPECT_EQ(3L, got.kernel_offset);
++  EXPECT_EQ(4, static_cast<int>(got.kind));
++  EXPECT_EQ(29791u, got.signature_hash);
++  // And the key must not be the zero key, which is what a skipped write yields.
++  EXPECT(!got.IsZero());
++}
++
++// An alloc-stub owner: kind == 255 and `owner` is conceptually a CodePtr rather
++// than a FunctionPtr. Only the key's kind field records the distinction; the
++// owner word itself is indistinguishable. See the note above.
++VM_UNIT_TEST_CASE(DDSlotResolution_SetSlotOwner_AllocStubKey) {
++  DDSlotResolution res;
++  FunctionKey stub_key{11, 22, 33, FunctionKey::kAllocStubKind, 0u};
++  const uword code_ptr = 0x4000;
++
++  res.SetSlotOwner(1L, code_ptr, stub_key);
++
++  FunctionKey got = res.KeyForSlot(1L);
++  EXPECT_EQ(11L, got.library_kernel_offset);
++  EXPECT_EQ(22L, got.owner_class_kernel_offset);
++  EXPECT_EQ(33L, got.kernel_offset);
++  EXPECT_EQ(255, static_cast<int>(got.kind));
++  EXPECT_EQ(0u, got.signature_hash);
++  EXPECT(!got.IsZero());  // kind=255 makes it non-zero
++  EXPECT_EQ(code_ptr, res.OwnerForSlot(1L));
++  EXPECT_EQ(1L, res.SlotForOwner(code_ptr));
++}
++
++// SetSlotOwner overwrites: calling twice for the same slot records the LATER
++// call in all three maps. ResolveDDSlots' verify-only path decides whether to
++// call SetSlotOwner at all; when it does call, the new value wins.
++//
++// This test also PINS THE STALE owner_to_slot_ ENTRY. After slot 0's owner
++// changes from owner_a to owner_b, owner_to_slot_[owner_a] still says 0.
++// Their SetSlotOwner performs three stores and no erase, and no read of
++// owner_to_slot_'s contents is observed anywhere in their binary (see the
++// analysis comment in dd_voting.cc). We reproduce the behaviour faithfully
++// and assert it, so that any future change to it is a deliberate, visible act
++// rather than an accident.
++VM_UNIT_TEST_CASE(DDSlotResolution_SetSlotOwner_Overwrite) {
++  DDSlotResolution res;
++  FunctionKey key_a{10, 11, 12, 1, 31u};
++  FunctionKey key_b{20, 21, 22, 2, 62u};
++  const uword owner_a = 0x1000;
++  const uword owner_b = 0x2000;
++
++  res.SetSlotOwner(0L, owner_a, key_a);
++  EXPECT_EQ(owner_a, res.OwnerForSlot(0L));
++  EXPECT_EQ(0L, res.SlotForOwner(owner_a));
++  EXPECT_EQ(10L, res.KeyForSlot(0L).library_kernel_offset);
++
++  // Overwrite with a different owner and key.
++  res.SetSlotOwner(0L, owner_b, key_b);
++
++  // slot_to_owner_ and slot_to_key_ now hold the LATER values.
++  EXPECT_EQ(owner_b, res.OwnerForSlot(0L));
++  FunctionKey got = res.KeyForSlot(0L);
++  EXPECT_EQ(20L, got.library_kernel_offset);
++  EXPECT_EQ(21L, got.owner_class_kernel_offset);
++  EXPECT_EQ(22L, got.kernel_offset);
++  EXPECT_EQ(2, static_cast<int>(got.kind));
++  EXPECT_EQ(62u, got.signature_hash);
++
++  // Still exactly one slot; the overwrite must not have added one.
++  EXPECT_EQ(static_cast<size_t>(1), res.slot_count());
++
++  // owner_to_slot_ gained owner_b → 0 ...
++  EXPECT_EQ(0L, res.SlotForOwner(owner_b));
++  // ... and RETAINS the now-stale owner_a → 0. Three stores, no erase.
++  // owner_a no longer owns slot 0, but the reverse map still claims it does.
++  EXPECT_EQ(0L, res.SlotForOwner(owner_a));
++}
++
++// max_slot_ tracks the largest slot id ever seen and never decreases.
++VM_UNIT_TEST_CASE(DDSlotResolution_MaxSlot_TracksLargest) {
++  DDSlotResolution res;
++  FunctionKey k{0, 0, 0, 0, 0};
++  EXPECT_EQ(-1L, res.max_slot());
++
++  res.SetSlotOwner(5L, 0x1, k);
++  EXPECT_EQ(5L, res.max_slot());
++
++  res.SetSlotOwner(2L, 0x2, k);   // smaller slot
++  EXPECT_EQ(5L, res.max_slot());  // max unchanged
++
++  res.SetSlotOwner(10L, 0x3, k);
++  EXPECT_EQ(10L, res.max_slot());
++
++  res.SetSlotOwner(0L, 0x4, k);   // smallest
++  EXPECT_EQ(10L, res.max_slot());
++  EXPECT_EQ(static_cast<size_t>(4), res.slot_count());
++}
++
++// Slot 0 is a legal slot id and must bump max_slot_ from -1 to 0. The -1
++// sentinel exists precisely so that slot 0 is distinguishable from "none".
++VM_UNIT_TEST_CASE(DDSlotResolution_MaxSlot_ZeroIsALegalSlot) {
++  DDSlotResolution res;
++  FunctionKey k{1, 0, 0, 0, 0};
++  EXPECT_EQ(-1L, res.max_slot());
++  EXPECT(!res.HasSlot(0L));
++
++  res.SetSlotOwner(0L, 0x1234, k);
++
++  EXPECT_EQ(0L, res.max_slot());  // not still -1
++  EXPECT(res.HasSlot(0L));
++  EXPECT_EQ(static_cast<uword>(0x1234), res.OwnerForSlot(0L));
++  EXPECT_EQ(0L, res.SlotForOwner(0x1234));
++}
++
++// A missing slot must return zero/-1/zero-key, not crash and not fabricate.
++VM_UNIT_TEST_CASE(DDSlotResolution_MissingSlotReturnsZero) {
++  DDSlotResolution res;
++  EXPECT(!res.HasSlot(99L));
++  EXPECT_EQ(static_cast<uword>(0), res.OwnerForSlot(99L));
++  EXPECT_EQ(-1L, res.SlotForOwner(0xDEAD));
++  EXPECT(res.KeyForSlot(99L).IsZero());
++
++  // Lookups must not have inserted anything (operator[] on a const path would).
++  EXPECT_EQ(static_cast<size_t>(0), res.slot_count());
++  EXPECT_EQ(-1L, res.max_slot());
++
++  // A populated resolution still reports absent for a different slot.
++  FunctionKey k{7, 8, 9, 1, 31u};
++  res.SetSlotOwner(3L, 0x500, k);
++  EXPECT(!res.HasSlot(99L));
++  EXPECT_EQ(static_cast<uword>(0), res.OwnerForSlot(99L));
++  EXPECT(res.KeyForSlot(99L).IsZero());
++  EXPECT_EQ(static_cast<size_t>(1), res.slot_count());
++}
++
++// Two distinct slots must not alias: each keeps its own owner and its own key.
++// A single-slot test cannot catch a SetSlotOwner that clobbers on every call.
++VM_UNIT_TEST_CASE(DDSlotResolution_MultipleSlotsDoNotAlias) {
++  DDSlotResolution res;
++  FunctionKey k1{100, 101, 102, 1, 29791u};
++  FunctionKey k2{200, 201, 202, 2, 59582u};
++
++  res.SetSlotOwner(1L, 0xAAA, k1);
++  res.SetSlotOwner(2L, 0xBBB, k2);
++
++  EXPECT_EQ(static_cast<size_t>(2), res.slot_count());
++  EXPECT_EQ(static_cast<uword>(0xAAA), res.OwnerForSlot(1L));
++  EXPECT_EQ(static_cast<uword>(0xBBB), res.OwnerForSlot(2L));
++  EXPECT_EQ(1L, res.SlotForOwner(0xAAA));
++  EXPECT_EQ(2L, res.SlotForOwner(0xBBB));
++
++  FunctionKey g1 = res.KeyForSlot(1L);
++  EXPECT_EQ(100L, g1.library_kernel_offset);
++  EXPECT_EQ(101L, g1.owner_class_kernel_offset);
++  EXPECT_EQ(102L, g1.kernel_offset);
++  EXPECT_EQ(1, static_cast<int>(g1.kind));
++  EXPECT_EQ(29791u, g1.signature_hash);
++
++  FunctionKey g2 = res.KeyForSlot(2L);
++  EXPECT_EQ(200L, g2.library_kernel_offset);
++  EXPECT_EQ(201L, g2.owner_class_kernel_offset);
++  EXPECT_EQ(202L, g2.kernel_offset);
++  EXPECT_EQ(2, static_cast<int>(g2.kind));
++  EXPECT_EQ(59582u, g2.signature_hash);
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

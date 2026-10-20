@@ -1,0 +1,235 @@
+From ab20455635bf8aa8ae5ef1584774129db1034261 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 16:54:22 +0800
+Subject: [PATCH 194/206] [vm] F162: resolve commit-message/code mismatch in
+ the native-call escape guard
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+d10ab819892's commit message claimed the kRunDartOnCPUCode native-call
+escape guard in DecodeSimulatorToNativeTransition checks against
+sim->overflow_stack_limit(), "the same" floor as dart_entry.cc's
+InvokeDartCode reentry guard. The code it actually shipped uses
+OSThread::Current()->overflow_stack_limit() instead -- a real mismatch,
+caught by an independent falsification pass (see memo.md 2026-10-01
+"F162 修复独立证伪 pass 回收: PARTIAL"), which also found that pass's
+repro (f162_repro/n3.dart) never actually drives execution through this
+site, only through dart_entry.cc's.
+
+This resolves it with new evidence rather than picking a side:
+
+- Added ShorebirdSimToCpu_DeepRecursion_SiteReachable and
+  ShorebirdSimToCpu_DeepRecursion_ToFloor to shorebird_sim_to_cpu_test.cc:
+  a reusable brk-#kRunDartOnCPUCode code buffer whose native target
+  reenters the Simulator (sim->Call) on itself with depth-1, driving a
+  real nested Sim(brk)->CPU(native)->Sim(brk)->... chain that consumes
+  genuine OS C stack per level -- the same shape the production escape
+  hits under deep recursive Dart code calling back into itself through
+  an indirect static call table entry that resolves to CPU code (see
+  shorebird/wrapper.cc SimToCPUConfig), which f162_repro/n3.dart's
+  noSuchMethod chain cannot reach because that only drives
+  dart_entry.cc's reentry.
+- Site reachability was confirmed with a one-off hit-counter
+  instrumented directly at the guard (since reverted, not part of this
+  commit): depth=3 produced exactly 4 hits (one per sim->Call level,
+  including the depth==0 base case), ruling out the decoder dispatching
+  somewhere else.
+- At depth=2000 the shipped code (OSThread floor) completes cleanly; at
+  depth=20000 it FATALs with a controlled diagnostic (exit 134/SIGABRT).
+- Negative control: temporarily disabling the guard (`if (false && ...)`)
+  at depth=20000 produces a real, uncontrolled SIGSEGV (exit 139) with no
+  diagnostic -- confirming the guard is load-bearing on this site, not
+  just decorative.
+- Trying the commit message's claimed floor (sim->overflow_stack_limit())
+  in place of OSThread's reproduces a false positive: it FATALs even at
+  depth=2000, which the shipped floor passes cleanly, because at this
+  exact brk trap execution is always still inside Simulator::Execute's
+  interpreter loop (confirmed by reading GenerateTransitionDartToCpuIfNeeded
+  Stub: its cbz only brk's while Thread::is_simulating_ is true, and
+  tail-jumps directly otherwise) -- i.e. on the real OS C stack, not on
+  Simulator's own heap-allocated stack buffer, so sim->overflow_stack_limit()
+  names a disjoint, irrelevant address range here.
+
+Conclusion: the shipped code was correct; the commit message was wrong.
+Documents this in a code comment at the guard site (does not amend
+d10ab819892, per this project's new-commits-not-amends policy) and adds
+the two tests above as permanent regression coverage for this site.
+
+Verified: runtime_check p1-p8 parity suite still 8/8 against
+ProductSimARM64_cpu's own gen_snapshot/dartaotruntime, in both default
+(FLAG_use_simulator=true) and --no-use_simulator modes.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+index b8d26f61ad7..91f3178bebd 100644
+--- a/runtime/vm/shorebird_sim_to_cpu_test.cc
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -167,5 +167,135 @@ ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_HypercallBlockIsContiguous) {
+   EXPECT(Simulator::NameOfSimToCpuHypercall(Instr::kBreakPointCode) == nullptr);
+ }
+ 
++// F162: the kRunDartOnCPUCode native-call escape (see constants_arm64.h,
++// simulator_arm64.cc:DecodeSimulatorToNativeTransition) is independent of
++// InvokeDartCode's CPU-shape reentry (dart_entry.cc) but shares the same
++// hazard: it sets simulator_csp_ to the *real* OS C stack pointer right
++// before the native call it makes (InvokeWithTHR), and if that native call
++// itself re-enters the simulator (sim->Call again), real C stack is consumed
++// on every level with no bound. These two tests build a reusable code
++// buffer identical in shape to ShorebirdSimToCpu_RunDartOnCpuHypercall above
++// and drive deep *reentrant* recursion through exactly this escape -- not
++// through dart_entry.cc's path, which the existing f162_repro/n3.dart only
++// reaches -- to confirm this site is reachable under real recursion and that
++// its guard is load-bearing there. (The question of which floor,
++// sim->overflow_stack_limit() vs OSThread::Current()->overflow_stack_limit(),
++// is correct for this site was resolved by a one-off falsification-pass
++// instrumentation that is not part of this permanent test: swapping to
++// sim->overflow_stack_limit() made the guard FATAL at depth 2000, which the
++// OSThread floor passes cleanly, because at this exact brk trap the escape
++// is always reached while genuinely interpreting -- see the cbz in
++// GenerateTransitionDartToCpuIfNeededStub, which only brk's when still
++// interpreting and tail-jumps directly otherwise -- so the real OS C stack,
++// not the Simulator's own heap buffer, is what is being consumed.)
++
++namespace {
++
++// Builds one page of code: brk #kRunDartOnCPUCode with x16 pointed at
++// `native_target`, x0 left alone (the caller sets it via sim->Call's first
++// parameter register). Identical shape to the code buffer in
++// ShorebirdSimToCpu_RunDartOnCpuHypercall, factored out so both new tests can
++// reuse the same allocation across thousands of reentrant calls instead of
++// mapping a fresh page per recursion level.
++std::unique_ptr<VirtualMemory> BuildRunDartOnCpuEscapeCode(uword native_target) {
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      VirtualMemory::PageSize(), false, false, "f162_deep_recursion"));
++  ASSERT(mem != nullptr);
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  const uint64_t addr = static_cast<uint64_t>(native_target);
++  code[0] = 0xD2800010u | ((addr & 0xFFFF) << 5);            // movz x16, lo16
++  code[1] = 0xF2A00010u | (((addr >> 16) & 0xFFFF) << 5);    // movk x16, [31:16]
++  code[2] = 0xF2C00010u | (((addr >> 32) & 0xFFFF) << 5);    // movk x16, [47:32]
++  code[3] = 0xF2E00010u | (((addr >> 48) & 0xFFFF) << 5);    // movk x16, [63:48]
++  code[4] = BRK | (Instr::kRunDartOnCPUCode << kImm16Shift);
++  // Unreachable (tail transfer continues from LR, as in the test above);
++  // poison x0 so a fallthrough is visible rather than silently "working".
++  code[5] = 0xD2800000u | (77u << 5);                        // movz x0, #77
++  code[6] = 0xD65F03C0u;                                      // ret
++  mem->Protect(VirtualMemory::kReadExecute);
++  return mem;
++}
++
++VirtualMemory* g_f162_deep_recursion_code = nullptr;
++
++// Native target for the hypercall: if depth > 0, re-enters the Simulator via
++// sim->Call on the *same* code buffer with depth-1, i.e. a real reentrant
++// Sim(brk)->CPU(this function)->Sim(brk)->... chain, exactly the shape the
++// production escape hits under deep recursive Dart code calling back into
++// itself through an indirect static call table entry that resolves to CPU
++// code (see runtime/vm/shorebird/wrapper.cc SimToCPUConfig). If depth <= 0,
++// bottoms out and returns 0 so the whole chain unwinds.
++int64_t ShorebirdTestDeepRecursiveNativeCaller(int64_t depth,
++    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t) {
++  if (depth <= 0) {
++    return 0;
++  }
++  Simulator* const sim = Simulator::Current();
++  ASSERT(sim != nullptr);
++  return sim->Call(
++      static_cast<int64_t>(
++          reinterpret_cast<uword>(g_f162_deep_recursion_code->address())),
++      depth - 1, 0, 0, 0);
++}
++
++}  // namespace
++
++// Sanity check (shallow, depth=3): the reentrant code buffer above must
++// actually drive execution through DecodeSimulatorToNativeTransition's
++// kRunDartOnCPUCode arm `depth + 1` times (once per level, including the
++// depth==0 base-case call that still brk's before the native target decides
++// not to recurse further) before any deep-recursion result from it is
++// trustworthy. This was verified with a one-off counter instrumented
++// directly at the guard site (since reverted, per F162's falsification-pass
++// instructions); what is pinned here is the observable behavior that
++// instrumentation confirmed: the chain completes with the right result at a
++// shallow depth with no crash and no spurious FATAL.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_DeepRecursion_SiteReachable) {
++  Simulator* sim = Simulator::Current();
++  const uword target =
++      reinterpret_cast<uword>(&ShorebirdTestDeepRecursiveNativeCaller);
++  std::unique_ptr<VirtualMemory> mem = BuildRunDartOnCpuEscapeCode(target);
++  g_f162_deep_recursion_code = mem.get();
++
++  const int64_t result = sim->Call(
++      static_cast<int64_t>(reinterpret_cast<uword>(mem->address())), 3, 0, 0,
++      0);
++  EXPECT_EQ(0, result);
++
++  g_f162_deep_recursion_code = nullptr;
++}
++
++// Deep-recursion trial: drives the SAME reentrant chain as the sanity check
++// above to a depth read from F162_DEPTH (env var, default 20000), high
++// enough to either (a) hit the guard's FATAL() before any real crash, or
++// (b) actually SIGSEGV/SIGBUS if the guard's floor is wrong for this site.
++// This test is meant to be invoked as its own process
++// (`run_vm_tests ShorebirdSimToCpu_DeepRecursion_ToFloor`) and its outcome
++// read from the process exit status, not from in-process EXPECT -- a crash
++// takes the whole process down, which is the point: we want to see whether
++// that crash is a controlled FATAL (SIGABRT, Dart's FATAL calls abort()) or
++// an uncontrolled SIGSEGV/SIGBUS at an unrelated address.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_DeepRecursion_ToFloor) {
++  Simulator* sim = Simulator::Current();
++  const uword target =
++      reinterpret_cast<uword>(&ShorebirdTestDeepRecursiveNativeCaller);
++  std::unique_ptr<VirtualMemory> mem = BuildRunDartOnCpuEscapeCode(target);
++  g_f162_deep_recursion_code = mem.get();
++
++  intptr_t depth = 20000;
++  if (const char* env = getenv("F162_DEPTH")) {
++    depth = atoll(env);
++  }
++  OS::PrintErr("F162_DEEP_RECURSION_START depth=%" Pd "\n", depth);
++  const int64_t result = sim->Call(
++      static_cast<int64_t>(reinterpret_cast<uword>(mem->address())),
++      static_cast<int64_t>(depth), 0, 0, 0);
++  // If we get here, the whole chain unwound without crashing or FATALing.
++  OS::PrintErr("F162_DEEP_RECURSION_COMPLETED result=%" Pd64 "\n", result);
++  EXPECT_EQ(0, result);
++
++  g_f162_deep_recursion_code = nullptr;
++}
++
+ }  // namespace dart
+ #endif  // TARGET_ARCH_ARM64 && DART_INCLUDE_SIMULATOR
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index a7454887a33..d92cd648e6d 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -2171,6 +2171,23 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+         // keeps tripping this native-call trap), it marches the real CSP
+         // down with zero margin checked, and eventually collides with the
+         // thread's stack guard page. Refuse rather than silently corrupt.
++        // F162 follow-up (independent falsification pass, see
++        // shorebird_sim_to_cpu_test.cc ShorebirdSimToCpu_DeepRecursion_*):
++        // this commit's own message says "against sim->overflow_stack_limit()",
++        // but the floor below is deliberately OSThread's, not sim's, and that
++        // is correct for this site -- it is NOT the same hazard shape as
++        // dart_entry.cc's reentry. GenerateTransitionDartToCpuIfNeededStub
++        // only reaches this brk while Thread::is_simulating_ is still true
++        // (its cbz tail-jumps directly, without a brk, once already on the
++        // CPU), so DecodeSimulatorToNativeTransition's kRunDartOnCPUCode arm
++        // is always entered from inside Simulator::Execute's C++ interpreter
++        // loop -- i.e. on the real OS C stack, not on Simulator's own
++        // heap-allocated stack buffer. Swapping this floor to
++        // sim->overflow_stack_limit() was tried empirically and FATALs
++        // spuriously at a depth (2000) the OSThread floor passes cleanly,
++        // because sim->overflow_stack_limit() names an address range
++        // entirely disjoint from current_csp here. The commit message is the
++        // thing that was wrong, not the code.
+         OSThread* os_thread = OSThread::Current();
+         const uword current_csp = OSThread::GetCurrentStackPointer();
+         const uword floor =
+-- 
+2.53.0
+

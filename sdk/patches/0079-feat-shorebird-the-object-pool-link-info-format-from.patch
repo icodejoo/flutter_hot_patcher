@@ -1,0 +1,528 @@
+From 26b5e5ed6c7965ebbd47b78a2170374321da1995 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 10:21:26 +0800
+Subject: [PATCH 079/206] feat(shorebird): the object pool link info format,
+ from CodeInfo's field list
+
+This format was recorded as undetermined: the header count was readable and
+everything after it was a wall of varints. The engine dSYM turns out to carry
+link_info.h's own declarations -- the mappers are absent from it, these are not
+-- and CodeInfo's field list is the whole answer.
+
+  class CodeInfo                     link_info.h:48, 0x60 bytes
+    SelfHash      self_hash_         @0x00 (line 74)
+    SubgraphHash  op_subgraph_hash_  @0x18 (line 80)
+    vector<uword> self_pp_indices_   @0x30 (line 85)
+    vector<uword> subgraph_pp_indices_ @0x48 (line 90)
+
+Read in that order, their artifacts parse to the byte:
+
+  unsigned count                     1380
+  count x CodeInfo
+  unsigned num_indices               385
+  num_indices x unsigned             ascending pool indices
+  unsigned num_pool_entries          1421
+
+The trailing 1421 is the pool size, and their own three-stage report adds up to
+exactly it: 1113 + 292 + 16.
+
+Also added, all from the same DWARF: Sha256Hash (0x18, one string) and
+IntervalInfo (0x10, two intptr_t). Their declarations for ClassInfo and
+SelectorRowInfo are recorded as a comment rather than applied -- renaming our
+fields buys fidelity no output can observe, at the cost of churn through
+byte-exact dumps.
+
+Two things deliberately not smoothed over. Sha256Hash is their name, but every
+value in their own file is 40 hex characters, which is SHA-1's width; the class
+does not police it, because theirs demonstrably does not. And the 385 trailing
+indices are carried under a descriptive name: measured, they are ascending,
+identical between base and patch, and a strict subset of the 1126 indices the
+records reference, but they match none of "all minus self", "all minus
+subgraph", or "all minus either". Naming them for an unsupported hypothesis is
+the mistake 0xd8 already was.
+
+Verification. The unit tests here can only show the reader and writer are
+inverses -- two halves of one guess agree as happily as two halves of the
+truth. The outside judge is op_link_info_check.sh in the spike, which decodes
+their two artifacts and re-encodes them: 193312 and 193325 bytes reproduced
+exactly. Parsing to EOF would have been weaker, since a reader that skipped a
+field and a writer that never wrote it still land on the last byte. Its
+self-test drops subgraph_pp_indices and both files stop matching at byte 463.
+
+Truncation is checked at every prefix length, not sampled: a prefix that parses
+is a prefix that invented a record. 102 tests pass; verify_all.sh reports
+5 ran, 0 failed, 0 skipped.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 447854c81da..a067b97aae9 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -377,6 +377,103 @@ void PrintClassTableLinkInfoIfRequested(Thread* thread) {
+ }
+ 
+ 
++namespace {
++
++// The string encoding shared by every link-info file: an unsigned length
++// followed by that many *signed* varints, one per character. Two different
++// terminator markers are in play -- 0x80 for unsigned, 0xC0 for signed -- and
++// mixing them up decodes hex digits into five-figure numbers, which is how
++// this was got wrong the first time.
++bool ReadString(ReadStream* stream, std::string* out) {
++  if (stream->PendingBytes() <= 0) return false;
++  const intptr_t length = stream->ReadUnsigned<intptr_t>();
++  // A length is bounded by what is left: one character costs at least one byte.
++  if (length < 0 || length > stream->PendingBytes()) return false;
++  out->clear();
++  out->reserve(static_cast<size_t>(length));
++  for (intptr_t i = 0; i < length; i++) {
++    if (stream->PendingBytes() <= 0) return false;
++    out->push_back(static_cast<char>(stream->Read<int32_t>()));
++  }
++  return true;
++}
++
++bool ReadIndexVector(ReadStream* stream, std::vector<uintptr_t>* out) {
++  if (stream->PendingBytes() <= 0) return false;
++  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  if (count < 0 || count > stream->PendingBytes()) return false;
++  out->clear();
++  out->reserve(static_cast<size_t>(count));
++  for (intptr_t i = 0; i < count; i++) {
++    if (stream->PendingBytes() <= 0) return false;
++    out->push_back(stream->ReadUnsigned<uintptr_t>());
++  }
++  return true;
++}
++
++void WriteIndexVector(BaseWriteStream* stream,
++                      const std::vector<uintptr_t>& values) {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(values.size()));
++  for (uintptr_t v : values) {
++    stream->WriteUnsigned<uintptr_t>(v);
++  }
++}
++
++}  // namespace
++
++bool Sha256Hash::ReadFromStream(ReadStream* stream) {
++  return ReadString(stream, &value_);
++}
++
++void Sha256Hash::WriteToStream(BaseWriteStream* stream) const {
++  WriteString(stream, value_);
++}
++
++std::unique_ptr<ObjectPoolLinkInfo> ObjectPoolLinkInfo::ReadFromStream(
++    ReadStream* stream) {
++  if (stream->PendingBytes() <= 0) return nullptr;
++  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  // Each record costs at least four bytes (two empty strings, two empty
++  // vectors), so anything past that is a malformed count and not a big file.
++  // Bounding before reserving matters: the check inside ReadStream is an
++  // ASSERT, compiled out of release, and an unbounded count reaches reserve().
++  if (count < 0 || count > stream->PendingBytes()) return nullptr;
++
++  std::vector<CodeInfo> codes;
++  codes.reserve(static_cast<size_t>(count));
++  for (intptr_t i = 0; i < count; i++) {
++    CodeInfo info;
++    if (!ReadString(stream, &info.self_hash_)) return nullptr;
++    if (!ReadString(stream, &info.op_subgraph_hash_)) return nullptr;
++    if (!ReadIndexVector(stream, &info.self_pp_indices_)) return nullptr;
++    if (!ReadIndexVector(stream, &info.subgraph_pp_indices_)) return nullptr;
++    codes.push_back(std::move(info));
++  }
++
++  std::vector<uintptr_t> indices;
++  if (!ReadIndexVector(stream, &indices)) return nullptr;
++
++  if (stream->PendingBytes() <= 0) return nullptr;
++  const intptr_t num_pool_entries = stream->ReadUnsigned<intptr_t>();
++  if (num_pool_entries < 0) return nullptr;
++
++  return std::unique_ptr<ObjectPoolLinkInfo>(new ObjectPoolLinkInfo(
++      std::move(codes), std::move(indices), num_pool_entries));
++}
++
++void ObjectPoolLinkInfo::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(codes_.size()));
++  for (const CodeInfo& info : codes_) {
++    WriteString(stream, info.self_hash_);
++    WriteString(stream, info.op_subgraph_hash_);
++    WriteIndexVector(stream, info.self_pp_indices_);
++    WriteIndexVector(stream, info.subgraph_pp_indices_);
++  }
++  WriteIndexVector(stream, indices_);
++  // Trailing, like the class and field tables' sizes.
++  stream->WriteUnsigned<intptr_t>(num_pool_entries_);
++}
++
+ void DispatchTableLinkInfo::WriteToStream(BaseWriteStream* stream) const {
+   stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(selectors_.size()));
+   for (const SelectorRowInfo& row : selectors_) {
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index d0d368ac2e9..70cac112337 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -20,6 +20,7 @@ namespace dart {
+ class Thread;
+ // Forward declared rather than including vm/datastream.h, which is heavy.
+ class BaseWriteStream;
++class ReadStream;
+ 
+ // Link information describing a base snapshot's class table, so a patch
+ // compiled later can be mapped onto it.
+@@ -125,6 +126,149 @@ struct SelectorRowInfo {
+   std::vector<std::pair<intptr_t, intptr_t>> ranges;  // Interval begin/end, end exclusive
+ };
+ 
++// Their own declarations for the two structs above, recovered from the engine
++// dSYM's DWARF for link_info.h (the mappers are absent from it, these are not):
++//
++//   class ClassInfo               link_info.h:93,  0x38 bytes
++//     cid         class_id_       @0x00 (line 107)
++//     ClassName   class_name_     @0x08 (line 110)
++//     ClassHash   class_hash_     @0x20 (line 113)
++//     ClassInfo(cid, ClassName, ClassHash)                          line 95
++//     static ClassInfo ReadFromStream(ReadStream*)                  line 98
++//
++//   class SelectorRowInfo         link_info.h:162, 0x38 bytes
++//     SelectorOffset offset_      @0x00 (line 179)
++//     SelectorHash   hash_        @0x08 (line 182)
++//     vector<IntervalInfo> ranges_@0x20 (line 185)
++//     SelectorRowInfo(int, const Sha256Hash&, const vector<IntervalInfo>&)
++//
++// The mangled constructors show ClassName and ClassHash are plain std::string
++// typedefs, while SelectorHash really is the Sha256Hash class below -- an
++// asymmetry that is theirs, not a transcription slip. Our field names differ
++// and are deliberately left alone: renaming them buys interface fidelity we
++// cannot observe in any output, at the cost of churn through byte-exact dumps.
++// Recorded here so the divergence is known rather than forgotten.
++
++// A hash carried as its own type rather than a bare string.
++//
++// Named for SHA-256 by them, but every value in their own object pool link
++// info is 40 hex characters, which is SHA-1's width, not SHA-256's. Reproduced
++// under their name and with their width behaviour: this class does not
++// validate the length, because theirs demonstrably does not either.
++class Sha256Hash {
++ public:
++  Sha256Hash() {}
++  explicit Sha256Hash(std::string value) : value_(std::move(value)) {}
++
++  const std::string& value() const { return value_; }
++
++  bool ReadFromStream(ReadStream* stream);
++  void WriteToStream(BaseWriteStream* stream) const;
++
++  bool operator==(const Sha256Hash& other) const {
++    return value_ == other.value_;
++  }
++
++ private:
++  std::string value_;  // @0x00
++};
++
++// A half-open index range. Their link_info.h:141, 0x10 bytes, start_ @0x00 and
++// end_ @0x08, both intptr_t, constructed from (long, long).
++struct IntervalInfo {
++  IntervalInfo() : start_(0), end_(0) {}
++  IntervalInfo(intptr_t start, intptr_t end) : start_(start), end_(end) {}
++
++  bool operator==(const IntervalInfo& other) const {
++    return start_ == other.start_ && end_ == other.end_;
++  }
++
++  intptr_t start_;
++  intptr_t end_;
++};
++
++// One code object's contribution to the object pool link info.
++//
++// Their link_info.h:48, 0x60 bytes. Field order and offsets from the engine
++// dSYM; the wire order below is the same order and was confirmed by parsing
++// their own artifacts to the byte (see ObjectPoolLinkInfo).
++//
++//   SelfHash     self_hash_            @0x00 (line 74)
++//   SubgraphHash op_subgraph_hash_     @0x18 (line 80)
++//   vector<uword> self_pp_indices_     @0x30 (line 85)
++//   vector<uword> subgraph_pp_indices_ @0x48 (line 90)
++//
++// SelfHash and SubgraphHash are std::string typedefs, not Sha256Hash: their
++// constructor mangles as CodeInfo(std::string, std::string, vector<unsigned
++// long>, vector<unsigned long>).
++struct CodeInfo {
++  CodeInfo() {}
++  CodeInfo(std::string self_hash,
++           std::string op_subgraph_hash,
++           std::vector<uintptr_t> self_pp_indices,
++           std::vector<uintptr_t> subgraph_pp_indices)
++      : self_hash_(std::move(self_hash)),
++        op_subgraph_hash_(std::move(op_subgraph_hash)),
++        self_pp_indices_(std::move(self_pp_indices)),
++        subgraph_pp_indices_(std::move(subgraph_pp_indices)) {}
++
++  bool operator==(const CodeInfo& other) const {
++    return self_hash_ == other.self_hash_ &&
++           op_subgraph_hash_ == other.op_subgraph_hash_ &&
++           self_pp_indices_ == other.self_pp_indices_ &&
++           subgraph_pp_indices_ == other.subgraph_pp_indices_;
++  }
++
++  std::string self_hash_;
++  std::string op_subgraph_hash_;
++  std::vector<uintptr_t> self_pp_indices_;
++  std::vector<uintptr_t> subgraph_pp_indices_;
++};
++
++// Link information describing a snapshot's object pool.
++//
++// The format was undetermined until the dSYM gave CodeInfo's field list; with
++// it, both of their artifacts parse to the byte with nothing left over:
++//
++//   unsigned count                              1380
++//   count x CodeInfo, in declaration order
++//   unsigned num_indices                        385
++//   num_indices x unsigned                      ascending pool indices
++//   unsigned num_pool_entries                   1421
++//
++// The trailing count is the whole pool's size, and 1113 + 292 + 16 from their
++// three-stage report adds up to exactly it.
++//
++// What the 385 indices mean is NOT established, so they are carried under a
++// descriptive name rather than an interpretive one. Measured, not guessed:
++// they are ascending, identical between base and patch, a strict subset of the
++// 1126 indices the records reference, and they match none of "all minus
++// self", "all minus subgraph", or "all minus either". Naming them for a
++// hypothesis none of those tests support is the mistake `0xd8` already was.
++class ObjectPoolLinkInfo {
++ public:
++  ObjectPoolLinkInfo(std::vector<CodeInfo> codes,
++                     std::vector<uintptr_t> indices,
++                     intptr_t num_pool_entries)
++      : codes_(std::move(codes)),
++        indices_(std::move(indices)),
++        num_pool_entries_(num_pool_entries) {}
++
++  const std::vector<CodeInfo>& codes() const { return codes_; }
++  const std::vector<uintptr_t>& indices() const { return indices_; }
++  intptr_t num_pool_entries() const { return num_pool_entries_; }
++
++  // Returns nullptr on any malformed input rather than aborting: the caller
++  // hands this whatever bytes an embedder supplied.
++  static std::unique_ptr<ObjectPoolLinkInfo> ReadFromStream(ReadStream* stream);
++  void WriteToStream(BaseWriteStream* stream) const;
++
++ private:
++  std::vector<CodeInfo> codes_;
++  std::vector<uintptr_t> indices_;
++  intptr_t num_pool_entries_;
++};
++
+ // Not a ZoneObject -- see the note on ClassTableLinkInfo.
+ class DispatchTableLinkInfo {
+  public:
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+new file mode 100644
+index 00000000000..8ef6b2aa0fd
+--- /dev/null
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -0,0 +1,180 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/link_info.h"
++
++#include <string>
++#include <vector>
++
++#include "vm/datastream.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// The object pool link info format, recovered once CodeInfo's field list came
++// out of the engine dSYM.
++//
++// The judge that matters is not in this file: it is their own two artifacts,
++// which parse to the byte with nothing left over, checked by
++// op_link_info_check.sh in the spike. Their artifacts cannot live in this
++// repository -- origin is public and they are Shorebird's build output -- so
++// what is here is the half that can: that our reader and writer are inverses,
++// and that malformed input is declined rather than trusted.
++
++static std::unique_ptr<ObjectPoolLinkInfo> RoundTrip(
++    const ObjectPoolLinkInfo& in,
++    intptr_t* out_bytes) {
++  MallocWriteStream out(/*initial_size=*/256);
++  in.WriteToStream(&out);
++  *out_bytes = out.bytes_written();
++  ReadStream rs(out.buffer(), out.bytes_written());
++  return ObjectPoolLinkInfo::ReadFromStream(&rs);
++}
++
++VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_RoundTrip) {
++  // Shaped like theirs: 40-character hex hashes, some records with no indices
++  // and some with several. Both cases occur in their own file (691 of 1380
++  // records carry self indices, 874 carry subgraph indices), and a reader that
++  // mishandles the empty case desynchronises on the very next record.
++  const std::string a(40, 'a');
++  const std::string b(40, 'b');
++  std::vector<CodeInfo> codes;
++  codes.emplace_back(a, b, std::vector<uintptr_t>{},
++                     std::vector<uintptr_t>{});
++  codes.emplace_back(b, a, std::vector<uintptr_t>{25, 27, 1405},
++                     std::vector<uintptr_t>{0});
++  codes.emplace_back(a, a, std::vector<uintptr_t>{1420},
++                     std::vector<uintptr_t>{7, 9});
++
++  const ObjectPoolLinkInfo in(codes, std::vector<uintptr_t>{25, 27, 1405},
++                              /*num_pool_entries=*/1421);
++
++  intptr_t bytes = 0;
++  std::unique_ptr<ObjectPoolLinkInfo> out = RoundTrip(in, &bytes);
++  EXPECT(out != nullptr);
++  if (out == nullptr) return;
++
++  EXPECT_EQ(static_cast<size_t>(3), out->codes().size());
++  EXPECT(out->codes()[0] == codes[0]);
++  EXPECT(out->codes()[1] == codes[1]);
++  EXPECT(out->codes()[2] == codes[2]);
++  EXPECT_EQ(static_cast<size_t>(3), out->indices().size());
++  EXPECT_EQ(static_cast<uintptr_t>(1405), out->indices()[2]);
++  EXPECT_EQ(static_cast<intptr_t>(1421), out->num_pool_entries());
++}
++
++// The trailing pool size is last, not first. A reader that stopped after the
++// records would still satisfy every assertion above, so this pins the position
++// by making the value the only thing that distinguishes two otherwise
++// identical files.
++VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_PoolSizeIsATrailer) {
++  const std::string h(40, 'c');
++  std::vector<CodeInfo> codes;
++  codes.emplace_back(h, h, std::vector<uintptr_t>{1},
++                     std::vector<uintptr_t>{2});
++
++  intptr_t bytes_small = 0;
++  intptr_t bytes_large = 0;
++  std::unique_ptr<ObjectPoolLinkInfo> small =
++      RoundTrip(ObjectPoolLinkInfo(codes, {}, 1), &bytes_small);
++  std::unique_ptr<ObjectPoolLinkInfo> large =
++      RoundTrip(ObjectPoolLinkInfo(codes, {}, 1421), &bytes_large);
++  EXPECT(small != nullptr);
++  EXPECT(large != nullptr);
++  if (small == nullptr || large == nullptr) return;
++
++  EXPECT_EQ(static_cast<intptr_t>(1), small->num_pool_entries());
++  EXPECT_EQ(static_cast<intptr_t>(1421), large->num_pool_entries());
++  // 1421 needs two varint bytes where 1 needs one, and the difference has to
++  // show up in the encoding rather than being silently dropped.
++  EXPECT_EQ(bytes_small + 1, bytes_large);
++}
++
++// Every string in their file is 40 hex characters. The reader must not depend
++// on that -- the width is not in the format -- so an empty hash and a long one
++// both have to survive the trip.
++VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_HashWidthIsNotAssumed) {
++  std::vector<CodeInfo> codes;
++  codes.emplace_back("", std::string(64, 'f'), std::vector<uintptr_t>{},
++                     std::vector<uintptr_t>{});
++
++  intptr_t bytes = 0;
++  std::unique_ptr<ObjectPoolLinkInfo> out =
++      RoundTrip(ObjectPoolLinkInfo(codes, {}, 0), &bytes);
++  EXPECT(out != nullptr);
++  if (out == nullptr) return;
++  EXPECT(out->codes()[0].self_hash_.empty());
++  EXPECT_EQ(static_cast<size_t>(64), out->codes()[0].op_subgraph_hash_.size());
++}
++
++// Truncation at every length must decline, not crash and not half-succeed.
++// The bounds inside ReadStream are ASSERTs and compile out of release, so an
++// unchecked count reaches reserve() with whatever the file said -- that is how
++// a four-byte file once asked for 1.92 TB.
++VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_DeclinesTruncatedInput) {
++  const std::string h(40, 'd');
++  std::vector<CodeInfo> codes;
++  codes.emplace_back(h, h, std::vector<uintptr_t>{1, 2},
++                     std::vector<uintptr_t>{3});
++  const ObjectPoolLinkInfo in(codes, std::vector<uintptr_t>{4}, 99);
++
++  MallocWriteStream out(/*initial_size=*/256);
++  in.WriteToStream(&out);
++  const intptr_t full = out.bytes_written();
++  EXPECT(full > 0);
++
++  intptr_t declined = 0;
++  for (intptr_t n = 0; n < full; n++) {
++    ReadStream rs(out.buffer(), n);
++    if (ObjectPoolLinkInfo::ReadFromStream(&rs) == nullptr) declined++;
++  }
++  // Every proper prefix. Not "most": a prefix that parses is a prefix that
++  // invented a record.
++  EXPECT_EQ(full, declined);
++
++  // And the untruncated one still parses, so the loop above is not passing
++  // because the reader rejects everything.
++  ReadStream rs(out.buffer(), full);
++  EXPECT(ObjectPoolLinkInfo::ReadFromStream(&rs) != nullptr);
++}
++
++VM_UNIT_TEST_CASE(ObjectPoolLinkInfo_DeclinesGarbage) {
++  uint8_t garbage[64];
++  memset(garbage, 0xa5, sizeof(garbage));
++  ReadStream rs(garbage, sizeof(garbage));
++  EXPECT(ObjectPoolLinkInfo::ReadFromStream(&rs) == nullptr);
++
++  ReadStream empty(garbage, 0);
++  EXPECT(ObjectPoolLinkInfo::ReadFromStream(&empty) == nullptr);
++}
++
++// Sha256Hash is their name for it, and their own values are 40 hex characters
++// -- SHA-1's width, not SHA-256's. Reproduced as they have it: the class does
++// not police the width, so this records that it does not.
++VM_UNIT_TEST_CASE(Sha256Hash_RoundTripDoesNotPoliceWidth) {
++  const Sha256Hash forty(std::string(40, 'e'));
++  MallocWriteStream out(/*initial_size=*/64);
++  forty.WriteToStream(&out);
++
++  ReadStream rs(out.buffer(), out.bytes_written());
++  Sha256Hash back;
++  EXPECT(back.ReadFromStream(&rs));
++  EXPECT(back == forty);
++  EXPECT_EQ(static_cast<size_t>(40), back.value().size());
++}
++
++// Their link_info.h:141 -- two intptr_t, in this order.
++VM_UNIT_TEST_CASE(IntervalInfo_LayoutMatchesTheirs) {
++  static_assert(sizeof(IntervalInfo) == 2 * sizeof(intptr_t),
++                "IntervalInfo is 0x10 bytes in their DWARF");
++  EXPECT_EQ(static_cast<size_t>(0x10), sizeof(IntervalInfo));
++  EXPECT_EQ(static_cast<size_t>(0x00), offsetof(IntervalInfo, start_));
++  EXPECT_EQ(static_cast<size_t>(0x08), offsetof(IntervalInfo, end_));
++
++  const IntervalInfo interval(3, 9);
++  EXPECT_EQ(static_cast<intptr_t>(3), interval.start_);
++  EXPECT_EQ(static_cast<intptr_t>(9), interval.end_);
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 6d10d93173b..9b714cd00c7 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -401,6 +401,7 @@ vm_sources_tests = [
+   "shorebird/wrapper_stub_test.cc",
+   "shorebird/linker_test.cc",
+   "shorebird/dd_voting_test.cc",
++  "shorebird/link_info_test.cc",
+   "shorebird/shorebird_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+-- 
+2.53.0
+

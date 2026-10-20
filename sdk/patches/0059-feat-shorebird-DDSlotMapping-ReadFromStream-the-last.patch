@@ -1,0 +1,285 @@
+From baf1d3f6af8983cec4bd0c96910acb066f772c57 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 16:43:57 +0800
+Subject: [PATCH 059/206] feat(shorebird): DDSlotMapping::ReadFromStream, the
+ last stub in the tree
+
+This was the one placeholder left in runtime/vm/shorebird: a reader that
+returned false unconditionally, blocked on "the wire format has not been
+disassembled". It has now been disassembled -- 664 bytes at 0x100198fb0.
+
+    N = varint
+    repeat N times:
+        a = varint;  b = varint;  c = varint
+        map_a[a] = b
+        if (c >= 1)  map_b[c] = b
+
+No magic and no version: their reader's first action is a varint decode,
+so this section continues the stream DDSlotVoters left off in.
+
+The comment this replaces guessed the two maps were base_slot->patch_slot
+and patch_slot->base_slot. That is refuted by the loop -- both maps take
+their value from the same column b, so they are two keys addressing one
+value, not inverses of each other. sizeof is 0x50 from their operator new
+call, which is exactly two libc++ hash tables and no other member, so the
+two maps are the whole object.
+
+What a, b and c MEAN is deliberately not asserted. VisitCode looks up a
+Function's kernel_offset_ in a long->long map and treats the result as a
+table index, which suggests one of these is kernel_offset -> slot, but it
+reaches its map through a pointer not yet traced to a DDSlotMapping.
+Shape is established; semantics are not, and naming them would be a guess.
+
+No reserve() on either map. Theirs does not reserve either -- the only
+external calls in the whole body are two to __next_prime -- and the
+bucket-width history is what fixes a libc++ map's iteration order.
+
+Verification: ninja exit 0, binary confirmed newer than all three sources,
+76 of 76 shorebird tests exit 0 (IsolateReload_ShapeChange_Const_AddSlot
+is an upstream test my grep caught by name; it needs --dfe and passes with
+it). Negative control: keying map_b by b instead of c gives exit 255 with
+the two map_b assertions named. The assertions use find() rather than at()
+because at() aborted the process at exit 134 without saying which key was
+missing.
+
+Honest limit, also recorded in the test: there is NO independent oracle for
+this format. They ship no mapping fixture and the writer is inside the
+closed aot-tools.dill, so these tests prove the reader matches the format I
+read out of their disassembly -- not that the format matches their writer.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+index 04f7a60169a..df318e12ca3 100644
+--- a/runtime/vm/shorebird/dd_voting.cc
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -238,13 +238,47 @@ bool DDSlotVoters::ReadFromStream(ReadStream* stream) {
+ // DDSlotMapping
+ // ===========================================================================
+ 
+-bool DDSlotMapping::ReadFromStream(ReadStream* /* stream */) {
+-  // TODO(slice-2c): implement once disassembly of 0x100198fb0 is complete.
+-  // The wire format follows DDSlotVoters in the same --dd_slot_mapping file.
+-  // From Ghidra template params: make_unique<DDSlotMapping>(
+-  //     unordered_map<long,long>, unordered_map<long,long>) — two maps.
+-  // Direction of each map (base→patch vs patch→base) is not yet established.
+-  return false;
++bool DDSlotMapping::ReadFromStream(ReadStream* stream) {
++  // No magic and no version here — unlike DDSlotVoters. The first action of
++  // their reader at 0x100198fb0 is a varint decode, so this continues the
++  // stream DDSlotVoters left off in rather than starting a framed section.
++  if (stream->PendingBytes() <= 0) return false;
++  const intptr_t num_rows = stream->ReadUnsigned<intptr_t>();
++
++  // A row is three varints, so at least three bytes. This is a runtime check
++  // on purpose: ASSERT compiles out in Release, and a truncated file would
++  // otherwise turn a bogus count straight into an enormous allocation.
++  if (num_rows < 0 || num_rows > stream->PendingBytes() / 3) {
++    OS::PrintErr("DDSlotMapping: implausible num_rows %" Pd "\n", num_rows);
++    return false;
++  }
++
++  // Deliberately no reserve() on either map. Their reader does not reserve
++  // either — the only external calls in the whole 664-byte body are two to
++  // __next_prime, i.e. the tables grow through the natural bucket-width
++  // sequence. That sequence is what fixes a libc++ map's iteration order, so
++  // reserving here would reorder any dump derived from these maps even though
++  // the contents would still match. Same trap as print_dd_function_identity_to.
++  for (intptr_t i = 0; i < num_rows; i++) {
++    if (stream->PendingBytes() < 3) {
++      OS::PrintErr("DDSlotMapping: truncated at row %" Pd " of %" Pd "\n", i,
++                   num_rows);
++      return false;
++    }
++    const intptr_t a = stream->ReadUnsigned<intptr_t>();
++    const intptr_t b = stream->ReadUnsigned<intptr_t>();
++    const intptr_t c = stream->ReadUnsigned<intptr_t>();
++
++    map_a_[static_cast<long>(a)] = static_cast<long>(b);
++    // c == 0 means "this row has no second key". Their code tests `c >= 1` on
++    // a signed register; the value arrives from an unsigned varint so the two
++    // spellings coincide, and this one keeps their instruction visible.
++    if (c >= 1) {
++      map_b_[static_cast<long>(c)] = static_cast<long>(b);
++    }
++  }
++
++  return true;
+ }
+ 
+ // ===========================================================================
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+index cb7d6689d07..96a7c41dec0 100644
+--- a/runtime/vm/shorebird/dd_voting.h
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -169,25 +169,52 @@ class DDSlotVoters {
+ // Produced by the closed aot-tools.dill after running the voting algorithm.
+ // We receive it from a file that may also contain DDSlotVoters before it.
+ //
+-// From Ghidra template params: make_unique<DDSlotMapping>(
+-//     unordered_map<long,long>, unordered_map<long,long>)
+-// Two maps: plausibly base_slot → patch_slot and patch_slot → base_slot.
+-// Direction not established from recon.
++// From make_unique<DDSlotMapping>(unordered_map<long,long>,
++// unordered_map<long,long>): two maps. Their operator new asks for 0x50 = 80
++// bytes, which is exactly two 40-byte libc++ hash tables and no other member,
++// so these two maps are the whole object.
+ //
+-// ReadFromStream is a STUB in this slice — the wire format has not been
+-// disassembled. It sets *ok=false unconditionally. TODO(slice-2c): implement
+-// once the disassembly of 0x100198fb0 is done.
++// Wire format, from DDSlotMapping::ReadFromStream at 0x100198fb0 (664 bytes):
++//
++//     N = varint
++//     repeat N times:
++//         a = varint;  b = varint;  c = varint
++//         map_a[a] = b
++//         if (c >= 1)  map_b[c] = b
++//
++// No magic and no version: it continues the stream DDSlotVoters left off in,
++// and the disassembly reads a varint as its very first action.
++//
++// An earlier guess recorded here — "plausibly base_slot → patch_slot and
++// patch_slot → base_slot" — is REFUTED by that loop. The two maps do not point
++// at each other; they share the same value column b, so they are two different
++// keys addressing one value. Whatever a and c are, they are alternative
++// identities for the same b.
++//
++// What a, b and c MEAN is deliberately not asserted here. The nearby evidence
++// (DDTableBuilder::VisitCode looks up a Function's kernel_offset_ in a
++// long→long map and treats the result as a table index) suggests one of these
++// maps is kernel_offset → slot, but VisitCode reaches its map through a pointer
++// this code has not yet traced to a DDSlotMapping, so naming the columns would
++// be a guess. Shape is established; semantics are not.
+ class DDSlotMapping {
+  public:
+   // Reads a DDSlotMapping from *stream. Returns true on success.
+-  // STUB: always returns false in this slice.
+   bool ReadFromStream(ReadStream* stream);
+ 
+   size_t size() const { return map_a_.size(); }
+ 
++  // Accessors exist for tests: size() alone cannot distinguish a reader that
++  // put the right count of wrong pairs in the map from a correct one.
++  const std::unordered_map<long, long>& map_a() const { return map_a_; }
++  const std::unordered_map<long, long>& map_b() const { return map_b_; }
++
+  private:
+-  std::unordered_map<long, long> map_a_;  // direction TBD
+-  std::unordered_map<long, long> map_b_;  // direction TBD
++  // Keyed by wire column a; value is column b. Every row contributes.
++  std::unordered_map<long, long> map_a_;
++  // Keyed by wire column c; value is the same column b. Rows with c == 0 are
++  // skipped, so this map is a subset of map_a_'s rows under a different key.
++  std::unordered_map<long, long> map_b_;
+ };
+ 
+ // DDSlotResolution: the output of ResolveDDSlots. Holds the per-slot winner
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index 9b224740123..c734f1f9f49 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -715,15 +715,93 @@ VM_UNIT_TEST_CASE(ShorebirdLinker_BogusVotersDoesNotPopulate) {
+   EXPECT(linker->dd_slot_voters() == nullptr);
+ }
+ 
+-// DDSlotMapping::ReadFromStream is a documented stub. Pin that it returns false
+-// so the gen_snapshot non-voters branch is known to reject rather than silently
+-// succeed. When slice-2c implements it, this test is the tripwire that says so.
+-VM_UNIT_TEST_CASE(DDSlotMapping_ReadFromStreamIsStillAStub) {
+-  const uint8_t bytes[8] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+-  ReadStream rs(bytes, sizeof(bytes));
++// --- DDSlotMapping (--dd_slot_mapping, second section of the file) ----------
++//
++// HONEST LIMIT, read this before trusting the three tests below. Unlike
++// DDSlotVoters, there is NO independent oracle for this format: they ship no
++// .dd_slot_mapping fixture, and the writer is inside the closed aot-tools.dill.
++// The row layout asserted here is my reading of their reader at 0x100198fb0,
++// so these tests prove the reader matches the DOCUMENTED format — they cannot
++// prove the documented format matches THEIR writer. The varint codec itself is
++// not hand-rolled: WriteUnsigned<intptr_t> is the exact counterpart of the
++// ReadUnsigned<intptr_t> under test, so only the row layout is authored here.
++// The load-bearing check remains feeding a real mapping file through it.
++
++// Three rows, one of which has c == 0 and must therefore land in map_a only.
++// Every key and every value is asserted by name: a size-only test passes on a
++// reader that builds the right NUMBER of wrong pairs, and the specific bug this
++// guards against — transposing b and c — keeps all three sizes correct.
++VM_UNIT_TEST_CASE(DDSlotMapping_RoundTrip_ThreeRows_OneWithoutSecondKey) {
++  MallocWriteStream ws(256);
++  ws.WriteUnsigned<intptr_t>(3);  // num_rows
++  ws.WriteUnsigned<intptr_t>(10); ws.WriteUnsigned<intptr_t>(100);
++  ws.WriteUnsigned<intptr_t>(55);
++  ws.WriteUnsigned<intptr_t>(20); ws.WriteUnsigned<intptr_t>(200);
++  ws.WriteUnsigned<intptr_t>(0);   // c == 0 → no map_b entry
++  ws.WriteUnsigned<intptr_t>(30); ws.WriteUnsigned<intptr_t>(300);
++  ws.WriteUnsigned<intptr_t>(77);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotMapping mapping;
++  EXPECT(mapping.ReadFromStream(&rs));
++
++  // Constrains consumption, not values: catches a reader that stops early or
++  // leaves trailing bytes unread.
++  EXPECT_EQ(0, rs.PendingBytes());
++
++  // find() rather than at(): a missing key must surface as a readable EXPECT
++  // failure. at() throws, which aborts the process (exit 134) and reports
++  // neither which key was absent nor which assertion was under test. Verified
++  // by negative control — with map_b keyed by b instead of c, the at() form
++  // aborted while this form fails the named assertion below.
++  auto lookup = [](const std::unordered_map<long, long>& m, long k) -> long {
++    auto it = m.find(k);
++    return it == m.end() ? -1L : it->second;
++  };
++
++  EXPECT_EQ(static_cast<size_t>(3), mapping.map_a().size());
++  EXPECT_EQ(100L, lookup(mapping.map_a(), 10));
++  EXPECT_EQ(200L, lookup(mapping.map_a(), 20));
++  EXPECT_EQ(300L, lookup(mapping.map_a(), 30));
++
++  // Two entries, not three: the c == 0 row is skipped. Keyed by c, valued by
++  // the SAME b as map_a — the two maps are not inverses of each other.
++  EXPECT_EQ(static_cast<size_t>(2), mapping.map_b().size());
++  EXPECT_EQ(100L, lookup(mapping.map_b(), 55));
++  EXPECT_EQ(300L, lookup(mapping.map_b(), 77));
++  EXPECT(mapping.map_b().find(0) == mapping.map_b().end());
++  // If b and c were transposed, map_b would be keyed 100/300 instead of 55/77.
++  EXPECT(mapping.map_b().find(200) == mapping.map_b().end());
++}
++
++// A count far larger than the buffer can hold must be rejected before any
++// allocation. The bound is a runtime check rather than an ASSERT precisely so
++// that it survives Release, where a bogus count would otherwise reach the map.
++VM_UNIT_TEST_CASE(DDSlotMapping_RejectsImplausibleRowCount) {
++  MallocWriteStream ws(64);
++  ws.WriteUnsigned<intptr_t>(100000);  // claims 100k rows
++  ws.WriteUnsigned<intptr_t>(1);       // ...with 3 bytes of payload
++  ws.WriteUnsigned<intptr_t>(2);
++  ws.WriteUnsigned<intptr_t>(3);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotMapping mapping;
++  EXPECT(!mapping.ReadFromStream(&rs));
++  EXPECT_EQ(static_cast<size_t>(0), mapping.map_a().size());
++}
++
++// A count that passes the plausibility bound but runs off the end mid-way. This
++// is the case the count check alone cannot catch, so the per-row guard has to.
++VM_UNIT_TEST_CASE(DDSlotMapping_RejectsTruncatedRow) {
++  MallocWriteStream ws(64);
++  ws.WriteUnsigned<intptr_t>(2);  // two rows promised
++  ws.WriteUnsigned<intptr_t>(10); ws.WriteUnsigned<intptr_t>(100);
++  ws.WriteUnsigned<intptr_t>(55);
++  ws.WriteUnsigned<intptr_t>(20);  // second row starts and stops
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
+   DDSlotMapping mapping;
+   EXPECT(!mapping.ReadFromStream(&rs));
+-  EXPECT_EQ(static_cast<size_t>(0), mapping.size());
+ }
+ 
+ // --- DD function identity (--print_dd_function_identity_to) ------------------
+-- 
+2.53.0
+

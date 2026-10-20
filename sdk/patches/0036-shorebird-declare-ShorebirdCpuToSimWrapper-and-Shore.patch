@@ -1,0 +1,104 @@
+From 34d29f217d402ef1d5cd5f85a34825a50ce7cce5 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 16:44:46 +0800
+Subject: [PATCH 036/206] shorebird: declare ShorebirdCpuToSimWrapper and
+ ShorebirdSimToCpuWrapper stubs
+
+Adds two new entries to VM_STUB_CODE_LIST and corresponding placeholder
+generators (single __ Breakpoint()) in stub_code_compiler_arm64.cc. This
+makes both stubs exist as live StubCode entries from VM startup, which is
+the prerequisite for WrapperAllocator::GetStubCodeRange implementations
+that read their addresses.
+
+The bodies are intentional breakpoints -- they are not called yet. Later
+tasks will replace them with real landing-pad sequences once the call sites
+are wired up (the Simulator / SimToCpu / WrapperAllocator chain currently
+dead-strips from gen_snapshot because nothing calls into it).
+
+Verification:
+- ninja -C xcodebuild/ReleaseARM64 run_vm_tests linked cleanly (566/566
+  steps, including the new test file).
+- StubCode_ShorebirdWrappersExist PASS (both stubs non-null, size > 0).
+- Negative control confirmed: inverting the IsNull() assertion produced
+  "error: expected: StubCode::ShorebirdSimToCpuWrapper().IsNull()" and
+  exit 255.
+- Full shorebird suite: 56/56 PASS (was 55/55; new test is the 56th).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 6f723752bb3..5328547ab41 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -605,6 +605,14 @@ void StubCodeCompiler::GenerateFfiCallbackTrampolineStub() {
+ #endif
+ }
+ 
++void StubCodeCompiler::GenerateShorebirdCpuToSimWrapperStub() {
++  __ Breakpoint();
++}
++
++void StubCodeCompiler::GenerateShorebirdSimToCpuWrapperStub() {
++  __ Breakpoint();
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+new file mode 100644
+index 00000000000..2aafde80a73
+--- /dev/null
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -0,0 +1,23 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/wrapper.h"
++
++#include "vm/stub_code.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++namespace shorebird {
++
++// Stubs are generated at VM startup, so this needs an isolate -- VM_UNIT_TEST_CASE
++// runs without one and StubCode would not be initialized.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrappersExist) {
++  EXPECT(!StubCode::ShorebirdCpuToSimWrapper().IsNull());
++  EXPECT(!StubCode::ShorebirdSimToCpuWrapper().IsNull());
++  EXPECT(StubCode::ShorebirdCpuToSimWrapper().Size() > 0);
++  EXPECT(StubCode::ShorebirdSimToCpuWrapper().Size() > 0);
++}
++
++}  // namespace shorebird
++}  // namespace dart
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 9625918343c..183b2506c2c 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -156,6 +156,8 @@ namespace dart {
+   V(CallNativeThroughSafepoint)                                                \
+   V(FfiCallTrampoline)                                                         \
+   V(FfiCallbackTrampoline)                                                     \
++  V(ShorebirdCpuToSimWrapper)                                                  \
++  V(ShorebirdSimToCpuWrapper)                                                  \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 0e00d35f68d..f564bc027fa 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -396,6 +396,7 @@ vm_sources_tests = [
+   "allocation_test.cc",
+   "sim_transition_test.cc",
+   "shorebird/wrapper_test.cc",
++  "shorebird/wrapper_stub_test.cc",
+   "shorebird/linker_test.cc",
+   "shorebird/dd_voting_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+-- 
+2.53.0
+

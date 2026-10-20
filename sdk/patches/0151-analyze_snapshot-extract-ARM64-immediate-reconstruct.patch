@@ -1,0 +1,171 @@
+From 8e8927cef440156d7c8a0a358c8a8677a40cb41e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 22:25:07 +0800
+Subject: [PATCH 151/206] analyze_snapshot: extract ARM64 immediate
+ reconstruction into a testable header
+
+F66 needs to reconstruct the immediates of the two dispatch-table call heads
+that DecodeDispatchCall currently reports as kNoSelector. ARM64 immediate
+decoding is easy to get subtly wrong in a way that still yields plausible
+numbers, so the arithmetic moves somewhere a unit test can reach it.
+
+The header is deliberately free of VM dependencies so that
+spikes/shorebird_linkinfo_oracle/test_arm64_decode.cc can include THIS source
+rather than a transcription of it. A test built on a re-typed copy passes while
+the shipped binary is wrong.
+
+DecodeImmLogical is dart::Instr::ImmLogical (constants_arm64.h:1618) unchanged;
+it is only relocated here. New: ApplyMoveWide (movz/movn/movk), ApplyAddShift
+and DecodeLogicalImmediateToReg, which is strict where the shape matcher is
+loose -- it refuses and/eor/ands and any non-xzr Rn, because the value in the
+register is then not a function of the words this scanner has seen.
+
+No behaviour change yet: nothing includes this header.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_arm64_decode.h b/runtime/vm/analyze_snapshot_arm64_decode.h
+new file mode 100644
+index 00000000000..a5d1558f376
+--- /dev/null
++++ b/runtime/vm/analyze_snapshot_arm64_decode.h
+@@ -0,0 +1,136 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_ANALYZE_SNAPSHOT_ARM64_DECODE_H_
++#define RUNTIME_VM_ANALYZE_SNAPSHOT_ARM64_DECODE_H_
++
++// ARM64 immediate reconstruction for analyze_snapshot's raw-word scanners.
++//
++// This header exists so the arithmetic can be exercised by a test that
++// compiles THE SAME SOURCE the shipped binary compiles. analyze_snapshot's
++// decoders are file-static inside analyze_snapshot_api_impl.cc, which drags in
++// the whole VM; a test that re-typed these formulae would be a test of the
++// re-typing. Everything here is therefore free of VM dependencies -- <stdint.h>
++// and nothing else -- so
++// spikes/shorebird_linkinfo_oracle/test_arm64_decode.cc can #include it
++// directly and link with plain clang++.
++//
++// ⚠️ Do not add a dart/ or vm/ include to this file. That is the one change
++// that silently turns the unit test from "tests the shipped code" into "does
++// not build", and the next person will fix the build by copying the formulae.
++
++#include <stdint.h>
++
++// dart::Instr::ImmLogical, constants_arm64.h:1618. Copied rather than called
++// because this file decodes raw words out of a snapshot payload and never
++// builds an Instr; the algorithm is upstream's, verbatim.
++//
++// Logical immediates cannot encode zero, so 0 doubles as "this encoding is not
++// a valid logical immediate". Callers that care must treat 0 as a failure.
++static inline uint64_t DecodeImmLogical(uint32_t w) {
++  const int reg_size = ((w >> 31) & 1) != 0 ? 64 : 32;
++  const int n = (w >> 22) & 1;
++  const int imm_s = (w >> 10) & 0x3F;
++  const int imm_r = (w >> 16) & 0x3F;
++  auto rotate_right = [](uint64_t value, int rotate, int width) -> uint64_t {
++    rotate &= 63;
++    if (rotate == 0) return value;
++    const uint64_t mask = (width == 64) ? ~0ULL : ((1ULL << width) - 1);
++    return ((value << (width - rotate)) | (value >> rotate)) & mask;
++  };
++  if (n == 1) {
++    if (imm_s == 0x3F) return 0;
++    return rotate_right((1ULL << (imm_s + 1)) - 1, imm_r, 64);
++  }
++  if ((imm_s >> 1) == 0x1F) return 0;
++  for (int width = 32; width >= 2; width /= 2) {
++    if ((imm_s & width) == 0) {
++      const int mask = width - 1;
++      if ((imm_s & mask) == mask) return 0;
++      uint64_t result =
++          rotate_right((1ULL << ((imm_s & mask) + 1)) - 1, imm_r & mask, width);
++      for (int w2 = width; w2 < reg_size; w2 *= 2) result |= result << w2;
++      return (reg_size == 64) ? result : (result & 0xFFFFFFFFULL);
++    }
++  }
++  return 0;
++}
++
++// `orr Xd, xzr, #imm` -- the canonical "materialise a logical immediate into a
++// register" form, which is what `mov Xd, #imm` assembles to when the constant
++// is encodable as a bitmask.
++//
++// The shape test in DecodeDispatchCall accepts the whole logical-immediate
++// opcode group (and/orr/eor/ands, any Rn), because narrowing it would change
++// which instruction streams match and therefore how many words get consumed.
++// Reconstructing the VALUE is only sound for orr-from-zero: `and x17, x5, #imm`
++// leaves something this file cannot know in x17. So the value decoder is
++// strict where the shape matcher is loose, and says so by returning false.
++static inline bool DecodeLogicalImmediateToReg(uint32_t w, uint64_t* value) {
++  if ((w & 0x1F800000) != 0x12000000) return false;  // logical (immediate)
++  if (((w >> 29) & 0x3) != 1) return false;          // opc: orr, not and/eor/ands
++  if (((w >> 5) & 0x1F) != 31) return false;         // Rn must be xzr
++  const uint64_t decoded = DecodeImmLogical(w);
++  if (decoded == 0) return false;  // 0 is ImmLogical's failure signal
++  *value = decoded;
++  return true;
++}
++
++// One ARM64 move-wide-immediate instruction, applied to a running value.
++//
++//   movn (opc 00)  value = ~(imm16 << shift)
++//   movz (opc 10)  value =   imm16 << shift
++//   movk (opc 11)  value =  (value with the 16-bit field at shift replaced)
++//
++// `first` says whether this is the instruction that ESTABLISHES the value.
++// movz/movn may only be first and movk may only follow, because those are the
++// only orderings under which the result is a function of the words seen: a
++// leading movk patches a register whose prior contents came from somewhere this
++// scanner never looked at. Returning false there is the difference between
++// "not decoded" and "decoded wrong".
++static inline bool ApplyMoveWide(uint32_t w, bool first, uint64_t* value) {
++  if ((w & 0x1F800000) != 0x12800000) return false;  // move wide (immediate)
++  const int sf = (w >> 31) & 1;
++  const uint32_t opc = (w >> 29) & 0x3;
++  const uint32_t hw = (w >> 21) & 0x3;
++  const uint64_t imm16 = (w >> 5) & 0xFFFF;
++  if (sf == 0 && hw > 1) return false;  // hw>1 is unallocated for 32-bit
++  const int shift = static_cast<int>(hw) * 16;
++  const uint64_t reg_mask = (sf != 0) ? ~0ULL : 0xFFFFFFFFULL;
++  switch (opc) {
++    case 0:  // movn
++      if (!first) return false;
++      *value = (~(imm16 << shift)) & reg_mask;
++      return true;
++    case 2:  // movz
++      if (!first) return false;
++      *value = (imm16 << shift) & reg_mask;
++      return true;
++    case 3:  // movk
++      if (first) return false;
++      *value =
++          ((*value & ~(0xFFFFULL << shift)) | (imm16 << shift)) & reg_mask;
++      return true;
++    default:
++      return false;  // opc == 01 is unallocated
++  }
++}
++
++// The shifted-register operand of `add lr, x0, x17{, <shift> #n}`.
++//
++// The dispatch-head matcher does not constrain bits 23:22 or 15:10, so an
++// encoding carrying a shift reaches here. Applying an LSL is exact; LSR/ASR
++// are modelled by refusing them rather than by ignoring them, because ignoring
++// a shift produces a wrong row index that looks just as plausible as a right
++// one.
++static inline bool ApplyAddShift(uint32_t add_word, uint64_t* value) {
++  const uint32_t shift_type = (add_word >> 22) & 0x3;
++  const uint32_t amount = (add_word >> 10) & 0x3F;
++  if (amount == 0) return true;
++  if (shift_type != 0) return false;  // only LSL is reconstructible here
++  *value <<= amount;
++  return true;
++}
++
++#endif  // RUNTIME_VM_ANALYZE_SNAPSHOT_ARM64_DECODE_H_
+-- 
+2.53.0
+

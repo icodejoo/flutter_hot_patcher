@@ -1,0 +1,1009 @@
+From 32582a15fb40c239c55bf864679b6e1bb6f58f15 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 26 Aug 2026 13:26:43 +0800
+Subject: [PATCH 107/206] feat(shorebird): land --compute_dd_table
+ (CascadeLimiter)
+
+The selector behind analyze_snapshot --compute_dd_table, from their private
+runtime/vm/shorebird/cascade_limiter.cc: Kahn longest-path depth over the callee
+edges, std::sort over the identity permutation of ALL nodes with that single
+key, then a growing greedy that cuts a function when its transitive caller
+closure (stopping at already-cut nodes, excluding itself) exceeds --dd_max_bytes.
+Emission ascends by self_hash with a dense index.
+
+The visit order calls the real std::sort rather than transcribing introsort.
+Their comparator has exactly one key and std::sort is not stable, so the tie
+order IS libc++'s trajectory; the compiler that builds analyze_snapshot resolves
+<algorithm> to a sort.h whose md5 matches the copy already validated
+behaviourally against the real std::sort on all 1380 positions.
+
+Also lands the callee graph, which everything above needs and which the dump
+used to omit: an edge is a b/bl whose target leaves the function. Measured
+against their own `callees` field on their base.so -- 1380/1380 sets, 3629/3629
+edges, nothing extra or missing -- so --shorebird now emits it.
+
+Verification, because byte-identity with their artifact is structurally
+impossible (neither analyze_snapshot reads the other's snapshots, and from their
+own base.dill ours emits 1589 entries against their 1380): a two-link chain,
+each link byte-exact. The reference model reproduces their --compute_dd_table
+byte for byte at all seventeen budgets and on the shipped base.ddtable; our
+binary reproduces that model byte for byte at the same seventeen budgets, with
+the graph independently rebuilt from the ELF so the comparison is not
+self-referential. verify_all.sh 14 ran / 0 failed, run_vm_tests 143 -> 154,
+verify_reproduction.sh still 28/28.
+
+Interface deviations are flagged in cascade_limiter.h rather than hidden: their
+Run() carries no eligibility argument, so we encode it as an empty hash, and
+Dart_ComputeDDTable's other four parameters could not be attributed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index ecfbc9c9a35..1a280260e7d 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -20,7 +20,16 @@
+ namespace dart {
+ namespace bin {
+ #ifdef SUPPORT_ANALYZE_SNAPSHOT
+-#define STRING_OPTIONS_LIST(V) V(out, out_path)
++// --compute_dd_table and --dd_max_bytes are deliberately absent from
++// PrintUsage, because they are absent from THEIR --help too: it documents six
++// Shorebird flags and these two are not among them (they were found with
++// `strings`). analyze_snapshot_help_check.sh diffs the two help texts, so
++// documenting a flag they leave undocumented would register there as a
++// divergence.
++#define STRING_OPTIONS_LIST(V)                                                 \
++  V(out, out_path)                                                             \
++  V(compute_dd_table, compute_dd_table_path)                                   \
++  V(dd_max_bytes, dd_max_bytes_arg)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(help, help)                                                                \
+@@ -198,11 +207,28 @@ int RunAnalyzer(int argc, char** argv) {
+     PrintUsage();
+     return kErrorExitCode;
+   }
+-  if (out_path == nullptr) {
++  // --compute_dd_table writes its own file and needs no --out. That is not a
++  // convenience: theirs is invoked exactly that way
++  //   analyze_snapshot --compute_dd_table=base.ddtable base.so
++  // and requiring --out here would reject a command line theirs accepts.
++  if (out_path == nullptr && compute_dd_table_path == nullptr) {
+     Syslog::PrintErr("No output path provided.\n");
+     return kErrorExitCode;
+   }
+ 
++  // Their own error message names the default: "Omit the flag to use the
++  // default of 10000 bytes."
++  int64_t dd_max_bytes = 10000;
++  if (dd_max_bytes_arg != nullptr) {
++    char* end = nullptr;
++    const int64_t parsed = strtoll(dd_max_bytes_arg, &end, 10);
++    if (end == dd_max_bytes_arg || *end != '\0' || parsed < 0) {
++      Syslog::PrintErr("Error: --dd_max_bytes must be a non-negative integer\n");
++      return kErrorExitCode;
++    }
++    dd_max_bytes = parsed;
++  }
++
+   // Initialize VM with default flags if none are provided.
+   // TODO(#47924): Implement auto-parsing of flags from the snapshot file.
+   if (vm_options.count() == 0) {
+@@ -275,16 +301,27 @@ int RunAnalyzer(int argc, char** argv) {
+   intptr_t out_len = 0;
+ 
+   Dart_EnterScope();
+-  if (dump_blobs) {
+-    Dart_DumpBlobs(info, &out, &out_len);
+-  } else if (dump_class_table) {
+-    Dart_DumpClassTableAsJson(info, &out, &out_len);
+-  } else if (shorebird_mode) {
+-    Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
+-  } else {
+-    Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
++  // --compute_dd_table has its own destination, so it is not part of the
++  // either/or below: theirs accepts it alongside --out and the other dumps.
++  if (compute_dd_table_path != nullptr) {
++    char* dd = nullptr;
++    intptr_t dd_len = 0;
++    Dart_ComputeDDTable(info, dd_max_bytes, &dd, &dd_len);
++    WriteFile(compute_dd_table_path, dd, dd_len);
++    free(dd);
++  }
++  if (out_path != nullptr) {
++    if (dump_blobs) {
++      Dart_DumpBlobs(info, &out, &out_len);
++    } else if (dump_class_table) {
++      Dart_DumpClassTableAsJson(info, &out, &out_len);
++    } else if (shorebird_mode) {
++      Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
++    } else {
++      Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
++    }
++    WriteFile(out_path, out, out_len);
+   }
+-  WriteFile(out_path, out, out_len);
+ 
+   // Since ownership of the JSON buffer is ours, free before we exit.
+   free(out);
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index 17b6faeb65c..d1a4254c2fa 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -44,6 +44,15 @@ void Dart_DumpBlobs(const Dart_SnapshotAnalyzerInformation& info,
+                     char** out,
+                     intptr_t* out_len);
+ 
++// flutter_hot_patcher: Shorebird's --compute_dd_table. `max_bytes` is their
++// --dd_max_bytes, whose default their own error message names as 10000. The one
++// place this deviates from their exported signature is spelled out at the
++// definition in analyze_snapshot_api_impl.cc.
++void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
++                         int64_t max_bytes,
++                         char** out,
++                         intptr_t* out_len);
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index aa295703a76..5a3f3f0f535 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -8,6 +8,7 @@
+ #include <set>
+ #include <sstream>
+ #include <unordered_map>
++#include <unordered_set>
+ #include <vector>
+ 
+ #include "include/analyze_snapshot_api.h"
+@@ -19,8 +20,10 @@
+ #include <algorithm>
+ #include <string>
+ #include <vector>
++#include "vm/datastream.h"
+ #include "vm/object.h"
+ #include "vm/object_store.h"
++#include "vm/shorebird/cascade_limiter.h"
+ #include "vm/shorebird/link_info.h"
+ #include "vm/image_snapshot.h"
+ #include "vm/snapshot.h"
+@@ -898,8 +901,9 @@ static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen,
+   return next;
+ }
+ 
+-// One scan, three outputs. self_hash, the pool references and the field table
+-// references all come from the same walk over the same instructions.
++// One scan, four outputs. self_hash, the pool references, the field table
++// references and the external branch targets all come from the same walk over
++// the same instructions.
+ //
+ // ⚠️ This is deliberate rather than tidy-minded. self_pp used to be produced by
+ // a second, independent scan, and it had silently fallen behind: it recognised
+@@ -910,6 +914,15 @@ struct ShorebirdCodeFacts {
+   std::string self_hash;
+   std::vector<intptr_t> pool_indices;   // first-seen order
+   std::vector<intptr_t> field_indices;  // first-seen order
++  // Targets of `b`/`bl` instructions that land OUTSIDE this function, as byte
++  // offsets relative to its own payload start (so they can be negative).
++  // Resolving one to a function needs the whole table, which is why the edge
++  // set is built separately, in ShorebirdCallGraph below.
++  //
++  // These come for free: the hash already has to tell an external branch from a
++  // local one, because it encodes the former as an ordinal and the latter as a
++  // bare marker.
++  std::vector<intptr_t> external_targets;  // first-seen order
+ };
+ 
+ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+@@ -1037,6 +1050,7 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   facts.self_hash = Sha1HexOf(stream.data(), stream.size());
+   facts.pool_indices = std::move(pool_order);
+   facts.field_indices = std::move(field_order);
++  facts.external_targets = std::move(external_order);
+   return facts;
+ }
+ 
+@@ -1152,6 +1166,58 @@ void CollectAllCodes(
+   }
+ }
+ 
++// The direct call graph, one sorted callee list per entry.
++//
++// An edge u -> v exists exactly when u contains a `b` or `bl` whose target
++// leaves u and lands inside v. That is not a guess about what their `callees`
++// field means -- it is measured against it: on their own base.so this predicate
++// reproduces all 1380 callee sets exactly, 3629 of 3629 edges, with nothing
++// extra and nothing missing (dd_table_model.py, stage 1).
++//
++// ⚠️ Encoding forms covered: the two unconditional immediate branches only, both
++// of which satisfy `w & 0x7C000000 == 0x14000000`. Conditional branches, cbz /
++// tbz and the register-indirect `blr` are deliberately NOT edges, and the
++// 3629/3629 match is what says they need not be -- a compiler does not reach
++// another function with `b.eq`.
++//
++// Requires `codes` to be sorted by offset, which CollectAllCodes leaves it.
++std::vector<std::vector<intptr_t>> ShorebirdCallGraph(
++    const std::vector<CodeEntry>& codes,
++    const std::vector<ShorebirdCodeFacts>& facts) {
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  std::vector<std::vector<intptr_t>> callees(n);
++  for (intptr_t u = 0; u < n; u++) {
++    std::set<intptr_t> edges;
++    for (intptr_t rel : facts[u].external_targets) {
++      const intptr_t target = codes[u].offset + rel;
++      // Upper bound on offset, then step back one: the entry that could contain
++      // the target is the last one starting at or before it.
++      auto it = std::upper_bound(codes.begin(), codes.end(), target,
++                                 [](intptr_t value, const CodeEntry& e) {
++                                   return value < e.offset;
++                                 });
++      if (it == codes.begin()) continue;
++      --it;
++      if (target >= it->offset + it->size) continue;  // padding between entries
++      edges.insert(it->index_in_entries);
++    }
++    callees[u].assign(edges.begin(), edges.end());
++  }
++  return callees;
++}
++
++// Whether a function has an identity to key a DD table entry on: the owner is a
++// Function, or it is an allocation stub. Type-test stubs and the owner-less
++// stubs do not, even though many of them do have callers.
++//
++// This is the same partition print_dd_function_identity_to uses, derived
++// independently from a row count there and from a table's entry count here, and
++// both come out at 1179 + 87.
++bool ShorebirdHasIdentity(const std::string& name) {
++  return name.rfind("[Optimized]", 0) == 0 ||
++         name.rfind("[Stub] Allocate ", 0) == 0;
++}
++
+ }  // namespace
+ 
+ // Dumps Shorebird-compatible analyze_snapshot JSON (--shorebird mode).
+@@ -1229,6 +1295,75 @@ void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
+   table->WriteDebugInfoToBuffer(out, out_len);
+ }
+ 
++// Shorebird's `--compute_dd_table=<file>`: which functions go in the DD table,
++// under a byte budget given by `--dd_max_bytes` (their own error message names
++// the default, 10000).
++//
++// The algorithm is `CascadeLimiter`, from their private
++// `runtime/vm/shorebird/cascade_limiter.cc`; see cascade_limiter.h for what was
++// read out of the disassembly and what is our own encoding.
++//
++// ⚠️ INTERFACE DEVIATION, stated rather than hidden. Their exported symbol is
++//   Dart_ComputeDDTable(char**, long*, char**, long*, long long, char const*,
++//                       long)
++// -- two output buffers, a budget, and one input buffer. We attribute only the
++// budget and one output pair with any confidence, so rather than invent roles
++// for the other four parameters this follows the shape of the neighbouring
++// entry points in this file. Same class of known deviation as LinkOracle's
++// Install() and the DDFunctionIdentity class name.
++void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
++                         int64_t max_bytes,
++                         char** out,
++                         intptr_t* out_len) {
++  Thread* thread = Thread::Current();
++  IsolateGroup* ig = thread->isolate_group();
++  DARTSCOPE(thread);
++
++  const uintptr_t isolate_instr_base =
++      reinterpret_cast<uintptr_t>(info.vm_isolate_instructions);
++
++  std::vector<CodeEntry> codes;
++  {
++    SafepointReadRwLocker ml(thread, ig->program_lock());
++    CollectAllCodes(ig, isolate_instr_base, codes);
++  }
++
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  std::vector<ShorebirdCodeFacts> facts;
++  facts.reserve(n);
++  std::vector<int64_t> sizes(n);
++  std::vector<std::string> hashes(n);
++  for (intptr_t i = 0; i < n; i++) {
++    facts.push_back(ComputeShorebirdCodeFacts(codes[i].payload, codes[i].size));
++    sizes[i] = static_cast<int64_t>(codes[i].size);
++    // An empty hash is how CascadeLimiter::Run is told a node is ineligible;
++    // see the note in cascade_limiter.h. The other half of eligibility ("has a
++    // caller") it derives from the graph itself.
++    if (ShorebirdHasIdentity(codes[i].name)) {
++      hashes[i] = facts[i].self_hash;
++    }
++  }
++
++  const std::vector<std::vector<intptr_t>> callees =
++      ShorebirdCallGraph(codes, facts);
++  std::unordered_map<int64_t, std::unordered_set<int64_t>> adjacency;
++  for (intptr_t u = 0; u < n; u++) {
++    if (callees[u].empty()) continue;
++    adjacency[u].insert(callees[u].begin(), callees[u].end());
++  }
++
++  const std::vector<int64_t> selected =
++      CascadeLimiter::Run(adjacency, sizes, hashes, n, max_bytes);
++  const std::vector<CascadeLimiterEntry> entries =
++      CascadeLimiter::BuildEntries(selected, sizes, hashes);
++
++  MallocWriteStream stream(/*initial_size=*/64 * KB);
++  CascadeLimiter::WriteEntries(&stream, entries);
++  *out_len = stream.bytes_written();
++  *out = reinterpret_cast<char*>(malloc(*out_len));
++  memcpy(*out, stream.buffer(), *out_len);
++}
++
+ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+@@ -1236,7 +1371,7 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+   Thread* thread = Thread::Current();
+   IsolateGroup* ig = thread->isolate_group();
+   DARTSCOPE(thread);
+-  
++
+   const uintptr_t isolate_instr_base =
+       reinterpret_cast<uintptr_t>(info.vm_isolate_instructions);
+   
+@@ -1257,18 +1392,27 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+   js.PrintfProperty("isolate_instructions", "%p", info.vm_isolate_instructions);
+   js.CloseObject();
+   
++  // One scan up front, because the callee edges need every entry's targets
++  // resolved against every entry's extent.
++  std::vector<ShorebirdCodeFacts> all_facts;
++  all_facts.reserve(codes.size());
++  for (const auto& entry : codes) {
++    all_facts.push_back(ComputeShorebirdCodeFacts(entry.payload, entry.size));
++  }
++  const std::vector<std::vector<intptr_t>> callees =
++      ShorebirdCallGraph(codes, all_facts);
++
+   // functions array
+   js.OpenArray("functions");
+-  for (const auto& entry : codes) {
++  for (intptr_t ci = 0; ci < static_cast<intptr_t>(codes.size()); ci++) {
++    const auto& entry = codes[ci];
+     js.OpenObject();
+     js.PrintProperty("name", entry.name.c_str());
+     js.PrintProperty64("index_in_entries", entry.index_in_entries);
+     js.PrintProperty64("offset", entry.offset);
+     js.PrintProperty64("size", entry.size);
+-    
+-    // Compute SHA-1 hash of instruction bytes
+-    const ShorebirdCodeFacts facts =
+-        ComputeShorebirdCodeFacts(entry.payload, entry.size);
++
++    const ShorebirdCodeFacts& facts = all_facts[ci];
+     js.PrintProperty("self_hash", facts.self_hash.c_str());
+     // subgraph_hash and op_subgraph_hash are DELIBERATELY ABSENT. They
+     // accumulate over the callee walk, which is unsolved -- see
+@@ -1299,20 +1443,29 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("self_field_table");
+     for (intptr_t slot : facts.field_indices) js.PrintValue64(slot);
+     js.CloseArray();
+-    // subgraph_pp, self_selectors, subgraph_selectors,
+-    // subgraph_field_table and callees are DELIBERATELY ABSENT, for the same
+-    // reason the subgraph hashes are: we cannot compute them, and emitting a
+-    // plausible value is worse than emitting nothing.
++    // callees is now computed, and unlike the other absentees it is checked
++    // against theirs rather than merely plausible: on their own base.so the
++    // `b`/`bl` predicate ShorebirdCallGraph uses reproduces all 1380 of their
++    // callee sets, 3629 of 3629 edges, nothing extra and nothing missing.
++    // Ascending, which is the order theirs come out in.
++    js.OpenArray("callees");
++    for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
++    js.CloseArray();
++    // subgraph_pp, self_selectors, subgraph_selectors and subgraph_field_table
++    // are DELIBERATELY ABSENT, for the same reason the subgraph hashes are: we
++    // cannot compute them, and emitting a plausible value is worse than
++    // emitting nothing.
+     //
+     // subgraph_pp was a copy of self_pp, which is wrong -- the subgraph list
+-    // has to include what the callees touch. The other five were hardcoded
++    // has to include what the callees touch. The other four were hardcoded
+     // empty arrays, which a consumer reads as "this function has none" rather
+     // than "we did not compute this".
+     //
+     // Measured on the one consumer that exists: tools/linker.py reads only
+     // name, offset, size and subgraph_hash, so unlike the hashes these were not
+     // live bad data -- but the shape is identical and a future consumer would
+-    // have no way to tell. They come back when the callee walk exists.
++    // have no way to tell. They come back when the subgraph walk exists; having
++    // callees is a prerequisite for that walk, not the walk itself.
+     js.CloseObject();
+   }
+   js.CloseArray();
+diff --git a/runtime/vm/shorebird/cascade_limiter.cc b/runtime/vm/shorebird/cascade_limiter.cc
+new file mode 100644
+index 00000000000..e9d9011b3e6
+--- /dev/null
++++ b/runtime/vm/shorebird/cascade_limiter.cc
+@@ -0,0 +1,171 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/cascade_limiter.h"
++
++#include <algorithm>
++#include <deque>
++
++#include "vm/shorebird/link_info.h"
++
++namespace dart {
++
++std::vector<int64_t> CascadeLimiter::LongestPathDepth(
++    const std::unordered_map<int64_t, std::unordered_set<int64_t>>& callees,
++    int64_t node_count) {
++  std::vector<int64_t> indegree(node_count, 0);
++  for (int64_t u = 0; u < node_count; u++) {
++    const auto it = callees.find(u);
++    if (it == callees.end()) continue;
++    for (int64_t v : it->second) {
++      if (v >= 0 && v < node_count) indegree[v]++;
++    }
++  }
++
++  std::vector<int64_t> depth(node_count, 0);
++  std::deque<int64_t> worklist;
++  for (int64_t u = 0; u < node_count; u++) {
++    if (indegree[u] == 0) worklist.push_back(u);
++  }
++
++  while (!worklist.empty()) {
++    const int64_t u = worklist.front();
++    worklist.pop_front();
++    const auto it = callees.find(u);
++    if (it == callees.end()) continue;
++    for (int64_t v : it->second) {
++      if (v < 0 || v >= node_count) continue;
++      if (depth[u] + 1 > depth[v]) depth[v] = depth[u] + 1;
++      if (--indegree[v] == 0) worklist.push_back(v);
++    }
++  }
++  // Nodes on a cycle never reach in-degree 0 and are never dequeued, so they
++  // never propagate a depth -- though they can still have received one, because
++  // the relaxation above runs before the decrement and does not look at the
++  // target's in-degree. See the header and
++  // CascadeLimiter_CyclicNodesNeverPropagateDepth.
++  return depth;
++}
++
++std::vector<int64_t> CascadeLimiter::VisitOrder(
++    const std::vector<int64_t>& depth) {
++  std::vector<int64_t> order(depth.size());
++  for (size_t i = 0; i < order.size(); i++) {
++    order[i] = static_cast<int64_t>(i);
++  }
++  // The single-key comparator. A lambda (rather than std::less) is what makes
++  // libc++ pick __introsort<..., _UseBitSetPartition = false>, which is the
++  // instantiation their symbols show.
++  std::sort(order.begin(), order.end(),
++            [&depth](int64_t a, int64_t b) { return depth[a] < depth[b]; });
++  return order;
++}
++
++int64_t CascadeLimiter::Cost(
++    const std::vector<std::vector<int64_t>>& callers,
++    const std::vector<int64_t>& sizes,
++    int64_t node,
++    const std::vector<bool>& cut) {
++  const int64_t n = static_cast<int64_t>(callers.size());
++  std::vector<bool> seen(n, false);
++  seen[node] = true;
++  std::vector<int64_t> stack;
++  stack.push_back(node);
++  int64_t total = 0;
++  while (!stack.empty()) {
++    const int64_t x = stack.back();
++    stack.pop_back();
++    // A cut node is counted (it was added when first reached) but not expanded:
++    // whatever calls it no longer has to move when this node changes.
++    if (cut[x]) continue;
++    for (int64_t u : callers[x]) {
++      if (seen[u]) continue;
++      seen[u] = true;
++      total += sizes[u];
++      stack.push_back(u);
++    }
++  }
++  return total;
++}
++
++std::vector<int64_t> CascadeLimiter::Run(
++    const std::unordered_map<int64_t, std::unordered_set<int64_t>>& callees,
++    const std::vector<int64_t>& sizes,
++    const std::vector<std::string>& hashes,
++    int64_t node_count,
++    int64_t budget) {
++  ASSERT(static_cast<int64_t>(sizes.size()) == node_count);
++  ASSERT(static_cast<int64_t>(hashes.size()) == node_count);
++
++  std::vector<std::vector<int64_t>> callers(node_count);
++  for (int64_t u = 0; u < node_count; u++) {
++    const auto it = callees.find(u);
++    if (it == callees.end()) continue;
++    for (int64_t v : it->second) {
++      if (v >= 0 && v < node_count) callers[v].push_back(u);
++    }
++  }
++
++  const std::vector<int64_t> depth = LongestPathDepth(callees, node_count);
++  const std::vector<int64_t> order = VisitOrder(depth);
++
++  // The growing greedy: one pass, cutting as it goes. A second pass changes
++  // nothing at any budget measured, so this single pass is also the fixpoint.
++  std::vector<bool> cut(node_count, false);
++  std::vector<int64_t> selected;
++  for (int64_t v : order) {
++    // Eligibility: a hash (the kind predicate, see the header) and at least one
++    // caller. A function nothing calls cannot be an indirect call target.
++    if (hashes[v].empty() || callers[v].empty()) continue;
++    if (Cost(callers, sizes, v, cut) > budget) {
++      cut[v] = true;
++      selected.push_back(v);
++    }
++  }
++  return selected;
++}
++
++std::vector<CascadeLimiterEntry> CascadeLimiter::BuildEntries(
++    const std::vector<int64_t>& selected,
++    const std::vector<int64_t>& sizes,
++    const std::vector<std::string>& hashes) {
++  std::vector<CascadeLimiterEntry> entries;
++  entries.reserve(selected.size());
++  for (int64_t v : selected) {
++    entries.push_back(CascadeLimiterEntry{0, hashes[v], sizes[v]});
++  }
++  // Their comparator is a plain memcmp over the entry's std::string field --
++  // std::string::compare inlined, with the short-string branch -- and nothing
++  // else: it runs before anything else and no second compare follows it.
++  //
++  // ⚠️ So this sort is NOT stable and equal hashes are ordered by introsort's
++  // trajectory, exactly as in VisitOrder. That is unobservable here rather than
++  // handled: every group of equal hashes in their own tables carries a single
++  // `size` (measured at all seventeen budgets -- 18 duplicate hashes at the
++  // saturated budgets, zero of them with differing sizes), so the emitted bytes
++  // do not depend on how a tie is broken. If a fixture ever produces two
++  // entries with the same hash and different sizes, this becomes observable and
++  // the tie order has to be derived.
++  std::sort(entries.begin(), entries.end(),
++            [](const CascadeLimiterEntry& a, const CascadeLimiterEntry& b) {
++              return a.hash < b.hash;
++            });
++  for (size_t i = 0; i < entries.size(); i++) {
++    entries[i].index = static_cast<int64_t>(i);
++  }
++  return entries;
++}
++
++void CascadeLimiter::WriteEntries(
++    BaseWriteStream* stream,
++    const std::vector<CascadeLimiterEntry>& entries) {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(entries.size()));
++  for (const CascadeLimiterEntry& e : entries) {
++    WriteString(stream, e.hash);
++    stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(e.index));
++    stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(e.size));
++  }
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/cascade_limiter.h b/runtime/vm/shorebird/cascade_limiter.h
+new file mode 100644
+index 00000000000..e748c88df56
+--- /dev/null
++++ b/runtime/vm/shorebird/cascade_limiter.h
+@@ -0,0 +1,131 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_CASCADE_LIMITER_H_
++#define RUNTIME_VM_SHOREBIRD_CASCADE_LIMITER_H_
++
++#include <cstdint>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++#include "vm/datastream.h"
++
++namespace dart {
++
++// Shorebird's `analyze_snapshot --compute_dd_table` selector, from
++// `runtime/vm/shorebird/cascade_limiter.cc`.
++//
++// Their `Run` has no symbol of its own -- it is inlined into
++// `Dart_ComputeDDTable` -- but the introsort instantiated inside it does, and
++// the mangled name carries the enclosing signature verbatim:
++//
++//   dart::CascadeLimiter::Run(
++//       const std::unordered_map<long, std::unordered_set<long>>&,
++//       const std::vector<long>&,
++//       const std::vector<std::string>&,
++//       long,
++//       long long);
++//
++// The parameter list below is that one. Full derivation, with addresses, in
++// `spikes/shorebird_linkinfo_oracle/CASCADE_LIMITER_RECON.md` and
++// `LIBCXX_INTROSORT_RECON.md`; the whole pipeline is reproduced byte for byte
++// against their own artifact at seventeen budgets by `dd_table_model.py`.
++//
++// ⚠️ ONE INTERFACE DETAIL IS OURS, NOT THEIRS. Their signature carries no
++// eligibility argument, and where they apply the kind predicate ("[Optimized]
++// or allocation stub") is not established. We encode it in `hashes`: a node
++// whose hash is EMPTY is ineligible. That is the least invented encoding
++// available -- the hash is literally what an entry consists of, so a node
++// without one cannot be an entry -- but it is a choice, and it is flagged here
++// rather than passed off as recovered. The other half of eligibility, "has at
++// least one caller", is derivable from `callees` and is derived.
++struct CascadeLimiterEntry {
++  // Layout read off the swap code in their `__sort3` (sizeof == 0x28):
++  //   long /* +0x00 */ ; std::string /* +0x08 */ ; long /* +0x20 */ ;
++  int64_t index;
++  std::string hash;
++  int64_t size;
++};
++
++class CascadeLimiter {
++ public:
++  // The set of node indices to put in the DD table, in no particular order.
++  static std::vector<int64_t> Run(
++      const std::unordered_map<int64_t, std::unordered_set<int64_t>>& callees,
++      const std::vector<int64_t>& sizes,
++      const std::vector<std::string>& hashes,
++      int64_t node_count,
++      int64_t budget);
++
++  // Kahn's algorithm over the CALLEE edges, keeping the longest path to each
++  // node.
++  //
++  // ⚠️ The graph has cycles and Kahn's does not handle them: a node whose
++  // in-degree never reaches zero is never dequeued, so it never PROPAGATES a
++  // depth. It can still receive one -- the relaxation fires on every edge out
++  // of a dequeued node regardless of the target's in-degree -- which is why
++  // this is not simply "cyclic nodes keep depth 0"; see
++  // CascadeLimiter_CyclicNodesNeverPropagateDepth. 716 of 1380 nodes on their
++  // own fixture end up at depth 0 as a result, and that is reproduced
++  // deliberately rather than smoothed over. Seeding at 0x10024e980, the
++  // `std::deque` worklist at sp+0x1b0, `indeg[v]--` at 0x10024eab8 and the
++  // relaxation `depth[v] = max(depth[v], depth[u] + 1)` at 0x10024ea9c.
++  //
++  // The result does not depend on any container's iteration order: a node is
++  // dequeued only once every in-edge has been consumed, so `depth[u]` is final
++  // when `u` is dequeued, and the relaxation is a max over all edges.
++  static std::vector<int64_t> LongestPathDepth(
++      const std::unordered_map<int64_t, std::unordered_set<int64_t>>& callees,
++      int64_t node_count);
++
++  // The visit order: `std::sort` over the identity permutation of ALL nodes
++  // with the single key `depth[]`, ascending.
++  //
++  // 🔑 This calls the real `std::sort` on purpose. Their comparator has exactly
++  // one key (proven: the only store into the lambda is `str x9,[sp,#0x170]`
++  // with `x9 = &depth`, and all 64 reads through it are at offset 0), there are
++  // only ~20 distinct depths over 1380 nodes, and `std::sort` is not stable --
++  // so what survives among equal depths is libc++'s introsort trajectory. Our
++  // fork compiles against a libc++ whose `__algorithm/sort.h` is byte-identical
++  // to theirs (md5 35a0f94a..., measured across two toolchains AND behaviourally
++  // via `libcxx_sort_oracle.cc`), and a lambda comparator selects the same
++  // `__introsort<..., /*_UseBitSetPartition=*/false>` instantiation their symbol
++  // names show. Transcribing introsort by hand here would reproduce the same
++  // trajectory at best and drift from it at worst.
++  //
++  // ⚠️ The sort is over ALL nodes, not the eligible ones. Sorting only the
++  // eligible subset gives a genuinely different relative order of those same
++  // nodes -- measured, not assumed.
++  static std::vector<int64_t> VisitOrder(const std::vector<int64_t>& depth);
++
++  // The bytes that have to be re-shipped when `node` changes: its transitive
++  // CALLER closure, stopping at (but still counting) nodes already cut, and NOT
++  // counting `node` itself.
++  //
++  // Excluding self is measured rather than assumed: budget 32 drops exactly
++  // three functions relative to budget 16, all size 12 with a single caller and
++  // closures of 24, 24 and 32 bytes. Counting the node itself would make them
++  // 36, 36 and 44 -- all over budget, and none would drop.
++  static int64_t Cost(const std::vector<std::vector<int64_t>>& callers,
++                      const std::vector<int64_t>& sizes,
++                      int64_t node,
++                      const std::vector<bool>& cut);
++
++  // Emission: ascending by hash, `index` dense 0..n-1 afterwards. Written with
++  // Dart's own WriteStream as
++  //     DDTable := count:u, { hash:str, index:u, size:u } * count
++  static std::vector<CascadeLimiterEntry> BuildEntries(
++      const std::vector<int64_t>& selected,
++      const std::vector<int64_t>& sizes,
++      const std::vector<std::string>& hashes);
++
++  static void WriteEntries(BaseWriteStream* stream,
++                           const std::vector<CascadeLimiterEntry>& entries);
++};
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_CASCADE_LIMITER_H_
+diff --git a/runtime/vm/shorebird/cascade_limiter_test.cc b/runtime/vm/shorebird/cascade_limiter_test.cc
+new file mode 100644
+index 00000000000..ccdb5b9bd5b
+--- /dev/null
++++ b/runtime/vm/shorebird/cascade_limiter_test.cc
+@@ -0,0 +1,198 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/cascade_limiter.h"
++
++#include <string>
++#include <vector>
++
++#include "vm/datastream.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// These tests pin the pieces of CascadeLimiter that can be stated on a graph
++// small enough to reason about by hand. The end-to-end claim -- that the whole
++// pipeline reproduces Shorebird's own --compute_dd_table output byte for byte at
++// seventeen budgets -- lives outside the tree, in the spike's
++// dd_table_model.py / dd_table_check.sh, because it needs their fixture.
++//
++// What is deliberately NOT tested here: the introsort tie order. It is
++// std::sort's, and asserting a particular permutation of a hand-made graph would
++// be asserting whatever libc++ happened to do, which is a tautology, not a
++// check. The order is pinned against the real libc++ by introsort_order_check.sh.
++
++using Adjacency = std::unordered_map<int64_t, std::unordered_set<int64_t>>;
++
++static Adjacency Graph(const std::vector<std::vector<int64_t>>& rows) {
++  Adjacency a;
++  for (size_t u = 0; u < rows.size(); u++) {
++    if (rows[u].empty()) continue;
++    a[static_cast<int64_t>(u)].insert(rows[u].begin(), rows[u].end());
++  }
++  return a;
++}
++
++UNIT_TEST_CASE(CascadeLimiter_LongestPathDepthOnAChain) {
++  // 0 -> 1 -> 2 -> 3
++  const auto depth = CascadeLimiter::LongestPathDepth(
++      Graph({{1}, {2}, {3}, {}}), 4);
++  EXPECT_EQ(0, depth[0]);
++  EXPECT_EQ(1, depth[1]);
++  EXPECT_EQ(2, depth[2]);
++  EXPECT_EQ(3, depth[3]);
++}
++
++UNIT_TEST_CASE(CascadeLimiter_LongestPathTakesTheLongerRoute) {
++  // 0 -> 1 -> 2 -> 4 and 0 -> 3 -> 4. Node 4 must get 3, not 2: the relaxation
++  // is a max, and a shortest-path or a plain BFS level would say 2.
++  const auto depth = CascadeLimiter::LongestPathDepth(
++      Graph({{1, 3}, {2}, {4}, {4}, {}}), 5);
++  EXPECT_EQ(1, depth[1]);
++  EXPECT_EQ(1, depth[3]);
++  EXPECT_EQ(2, depth[2]);
++  EXPECT_EQ(3, depth[4]);
++}
++
++UNIT_TEST_CASE(CascadeLimiter_CyclicNodesNeverPropagateDepth) {
++  // 0 -> 1, 1 -> 2, 2 -> 1. Nodes 1 and 2 are on a cycle, so neither ever
++  // reaches in-degree 0 and neither is ever dequeued.
++  //
++  // ⚠️ The consequence is finer than "cyclic nodes keep depth 0", which is how
++  // CASCADE_LIMITER_RECON.md phrases it, and the difference is what this test
++  // exists to pin: the relaxation fires on every edge OUT of a dequeued node
++  // regardless of the target's in-degree, so node 1 does get depth 1 from node
++  // 0. What it never does is propagate: node 2 stays at 0 because node 1 is
++  // never dequeued. 716 of the 1380 nodes in their own fixture sit at 0 for
++  // that second reason, and "fixing" the cycle handling changes the visit order
++  // and therefore the table.
++  //
++  // (My first version of this test asserted depth[1] == 0 and failed. The model
++  // that reproduces their bytes relaxes first and decrements second, so the
++  // assertion was wrong, not the code.)
++  const auto depth = CascadeLimiter::LongestPathDepth(
++      Graph({{1}, {2}, {1}}), 3);
++  EXPECT_EQ(0, depth[0]);
++  EXPECT_EQ(1, depth[1]);
++  EXPECT_EQ(0, depth[2]);
++}
++
++UNIT_TEST_CASE(CascadeLimiter_VisitOrderIsEveryNodeAscendingByDepth) {
++  const std::vector<int64_t> depth = {3, 0, 2, 0, 1, 2, 0};
++  const auto order = CascadeLimiter::VisitOrder(depth);
++  // Every node appears exactly once: the sort is over the whole population, and
++  // eligibility is applied afterwards, inside the greedy.
++  EXPECT_EQ(depth.size(), order.size());
++  std::vector<bool> seen(depth.size(), false);
++  for (int64_t v : order) {
++    EXPECT(!seen[v]);
++    seen[v] = true;
++  }
++  for (size_t i = 1; i < order.size(); i++) {
++    EXPECT(depth[order[i - 1]] <= depth[order[i]]);
++  }
++}
++
++UNIT_TEST_CASE(CascadeLimiter_CostExcludesTheNodeItself) {
++  // The shape that measured this on their own tables: a size-12 allocation stub
++  // with a single size-24 caller. The cost is 24. Including the node itself
++  // would make it 36, and the three functions that drop between budget 16 and
++  // budget 32 would not drop.
++  const std::vector<std::vector<int64_t>> callers = {{1}, {}};
++  const std::vector<int64_t> sizes = {12, 24};
++  const std::vector<bool> cut(2, false);
++  EXPECT_EQ(24, CascadeLimiter::Cost(callers, sizes, 0, cut));
++}
++
++UNIT_TEST_CASE(CascadeLimiter_CostCountsCutNodesWithoutExpandingThem) {
++  // 2 -> 1 -> 0 as callee edges, i.e. 0's callers are 1 and then 2.
++  const std::vector<std::vector<int64_t>> callers = {{1}, {2}, {}};
++  const std::vector<int64_t> sizes = {8, 16, 32};
++  std::vector<bool> none(3, false);
++  EXPECT_EQ(48, CascadeLimiter::Cost(callers, sizes, 0, none));
++  // With 1 cut, 1 is still counted -- it does have to be re-shipped -- but the
++  // walk stops there, so 2 is not.
++  std::vector<bool> one_cut(3, false);
++  one_cut[1] = true;
++  EXPECT_EQ(16, CascadeLimiter::Cost(callers, sizes, 0, one_cut));
++}
++
++UNIT_TEST_CASE(CascadeLimiter_RunSkipsNodesWithNoHashOrNoCaller) {
++  // 0 -> 1, 0 -> 2, 0 -> 3. Budget 0 means every eligible node is cut, so what
++  // is left out is exactly what was ineligible: node 0 has no caller, and node 2
++  // has no hash (our encoding of "[Optimized] or allocation stub"; see the
++  // header).
++  const std::vector<int64_t> sizes = {100, 4, 4, 4};
++  const std::vector<std::string> hashes = {"h0", "h1", "", "h3"};
++  const auto selected =
++      CascadeLimiter::Run(Graph({{1, 2, 3}, {}, {}, {}}), sizes, hashes, 4, 0);
++  std::vector<bool> in(4, false);
++  for (int64_t v : selected) in[v] = true;
++  EXPECT(!in[0]);
++  EXPECT(in[1]);
++  EXPECT(!in[2]);
++  EXPECT(in[3]);
++  EXPECT_EQ(2u, selected.size());
++}
++
++UNIT_TEST_CASE(CascadeLimiter_RunCutsOnlyWhenTheCascadeExceedsTheBudget) {
++  // One caller of size 24 above one node. Cost 24: cut at budget 16, kept at
++  // budget 24 (strictly greater, not greater-or-equal) and at 32.
++  const std::vector<int64_t> sizes = {12, 24};
++  const std::vector<std::string> hashes = {"aa", "bb"};
++  const auto g = Graph({{}, {0}});
++  EXPECT_EQ(1u, CascadeLimiter::Run(g, sizes, hashes, 2, 16).size());
++  EXPECT_EQ(0u, CascadeLimiter::Run(g, sizes, hashes, 2, 24).size());
++  EXPECT_EQ(0u, CascadeLimiter::Run(g, sizes, hashes, 2, 32).size());
++}
++
++UNIT_TEST_CASE(CascadeLimiter_EntriesAscendByHashAndIndexIsDense) {
++  const std::vector<int64_t> sizes = {12, 16, 20};
++  const std::vector<std::string> hashes = {"cc", "aa", "bb"};
++  const auto entries = CascadeLimiter::BuildEntries({0, 1, 2}, sizes, hashes);
++  EXPECT_EQ(3u, entries.size());
++  EXPECT_STREQ("aa", entries[0].hash.c_str());
++  EXPECT_STREQ("bb", entries[1].hash.c_str());
++  EXPECT_STREQ("cc", entries[2].hash.c_str());
++  EXPECT_EQ(16, entries[0].size);
++  EXPECT_EQ(20, entries[1].size);
++  EXPECT_EQ(12, entries[2].size);
++  for (size_t i = 0; i < entries.size(); i++) {
++    EXPECT_EQ(static_cast<int64_t>(i), entries[i].index);
++  }
++}
++
++UNIT_TEST_CASE(CascadeLimiter_WriteEntriesEncodesTheContainerExactly) {
++  // DDTable := count:u, { hash:str, index:u, size:u } * count, written with
++  // Dart's WriteStream: unsigned varints terminate at >= 0x80, characters are
++  // SIGNED varints and terminate at >= 0xC0, so a letter costs two bytes.
++  //
++  // Hand-computed rather than captured from a run, which is the only way this
++  // test says anything: 2 -> 0x82; "ab" -> 0x82 0x61 0xC0 0x62 0xC0;
++  // index 0 -> 0x80; size 12 -> 0x8C; "b" -> 0x81 0x62 0xC0; index 1 -> 0x81;
++  // size 300 -> 0x2C 0x82 (300 & 0x7F == 44, 300 >> 7 == 2).
++  std::vector<CascadeLimiterEntry> entries = {
++      CascadeLimiterEntry{0, "ab", 12},
++      CascadeLimiterEntry{1, "b", 300},
++  };
++  MallocWriteStream stream(/*initial_size=*/64);
++  CascadeLimiter::WriteEntries(&stream, entries);
++  const uint8_t expected[] = {0x82, 0x82, 0x61, 0xC0, 0x62, 0xC0, 0x80,
++                              0x8C, 0x81, 0x62, 0xC0, 0x81, 0x2C, 0x82};
++  EXPECT_EQ(static_cast<intptr_t>(sizeof(expected)), stream.bytes_written());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(sizeof(expected)); i++) {
++    EXPECT_EQ(expected[i], stream.buffer()[i]);
++  }
++}
++
++UNIT_TEST_CASE(CascadeLimiter_EmptyGraphWritesJustTheCount) {
++  const auto selected = CascadeLimiter::Run(Adjacency(), {}, {}, 0, 10000);
++  EXPECT_EQ(0u, selected.size());
++  MallocWriteStream stream(/*initial_size=*/16);
++  CascadeLimiter::WriteEntries(&stream, CascadeLimiter::BuildEntries({}, {}, {}));
++  EXPECT_EQ(1, stream.bytes_written());
++  EXPECT_EQ(0x80, stream.buffer()[0]);
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 47fda4ae8b1..798ed72bdaa 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -136,8 +136,15 @@ class CallbackFile {
+   void* handle_ = nullptr;
+ };
+ 
++}  // namespace
++
+ // Strings are length-prefixed, then one signed varint per character. Characters
+ // <= 63 therefore occupy a single byte and letters occupy two.
++//
++// Visible outside this file rather than kept file-local because
++// cascade_limiter.cc writes the same container encoding. A second copy of this
++// loop is exactly the kind of thing that drifts silently -- self_pp already cost
++// this file a round that way.
+ void WriteString(BaseWriteStream* stream, const std::string& s) {
+   stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(s.size()));
+   for (char c : s) {
+@@ -145,8 +152,6 @@ void WriteString(BaseWriteStream* stream, const std::string& s) {
+   }
+ }
+ 
+-}  // namespace
+-
+ void ClassTableLinkInfo::WriteToStream(BaseWriteStream* stream) const {
+   stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(classes_.size()));
+   for (const ClassInfo& info : classes_) {
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index ec4082ad31c..af718cf8cfb 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -397,6 +397,12 @@ std::unique_ptr<FieldTableLinkInfo> GetFieldTableLinkInfo(Thread* thread);
+ void PrintClassTableLinkInfoIfRequested(Thread* thread);
+ void PrintFieldTableLinkInfoIfRequested(Thread* thread);
+ 
++// The one string encoding every one of their link-info containers uses: the
++// length as an unsigned varint, then one SIGNED varint per character. Defined
++// in link_info.cc and shared with cascade_limiter.cc, so the DD table and the
++// link info files cannot drift apart.
++void WriteString(BaseWriteStream* stream, const std::string& s);
++
+ }  // namespace dart
+ 
+ #endif  // RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index c29fda50ef3..58bbb4bc065 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -299,6 +299,8 @@ vm_sources = [
+   "sim_transition.h",
+   "sim_bridge.cc",
+   "sim_bridge.h",
++  "shorebird/cascade_limiter.cc",
++  "shorebird/cascade_limiter.h",
+   "shorebird/field_hasher.cc",
+   "shorebird/field_hasher.h",
+   "shorebird/link_info.cc",
+@@ -406,6 +408,7 @@ vm_sources_tests = [
+   "shorebird/linker_test.cc",
+   "shorebird/dd_voting_test.cc",
+   "shorebird/link_info_test.cc",
++  "shorebird/cascade_limiter_test.cc",
+   "shorebird/object_pool_editor_test.cc",
+   "shorebird/shorebird_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+-- 
+2.53.0
+

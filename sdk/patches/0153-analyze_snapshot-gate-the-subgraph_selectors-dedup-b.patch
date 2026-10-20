@@ -1,0 +1,74 @@
+From 193cf8e5228f6751570bcb8e0473f4044ee74c69 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 22:59:48 +0800
+Subject: [PATCH 153/206] analyze_snapshot: gate the subgraph_selectors dedup
+ behind a switch
+
+subgraph_selectors is deduplicated per function on our side and evidently not
+on theirs: theirs holds 32262 element slots across the two independent
+fixtures, ours 9870. Every containment/sub-multiset statement this harness
+makes about that field is therefore produced by our own one-sided dedup, and
+says nothing about whether the selector VALUES decoded at non-depth-0 sites
+are right. The only field where the values are proven equal is self_selectors
+(depth 0, ordered-list identical, 4596/4596 functions, 1465 slots).
+
+F66_SUBGRAPH_SELECTOR_DEDUP=0 emits every dispatch selector occurrence in
+subgraph order so the multiset question can actually be asked. Default stays 1,
+so this commit changes no output: ProductSimARM64 rebuilt, REAL GAP 4,
+diff_units.sh shorebird UNITS 67391, both unchanged.
+
+Driven by spikes/shorebird_linkinfo_oracle/nc3_f66_dedup_multiset.sh.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index dae94a05245..6b2d410b74c 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1051,6 +1051,19 @@ static constexpr intptr_t kNoSelector = -1;
+ #define F66_DECODE_DISPATCH_IMMEDIATES 1
+ #endif
+ 
++// NC3 for F66. Our subgraph_selectors list is deduplicated per function; theirs
++// is not obviously so (theirs holds 32262 element slots to our 9870). As long
++// as this dedup is on, "ours is a sub-multiset of theirs" on this field is a
++// property of the dedup, not evidence that the decoded selector VALUES are
++// right at non-depth-0 sites -- the ordered-equality evidence for the values
++// covers self_selectors (depth 0) only. Set to 0 to emit every dispatch
++// selector occurrence in subgraph order and ask whether our undeduped list
++// reproduces theirs as a MULTISET. Driven by
++// spikes/shorebird_linkinfo_oracle/nc3_f66_dedup_multiset.sh.
++#ifndef F66_SUBGRAPH_SELECTOR_DEDUP
++#define F66_SUBGRAPH_SELECTOR_DEDUP 1
++#endif
++
+ // `add lr, x0, x17` makes the row index (origin + x17), so whatever was
+ // materialised into IP1 is a selector offset from kOriginElement, exactly like
+ // the #imm12 of the add/sub head below.
+@@ -1682,7 +1695,9 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     std::vector<intptr_t> subgraph_field;
+     std::set<intptr_t> field_subgraph_seen;
+     std::vector<intptr_t> self_selectors, subgraph_selectors;
++#if F66_SUBGRAPH_SELECTOR_DEDUP
+     std::set<intptr_t> selector_subgraph_seen;
++#endif
+ 
+     push(&op_stream, kEntryCodeName,
+          Utils::StringHash(codes[root].name.c_str(),
+@@ -1719,9 +1734,13 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+           kind = kEntryDispatchTableCall;
+           value = 1;
+           if (step.value != kNoSelector) {
++#if F66_SUBGRAPH_SELECTOR_DEDUP
+             if (selector_subgraph_seen.insert(step.value).second) {
+               subgraph_selectors.push_back(step.value);
+             }
++#else
++            subgraph_selectors.push_back(step.value);
++#endif
+             if (depth0) {
+               self_selectors.push_back(step.value);
+             }
+-- 
+2.53.0
+

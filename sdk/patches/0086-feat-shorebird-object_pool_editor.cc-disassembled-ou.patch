@@ -1,0 +1,1452 @@
+From f426f46f5b050f3d7e07f134bfe07a350bea653d Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 13:11:15 +0800
+Subject: [PATCH 086/206] feat(shorebird): object_pool_editor.cc, disassembled
+ out of their gen_snapshot
+
+Their private object_pool_editor.cc, recovered from the four functions nm still
+names in the shipped gen_snapshot_arm64, plus the upstream Assembler::PadLoadStore
+they call. The recon with every address is OBJECT_POOL_EDITOR_RECON.md in the
+spike.
+
+  Assembler::PadLoadStore                       0x10024b2e8
+  DetectObjectPoolOp                            0x1001a2720, 884 B
+  LoadStoreFromSingle                  (static) 0x1001a2a94, 192 B
+  ObjectPoolEditor::InstructionCountNoPadding   0x1001a2b54, 420 B
+  AssembleReplacement                  (static) 0x1001a2de8, 1016 B
+
+PadLoadStore is what makes the whole scheme work: every object pool access off
+PP gets padded with NOPs to three instructions, so an entry can move without
+anything around it moving. The editor then patches accesses in place with a
+plain memcpy -- no relocation, no re-layout.
+
+The six kind values are not guessed. Each arm of their AssembleReplacement
+installs a distinct std::function vtable, and the vtable's operator() slot
+demangles to a name that spells out the Assembler method: LoadWordFromPoolIndex,
+StoreWordToPoolIndex, LoadDoubleWordFromPoolIndex, LoadS/D/QFromOffset.
+
+Deliberately not reproduced, in each case with the reason in a comment: their
+constant-folded copies of InstructionCountForLoadStoreFromOffset, their eor/cmp
+encoding of the padding loop's exit test, and their duplicate calls to the
+counter -- all optimiser artifacts. Their bit magic for offset-to-index is
+written as the division it works out to.
+
+Left undetermined rather than invented: DetectObjectPoolOp's fourth parameter,
+which is in the mangled name and read nowhere in their 884 bytes; whether
+InstructionCountNoPadding is a static member; and the name of the walk, which is
+fully inlined into upstream's ImageWriter::Write and left no symbol. The walk's
+shape is recovered and implemented as Edit; its old-index-to-new-index table is
+not, so nothing calls it from the image writer yet.
+
+Two divergences turned up under test and are pinned by
+ObjectPoolEditor_CountFollowsPrepareLargeOffset rather than smoothed over: the
+counter counts PrepareLargeOffset, but LoadWordFromPoolIndex,
+StoreWordToPoolIndex and LoadDoubleWordFromPoolIndex have ladders of their own
+and come out one instruction different at index 62 and at offset 2^24. Their own
+self-check catches both and declines the site instead of corrupting it.
+
+15 tests. verify_all.sh: 6 ran, 0 failed, 0 skipped; run_vm_tests 128 passed.
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index 3863c6e1b5f..5ae1ebd881f 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1053,6 +1053,55 @@ intptr_t Assembler::InstructionCountForLoadStoreFromOffset(
+   return (assembler.CodeSize() - before) / Instr::kInstrSize + 1;
+ }
+ 
++// Shorebird, from PadLoadStore at 0x10024b2e8 in their gen_snapshot. Their
++// version does three things in order: measure the emission and compare it
++// against InstructionCountForLoadStoreFromOffset (their assembler_arm64.cc line
++// 1316, whose assert string names the file and the line); if the base is PP,
++// pad with 0xd503201f -- NOP -- until the footprint reaches
++// kObjectPoolLoadStoreMinInstructionCount; and check the total is at most
++// 3 * 4 bytes (their line 1322).
++//
++// Deliberately not transcribed: their exit test is an `eor` followed by
++// `cmp #3`. That is the compiler's encoding of the comparison, not a comparison
++// anybody wrote, so what is below is the condition rather than the xor.
++//
++// The padding count comes from the measured emission and not from the counter,
++// because the two do not always agree in this tree. The counter counts
++// PrepareLargeOffset; three of the object pool emitters use it, and the other
++// three -- LoadWordFromPoolIndex, StoreWordToPoolIndex and
++// LoadDoubleWordFromPoolIndex -- have ladders of their own that can come out one
++// instruction different. ObjectPoolEditor_CountFollowsPrepareLargeOffset pins
++// both cases rather than leaving them to be discovered. Measuring cannot be
++// wrong about what was just emitted; the counter can.
++//
++// Their two checks are reproduced as ASSERTs, matching the recon, and not as
++// RELEASE_ASSERTs: the disagreement above means the first one is not a property
++// this tree has, and a check known to be false is worse than no check. (Their
++// release build does still contain the two calls to the counter, which an ASSERT
++// would have compiled out. That is unexplained.)
++//
++// Note also that this fork does not make Shorebird's companion change, which is
++// to route the nineteen upstream emitters -- Load, LoadImmediate,
++// LoadObjectHelper, LoadNativeEntry, BranchLink and the rest -- through here.
++// Only the object pool editor calls this, so only what it emits is padded.
++void Assembler::PadLoadStore(std::function<void()> emit,
++                             Register base,
++                             int32_t offset,
++                             OperandSize sz,
++                             Address::AddressType addr_type) {
++  const intptr_t start = CodeSize();
++  emit();
++  const intptr_t emitted = (CodeSize() - start) / Instr::kInstrSize;
++  ASSERT(emitted ==
++         InstructionCountForLoadStoreFromOffset(offset, sz, addr_type));
++  if (base != PP) return;
++  for (intptr_t i = emitted; i < kObjectPoolLoadStoreMinInstructionCount; i++) {
++    nop();
++  }
++  ASSERT((CodeSize() - start) <=
++         kObjectPoolLoadStoreMinInstructionCount * Instr::kInstrSize);
++}
++
+ Address Assembler::PrepareLargeOffset(Register base,
+                                       int32_t offset,
+                                       OperandSize sz,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.h b/runtime/vm/compiler/assembler/assembler_arm64.h
+index ff8657d6ceb..4a1148e1350 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.h
++++ b/runtime/vm/compiler/assembler/assembler_arm64.h
+@@ -1887,6 +1887,21 @@ class Assembler : public AssemblerBase {
+       OperandSize sz = kEightBytes,
+       Address::AddressType addr_type = Address::AddressType::Offset);
+ 
++  // Shorebird. Every object pool access has to occupy the same number of bytes
++  // whichever index it reads, or moving an entry would move all the code after
++  // it. This is what makes that true: run [emit], then, if it loaded off PP,
++  // pad the result out with NOPs to a fixed footprint.
++  //
++  // Both halves are pinned in their gen_snapshot: the loop compares against 3
++  // and the trailing bound is 13 bytes, so the footprint is three instructions.
++  static constexpr intptr_t kObjectPoolLoadStoreMinInstructionCount = 3;
++
++  void PadLoadStore(std::function<void()> emit,
++                    Register base,
++                    int32_t offset,
++                    OperandSize sz,
++                    Address::AddressType addr_type);
++
+   Address PrepareLargeOffset(Register base,
+                              int32_t offset,
+                              OperandSize sz,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index b96f663d5b7..c03720fa9f5 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -60,6 +60,69 @@ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+   }
+ }
+ 
++// Shorebird's PadLoadStore, the thing that lets an object pool entry move:
++// every access off PP gets the same three-instruction footprint, so the code
++// around it never has to shift.
++//
++// The counts are deliberately not written down. What is asserted is that the
++// padded form is the unpadded form followed by NOPs and nothing else, so this
++// cannot pass by agreeing with a stale table of expected sizes.
++ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStore) {
++  const int32_t kOffsets[] = {
++      0,         8,         0x1000, 0x7ff8,  // one instruction
++      0x8000,    0x9000,    0x10000,         // two
++      0x1000000, 0x1234568,                  // three
++  };
++
++  for (int32_t offset : kOffsets) {
++    compiler::ObjectPoolBuilder bare_pool;
++    compiler::Assembler bare(&bare_pool);
++    bare.LoadFromOffset(R3, PP, offset, compiler::kEightBytes);
++    const intptr_t natural = bare.CodeSize() / Instr::kInstrSize;
++    EXPECT(natural >= 1);
++    EXPECT(natural <=
++           compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount);
++
++    compiler::ObjectPoolBuilder padded_pool;
++    compiler::Assembler padded(&padded_pool);
++    padded.PadLoadStore(
++        [&]() { padded.LoadFromOffset(R3, PP, offset, compiler::kEightBytes); },
++        PP, offset, compiler::kEightBytes, compiler::Address::Offset);
++    EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
++              padded.CodeSize() / Instr::kInstrSize);
++
++    // The real instructions come first, unchanged...
++    const uint32_t* bare_words =
++        reinterpret_cast<const uint32_t*>(bare.CodeAddress(0));
++    const uint32_t* padded_words =
++        reinterpret_cast<const uint32_t*>(padded.CodeAddress(0));
++    for (intptr_t i = 0; i < natural; i++) {
++      EXPECT_EQ(bare_words[i], padded_words[i]);
++    }
++    // ...and the rest is NOP, 0xd503201f.
++    for (intptr_t i = natural;
++         i < compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount;
++         i++) {
++      EXPECT_EQ(static_cast<uint32_t>(0xd503201f), padded_words[i]);
++    }
++  }
++}
++
++// The padding is conditional on the base being PP, which is the one register
++// whose displacements the object pool editor rewrites. Anything else keeps its
++// natural length -- padding it would only make the code bigger.
++ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreOnlyPadsPoolAccesses) {
++  const int32_t offset = 0;  // A one-instruction load either way.
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.PadLoadStore(
++      [&]() {
++        assembler.LoadFromOffset(R3, R5, offset, compiler::kEightBytes);
++      },
++      R5, offset, compiler::kEightBytes, compiler::Address::Offset);
++  EXPECT_EQ(static_cast<intptr_t>(1), assembler.CodeSize() / Instr::kInstrSize);
++}
++
+ ASSEMBLER_TEST_GENERATE(Simple, assembler) {
+   __ add(R0, ZR, Operand(ZR));
+   __ add(R0, R0, Operand(42));
+diff --git a/runtime/vm/shorebird/object_pool_editor.cc b/runtime/vm/shorebird/object_pool_editor.cc
+new file mode 100644
+index 00000000000..7f70526a0b4
+--- /dev/null
++++ b/runtime/vm/shorebird/object_pool_editor.cc
+@@ -0,0 +1,494 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/object_pool_editor.h"
++
++#if defined(TARGET_ARCH_ARM64) && !defined(DART_PRECOMPILED_RUNTIME)
++
++#include <string.h>
++
++#include "platform/utils.h"
++#include "vm/compiler/assembler/assembler.h"
++#include "vm/compiler/assembler/disassembler.h"
++#include "vm/compiler/runtime_api.h"
++#include "vm/constants.h"
++#include "vm/os.h"
++
++namespace dart {
++
++using compiler::Assembler;
++using compiler::kDWord;
++using compiler::kEightBytes;
++using compiler::kQWord;
++using compiler::kSWord;
++
++// The pool pointer register, 27 on arm64. Their code compares against the bare
++// number throughout (`cmp w23, #0x1b`).
++static constexpr uint32_t kPP = static_cast<uint32_t>(PP);
++// The assembler's scratch register, 16. LoadDoubleWordFromPoolIndex and
++// StoreWordToPoolIndex use it to hold a computed base.
++static constexpr uint32_t kTMP = static_cast<uint32_t>(TMP);
++
++// The instruction fields, as unsigned so that masking a uint32_t instruction
++// word does not go through int. Named for the architectural bit they are, which
++// is how the recon reads them.
++static constexpr uint32_t kV = static_cast<uint32_t>(B26);   // FP/SIMD
++static constexpr uint32_t kL = static_cast<uint32_t>(B22);   // load, not store
++static constexpr uint32_t kOpc1 = static_cast<uint32_t>(B23);  // FP size high
++static constexpr uint32_t kScaled = static_cast<uint32_t>(B24);
++
++// `add Xd, Xn, #imm12{, lsl 12}`, 64-bit. B31 | AddSubImmFixed is 0x91000000.
++static constexpr uint32_t kAddImm64Fixed = 0x91000000;
++// Rd == TMP, everything else about the register fields unconstrained.
++static constexpr uint32_t kAddImm64RdTmpMask = 0x9f00001f;
++// Rn == PP.
++static constexpr uint32_t kAddImm64RnPPMask = 0x9f0003e0;
++
++static int32_t ElementOffset(int64_t index) {
++  return static_cast<int32_t>(compiler::target::ObjectPool::element_offset(
++      static_cast<intptr_t>(index)));
++}
++
++// The inverse of element_offset. Their binary encodes this twice, once as
++// `(0xFFFFFFFE20000000 + ((off - 1) << 29)) >> 32` and once as a
++// subtract-and-shift ladder; both work out to the division below with C's
++// truncation towards zero, including for offsets under the header size, which
++// come out negative. The recon's instruction is to write the division rather
++// than either piece of bit magic.
++static int64_t IndexFromElementOffset(uint32_t offset) {
++  return (static_cast<int64_t>(offset) -
++          compiler::target::ObjectPool::element_offset(0)) /
++         static_cast<int64_t>(compiler::target::kWordSize);
++}
++
++// Classify a single-instruction load or store whose byte offset has already
++// been reconstructed from the instructions before it, and convert that offset
++// to a pool index. Their LoadStoreFromSingle at 0x1001a2a94; the two calls to
++// it are followed by `mov x8, x1`, which is what proves it returns the pair.
++static ObjectPoolOp LoadStoreFromSingle(const Instr& instr, uint32_t offset) {
++  const uint32_t bits = static_cast<uint32_t>(instr.InstructionBits());
++  const int64_t index = IndexFromElementOffset(offset);
++  if ((bits & kV) == 0) {
++    // Integer: the L bit says load or store.
++    return {index, (bits & kL) != 0 ? kObjectPoolOpLoadWord
++                                     : kObjectPoolOpStoreWord};
++  }
++  switch (bits >> 30) {
++    case 0:
++      return {index, kObjectPoolOpLoadQuad};
++    case 2:
++      return {index, kObjectPoolOpLoadFloat};
++    case 3:
++      return {index, kObjectPoolOpLoadDouble};
++    default:
++      // size == 1, a 16-bit FP access. Their line 51.
++      UNREACHABLE();
++  }
++}
++
++// `add Xd, Xn, #imm12{, lsl 12}`: fold the immediate into [offset].
++//
++// The two-bit shift field above 1 is not a valid 64-bit add, and both of their
++// pair paths decline it (0x1001a2890 and 0x1001a2994) rather than masking it
++// off. The single path does not check it at all -- see the call site.
++static bool AccumulateAddImmediate(uint32_t add_instr, uint32_t* offset) {
++  const uint32_t sh = (add_instr >> kImm12ShiftShift) & 3;
++  if (sh > 1) return false;
++  const uint32_t imm12 = (add_instr >> kImm12Shift) & 0xfff;
++  *offset += (sh != 0) ? (imm12 << 12) : imm12;
++  return true;
++}
++
++// The three shapes LoadDoubleWordFromPoolIndex can emit:
++//
++//   ldp Xt1, Xt2, [PP, #imm7]
++//   add TMP, PP, #imm{, lsl 12}               ; ldp Xt1, Xt2, [TMP, #imm7]
++//   add TMP, PP, #imm{, lsl 12} ; add TMP, TMP, #imm{, lsl 12} ; ldp [TMP,#imm7]
++//
++// Its two remaining branches -- the movz/movk/add/ldp form, four instructions
++// wide -- are not recognised, in their decoder either.
++static bool DetectPair(uword pc,
++                       ObjectPoolOp& op,
++                       uword limit,
++                       uint32_t instr) {
++  // 64-bit LDP, signed-offset form. Written as the literal mask and value their
++  // code uses: the LDP constant in constants_arm64.h does not carry bit 24,
++  // which is what selects the signed-offset addressing mode.
++  if ((instr & 0xfb400000) != 0xa9400000) return false;
++  const uint32_t rn = (instr >> kRnShift) & 0x1f;
++  // imm7 read unsigned, as theirs does, although the field is architecturally
++  // signed. A negative displacement off PP is not a pool access.
++  uint32_t offset = ((instr >> kImm7Shift) & 0x7f) * 8;
++
++  if (rn == kTMP) {
++    if (pc - Instr::kInstrSize < limit) return false;
++    const uint32_t prev =
++        *reinterpret_cast<const uint32_t*>(pc - Instr::kInstrSize);
++    if ((prev & kAddImm64RdTmpMask) != (kAddImm64Fixed | kTMP)) return false;
++    if (!AccumulateAddImmediate(prev, &offset)) return false;
++    const uint32_t prev_rn = (prev >> kRnShift) & 0x1f;
++    if (prev_rn == kTMP) {
++      // The three-instruction form. Note the Rd field is not checked on this
++      // one, only Rn == PP.
++      if (pc - 2 * Instr::kInstrSize < limit) return false;
++      const uint32_t prev2 =
++          *reinterpret_cast<const uint32_t*>(pc - 2 * Instr::kInstrSize);
++      if ((prev2 & kAddImm64RnPPMask) !=
++          (kAddImm64Fixed | (kPP << kRnShift))) {
++        return false;
++      }
++      if (!AccumulateAddImmediate(prev2, &offset)) return false;
++    } else if (prev_rn != kPP) {
++      return false;
++    }
++  } else if (rn != kPP) {
++    return false;
++  }
++
++  op.index = IndexFromElementOffset(offset);
++  op.kind = kObjectPoolOpLoadDoubleWord;
++  return true;
++}
++
++// A single load or store. Two addressing modes reach the object pool: the
++// unsigned scaled-offset form, optionally preceded by an `add` off PP, and the
++// register-offset form, whose index register is loaded by a movz or a
++// movz/movk pair.
++static bool DetectSingle(uword pc,
++                         ObjectPoolOp& op,
++                         uword limit,
++                         uint32_t instr) {
++  const uint32_t size = instr >> 30;
++  // An integer pool access is always a whole word.
++  if ((instr & kV) == 0 && size != 3) return false;
++  // B23 extends the FP size field; set, it means 128-bit, so the scale is 4.
++  const uint32_t scale = ((instr & kOpc1) != 0) ? 4 : size;
++
++  if ((instr & kScaled) != 0) {
++    // Unsigned scaled offset.
++    uint32_t offset = ((instr >> kImm12Shift) & 0xfff) << scale;
++    const uint32_t rn = (instr >> kRnShift) & 0x1f;
++    if (rn != kPP) {
++      // add Xd, PP, #imm ; ldr Xt, [Xd, #imm12]
++      if (pc - Instr::kInstrSize < limit) return false;
++      const uint32_t prev =
++          *reinterpret_cast<const uint32_t*>(pc - Instr::kInstrSize);
++      if ((prev & kAddImm64RnPPMask) != (kAddImm64Fixed | (kPP << kRnShift))) {
++        return false;
++      }
++      if (((prev >> kRdShift) & 0x1f) != rn) return false;
++      // Reproduced as they have it, including what looks like a latent
++      // assumption (recon (c)6): the shift field is not consulted here, so the
++      // immediate is taken as always shifted left by 12. Their two pair paths
++      // do check it. Whether that is a bug or guaranteed by construction is
++      // undetermined, so it is not "fixed" here.
++      offset |= (prev << 2) & 0xfff000;
++      op = LoadStoreFromSingle(*Instr::At(pc), offset);
++      return true;
++    }
++    int32_t kind;
++    if ((instr & kV) != 0) {
++      switch (size) {
++        case 0:
++          kind = kObjectPoolOpLoadQuad;
++          break;
++        case 2:
++          kind = kObjectPoolOpLoadFloat;
++          break;
++        case 3:
++          kind = kObjectPoolOpLoadDouble;
++          break;
++        default:
++          // size == 1, a 16-bit FP access. Their line 51 again.
++          UNREACHABLE();
++      }
++    } else {
++      kind = ((instr & kL) != 0) ? kObjectPoolOpLoadWord
++                                  : kObjectPoolOpStoreWord;
++    }
++    op.index = IndexFromElementOffset(offset);
++    op.kind = kind;
++    return true;
++  }
++
++  // Register offset: bits 11:10 are 0b10 and Rn is PP.
++  if ((instr & 0xfe0) != 0xb60) return false;
++  if (pc - Instr::kInstrSize < limit) return false;
++  const uint32_t prev =
++      *reinterpret_cast<const uint32_t*>(pc - Instr::kInstrSize);
++  if ((prev & static_cast<uint32_t>(MoveWideMask)) !=
++      static_cast<uint32_t>(MoveWideFixed)) {
++    return false;
++  }
++  // The move's destination has to be the load's index register...
++  if (((prev >> kRdShift) & 0x1f) != ((instr >> 16) & 0x1f)) return false;
++  // ...and, for an integer access, also its destination: LoadWordFromPoolIndex
++  // materialises the offset in the register it is about to load into.
++  if ((instr & kV) == 0 &&
++      ((prev >> kRdShift) & 0x1f) != ((instr >> kRtShift) & 0x1f)) {
++    return false;
++  }
++
++  switch ((prev >> 29) & 3) {
++    case 2: {  // movz
++      // hw must be zero: a single movz covers only the low 16 bits.
++      if ((prev & (3 << kHWShift)) != 0) return false;
++      op = LoadStoreFromSingle(*Instr::At(pc), (prev >> 5) & 0xffff);
++      return true;
++    }
++    case 3: {  // movk, paired with the movz before it
++      if (((prev >> kHWShift) & 3) != 1) return false;
++      if (pc - 2 * Instr::kInstrSize < limit) return false;
++      const uint32_t prev2 =
++          *reinterpret_cast<const uint32_t*>(pc - 2 * Instr::kInstrSize);
++      // MOVZ with hw == 0. Their mask stops at bit 30, so the sf bit is not
++      // checked.
++      if ((prev2 & 0x7fe00000) != 0x52800000) return false;
++      if (((prev2 >> kRdShift) & 0x1f) != ((prev >> kRdShift) & 0x1f)) {
++        return false;
++      }
++      const uint32_t offset =
++          ((prev2 >> 5) & 0xffff) | (((prev >> 5) & 0xffff) << 16);
++      op = LoadStoreFromSingle(*Instr::At(pc), offset);
++      return true;
++    }
++    default:
++      return false;
++  }
++}
++
++bool DetectObjectPoolOp(uword pc, ObjectPoolOp& op, uword limit, int*) {
++  const uint32_t instr = *reinterpret_cast<const uint32_t*>(pc);
++  // LoadStoreRegMask / LoadStoreRegFixed, and then: not an FP/SIMD store.
++  // There is no StoreS/D/QToPoolIndex, so V set with L clear can never be a
++  // pool access.
++  if ((instr & static_cast<uint32_t>(LoadStoreRegMask)) ==
++          static_cast<uint32_t>(LoadStoreRegFixed) &&
++      (instr & (kV | kL)) != kV) {
++    // Their code branches into the pair decoder on every failure here rather
++    // than returning. It can never succeed: the pair test needs bit 28 clear
++    // and every load/store-register encoding has it set. So this returns.
++    return DetectSingle(pc, op, limit, instr);
++  }
++  return DetectPair(pc, op, limit, instr);
++}
++
++intptr_t ObjectPoolEditor::InstructionCountNoPadding(const ObjectPoolOp& op) {
++  const int32_t offset = ElementOffset(op.index);
++  switch (op.kind) {
++    case kObjectPoolOpLoadWord:
++    case kObjectPoolOpStoreWord:
++      return Assembler::InstructionCountForLoadStoreFromOffset(
++          offset, kEightBytes, compiler::Address::Offset);
++    case kObjectPoolOpLoadDoubleWord:
++      return Assembler::InstructionCountForLoadStoreFromOffset(
++          offset, kEightBytes, compiler::Address::PairOffset);
++    case kObjectPoolOpLoadFloat:
++      return Assembler::InstructionCountForLoadStoreFromOffset(
++          offset, kSWord, compiler::Address::Offset);
++    case kObjectPoolOpLoadDouble:
++      return Assembler::InstructionCountForLoadStoreFromOffset(
++          offset, kDWord, compiler::Address::Offset);
++    case kObjectPoolOpLoadQuad:
++      return Assembler::InstructionCountForLoadStoreFromOffset(
++          offset, kQWord, compiler::Address::Offset);
++    case kObjectPoolOpNone:
++      UNREACHABLE();  // Their line 525.
++    default:
++      UNREACHABLE();  // Their line 527.
++  }
++}
++
++// Emit, into [assembler], an object pool access that reads op.index, uses the
++// same destination register as the sequence ending at [pc], and occupies the
++// same three-instruction footprint.
++//
++// [pc] addresses the last instruction of the *original* sequence. op.index is
++// the *target* index and need not be the one at [pc] -- that difference is the
++// whole point of the file.
++static void AssembleReplacement(Assembler* assembler,
++                                const ObjectPoolOp& op,
++                                uword pc) {
++  // A validity gate and nothing more: the result is never read. Every arm
++  // re-reads the register fields straight out of the instruction word, which
++  // is provable -- after the branch at 0x1001a2e30 no arm touches the stack
++  // slot the detected op was written to.
++  ObjectPoolOp detected = {};
++  if (!DetectObjectPoolOp(pc, detected, /*limit=*/0)) {
++    Disassembler::Disassemble(pc - 8, pc + 0x1c);
++    FATAL("Failed to detect object pool load at 0x%lx\n",
++          static_cast<unsigned long>(pc));  // NOLINT: their format string.
++  }
++
++  const int32_t offset = ElementOffset(op.index);
++  const intptr_t index = static_cast<intptr_t>(op.index);
++  const uint32_t instr = *reinterpret_cast<const uint32_t*>(pc);
++  const uint32_t rt = (instr >> kRtShift) & 0x1f;
++
++  switch (op.kind) {
++    case kObjectPoolOpNone:
++      UNREACHABLE();  // Their line 419.
++    case kObjectPoolOpLoadWord: {
++      const Register dst = static_cast<Register>(rt);
++      const uint32_t rn = (instr >> kRnShift) & 0x1f;
++      // Which emitter produced the original, decided by its base register.
++      // LoadWordFromPoolIndex's multi-instruction form uses the destination
++      // itself as the scratch (add dst, PP, #hi ; ldr dst, [dst, #lo]), and its
++      // one-instruction form loads straight off PP. Anything else went through
++      // the assembler's scratch, which is what Load/LoadFromOffset uses. So the
++      // branch picks the emitter that reproduces the original register usage.
++      if (rn == rt || rn == kPP) {
++        assembler->PadLoadStore(
++            [&]() { assembler->LoadWordFromPoolIndex(dst, index, PP); }, PP,
++            offset, kEightBytes, compiler::Address::Offset);
++      } else {
++        // Not padded here, and not padded in their code either: this arm is a
++        // tail call. In their build LoadFromOffset reaches PadLoadStore through
++        // Assembler::Load, which is one of the nineteen upstream emitters they
++        // route through it. This fork does not make that change, so this arm
++        // emits its natural length. It is the one place where the fixed
++        // footprint does not hold here.
++        assembler->LoadFromOffset(dst, PP, offset, kEightBytes);
++      }
++      break;
++    }
++    case kObjectPoolOpStoreWord: {
++      const Register src = static_cast<Register>(rt);
++      assembler->PadLoadStore(
++          [&]() { assembler->StoreWordToPoolIndex(src, index, PP); }, PP,
++          offset, kEightBytes, compiler::Address::Offset);
++      break;
++    }
++    case kObjectPoolOpLoadDoubleWord: {
++      const Register lower = static_cast<Register>(rt);
++      const Register upper = static_cast<Register>((instr >> 10) & 0x1f);
++      assembler->PadLoadStore(
++          [&]() { assembler->LoadDoubleWordFromPoolIndex(lower, upper, index); },
++          PP, offset, kEightBytes, compiler::Address::PairOffset);
++      break;
++    }
++    case kObjectPoolOpLoadFloat: {
++      const VRegister dst = static_cast<VRegister>(rt);
++      assembler->PadLoadStore(
++          [&]() { assembler->LoadSFromOffset(dst, PP, offset); }, PP, offset,
++          kSWord, compiler::Address::Offset);
++      break;
++    }
++    case kObjectPoolOpLoadDouble: {
++      const VRegister dst = static_cast<VRegister>(rt);
++      assembler->PadLoadStore(
++          [&]() { assembler->LoadDFromOffset(dst, PP, offset); }, PP, offset,
++          kDWord, compiler::Address::Offset);
++      break;
++    }
++    case kObjectPoolOpLoadQuad: {
++      const VRegister dst = static_cast<VRegister>(rt);
++      assembler->PadLoadStore(
++          [&]() { assembler->LoadQFromOffset(dst, PP, offset); }, PP, offset,
++          kQWord, compiler::Address::Offset);
++      break;
++    }
++    default:
++      // A kind outside 0..6 falls out of their switch and returns silently.
++      break;
++  }
++}
++
++bool ObjectPoolEditor::Edit(uword start,
++                            uword end,
++                            const intptr_t* index_mapping,
++                            intptr_t mapping_length) {
++  static constexpr intptr_t kFootprint =
++      Assembler::kObjectPoolLoadStoreMinInstructionCount;
++  static constexpr intptr_t kFootprintBytes = kFootprint * Instr::kInstrSize;
++  const uint32_t kNop = static_cast<uint32_t>(Instr::kNopInstruction);
++
++  bool ok = true;
++  for (uword pc = start; pc < end; pc += Instr::kInstrSize) {
++    ObjectPoolOp op = {};
++    if (!DetectObjectPoolOp(pc, op, /*limit=*/start)) continue;
++
++    const intptr_t count = InstructionCountNoPadding(op);
++    // pc is the last instruction of the sequence, so it begins here.
++    const uword sequence = pc - (count - 1) * Instr::kInstrSize;
++    // The rest of the footprint has to be padding. If it is not, the twelve
++    // bytes at [sequence] are not this access's to overwrite.
++    bool padded = true;
++    for (intptr_t i = 0; i < kFootprint - count; i++) {
++      const uword at = pc + (i + 1) * Instr::kInstrSize;
++      if (at >= end || *reinterpret_cast<const uint32_t*>(at) != kNop) {
++        padded = false;
++        break;
++      }
++    }
++    if (!padded) {
++      // Whether theirs reports this or is fatal is undetermined -- the recon
++      // could not tell which the branch at 0x1000bc7a8 leads to. Both agree on
++      // the part that matters, which is that the site is not rewritten; the
++      // survivable one is chosen here.
++      OS::PrintErr(
++          "Object pool access at 0x%" Px
++          " is %" Pd " instructions and is not padded to %" Pd "\n",
++          pc, count, kFootprint);
++      ok = false;
++      continue;
++    }
++
++    if (op.index < 0 || op.index >= mapping_length) {
++      // Theirs indexes the table without a visible check. A pool index outside
++      // it means the detection was a false positive, and there is nothing safe
++      // to do with it, so it is declined. The check is ours.
++      OS::PrintErr("Object pool access at 0x%" Px " reads index %" Pd64
++                   ", outside the %" Pd "-entry mapping\n",
++                   pc, op.index, mapping_length);
++      ok = false;
++      continue;
++    }
++    const intptr_t new_index = index_mapping[op.index];
++
++    Assembler assembler(/*object_pool_builder=*/nullptr,
++                        /*far_branch_level=*/0);
++    // The pool-index emitters assert this. Inferred, not proven: what their
++    // image writer sets is a bool at offset 0x89 into the Assembler.
++    assembler.set_constant_pool_allowed(true);
++
++    if (new_index == op.index) {
++      // Their standing self-check. Re-assembling an access that is not moving
++      // has to reproduce the bytes already there, because the same emitters
++      // produced them during AOT compilation.
++      AssembleReplacement(&assembler, op, pc);
++      const intptr_t size = assembler.CodeSize();
++      const uword assembled = assembler.CodeAddress(0);
++      if (memcmp(reinterpret_cast<const void*>(assembled),
++                 reinterpret_cast<const void*>(sequence),
++                 Utils::Minimum(size, kFootprintBytes)) != 0) {
++        OS::PrintErr("Expected:\n");
++        Disassembler::Disassemble(assembled, assembled + size);
++        OS::PrintErr("Actual:\n");
++        Disassembler::Disassemble(sequence, sequence + kFootprintBytes);
++        ok = false;
++      }
++      continue;
++    }
++
++    // Moving it. Patched in place, over the footprint the padding guarantees:
++    // no relocation, no re-layout.
++    //
++    // Theirs decodes the sequence a second time here, with limit 0, and uses
++    // that result's kind. A smaller limit only ever admits more, so the second
++    // decode cannot disagree with the first; the recon's own instruction about
++    // their duplicated InstructionCountNoPadding calls applies, and it is not
++    // reproduced.
++    const ObjectPoolOp target = {new_index, op.kind};
++    AssembleReplacement(&assembler, target, pc);
++    memcpy(reinterpret_cast<void*>(sequence),
++           reinterpret_cast<const void*>(assembler.CodeAddress(0)),
++           assembler.CodeSize());
++  }
++  return ok;
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && !defined(DART_PRECOMPILED_RUNTIME)
+diff --git a/runtime/vm/shorebird/object_pool_editor.h b/runtime/vm/shorebird/object_pool_editor.h
+new file mode 100644
+index 00000000000..f615f619b01
+--- /dev/null
++++ b/runtime/vm/shorebird/object_pool_editor.h
+@@ -0,0 +1,128 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_OBJECT_POOL_EDITOR_H_
++#define RUNTIME_VM_SHOREBIRD_OBJECT_POOL_EDITOR_H_
++
++#include "vm/allocation.h"
++#include "vm/globals.h"
++
++namespace dart {
++
++// Shorebird's object_pool_editor.cc, recovered by disassembling their shipped
++// gen_snapshot_arm64. The full recon, with every address, is in
++// spikes/shorebird_linkinfo_oracle/OBJECT_POOL_EDITOR_RECON.md; the private
++// file name string sits at 0x1004bfd5e in their binary.
++//
++// What the file is for. Linking a patch against a base snapshot moves object
++// pool entries around, so code that reads entry 40 in the base may have to read
++// entry 41 in the patch. Rewriting the *code* is only possible if the rewrite
++// does not change its length -- otherwise every branch after it would have to
++// move. Shorebird makes that true by giving every object pool access a fixed
++// three-instruction footprint (Assembler::PadLoadStore, in the upstream arm64
++// assembler), and then patching accesses in place with a plain memcpy. There is
++// no relocation and no re-layout.
++//
++// Four functions, all confirmed by their mangled names in `nm`:
++//
++//   DetectObjectPoolOp                        0x1001a2720, 884 B
++//   LoadStoreFromSingle              (static) 0x1001a2a94, 192 B
++//   ObjectPoolEditor::InstructionCountNoPadding
++//                                             0x1001a2b54, 420 B
++//   AssembleReplacement              (static) 0x1001a2de8, 1016 B
++//
++// The two static ones have internal linkage and live in the .cc. What is *not*
++// recovered is the walk that drives them: it is fully inlined into upstream's
++// ImageWriter::Write, with no surviving symbol, so its name and signature are
++// ours (see Edit below). Their loop's shape is recovered; the old-index to
++// new-index table it consumes is not -- who owns it, and how it relates to
++// ObjectPoolMappingsAggregator::GetBestMapping, is undetermined (recon (c)5).
++// That is why nothing in this tree calls Edit from the image writer yet: the
++// input does not exist, and Shorebird's companion change -- routing the
++// nineteen upstream emitters through PadLoadStore so that snapshots come out
++// padded in the first place -- is not made here either.
++//
++// ⚠️ Every encoding below is arm64. The implementation is compiled only for
++// TARGET_ARCH_ARM64.
++
++// What kind of object pool access a detected sequence is. The values are proven
++// rather than guessed: each arm of their AssembleReplacement installs a
++// distinct std::function vtable, and the vtable's operator() slot demangles to
++// a name that spells out the Assembler method being called. These C++
++// identifiers are ours; the numbers are theirs.
++enum ObjectPoolOpKind : int32_t {
++  // Not a pool access. Reaching AssembleReplacement or
++  // InstructionCountNoPadding with this is UNREACHABLE in their code too
++  // (their lines 419 and 525).
++  kObjectPoolOpNone = 0,
++  kObjectPoolOpLoadWord = 1,        // Assembler::LoadWordFromPoolIndex
++  kObjectPoolOpStoreWord = 2,       // Assembler::StoreWordToPoolIndex
++  kObjectPoolOpLoadDoubleWord = 3,  // Assembler::LoadDoubleWordFromPoolIndex
++  kObjectPoolOpLoadFloat = 4,       // Assembler::LoadSFromOffset
++  kObjectPoolOpLoadDouble = 5,      // Assembler::LoadDFromOffset
++  kObjectPoolOpLoadQuad = 6,        // Assembler::LoadQFromOffset
++};
++
++// Their layout, from the stores DetectObjectPoolOp makes into it
++// (`str x0,[x1]` then `str w8,[x1,#0x8]`) and from its caller zeroing exactly
++// twelve bytes before the call.
++struct ObjectPoolOp {
++  int64_t index;
++  int32_t kind;
++};
++
++// Decode the object pool access ending at [pc], walking backwards for the
++// instructions that built up the offset. [pc] is the *last* instruction of the
++// sequence -- the load or store itself -- and [limit] is an inclusive lower
++// bound: a sequence that would need to read below it is declined rather than
++// read.
++//
++// The fourth parameter is in their mangled name and is never read anywhere in
++// the 884 bytes of their implementation -- no reference to x3 exists, and both
++// of their call sites pass three arguments. LLVM only eliminates a dead
++// argument, so it is unused in their source as well. What it was meant to be is
++// undetermined (recon (c)1), so it is declared and ignored here too rather than
++// given an invented meaning.
++bool DetectObjectPoolOp(uword pc,
++                        ObjectPoolOp& op,
++                        uword limit,
++                        int* unused = nullptr);
++
++// AllStatic because their class has no constructor, destructor or field symbol
++// anywhere in the binary -- but that is absence of evidence, not evidence: it
++// would look the same if the class had state and were always inlined. Likewise
++// whether InstructionCountNoPadding is a static member is undetermined (recon
++// (c)2): the observed ABI takes the index in x0 and the kind in w1 with no
++// `this`, which both a static member and a non-static one with an unused
++// `this` compile to.
++class ObjectPoolEditor : public AllStatic {
++ public:
++  // How many instructions this access occupies before padding. Their five
++  // switch arms and the exact OperandSize / AddressType each passes are
++  // recovered; for kinds 1, 2 and 3 the helper was inlined and constant-folded,
++  // which is a compiler artifact and is deliberately not reproduced.
++  static intptr_t InstructionCountNoPadding(const ObjectPoolOp& op);
++
++  // Walk [start, end) -- an Instructions payload -- and, for every object pool
++  // access in it, either move it to the index [index_mapping] gives or, when
++  // the mapping leaves it alone, re-assemble it and check it comes out byte for
++  // byte identical to what is already there.
++  //
++  // That second half is their own standing self-check, and it is the closest
++  // thing to a free oracle this file has: it compares this decoder and these
++  // emitters against code the same emitters produced during AOT compilation.
++  // Its failure output is theirs, "Expected:\n" and "Actual:\n", each of which
++  // occurs exactly once in their binary.
++  //
++  // Returns false if any self-check failed or any site had to be declined.
++  // The name is ours: theirs did not survive as a symbol.
++  static bool Edit(uword start,
++                   uword end,
++                   const intptr_t* index_mapping,
++                   intptr_t mapping_length);
++};
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_OBJECT_POOL_EDITOR_H_
+diff --git a/runtime/vm/shorebird/object_pool_editor_test.cc b/runtime/vm/shorebird/object_pool_editor_test.cc
+new file mode 100644
+index 00000000000..2ec35087479
+--- /dev/null
++++ b/runtime/vm/shorebird/object_pool_editor_test.cc
+@@ -0,0 +1,579 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/object_pool_editor.h"
++
++#if defined(TARGET_ARCH_ARM64) && !defined(DART_PRECOMPILED_RUNTIME)
++
++#include <string.h>
++
++#include <vector>
++
++#include "vm/compiler/assembler/assembler.h"
++#include "vm/compiler/runtime_api.h"
++#include "vm/constants.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// The editor decodes machine code, so almost everything here has to assemble
++// real instructions to have anything to decode -- which is also the only honest
++// way to test it. Checking the decoder against hand-written expected words
++// would be checking it against a second copy of the same encoding rules.
++//
++// ISOLATE_UNIT_TEST_CASE throughout: an Assembler is a StackResource and
++// dereferences a null ThreadState if there is no current thread, which is a
++// segfault at construction rather than a compile error.
++
++// Which OperandSize and AddressType each kind's emitter uses. These are the
++// values recovered from their AssembleReplacement's PadLoadStore call sites,
++// and the same ones ObjectPoolEditor::InstructionCountNoPadding passes.
++struct KindInfo {
++  compiler::OperandSize sz;
++  compiler::Address::AddressType type;
++};
++
++static KindInfo InfoForKind(int32_t kind) {
++  switch (kind) {
++    case kObjectPoolOpLoadWord:
++    case kObjectPoolOpStoreWord:
++      return {compiler::kEightBytes, compiler::Address::Offset};
++    case kObjectPoolOpLoadDoubleWord:
++      return {compiler::kEightBytes, compiler::Address::PairOffset};
++    case kObjectPoolOpLoadFloat:
++      return {compiler::kSWord, compiler::Address::Offset};
++    case kObjectPoolOpLoadDouble:
++      return {compiler::kDWord, compiler::Address::Offset};
++    case kObjectPoolOpLoadQuad:
++      return {compiler::kQWord, compiler::Address::Offset};
++    default:
++      UNREACHABLE();
++  }
++}
++
++// Not PP, not TMP and not TMP2, so that a sequence's base register says
++// unambiguously which emitter produced it.
++static const Register kDst = R3;
++static const Register kDst2 = R4;
++static const VRegister kFpDst = V5;
++
++static int32_t OffsetOfIndex(intptr_t index) {
++  return static_cast<int32_t>(
++      compiler::target::ObjectPool::element_offset(index));
++}
++
++// The bare emitter for each kind, with no padding.
++static void EmitRaw(compiler::Assembler* a, int32_t kind, intptr_t index) {
++  const int32_t offset = OffsetOfIndex(index);
++  switch (kind) {
++    case kObjectPoolOpLoadWord:
++      a->LoadWordFromPoolIndex(kDst, index, PP);
++      break;
++    case kObjectPoolOpStoreWord:
++      a->StoreWordToPoolIndex(kDst, index, PP);
++      break;
++    case kObjectPoolOpLoadDoubleWord:
++      a->LoadDoubleWordFromPoolIndex(kDst, kDst2, index);
++      break;
++    case kObjectPoolOpLoadFloat:
++      a->LoadSFromOffset(kFpDst, PP, offset);
++      break;
++    case kObjectPoolOpLoadDouble:
++      a->LoadDFromOffset(kFpDst, PP, offset);
++      break;
++    case kObjectPoolOpLoadQuad:
++      a->LoadQFromOffset(kFpDst, PP, offset);
++      break;
++    default:
++      UNREACHABLE();
++  }
++}
++
++// How many instructions the emitter really uses, measured rather than reasoned
++// about. This is the number ObjectPoolEditor::InstructionCountNoPadding is
++// supposed to predict.
++static intptr_t MeasuredCount(int32_t kind, intptr_t index) {
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.set_constant_pool_allowed(true);
++  const intptr_t before = assembler.CodeSize();
++  EmitRaw(&assembler, kind, index);
++  return (assembler.CodeSize() - before) / Instr::kInstrSize;
++}
++
++// Assemble a padded access -- the same emitter and the same PadLoadStore call
++// their AssembleReplacement makes -- and copy it into buffer[at..]. Returns the
++// address of its last real instruction, which is what the editor calls pc.
++static uword WritePaddedAccess(uint32_t* buffer,
++                               intptr_t at,
++                               int32_t kind,
++                               intptr_t index) {
++  const KindInfo info = InfoForKind(kind);
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.set_constant_pool_allowed(true);
++  assembler.PadLoadStore([&]() { EmitRaw(&assembler, kind, index); }, PP,
++                         OffsetOfIndex(index), info.sz, info.type);
++  const intptr_t bytes = assembler.CodeSize();
++  memmove(&buffer[at], reinterpret_cast<const void*>(assembler.CodeAddress(0)),
++          bytes);
++  return reinterpret_cast<uword>(&buffer[at + MeasuredCount(kind, index) - 1]);
++}
++
++static void FillWithNops(uint32_t* buffer, intptr_t words) {
++  for (intptr_t i = 0; i < words; i++) {
++    buffer[i] = static_cast<uint32_t>(Instr::kNopInstruction);
++  }
++}
++
++static std::vector<intptr_t> IdentityMapping(intptr_t entries) {
++  std::vector<intptr_t> mapping(entries);
++  for (intptr_t i = 0; i < entries; i++) {
++    mapping[i] = i;
++  }
++  return mapping;
++}
++
++// Their layout, and the only part of it that is not inference: the stores
++// DetectObjectPoolOp makes into it are `str x0,[x1]` and `str w8,[x1,#0x8]`,
++// and its caller zeroes exactly twelve bytes.
++VM_UNIT_TEST_CASE(ObjectPoolOp_LayoutMatchesTheirs) {
++  static_assert(sizeof(ObjectPoolOp) == 16, "int64 index then int32 kind");
++  EXPECT_EQ(static_cast<size_t>(0x00), offsetof(ObjectPoolOp, index));
++  EXPECT_EQ(static_cast<size_t>(0x08), offsetof(ObjectPoolOp, kind));
++  EXPECT_EQ(static_cast<size_t>(8), sizeof(ObjectPoolOp::index));
++  EXPECT_EQ(static_cast<size_t>(4), sizeof(ObjectPoolOp::kind));
++}
++
++// One row per shape their decoder recognises. The counts are not asserted here
++// -- MeasuredCount supplies them -- but the spread of indices is chosen so that
++// every kind is exercised in its one-, two- and where reachable
++// three-instruction form, because those are three completely different decode
++// paths: bare scaled offset, `add` off PP first, and movz/movk into an index
++// register.
++struct DetectCase {
++  int32_t kind;
++  intptr_t index;
++  intptr_t expected_count;
++};
++
++static const DetectCase kDetectCases[] = {
++    // Bare `ldr Xt, [PP, #imm12]` and friends.
++    {kObjectPoolOpLoadWord, 0, 1},
++    {kObjectPoolOpLoadWord, 4093, 1},
++    {kObjectPoolOpStoreWord, 0, 1},
++    {kObjectPoolOpLoadDoubleWord, 0, 1},
++    {kObjectPoolOpLoadDoubleWord, 61, 1},
++    {kObjectPoolOpLoadFloat, 0, 1},
++    {kObjectPoolOpLoadDouble, 0, 1},
++    // kQWord scales by 16, so only even indices land on a representable
++    // scaled offset; an odd one assembles to the unscaled form, which their
++    // decoder does not recognise.
++    {kObjectPoolOpLoadQuad, 0, 1},
++    {kObjectPoolOpLoadQuad, 2, 1},
++    // `add Xd, PP, #hi` then a 12-bit offset off Xd.
++    {kObjectPoolOpLoadWord, 5000, 2},
++    {kObjectPoolOpStoreWord, 5000, 2},
++    {kObjectPoolOpLoadDoubleWord, 511, 2},
++    {kObjectPoolOpLoadFloat, 5000, 2},
++    {kObjectPoolOpLoadDouble, 5000, 2},
++    {kObjectPoolOpLoadQuad, 10000, 2},
++    // movz/movk into an index register, then a register-offset access.
++    {kObjectPoolOpLoadWord, 2100000, 3},
++    {kObjectPoolOpLoadFloat, 2100000, 3},
++    {kObjectPoolOpLoadDouble, 2100000, 3},
++    {kObjectPoolOpLoadQuad, 2100000, 3},
++};
++
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DetectsEveryKind) {
++  for (const DetectCase& c : kDetectCases) {
++    // The measured count is asserted too: a row whose form silently changed
++    // would otherwise keep passing while testing a different path.
++    EXPECT_EQ(c.expected_count, MeasuredCount(c.kind, c.index));
++
++    uint32_t buffer[8];
++    FillWithNops(buffer, ARRAY_SIZE(buffer));
++    const uword pc = WritePaddedAccess(buffer, 2, c.kind, c.index);
++
++    ObjectPoolOp op = {};
++    EXPECT(DetectObjectPoolOp(pc, op, reinterpret_cast<uword>(buffer)));
++    EXPECT_EQ(static_cast<int64_t>(c.index), op.index);
++    EXPECT_EQ(c.kind, op.kind);
++
++    // And nothing else in the sequence decodes as an access on its own: the
++    // walk steps one instruction at a time, so a prefix that also matched
++    // would be rewritten twice.
++    for (intptr_t i = 0; i < c.expected_count - 1; i++) {
++      ObjectPoolOp spurious = {};
++      EXPECT(!DetectObjectPoolOp(reinterpret_cast<uword>(&buffer[2 + i]),
++                                 spurious, reinterpret_cast<uword>(buffer)));
++    }
++  }
++}
++
++// A load the general-purpose Assembler::Load path produced, which reaches the
++// pool through the scratch register rather than the destination. Their
++// AssembleReplacement has a separate arm for exactly this shape.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DetectsScratchBasedLoad) {
++  const intptr_t index = 5000;
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.set_constant_pool_allowed(true);
++  assembler.LoadFromOffset(kDst, PP, OffsetOfIndex(index),
++                           compiler::kEightBytes);
++  const intptr_t count = assembler.CodeSize() / Instr::kInstrSize;
++  EXPECT_EQ(static_cast<intptr_t>(2), count);
++
++  uint32_t buffer[4];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  memmove(buffer, reinterpret_cast<const void*>(assembler.CodeAddress(0)),
++          assembler.CodeSize());
++
++  ObjectPoolOp op = {};
++  EXPECT(DetectObjectPoolOp(reinterpret_cast<uword>(&buffer[count - 1]), op,
++                            reinterpret_cast<uword>(buffer)));
++  EXPECT_EQ(static_cast<int64_t>(index), op.index);
++  EXPECT_EQ(static_cast<int32_t>(kObjectPoolOpLoadWord), op.kind);
++}
++
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DeclinesNonPoolCode) {
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.set_constant_pool_allowed(true);
++  // A load off something that is not the pool pointer.
++  assembler.ldr(kDst, compiler::Address(R5, 16));
++  // A 32-bit load off the pool pointer: an integer pool entry is a whole word.
++  assembler.ldr(kDst, compiler::Address(PP, 16), compiler::kFourBytes);
++  // An FP store off the pool pointer. There is no StoreDToPoolIndex, so V set
++  // with L clear is excluded before anything else is looked at.
++  assembler.StoreDToOffset(kFpDst, PP, 16);
++  // Not a load or store at all.
++  assembler.ret();
++
++  const intptr_t words = assembler.CodeSize() / Instr::kInstrSize;
++  std::vector<uint32_t> buffer(words);
++  memmove(buffer.data(), reinterpret_cast<const void*>(assembler.CodeAddress(0)),
++          assembler.CodeSize());
++
++  for (intptr_t i = 0; i < words; i++) {
++    ObjectPoolOp op = {};
++    EXPECT(!DetectObjectPoolOp(reinterpret_cast<uword>(&buffer[i]), op,
++                               reinterpret_cast<uword>(buffer.data())));
++  }
++}
++
++// Recorded, not fixed. StoreWordToPoolIndex's widest form materialises the
++// offset in TMP, but their decoder insists that an *integer* access's index
++// register also be its data register -- which is true of
++// LoadWordFromPoolIndex, whose scratch is the destination, and false of every
++// store. So the three-instruction store is undetectable in their decoder, and
++// therefore here.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DeclinesTheThreeInstructionStore) {
++  const intptr_t index = 2100000;
++  EXPECT_EQ(static_cast<intptr_t>(3),
++            MeasuredCount(kObjectPoolOpStoreWord, index));
++
++  uint32_t buffer[8];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  const uword pc =
++      WritePaddedAccess(buffer, 2, kObjectPoolOpStoreWord, index);
++  ObjectPoolOp op = {};
++  EXPECT(!DetectObjectPoolOp(pc, op, reinterpret_cast<uword>(buffer)));
++}
++
++// limit is an inclusive lower bound, and a sequence that would need to read
++// below it is declined rather than read. Without that, the walk over an
++// Instructions payload would read whatever precedes the payload.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DetectionStopsAtTheLimit) {
++  const intptr_t index = 5000;  // Two instructions: add off PP, then the load.
++  uint32_t buffer[8];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  const uword pc = WritePaddedAccess(buffer, 2, kObjectPoolOpLoadWord, index);
++  const uword add_pc = pc - Instr::kInstrSize;
++
++  ObjectPoolOp op = {};
++  EXPECT(DetectObjectPoolOp(pc, op, add_pc));
++  EXPECT_EQ(static_cast<int64_t>(index), op.index);
++
++  // One byte higher and the `add` is out of bounds.
++  ObjectPoolOp declined = {};
++  EXPECT(!DetectObjectPoolOp(pc, declined, add_pc + 1));
++  EXPECT(!DetectObjectPoolOp(pc, declined, pc));
++}
++
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_InstructionCountMatchesTheEmitters) {
++  // The three FP kinds emit through PrepareLargeOffset, which is exactly what
++  // the counter counts, so these agree by construction and the whole range of
++  // indices is fair game.
++  static const int32_t kThroughPrepareLargeOffset[] = {
++      kObjectPoolOpLoadFloat, kObjectPoolOpLoadDouble, kObjectPoolOpLoadQuad};
++  static const intptr_t kIndices[] = {0,    2,    30,      1000,    2046,
++                                      4094, 5000, 65536,   2097150, 2100000};
++  for (int32_t kind : kThroughPrepareLargeOffset) {
++    for (intptr_t index : kIndices) {
++      const ObjectPoolOp op = {index, kind};
++      EXPECT_EQ(MeasuredCount(kind, index),
++                ObjectPoolEditor::InstructionCountNoPadding(op));
++    }
++  }
++
++  // The two integer kinds emit through LoadWordFromPoolIndex and
++  // StoreWordToPoolIndex, which have a ladder of their own. They agree with the
++  // counter everywhere below 2^24; where they do not is the test below.
++  static const int32_t kOwnLadder[] = {kObjectPoolOpLoadWord,
++                                       kObjectPoolOpStoreWord};
++  for (int32_t kind : kOwnLadder) {
++    for (intptr_t index : kIndices) {
++      if (OffsetOfIndex(index) >= (1 << 24)) continue;
++      const ObjectPoolOp op = {index, kind};
++      EXPECT_EQ(MeasuredCount(kind, index),
++                ObjectPoolEditor::InstructionCountNoPadding(op));
++    }
++  }
++  // Not a vacuous loop: at least one index in the list is past the cutoff, so
++  // the skip above is skipping something and the rest really ran.
++  EXPECT(OffsetOfIndex(kIndices[ARRAY_SIZE(kIndices) - 1]) >= (1 << 24));
++  EXPECT(OffsetOfIndex(kIndices[0]) < (1 << 24));
++}
++
++// Two divergences found while landing this, recorded rather than papered over
++// -- and recorded here rather than "fixed", because the recon is explicit that
++// InstructionCountNoPadding calls InstructionCountForLoadStoreFromOffset for
++// all six kinds and that re-deriving their constant-folded ladder would be
++// copying an optimiser artifact.
++//
++// Both have the same cause. The counter counts PrepareLargeOffset, and three of
++// the six emitters use it. The other three -- LoadWordFromPoolIndex,
++// StoreWordToPoolIndex and LoadDoubleWordFromPoolIndex -- each have a ladder of
++// their own, which can disagree:
++//
++//   * pair, index 62 (offset 512). LoadDoubleWordFromPoolIndex will take
++//     `add TMP, PP, #imm` for any immediate an add can hold; PrepareLargeOffset
++//     additionally insists the low twelve bits fit an imm7. Emitter 2,
++//     counter 3.
++//   * word, index 2097150 (offset exactly 2^24). LoadWordFromPoolIndex always
++//     emits movz *and* movk, where PrepareLargeOffset goes through
++//     LoadImmediate, which drops the movk when the low sixteen bits are zero.
++//     Emitter 3, counter 2.
++//
++// The second one is ours rather than theirs: the recon reads their folded
++// Address::Offset ladder as "1 if -256 <= offset < 32768, else 2 if
++// offset >> 24 == 0, else 3", which is 3 at 2^24 and so agrees with the
++// emitter. Our counter is written against PrepareLargeOffset instead.
++//
++// The consequence of either is visible end to end: with the count wrong, the
++// editor locates the start of the sequence at the wrong instruction, and its own
++// self-check catches it and declines the site instead of corrupting it. Which is
++// at least the self-check working.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_CountFollowsPrepareLargeOffset) {
++  // Where the pair emitter agrees: inside the imm7 range, and past it when the
++  // low twelve bits still fit one.
++  for (intptr_t index : {0, 1, 61, 511, 512}) {
++    const ObjectPoolOp op = {index, kObjectPoolOpLoadDoubleWord};
++    EXPECT_EQ(MeasuredCount(kObjectPoolOpLoadDoubleWord, index),
++              ObjectPoolEditor::InstructionCountNoPadding(op));
++  }
++
++  struct Divergence {
++    int32_t kind;
++    intptr_t index;
++    intptr_t emitted;
++    intptr_t counted;
++  };
++  static const Divergence kDivergences[] = {
++      {kObjectPoolOpLoadDoubleWord, 62, 2, 3},
++      {kObjectPoolOpLoadWord, 2097150, 3, 2},
++      {kObjectPoolOpStoreWord, 2097150, 3, 2},
++  };
++
++  for (const Divergence& d : kDivergences) {
++    const ObjectPoolOp op = {d.index, d.kind};
++    EXPECT_EQ(d.emitted, MeasuredCount(d.kind, d.index));
++    EXPECT_EQ(d.counted, ObjectPoolEditor::InstructionCountNoPadding(op));
++
++    // The store's three-instruction form is not detectable at all (see
++    // ObjectPoolEditor_DeclinesTheThreeInstructionStore), so there is no site
++    // for the editor to decline.
++    if (d.kind == kObjectPoolOpStoreWord) continue;
++
++    // Two words of slack in front, because a count that is too high makes the
++    // editor look further back than the sequence actually starts.
++    uint32_t buffer[8];
++    FillWithNops(buffer, ARRAY_SIZE(buffer));
++    WritePaddedAccess(buffer, 2, d.kind, d.index);
++    const std::vector<intptr_t> mapping = IdentityMapping(d.index + 1);
++    EXPECT(!ObjectPoolEditor::Edit(
++        reinterpret_cast<uword>(buffer),
++        reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer)), mapping.data(),
++        static_cast<intptr_t>(mapping.size())));
++  }
++}
++
++// Their standing self-check, which is the closest thing to a free oracle this
++// file has: for every access the mapping leaves alone, re-assemble it and
++// compare bytes with what is already there. Here the "already there" is code
++// this test assembled with the same emitters, which is the same relationship
++// their image writer has to the AOT compiler's output.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_SelfCheckAcceptsAssembledCode) {
++  intptr_t highest = 0;
++  for (const DetectCase& c : kDetectCases) {
++    if (c.index > highest) highest = c.index;
++  }
++  const std::vector<intptr_t> mapping = IdentityMapping(highest + 1);
++
++  for (const DetectCase& c : kDetectCases) {
++    uint32_t buffer[8];
++    FillWithNops(buffer, ARRAY_SIZE(buffer));
++    WritePaddedAccess(buffer, 2, c.kind, c.index);
++    EXPECT(ObjectPoolEditor::Edit(
++        reinterpret_cast<uword>(buffer),
++        reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer)), mapping.data(),
++        static_cast<intptr_t>(mapping.size())));
++  }
++}
++
++// The one arm of their AssembleReplacement that does not go through
++// PadLoadStore, because in their build the padding happens further out, in
++// Assembler::Load. It still has to reproduce the original byte for byte.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_SelfCheckAcceptsAScratchBasedLoad) {
++  const intptr_t index = 5000;
++  compiler::ObjectPoolBuilder pool_builder;
++  compiler::Assembler assembler(&pool_builder);
++  assembler.set_constant_pool_allowed(true);
++  assembler.PadLoadStore(
++      [&]() {
++        assembler.LoadFromOffset(kDst, PP, OffsetOfIndex(index),
++                                 compiler::kEightBytes);
++      },
++      PP, OffsetOfIndex(index), compiler::kEightBytes,
++      compiler::Address::Offset);
++  EXPECT_EQ(static_cast<intptr_t>(3),
++            assembler.CodeSize() / Instr::kInstrSize);
++
++  uint32_t buffer[8];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  memmove(&buffer[2], reinterpret_cast<const void*>(assembler.CodeAddress(0)),
++          assembler.CodeSize());
++
++  const std::vector<intptr_t> mapping = IdentityMapping(index + 1);
++  EXPECT(ObjectPoolEditor::Edit(
++      reinterpret_cast<uword>(buffer),
++      reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer)), mapping.data(),
++      static_cast<intptr_t>(mapping.size())));
++}
++
++// The padding is what makes an in-place rewrite legal, so a site that is not
++// padded must be declined -- overwriting the twelve-byte footprint would
++// destroy a real instruction.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_DeclinesUnpaddedSites) {
++  const intptr_t index = 0;  // One instruction, so two words of padding.
++  uint32_t buffer[8];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  WritePaddedAccess(buffer, 2, kObjectPoolOpLoadWord, index);
++
++  const std::vector<intptr_t> mapping = IdentityMapping(index + 1);
++  const uword start = reinterpret_cast<uword>(buffer);
++  const uword end = reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer));
++  EXPECT(ObjectPoolEditor::Edit(start, end, mapping.data(),
++                                static_cast<intptr_t>(mapping.size())));
++
++  // Replace the second padding word with something that is not a NOP.
++  buffer[4] = 0xd65f03c0;  // ret
++  EXPECT(!ObjectPoolEditor::Edit(start, end, mapping.data(),
++                                 static_cast<intptr_t>(mapping.size())));
++}
++
++// The point of the file: move an access to a different pool entry without
++// moving anything around it.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_RewriteMovesTheIndex) {
++  struct Move {
++    int32_t kind;
++    intptr_t from;
++    intptr_t to;
++  };
++  // The destination is never wider than the source. Their walk advances one
++  // instruction at a time and does not skip what it just wrote, so a
++  // replacement whose load lands after the old one would be found again and
++  // translated twice.
++  static const Move kMoves[] = {
++      {kObjectPoolOpLoadWord, 0, 7},
++      {kObjectPoolOpLoadWord, 5000, 40},
++      {kObjectPoolOpStoreWord, 0, 12},
++      {kObjectPoolOpStoreWord, 5000, 5001},
++      {kObjectPoolOpLoadDoubleWord, 0, 61},
++      {kObjectPoolOpLoadFloat, 0, 9},
++      {kObjectPoolOpLoadDouble, 5000, 3},
++      {kObjectPoolOpLoadQuad, 0, 2},
++  };
++
++  for (const Move& m : kMoves) {
++    EXPECT(MeasuredCount(m.kind, m.to) <= MeasuredCount(m.kind, m.from));
++
++    uint32_t buffer[8];
++    FillWithNops(buffer, ARRAY_SIZE(buffer));
++    WritePaddedAccess(buffer, 2, m.kind, m.from);
++    const uint32_t before_head = buffer[1];
++    const uint32_t before_tail = buffer[ARRAY_SIZE(buffer) - 1];
++
++    intptr_t entries = (m.from > m.to ? m.from : m.to) + 1;
++    std::vector<intptr_t> mapping = IdentityMapping(entries);
++    mapping[m.from] = m.to;
++
++    EXPECT(ObjectPoolEditor::Edit(
++        reinterpret_cast<uword>(buffer),
++        reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer)), mapping.data(),
++        static_cast<intptr_t>(mapping.size())));
++
++    // The rewritten sequence starts where the old one did and reads the new
++    // index.
++    const intptr_t new_count = MeasuredCount(m.kind, m.to);
++    const uword new_pc = reinterpret_cast<uword>(&buffer[2 + new_count - 1]);
++    ObjectPoolOp op = {};
++    EXPECT(DetectObjectPoolOp(new_pc, op, reinterpret_cast<uword>(buffer)));
++    EXPECT_EQ(static_cast<int64_t>(m.to), op.index);
++    EXPECT_EQ(m.kind, op.kind);
++
++    // And nothing outside the footprint moved. There is no relocation here:
++    // the whole scheme depends on the replacement being the same size.
++    EXPECT_EQ(before_head, buffer[1]);
++    EXPECT_EQ(before_tail, buffer[ARRAY_SIZE(buffer) - 1]);
++    EXPECT_EQ(static_cast<uint32_t>(Instr::kNopInstruction), buffer[5]);
++  }
++}
++
++// A rewrite has to leave the neighbouring access alone, and both have to still
++// pass the self-check afterwards. This is the case a footprint that was not
++// really fixed would break.
++ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_RewriteLeavesNeighboursAlone) {
++  uint32_t buffer[12];
++  FillWithNops(buffer, ARRAY_SIZE(buffer));
++  WritePaddedAccess(buffer, 0, kObjectPoolOpLoadWord, 11);
++  WritePaddedAccess(buffer, 3, kObjectPoolOpLoadDouble, 22);
++  WritePaddedAccess(buffer, 6, kObjectPoolOpStoreWord, 33);
++  const uint32_t first_before = buffer[0];
++  const uint32_t third_before = buffer[6];
++
++  std::vector<intptr_t> mapping = IdentityMapping(64);
++  mapping[22] = 44;
++  const uword start = reinterpret_cast<uword>(buffer);
++  const uword end = reinterpret_cast<uword>(buffer + ARRAY_SIZE(buffer));
++  EXPECT(ObjectPoolEditor::Edit(start, end, mapping.data(),
++                                static_cast<intptr_t>(mapping.size())));
++
++  EXPECT_EQ(first_before, buffer[0]);
++  EXPECT_EQ(third_before, buffer[6]);
++  ObjectPoolOp op = {};
++  EXPECT(DetectObjectPoolOp(reinterpret_cast<uword>(&buffer[3]), op, start));
++  EXPECT_EQ(static_cast<int64_t>(44), op.index);
++
++  // Everything now agrees with the mapping's fixed points, so a second pass
++  // must be a pure self-check and must pass.
++  std::vector<intptr_t> settled = IdentityMapping(64);
++  EXPECT(ObjectPoolEditor::Edit(start, end, settled.data(),
++                                static_cast<intptr_t>(settled.size())));
++}
++
++}  // namespace dart
++
++#endif  // defined(TARGET_ARCH_ARM64) && !defined(DART_PRECOMPILED_RUNTIME)
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 9b714cd00c7..4a6d5460de5 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -307,6 +307,8 @@ vm_sources = [
+   "shorebird/dd_voting.h",
+   "shorebird/linker.cc",
+   "shorebird/linker.h",
++  "shorebird/object_pool_editor.cc",
++  "shorebird/object_pool_editor.h",
+   "shorebird/shorebird.h",
+   "shorebird.cc",
+   "simulator_memory.h",
+@@ -402,6 +404,7 @@ vm_sources_tests = [
+   "shorebird/linker_test.cc",
+   "shorebird/dd_voting_test.cc",
+   "shorebird/link_info_test.cc",
++  "shorebird/object_pool_editor_test.cc",
+   "shorebird/shorebird_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+-- 
+2.53.0
+

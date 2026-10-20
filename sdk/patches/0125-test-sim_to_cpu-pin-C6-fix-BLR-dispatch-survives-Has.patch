@@ -1,0 +1,72 @@
+From 5beea3541c1d48d887d7f5f7c6135820769098f3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 2 Sep 2026 09:34:43 +0800
+Subject: [PATCH 125/206] =?UTF-8?q?test(sim=5Fto=5Fcpu):=20pin=20C6=20fix?=
+ =?UTF-8?q?=20=E2=80=94=20BLR=20dispatch=20survives=20HasScheduledInterrup?=
+ =?UTF-8?q?ts?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+index d87dd1529a8..b8d26f61ad7 100644
+--- a/runtime/vm/shorebird_sim_to_cpu_test.cc
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -101,6 +101,52 @@ ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_RunDartOnCpuHypercall) {
+   EXPECT_EQ(42, result);  // ShorebirdTestNativeDoubler(21) = 42, not 99
+ }
+ 
++// Test: BLR to a linked address succeeds even when HasScheduledInterrupts() is true.
++// C6 removed a guard that used `break` inside a switch-case when interrupts were pending;
++// that break exited the switch rather than falling through, so the callee never ran.
++// Since interrupts are almost always pending in practice, this effectively blocked all
++// BLR dispatches. This test pins the fix by explicitly scheduling an interrupt, then
++// asserting the dispatch still delivers the right return value.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_InterruptPending) {
++  Thread* thr = Thread::Current();
++  ASSERT(thr != nullptr);
++
++  Simulator* sim = Simulator::Current();
++  const uword target = reinterpret_cast<uword>(&ShorebirdTestNativeDoubler);
++
++  sim->SetLinkedFunction(target, target);
++  sim->SetBaseInstructionsBase(0);
++  sim->SetSimToCpuEnabled(true);
++
++  // Force HasScheduledInterrupts() == true for the duration of this test.
++  thr->ScheduleInterrupts(Thread::kVMInterrupt);
++  EXPECT(thr->HasScheduledInterrupts());  // validate the test's own assumption
++
++  std::unique_ptr<VirtualMemory> mem(VirtualMemory::Allocate(
++      VirtualMemory::PageSize(), false, false, "a2test_interrupt"));
++  ASSERT(mem != nullptr);
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  const uint64_t addr = static_cast<uint64_t>(target);
++  code[0] = 0xD2800000u | (21u << 5);
++  code[1] = 0xD2800003u | ((addr & 0xFFFF) << 5);
++  code[2] = 0xF2A00003u | (((addr >> 16) & 0xFFFF) << 5);
++  code[3] = 0xF2C00003u | (((addr >> 32) & 0xFFFF) << 5);
++  code[4] = 0xF2E00003u | (((addr >> 48) & 0xFFFF) << 5);
++  code[5] = 0xD63F0060u;   // blr x3
++  code[6] = 0xD65F03C0u;   // ret
++  mem->Protect(VirtualMemory::kReadExecute);
++
++  const int64_t result = sim->Call(
++      static_cast<int64_t>(reinterpret_cast<uword>(code)), 0, 0, 0, 0);
++
++  // BLR dispatch must not be skipped even with interrupts pending.
++  EXPECT_EQ(42, result);
++
++  // Clean up: clear the interrupt we scheduled so the isolate is not left dirty.
++  thr->GetAndClearInterrupts();
++  sim->SetLinkedFunction(target, 0);
++}
++
+ // The nine imm16 values and their names are read out of their binary, so a
+ // typo in the block is worth catching -- the range has to stay contiguous and
+ // every value in it has to name itself.
+-- 
+2.53.0
+

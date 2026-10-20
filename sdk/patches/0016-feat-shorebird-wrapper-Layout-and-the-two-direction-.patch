@@ -1,0 +1,245 @@
+From 63385e05de110c0d792beb3b149470c7763a2e81 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 10:24:54 +0800
+Subject: [PATCH 016/206] feat(shorebird): wrapper Layout and the two direction
+ configs
+
+Layout field order, offsets and 0x60 size mirror their DWARF. The wrapper
+count is derived from (page_size - shared_body_size) / landing_pad_size,
+which reproduces both of their constants: 2014 for CPUToSim and 2044 for
+SimToCPU, the latter a truncated 2044.5. kSharedBodySize (272 vs 28) is the
+only substantive difference between the two directions.
+
+Stub code ranges are empty until the stub generators exist in plan #2.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+new file mode 100644
+index 00000000000..64598b6546e
+--- /dev/null
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -0,0 +1,22 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/wrapper.h"
++
++namespace dart {
++namespace shorebird {
++
++// The real implementations resolve the generated stub's address range. The
++// stubs do not exist until plan #2, so these report an empty range for now.
++// Task 4 tests assert that an empty range is rejected rather than remapped.
++CodeRange CPUToSimConfig::GetStubCodeRange() {
++  return CodeRange();
++}
++
++CodeRange SimToCPUConfig::GetStubCodeRange() {
++  return CodeRange();
++}
++
++}  // namespace shorebird
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+new file mode 100644
+index 00000000000..799e4622e40
+--- /dev/null
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -0,0 +1,104 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_WRAPPER_H_
++#define RUNTIME_VM_SHOREBIRD_WRAPPER_H_
++
++#include <functional>
++
++#include "platform/globals.h"
++#include "vm/growable_array.h"
++
++namespace dart {
++namespace shorebird {
++
++// Half-open [begin, end) address range of a stub's own code.
++struct CodeRange {
++  uword begin = 0;
++  uword end = 0;
++
++  intptr_t size() const { return static_cast<intptr_t>(end - begin); }
++};
++
++// A wrapper page is two mappings of equal size laid end to end:
++//   [0, rx_mapping_size)                  COW remap of the stub's code pages
++//   [rx_mapping_size, rx + rw)            plain RW metadata, one entry per
++//                                         wrapper, metadata_size bytes each
++//
++// Field order and offsets mirror their DWARF exactly (0x60 bytes total), so
++// this struct can be compared against their layout directly.
++struct Layout {
++  intptr_t page_size = 0;               // 0x00
++  intptr_t rx_mapping_size = 0;         // 0x08
++  intptr_t rw_mapping_size = 0;         // 0x10
++  intptr_t num_wrappers_per_page = 0;   // 0x18
++  intptr_t metadata_size = 0;           // 0x20
++  intptr_t landing_pad_size = 0;        // 0x28
++  intptr_t shared_body_size = 0;        // 0x30
++  const char* wrapper_page_name = nullptr;               // 0x38
++  std::function<CodeRange()> get_stub_code_range;        // 0x40
++
++  // Builds a Layout from a compile-time configuration. The wrapper count is
++  // derived, never spelled out: one shared body sits at the front of the page
++  // and the remainder divides into fixed-size landing pads. Reproduces both of
++  // their constants -- 2014 for CPUToSim and 2044 for SimToCPU, the latter a
++  // truncated 2044.5.
++  template <typename C>
++  static Layout fromTemplate() {
++    Layout l;
++    l.page_size = C::kPageSize;
++    l.rx_mapping_size = C::kRxMappingSize;
++    l.rw_mapping_size = C::kRwMappingSize;
++    l.metadata_size = C::kMetadataSize;
++    l.landing_pad_size = C::kLandingPadSize;
++    l.shared_body_size = C::kSharedBodySize;
++    l.wrapper_page_name = C::kWrapperPageName;
++    l.num_wrappers_per_page =
++        (l.page_size - l.shared_body_size) / l.landing_pad_size;
++    l.get_stub_code_range = C::GetStubCodeRange;
++    return l;
++  }
++};
++
++// Metadata is a single target address. WrapEntryPoint stores into this and
++// nothing else -- no instructions are written at runtime.
++struct Metadata {
++  uword target_entry_point;
++};
++
++// Direction-independent numbers. Both of their configs carry identical values
++// for everything except kSharedBodySize.
++struct WrapperConfigBase {
++  static constexpr intptr_t kPageSize = 16384;
++  static constexpr intptr_t kLandingPadSize = 8;
++  static constexpr intptr_t kRxMappingSize = 32768;
++  static constexpr intptr_t kRwMappingSize = 32768;
++  static constexpr intptr_t kMetadataSize = sizeof(Metadata);  // 8
++};
++
++// Host CPU code calling into simulated code.
++struct CPUToSimConfig : public WrapperConfigBase {
++  static constexpr intptr_t kSharedBodySize = 272;
++  static constexpr const char* kWrapperPageName = "cpu-to-sim wrappers";
++  static CodeRange GetStubCodeRange();
++};
++
++// Simulated code calling out to host CPU code.
++struct SimToCPUConfig : public WrapperConfigBase {
++  static constexpr intptr_t kSharedBodySize = 28;
++  static constexpr const char* kWrapperPageName = "sim-to-cpu wrappers";
++  static CodeRange GetStubCodeRange();
++};
++
++// Selects the per-direction configuration. Their DWARF names the two
++// instantiations WrapperLayout<CPUToSimConfig> and WrapperLayout<SimToCPUConfig>
++// as the template arguments to Layout::fromTemplate, so this indirection is
++// theirs, not ours.
++template <typename Config>
++struct WrapperLayout : public Config {};
++
++}  // namespace shorebird
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_WRAPPER_H_
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+new file mode 100644
+index 00000000000..afb6464dab5
+--- /dev/null
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -0,0 +1,61 @@
++// Copyright (c) 2026, the Dart project authors. Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/wrapper.h"
++
++#include "vm/unit_test.h"
++
++namespace dart {
++namespace shorebird {
++
++// The constants below are Shorebird's own, read out of the DW_AT_const_value
++// entries in their shipped dSYM. See
++// spikes/shorebird_linkinfo_oracle/dwarf_types/{CPUToSimConfig,SimToCPUConfig}.txt
++VM_UNIT_TEST_CASE(WrapperLayout_DerivedCountsMatchTheirDwarf) {
++  const Layout cpu_to_sim = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  EXPECT_EQ(static_cast<intptr_t>(16384), cpu_to_sim.page_size);
++  EXPECT_EQ(static_cast<intptr_t>(8), cpu_to_sim.landing_pad_size);
++  EXPECT_EQ(static_cast<intptr_t>(272), cpu_to_sim.shared_body_size);
++  EXPECT_EQ(static_cast<intptr_t>(32768), cpu_to_sim.rx_mapping_size);
++  EXPECT_EQ(static_cast<intptr_t>(32768), cpu_to_sim.rw_mapping_size);
++  EXPECT_EQ(static_cast<intptr_t>(8), cpu_to_sim.metadata_size);
++  // (16384 - 272) / 8 == 2014 exactly.
++  EXPECT_EQ(static_cast<intptr_t>(2014), cpu_to_sim.num_wrappers_per_page);
++
++  const Layout sim_to_cpu = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  EXPECT_EQ(static_cast<intptr_t>(16384), sim_to_cpu.page_size);
++  EXPECT_EQ(static_cast<intptr_t>(8), sim_to_cpu.landing_pad_size);
++  // The only substantive difference between the two directions.
++  EXPECT_EQ(static_cast<intptr_t>(28), sim_to_cpu.shared_body_size);
++  // (16384 - 28) / 8 == 2044.5, truncated to 2044.
++  EXPECT_EQ(static_cast<intptr_t>(2044), sim_to_cpu.num_wrappers_per_page);
++}
++
++// Guards the relation rather than the literals, so a future config change is
++// still checked against the rule their two data points establish.
++VM_UNIT_TEST_CASE(WrapperLayout_CountIsDerivedNotHardcoded) {
++  const Layout a = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++  EXPECT_EQ((a.page_size - a.shared_body_size) / a.landing_pad_size,
++            a.num_wrappers_per_page);
++  const Layout b = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  EXPECT_EQ((b.page_size - b.shared_body_size) / b.landing_pad_size,
++            b.num_wrappers_per_page);
++}
++
++VM_UNIT_TEST_CASE(WrapperLayout_StructMatchesTheirDwarfSize) {
++  // Their DW_AT_byte_size for Layout is 0x60.
++  EXPECT_EQ(static_cast<size_t>(0x60), sizeof(Layout));
++  EXPECT_EQ(static_cast<size_t>(0x00), offsetof(Layout, page_size));
++  EXPECT_EQ(static_cast<size_t>(0x08), offsetof(Layout, rx_mapping_size));
++  EXPECT_EQ(static_cast<size_t>(0x10), offsetof(Layout, rw_mapping_size));
++  EXPECT_EQ(static_cast<size_t>(0x18), offsetof(Layout, num_wrappers_per_page));
++  EXPECT_EQ(static_cast<size_t>(0x20), offsetof(Layout, metadata_size));
++  EXPECT_EQ(static_cast<size_t>(0x28), offsetof(Layout, landing_pad_size));
++  EXPECT_EQ(static_cast<size_t>(0x30), offsetof(Layout, shared_body_size));
++  EXPECT_EQ(static_cast<size_t>(0x38), offsetof(Layout, wrapper_page_name));
++  EXPECT_EQ(static_cast<size_t>(0x40), offsetof(Layout, get_stub_code_range));
++}
++
++}  // namespace shorebird
++}  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 3aa315c3312..6bf75acdf7a 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -301,6 +301,8 @@ vm_sources = [
+   "sim_bridge.h",
+   "shorebird/link_info.cc",
+   "shorebird/link_info.h",
++  "shorebird/wrapper.cc",
++  "shorebird/wrapper.h",
+   "simulator_memory.h",
+   "simulator_riscv.cc",
+   "simulator_riscv.h",
+@@ -389,6 +391,7 @@ vm_sources = [
+ vm_sources_tests = [
+   "allocation_test.cc",
+   "sim_transition_test.cc",
++  "shorebird/wrapper_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+   # flutter_hot_patcher B2
+-- 
+2.53.0
+

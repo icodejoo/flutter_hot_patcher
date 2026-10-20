@@ -1,0 +1,433 @@
+From 1f836a400a675d4653c2def421cfaca8c81d8b10 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 20:26:49 +0800
+Subject: [PATCH 067/206] feat(shorebird): wire the wrapper allocators, closing
+ AllocateMetadata's gap
+
+AllocateMetadata has been recorded here as having no production call site,
+which is why nothing in the wrapper subsystem had ever run outside its own
+tests. Their two call sites are the lambdas Deserializer::WrapperForRunTarget
+returns, and both are now read out of the binary rather than guessed --
+eleven instructions each, differing only in which allocator they take:
+
+    ldr x19, [isolate_group, #0x8d0]   ; 'lambda'
+    bl  AllocateMetadata
+    str x20, [x0]                      ; metadata->target_entry_point = ep
+    ldr x8,  [x19, #0x40]              ; layout_.rx_mapping_size
+    sub x0,  x0, x8                    ; == WrapperOfMetadata(metadata)
+
+The DWARF names the two slots -- IsolateGroup+0x8d0 is
+shorebird_cpu_to_sim_wrappers_ and +0x8d8 is shorebird_sim_to_cpu_wrappers_ --
+so which arm gets which is transcribed, not inferred from the control flow.
+IsolateGroup grows the same pair, built on first use because each reserves
+address space and a group that never loads a patch has nothing to wrap.
+
+Note the cpu arm wraps as well. A target being native says nothing about who
+calls it, and simulated code still needs a door.
+
+Two things this turned up that reading could not have:
+
+  * CPUToSimConfig::GetStubCodeRange still reported an empty range, with a
+    comment saying the 272-byte body had not been transcribed. It had been;
+    the comment outlived the work. An empty range is not inert -- EnsureStub-
+    Page maps nothing, so that direction could never hand out a wrapper.
+  * Two existing tests asserted exactly that emptiness, using CPUToSimConfig
+    as their stand-in for "a config with no stub". They are why the stale
+    range survived: the tests agreed with it. They now use a layout that is
+    empty by construction, and CodeSizeComesFromTheCallback asserts both
+    production configs report a real stub, so the next one to lose its stub
+    fails instead of being expected.
+
+ReadInstructions only wraps when a LinkOracle is installed. Wrapping costs a
+landing pad per entry point and buys nothing without a patch. Theirs gates it
+on a Deserializer field at +0xc0 whose meaning is not established, so the gate
+here is the condition we can name rather than a guess at theirs.
+
+Two tests, each with a negative control that only it catches: reporting the
+CPU->Sim stub absent turns the round-trip red and leaves the config check
+green; handing the cpu_to_sim accessor the Sim->CPU config does the reverse.
+
+83 of 83 shorebird tests. verify_reproduction.sh, dd_runtime_check.sh and
+dd_pass_check.sh all clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index b4f46a04f83..3a27c011a4a 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -29,6 +29,7 @@
+ #include "vm/raw_object_fields.h"
+ #include "vm/shorebird/link_info.h"
+ #include "vm/shorebird/shorebird.h"
++#include "vm/shorebird/wrapper.h"
+ #include "vm/stub_code.h"
+ #include "vm/symbols.h"
+ #include "vm/timeline.h"
+@@ -9533,27 +9534,51 @@ DeserializationCluster* Deserializer::ReadCluster() {
+ // The shape is much smaller than ReadDispatchTable's because the entries are
+ // plain references rather than a delta encoding, and because there is no
+ // deferred variant -- the table is complete when the object graph is.
+-// Shorebird. Theirs returns a std::function too -- the same
+-// std::function<uword(uword)>, built at app_snapshot.cc:894 -- and the caller
+-// hands it to EntryPoints, which applies it to each address it computes.
++// Shorebird. Their std::function<uword(uword)> from app_snapshot.cc:894, whose
++// two lambdas were read out of the vtables in their __DATA_CONST -- see
++// spikes/shorebird_linkinfo_oracle/WRAP_FUNCTION_RECON.md. Both are the same
++// eleven instructions apart from which allocator they take:
+ //
+-// ⚠️ Only the cpu arm is implemented. Their sim arm allocates a CPU->Sim
+-// wrapper per entry point, and the machinery for that (WrapperAllocator) has
+-// no loader wired to it yet; the shape of their lambda has not been read out
+-// of the binary either, so writing one would be invention rather than
+-// reproduction. Reaching this with sim is a hard failure rather than a quiet
+-// identity, because a simulated entry point that is jumped to directly does
+-// not fail where the mistake was made.
++//     ldr x19, [isolate_group, #0x8d0]   ; 'lambda'  -> cpu_to_sim
++//     bl  AllocateMetadata
++//     str x20, [x0]                      ; metadata->target_entry_point = ep
++//     ldr x8,  [x19, #0x40]              ; layout_.rx_mapping_size
++//     sub x0,  x0, x8                    ; == WrapperOfMetadata(metadata)
++//
++// Which arm takes which allocator is not inferred from the control flow: their
++// DWARF names IsolateGroup+0x8d0 shorebird_cpu_to_sim_wrappers_ and +0x8d8
++// shorebird_sim_to_cpu_wrappers_.
++//
++// Note that the cpu arm wraps too, rather than returning the address unchanged.
++// It has to: the wrapper is what lets simulated code reach a native target, and
++// a target being native says nothing about who calls it.
+ std::function<uword(uword)> Deserializer::WrapperForRunTarget(
+     LinkOracle::RunTarget target) const {
++  auto* const group = thread()->isolate_group();
++  shorebird::WrapperAllocator* allocator = nullptr;
+   switch (target) {
+-    case LinkOracle::RunTarget::cpu:
+-      // Code that runs on the CPU is entered at its own address.
+-      return [](uword entry_point) { return entry_point; };
+     case LinkOracle::RunTarget::sim:
+-      FATAL("Shorebird: no CPU->Sim wrapper is wired to the deserializer");
++      // A simulated target is entered by handing control to the simulator.
++      allocator = group->shorebird_cpu_to_sim_wrappers();
++      break;
++    case LinkOracle::RunTarget::cpu:
++      // A native target still needs a door a simulated caller can walk through.
++      allocator = group->shorebird_sim_to_cpu_wrappers();
++      break;
+   }
+-  UNREACHABLE();
++  ASSERT(allocator != nullptr);
++
++  return [allocator](uword entry_point) {
++    void* const metadata = allocator->AllocateMetadata();
++    // Out of address space for wrappers. Returning the bare entry point would
++    // hand simulated code a native address to jump to, so this stops here.
++    if (metadata == nullptr) {
++      FATAL("Shorebird: out of wrapper pages");
++    }
++    static_cast<shorebird::Metadata*>(metadata)->target_entry_point =
++        entry_point;
++    return allocator->WrapperOfMetadata(metadata);
++  };
+ }
+ 
+ void Deserializer::ReadIndirectStaticCallTable() {
+@@ -9818,11 +9843,21 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+   const uint32_t payload_info = ReadUnsigned();
+ 
+   // Shorebird: the arithmetic upstream did inline lives in EntryPoints now, so
+-  // that the addresses can be routed through WrapperForRunTarget on the way
+-  // out. With the CPU target that function is the identity and the values are
+-  // bit for bit what upstream computed.
++  // that the addresses can be routed through a wrapper on the way out.
++  //
++  // Nothing is wrapped unless a patch is loaded. Wrapping costs a landing pad
++  // per entry point and only buys anything when native and simulated code have
++  // to call each other, which cannot happen without a patch. Theirs gates this
++  // too -- WrapFunction takes a plain function pointer instead of either lambda
++  // when the field at Deserializer+0xc0 is not 1 -- but what that field is has
++  // not been established, so the gate here is the condition we can name rather
++  // than a guess at theirs.
+   const EntryPoints entry_points(
+-      payload_start, WrapperForRunTarget(LinkOracle::RunTarget::cpu),
++      payload_start,
++      LinkOracle::shared() != nullptr
++          ? WrapperForRunTarget(LinkOracle::RunTarget::cpu)
++          : std::function<uword(uword)>(
++                [](uword entry_point) { return entry_point; }),
+       payload_info);
+ 
+   instructions_table_.SetCodeAt(instructions_index_++, code);
+diff --git a/runtime/vm/isolate.cc b/runtime/vm/isolate.cc
+index 8a49a798fe3..d18015dae1e 100644
+--- a/runtime/vm/isolate.cc
++++ b/runtime/vm/isolate.cc
+@@ -47,6 +47,7 @@
+ #include "vm/simulator.h"
+ #include "vm/stack_frame.h"
+ #include "vm/stub_code.h"
++#include "vm/shorebird/wrapper.h"
+ #include "vm/symbols.h"
+ #include "vm/tags.h"
+ #include "vm/thread.h"
+@@ -400,6 +401,29 @@ IsolateGroup::IsolateGroup(std::shared_ptr<IsolateGroupSource> source,
+   }
+ }
+ 
++// Shorebird. Built on first use rather than in the constructor: each allocator
++// reserves a stub page and an [RX][RW] mapping, and a group that never loads a
++// patch has nothing to wrap.
++shorebird::WrapperAllocator* IsolateGroup::shorebird_cpu_to_sim_wrappers() {
++  MutexLocker ml(&shorebird_wrappers_mutex_);
++  if (shorebird_cpu_to_sim_wrappers_ == nullptr) {
++    shorebird_cpu_to_sim_wrappers_.reset(new shorebird::WrapperAllocator(
++        shorebird::WrapperAllocator::Layout::fromTemplate<
++            shorebird::WrapperLayout<shorebird::CPUToSimConfig>>()));
++  }
++  return shorebird_cpu_to_sim_wrappers_.get();
++}
++
++shorebird::WrapperAllocator* IsolateGroup::shorebird_sim_to_cpu_wrappers() {
++  MutexLocker ml(&shorebird_wrappers_mutex_);
++  if (shorebird_sim_to_cpu_wrappers_ == nullptr) {
++    shorebird_sim_to_cpu_wrappers_.reset(new shorebird::WrapperAllocator(
++        shorebird::WrapperAllocator::Layout::fromTemplate<
++            shorebird::WrapperLayout<shorebird::SimToCPUConfig>>()));
++  }
++  return shorebird_sim_to_cpu_wrappers_.get();
++}
++
+ IsolateGroup::~IsolateGroup() {
+ #if !defined(PRODUCT) && !defined(DART_PRECOMPILED_RUNTIME)
+   RELEASE_ASSERT(group_reload_context_ == nullptr);
+diff --git a/runtime/vm/isolate.h b/runtime/vm/isolate.h
+index 9ae95ab31b8..12497950e8a 100644
+--- a/runtime/vm/isolate.h
++++ b/runtime/vm/isolate.h
+@@ -42,6 +42,10 @@
+ namespace dart {
+ 
+ // Forward declarations.
++namespace shorebird {
++class WrapperAllocator;
++}  // namespace shorebird
++
+ class ApiState;
+ class BackgroundCompiler;
+ class Become;
+@@ -424,6 +428,18 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
+     dispatch_table_snapshot_size_ = size;
+   }
+ 
++  // Shorebird's two wrapper allocators, one per direction. A simulated target
++  // is entered through a CPU->Sim wrapper and a native one through a Sim->CPU
++  // wrapper, so both exist whenever anything is being wrapped -- see
++  // Deserializer::WrapperForRunTarget.
++  //
++  // Theirs are `shorebird::CPUToSimWrapper*` and `shorebird::SimToCPUWrapper*`
++  // at IsolateGroup+0x8d0 and +0x8d8 (engine dSYM, by name). Pointers, and
++  // built here on first use for the same reason: each one reserves address
++  // space, and a group that never loads a patch should not pay for either.
++  shorebird::WrapperAllocator* shorebird_cpu_to_sim_wrappers();
++  shorebird::WrapperAllocator* shorebird_sim_to_cpu_wrappers();
++
+   // Shorebird's DD table, live form: entry points indexed by dd_slot, which is
+   // what IndirectStaticCallInstr's emitted sequence loads and branches to. Note
+   // it is a bare uword[] and not wrapped the way DispatchTable is -- theirs is
+@@ -972,6 +988,12 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
+   // neighbourhood is what makes the intent legible.
+   std::unique_ptr<uword[]> indirect_static_call_table_;
+   intptr_t indirect_static_call_table_size_ = 0;
++  // Guards the two allocators below, which are built on first use. The
++  // deserializer is the only caller today and runs single-threaded, so this is
++  // for the second caller rather than the first.
++  Mutex shorebird_wrappers_mutex_;
++  std::unique_ptr<shorebird::WrapperAllocator> shorebird_cpu_to_sim_wrappers_;
++  std::unique_ptr<shorebird::WrapperAllocator> shorebird_sim_to_cpu_wrappers_;
+   std::shared_ptr<FieldTable> initial_field_table_;
+   std::shared_ptr<FieldTable> sentinel_field_table_;
+   std::shared_ptr<FieldTable> shared_initial_field_table_;
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index c936a03c578..262f407fe1b 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -18,12 +18,31 @@ namespace shorebird {
+ static_assert(sizeof(WrapperAllocator) == 0x98,
+               "WrapperAllocator must match Shorebird's 0x98 layout");
+ 
+-// CPU->Sim stub body (272 B) is not yet transcribed from Shorebird's binary.
+-// Stays empty until that work lands; the stub generator emits a breakpoint
+-// placeholder, and nothing should call into it before it is real.
++// CPU->Sim. This reported an empty range, with a comment saying the 272-byte
++// body had not been transcribed yet. It has -- Generate\
++// TransitionDartToSimulatorIfNeededStub emits it, and compare_stubs.py checks
++// it against theirs. The comment outlived the work.
++//
++// An empty range is not inert: EnsureStubPage maps nothing, so AllocateMetadata
++// returns nullptr forever and this direction can never hand out a wrapper.
++// Nothing noticed because nothing asked it to; found by wiring
++// Deserializer::WrapperForRunTarget to it.
+ void CPUToSimConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+-  code_start = 0;
+-  code_end = 0;
++  if (!StubCode::HasBeenInitialized()) {
++    // Consulted before StubCode::Init() -- politely report "no stub yet"
++    // rather than crashing on an uninitialized Code handle.
++    code_start = 0;
++    code_end = 0;
++    return;
++  }
++  const Code& stub = StubCode::TransitionDartToSimulatorIfNeeded();
++  if (stub.IsNull()) {
++    code_start = 0;
++    code_end = 0;
++    return;
++  }
++  code_start = stub.EntryPoint();
++  code_end = code_start + static_cast<uword>(stub.Size());
+ }
+ 
+ // Sim->CPU. The shared body is still a breakpoint placeholder, but reporting the
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index e1cbae62674..816e2f0122b 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -8,6 +8,7 @@
+ #include <mach/mach_vm.h>
+ 
+ #include "platform/utils.h"
++#include "vm/isolate.h"
+ #include "vm/unit_test.h"
+ #include "vm/virtual_memory.h"
+ 
+@@ -51,6 +52,29 @@ static Layout TestLayout() {
+                 TestStubCodeRange};
+ }
+ 
++// A layout whose stub range is empty by construction. The two tests below used
++// CPUToSimConfig for this, back when that config reported an empty range
++// because its 272-byte body had not been transcribed. It has been for a while,
++// and the range is real now -- so what those tests meant has to be said
++// directly rather than borrowed from a production config's unfinished state.
++static void EmptyStubCodeRange(uword& code_start, uword& code_end) {
++  code_start = 0;
++  code_end = 0;
++}
++
++static Layout EmptyStubLayout() {
++  Layout l = TestLayout();
++  return Layout{l.page_size,
++                l.rx_mapping_size,
++                l.rw_mapping_size,
++                l.num_wrappers_per_page,
++                l.metadata_size,
++                l.landing_pad_size,
++                l.shared_body_size,
++                "empty-stub wrappers",
++                EmptyStubCodeRange};
++}
++
+ // Offset of the stub within its own OS page. This is what
+ // offset_of_first_wrapper_in_page_ holds -- upstream's
+ // offset_of_first_trampoline_in_page_, computed as code_start - page_start.
+@@ -139,17 +163,21 @@ VM_UNIT_TEST_CASE(WrapperLayout_MappingSizeAndAlignment) {
+ 
+ VM_UNIT_TEST_CASE(WrapperLayout_CodeSizeComesFromTheCallback) {
+   EXPECT_EQ(static_cast<uword>(kTestStubSize), TestLayout().CodeSize());
+-  // The production configs report an empty range until the stubs exist.
+-  EXPECT_EQ(static_cast<uword>(0),
+-            Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>().CodeSize());
++  EXPECT_EQ(static_cast<uword>(0), EmptyStubLayout().CodeSize());
++
++  // Both production configs report a real stub. This used to assert the
++  // opposite for CPU->Sim, which is how a stale GetStubCodeRange survived: the
++  // test agreed with it. Asserting non-zero means the next config to lose its
++  // stub is a failure rather than an expectation.
++  EXPECT(Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>().CodeSize() > 0);
++  EXPECT(Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>().CodeSize() > 0);
+ }
+ 
+ // With no stub to duplicate there is nothing to hand out. Failing loudly here
+ // rather than returning a pointer into an unmapped page is the whole reason
+ // EnsureStubPage tolerates an empty range.
+ VM_UNIT_TEST_CASE(WrapperAllocator_RejectsEmptyStubRange) {
+-  const Layout l = Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+-  WrapperAllocator allocator(l);
++  WrapperAllocator allocator(EmptyStubLayout());
+   EXPECT(allocator.AllocateMetadata() == nullptr);
+ }
+ 
+@@ -356,5 +384,71 @@ VM_UNIT_TEST_CASE(WrapperAllocator_FreesItsPagesOnDestruction) {
+   EXPECT(!RegionStartsAt(page_b));
+ }
+ 
++// The two allocators IsolateGroup hands out. Theirs are two separate pointers
++// at IsolateGroup+0x8d0 and +0x8d8 (engine dSYM, by name), and
++// Deserializer::WrapperForRunTarget picks between them by run target -- so the
++// thing that can go wrong here is not "does an allocator work", which the tests
++// above cover, but "did each accessor get the config it was supposed to".
++//
++// shared_body_size is the only field the two directions disagree on, which
++// makes it the whole discriminator: 272 for CPU->Sim, 28 for Sim->CPU.
++ISOLATE_UNIT_TEST_CASE(WrapperAllocator_IsolateGroupHandsOutBothDirections) {
++  auto* const group = thread->isolate_group();
++
++  WrapperAllocator* const cpu_to_sim = group->shorebird_cpu_to_sim_wrappers();
++  WrapperAllocator* const sim_to_cpu = group->shorebird_sim_to_cpu_wrappers();
++
++  EXPECT(cpu_to_sim != nullptr);
++  EXPECT(sim_to_cpu != nullptr);
++  EXPECT(cpu_to_sim != sim_to_cpu);
++
++  EXPECT_EQ(static_cast<intptr_t>(272), cpu_to_sim->layout().shared_body_size);
++  EXPECT_EQ(static_cast<intptr_t>(28), sim_to_cpu->layout().shared_body_size);
++
++  // Built once and kept, not rebuilt per call.
++  EXPECT(cpu_to_sim == group->shorebird_cpu_to_sim_wrappers());
++  EXPECT(sim_to_cpu == group->shorebird_sim_to_cpu_wrappers());
++}
++
++// What Deserializer::WrapperForRunTarget's lambdas do, in both directions:
++// allocate a metadata slot, store the target in it, and convert to the wrapper
++// entry point. ContainsEntryPoint is the inverse and is what makes this a
++// round trip rather than an assertion that a pointer is non-null.
++//
++// CPU->Sim is the direction that matters here. Its GetStubCodeRange used to
++// report an empty range -- a comment left over from before the 272-byte body
++// was transcribed -- which meant AllocateMetadata returned nullptr forever and
++// this direction could not hand out a single wrapper.
++ISOLATE_UNIT_TEST_CASE(WrapperAllocator_RoundTripsThroughBothDirections) {
++  auto* const group = thread->isolate_group();
++
++  WrapperAllocator* const allocators[] = {
++      group->shorebird_cpu_to_sim_wrappers(),
++      group->shorebird_sim_to_cpu_wrappers(),
++  };
++
++  for (WrapperAllocator* allocator : allocators) {
++    const uword target = reinterpret_cast<uword>(&testFunction);
++
++    void* const metadata = allocator->AllocateMetadata();
++    EXPECT(metadata != nullptr);
++    if (metadata == nullptr) continue;
++
++    static_cast<Metadata*>(metadata)->target_entry_point = target;
++    const uword wrapper = allocator->WrapperOfMetadata(metadata);
++
++    uword recovered = 0;
++    EXPECT(allocator->ContainsEntryPoint(wrapper, &recovered));
++    EXPECT_EQ(target, recovered);
++
++    // A distinct call gets a distinct pad, so two wrapped targets cannot
++    // collide.
++    void* const second = allocator->AllocateMetadata();
++    EXPECT(second != nullptr);
++    EXPECT(second != metadata);
++  }
++}
++
++
+ }  // namespace shorebird
+ }  // namespace dart
+-- 
+2.53.0
+

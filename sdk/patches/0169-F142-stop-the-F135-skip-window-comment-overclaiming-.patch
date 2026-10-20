@@ -1,0 +1,47 @@
+From 5c7c64af06c13bd82b719944527fb9b3996980e9 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Sun, 27 Sep 2026 19:08:48 +0800
+Subject: [PATCH 169/206] F142: stop the F135 skip-window comment overclaiming
+ external branches
+
+The comment said every branch DecodeBranchDelta accepts, "local or
+external", is handled inside the pool-load skip window. Probe rows
+N7/N7b-d/N7f (reports_20260925/f135_window_patch_probe.py) show a
+conditional branch (b.cond/cbz) whose target lies outside the function
+still hashes differently from theirs, in or out of the window. State
+what is measured (local b/bl/b.cond/cbz/tbz, external b/bl) and leave a
+TODO for the external-conditional gap. Comment-only change.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 3642ef75927..8120927b1e1 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1497,13 +1497,18 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       //    both sides -- the fixed 3-n budget itself matches theirs (this is
+       //    also why the F68 self_pp slots are a codegen-layout effect, not an
+       //    over-eager decoder: their analyzer carries the same skip);
+-      //  * but a DIRECT BRANCH (anything DecodeBranchDelta accepts: b, bl, b.cond,
+-      //    local or external) inside the window is still classified, and it does
+-      //    NOT spend the budget: `bl` at word 5 hashes identically to `bl` at
+-      //    word 7 with 5-6 left as NOPs (their self_hash d539947c both ways),
+-      //    i.e. the window slides past the branch and swallows word 7 instead.
++      //  * but a DIRECT BRANCH (anything DecodeBranchDelta accepts) inside the
++      //    window is handed to classify_branch and does NOT spend the budget:
++      //    `bl` at word 5 hashes identically to `bl` at word 7 with 5-6 left as
++      //    NOPs (their self_hash d539947c both ways), i.e. the window slides
++      //    past the branch and swallows word 7 instead. Measured to match
++      //    theirs for local b/bl/b.cond/cbz/tbz and for external b/bl.
+       // Before this, ours swallowed the branch too: callees [19] vs their
+       // [19,25], self_hash c9dafe74 vs d539947c.
++      // TODO(F135/N7): NOT handled -- a CONDITIONAL branch (b.cond/cbz) whose
++      // target is outside the function. classify_branch records it as kRaw and
++      // self_hash still differs from theirs, inside the window or not (probe
++      // rows N7, N7b-d, N7f). Pre-existing, out of F135 scope, still open.
+       facts.classified.push_back({ShorebirdClassifiedStep::kPool, used, index});
+ #if F67_POOL_SEEN_DEDUP
+       if (pool_seen.insert(index).second) facts.pool_indices.push_back(index);
+-- 
+2.53.0
+

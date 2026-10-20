@@ -1,0 +1,217 @@
+From 1b72da8510a3beb33106f776441dff486bf24269 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 29 Sep 2026 22:07:36 +0800
+Subject: [PATCH 182/206] F152: move Isolate::simulator_ to +0x20, use R5 in
+ safepoint stubs
+
+Shorebird's Isolate places simulator_ right after finalizers_ (+0x20);
+ours had it after environment_callback_ (+0xa0). Moving it makes the
+four stubs that load Isolate::simulator_offset() (CallSimulatorFromFfi-
+Trampoline, ResumeOnSimulator, RunDartOnCPU, TransitionDartToSimulator-
+IfNeeded) byte-identical to theirs, and aligns the 14 pointer members
+from scheduled_mutator_thread_ to environment_callback_ with their
+offsets (DWARF-verified in ProductSimIosARM64).
+
+EnterSafepoint/ExitSafepoint load+call the runtime entry through R5
+instead of R0, matching Shorebird's stubs. Both stub bodies are wrapped
+in PushRegisters/PopRegisters(all general registers) and R5 is not read
+between the push and the ldr, so this is encoding-only.
+
+The move shifts has_resumption_breakpoints_ (+0x20 -> +0x28 on 64-bit,
++0x10 -> +0x14 on 32-bit). That field is in runtime_offsets_list.h under
+NOT_IN_PRODUCT, so all 15 non-PRODUCT entries in
+runtime_offsets_extracted.h are updated; without this CheckOffsets
+aborts non-PRODUCT builds (observed in a DebugSIMARM64 build).
+Only the macos simarm64 JIT table was verified by CheckOffsets; the
+other 14 entries follow from the same ABI layout arithmetic.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/runtime_offsets_extracted.h b/runtime/vm/compiler/runtime_offsets_extracted.h
+index d8f78122e6e..69c6b6f041d 100644
+--- a/runtime/vm/compiler/runtime_offsets_extracted.h
++++ b/runtime/vm/compiler/runtime_offsets_extracted.h
+@@ -239,7 +239,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x4;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0xc;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x10;
++    Isolate_has_resumption_breakpoints_offset = 0x14;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x10;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -996,7 +996,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x8;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0x18;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x20;
++    Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x20;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -1752,7 +1752,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x4;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0xc;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x10;
++    Isolate_has_resumption_breakpoints_offset = 0x14;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x10;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -2508,7 +2508,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x8;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0x18;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x20;
++    Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x20;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -3270,7 +3270,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x8;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0x18;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x20;
++    Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x20;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -4029,7 +4029,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x8;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0x18;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x20;
++    Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x20;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -4786,7 +4786,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x4;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0xc;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x10;
++    Isolate_has_resumption_breakpoints_offset = 0x14;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x10;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -5544,7 +5544,7 @@ static constexpr dart::compiler::target::word Instance_first_field_offset = 0x8;
+ static constexpr dart::compiler::target::word Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word Isolate_finalizers_offset = 0x18;
+ static constexpr dart::compiler::target::word
+-    Isolate_has_resumption_breakpoints_offset = 0x20;
++    Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word IsolateGroup_object_store_offset =
+     0x20;
+ static constexpr dart::compiler::target::word IsolateGroup_class_table_offset =
+@@ -12323,7 +12323,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0xc;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x10;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x14;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x10;
+ static constexpr dart::compiler::target::word
+@@ -13163,7 +13163,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0x18;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x20;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x20;
+ static constexpr dart::compiler::target::word
+@@ -14010,7 +14010,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0x18;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x20;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x20;
+ static constexpr dart::compiler::target::word
+@@ -14853,7 +14853,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0x18;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x20;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x20;
+ static constexpr dart::compiler::target::word
+@@ -15696,7 +15696,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0x18;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x20;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x20;
+ static constexpr dart::compiler::target::word
+@@ -16537,7 +16537,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0xc;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x10;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x14;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x10;
+ static constexpr dart::compiler::target::word
+@@ -17378,7 +17378,7 @@ static constexpr dart::compiler::target::word AOT_Int32x4_value_offset = 0x8;
+ static constexpr dart::compiler::target::word AOT_Isolate_finalizers_offset =
+     0x18;
+ static constexpr dart::compiler::target::word
+-    AOT_Isolate_has_resumption_breakpoints_offset = 0x20;
++    AOT_Isolate_has_resumption_breakpoints_offset = 0x28;
+ static constexpr dart::compiler::target::word
+     AOT_IsolateGroup_object_store_offset = 0x20;
+ static constexpr dart::compiler::target::word
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index ab5c0c02acd..35c7eb6f9af 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -360,8 +360,8 @@ void StubCodeCompiler::GenerateEnterSafepointStub() {
+   __ ReserveAlignedFrameSpace(0);
+   __ mov(CSP, SP);
+ 
+-  __ ldr(R0, Address(THR, kEnterSafepointRuntimeEntry.OffsetFromThread()));
+-  __ blr(R0);
++  __ ldr(R5, Address(THR, kEnterSafepointRuntimeEntry.OffsetFromThread()));
++  __ blr(R5);
+ 
+   __ mov(SP, CALLEE_SAVED_TEMP2);
+   __ mov(CSP, CALLEE_SAVED_TEMP);
+@@ -386,8 +386,8 @@ void StubCodeCompiler::GenerateExitSafepointStub() {
+ 
+   __ VerifyNotInGenerated(R0);
+ 
+-  __ ldr(R0, Address(THR, kExitSafepointRuntimeEntry.OffsetFromThread()));
+-  __ blr(R0);
++  __ ldr(R5, Address(THR, kExitSafepointRuntimeEntry.OffsetFromThread()));
++  __ blr(R5);
+ 
+   __ mov(SP, CALLEE_SAVED_TEMP2);
+   __ mov(CSP, CALLEE_SAVED_TEMP);
+diff --git a/runtime/vm/isolate.h b/runtime/vm/isolate.h
+index 09d515c3051..73d1a1d05c4 100644
+--- a/runtime/vm/isolate.h
++++ b/runtime/vm/isolate.h
+@@ -1624,6 +1624,7 @@ class Isolate : public IntrusiveDListEntry<Isolate> {
+   // Used to clear out `UntaggedFinalizerBase::isolate_` pointers on isolate
+   // shutdown to prevent usage of dangling pointers.
+   GrowableObjectArrayPtr finalizers_;
++  Simulator* simulator_ = nullptr;
+   bool has_resumption_breakpoints_ = false;
+   // End accessed from generated code.
+ 
+@@ -1723,7 +1724,6 @@ class Isolate : public IntrusiveDListEntry<Isolate> {
+   uint64_t terminate_capability_ = 0;
+   void* init_callback_data_ = nullptr;
+   Dart_EnvironmentCallback environment_callback_ = nullptr;
+-  Simulator* simulator_ = nullptr;
+   Mutex mutex_;  // Protects compiler stats.
+   IsolateMessageHandler* message_handler_ = nullptr;
+   intptr_t defer_finalization_count_ = 0;
+-- 
+2.53.0
+

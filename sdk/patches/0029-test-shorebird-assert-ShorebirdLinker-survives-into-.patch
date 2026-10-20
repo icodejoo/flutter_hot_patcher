@@ -1,0 +1,123 @@
+From e63059b10d95a321f66a989c0d6b9b5a59af2559 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 12:47:21 +0800
+Subject: [PATCH 029/206] test(shorebird): assert ShorebirdLinker survives into
+ the product artifact
+
+Greps dart::ShorebirdLinker, not shorebird::ShorebirdLinker. That distinction is
+the whole point: their symbols live in plain dart:: (they use dart::shorebird::
+only for the WrapperAllocator family), so the original spelling would have
+matched ours and scored zero on theirs -- reporting success in exactly the case
+where we had diverged. The script now also asserts the wrong namespace is
+ABSENT, so a future regression fails loudly instead of silently.
+
+Unlike wrapper_symbols_check.sh, which expects 0 because nothing references
+WrapperAllocator yet, this PASSES: gen_snapshot.cc calls
+InitializeShorebirdLinkData() from CreateAndWritePrecompiledSnapshot.
+
+  our ProductARM64 gen_snapshot: 22 matches, wrong-namespace 0 -> PASS
+
+Staleness is checked before any count is reported, but only for binaries under
+$SDK. Applying "older than linker.cc" to a third-party binary is meaningless --
+Shorebird's own gen_snapshot is legitimately older than our source, and the
+first version of this script rejected it with a plausible-looking exit 3, which
+made it unable to check theirs at all. Found by running the script's own
+controls rather than reasoning about them.
+
+Controls, all verified:
+  ours              -> PASS, exit 0
+  THEIR gen_snapshot -> PASS, exit 0   (same pattern matches theirs: the check
+                                        the buggy spelling could never pass)
+  /bin/echo          -> FAIL, exit 1   (n == 0 path)
+  missing binary     -> exit 2
+  stale our-binary   -> exit 3
+
+Note on counts: raw numbers are NOT comparable across binaries. Our unstripped
+Product build carries STABS debug-map duplicates that their stripped binary does
+not, so 22-vs-20 means nothing; only non-zero-on-both, and the deduplicated
+method list, are meaningful. Likewise std::__2 vs std::__fl is libc++ ABI
+namespace versioning, not a divergence.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker_symbols_check.sh b/runtime/vm/shorebird/linker_symbols_check.sh
+new file mode 100755
+index 00000000000..41e2b6f11dc
+--- /dev/null
++++ b/runtime/vm/shorebird/linker_symbols_check.sh
+@@ -0,0 +1,72 @@
++#!/usr/bin/env bash
++# Fails if linker.cc got dead-stripped out of the product gen_snapshot.
++#
++# Unlike wrapper_symbols_check.sh -- which expects 0 because nothing references
++# WrapperAllocator yet -- this one is expected to PASS: gen_snapshot.cc calls
++# InitializeShorebirdLinkData() from CreateAndWritePrecompiledSnapshot, so there
++# is a real call site and the linker cannot be stripped.
++#
++# WHAT THIS PROVES, AND WHAT IT DOES NOT. A symbol count proves the code is
++# LINKED IN. It says nothing about whether it RAN CORRECTLY. The functional half
++# is the two-step gen_snapshot run recorded in the plan (valid link files load
++# and exit 0; bogus path / empty / truncated / absurd count each fail loudly).
++# Cite both together or neither -- on its own, either half overstates.
++#
++# NAMESPACE MATTERS HERE. Their symbols demangle to `dart::ShorebirdLinker`, NOT
++# `dart::shorebird::ShorebirdLinker`; they use dart::shorebird:: only for the
++# WrapperAllocator family. An earlier draft of this check grepped
++# `shorebird::ShorebirdLinker`, which would have matched ours and could never
++# have matched theirs -- reporting success in exactly the case where we had
++# diverged. So this script asserts the correct namespace is present AND that the
++# wrong one is absent.
++set -euo pipefail
++
++SDK=${SDK:-$HOME/dart-3122/sdk}
++BIN=${1:-$SDK/xcodebuild/ProductARM64/gen_snapshot}
++SRC=$SDK/runtime/vm/shorebird/linker.cc
++
++[ -x "$BIN" ] || { echo "missing binary: $BIN" >&2; exit 2; }
++
++# Staleness first: a stale binary yields a number that looks like an answer
++# whichever way it comes out, so refuse to report one.
++#
++# But only for OUR build output. "Older than linker.cc" is meaningless for a
++# third-party binary -- Shorebird's own gen_snapshot is legitimately older than
++# our source, and applying the rule to it made this script unable to check
++# theirs at all while returning a plausible-looking exit 3.
++case "$BIN" in
++  "$SDK"/*)
++    if [ -f "$SRC" ] && [ "$BIN" -ot "$SRC" ]; then
++      echo "STALE: $(basename "$BIN") is older than linker.cc -- rebuild" \
++           "before trusting any count" >&2
++      exit 3
++    fi
++    ;;
++  *)
++    echo "note: $BIN is outside $SDK; skipping the staleness check" >&2
++    ;;
++esac
++
++syms=$(nm -a "$BIN" 2>/dev/null | c++filt || true)
++
++n=$(printf '%s\n' "$syms" | grep -cE \
++    'dart::(ShorebirdLinker|Read(Class|Field|Dispatch)TableLinkInfo)' || true)
++
++# Must be zero: this is the divergence the original spelling would have hidden.
++wrong_ns=$(printf '%s\n' "$syms" | grep -cE 'dart::shorebird::ShorebirdLinker' \
++           || true)
++
++echo "linker.cc symbols in $(basename "$BIN"): $n"
++echo "wrong-namespace (dart::shorebird::ShorebirdLinker) symbols: $wrong_ns"
++
++if [ "$n" -eq 0 ]; then
++  echo "FAIL: dead-stripped, or the gen_snapshot.cc call site is missing" >&2
++  exit 1
++fi
++if [ "$wrong_ns" -ne 0 ]; then
++  echo "FAIL: ShorebirdLinker is in dart::shorebird::, but their binary puts" \
++       "it in dart:: -- symbol-level comparison against theirs is broken" >&2
++  exit 1
++fi
++
++echo "PASS: ShorebirdLinker is present in the product artifact, in dart::"
+-- 
+2.53.0
+

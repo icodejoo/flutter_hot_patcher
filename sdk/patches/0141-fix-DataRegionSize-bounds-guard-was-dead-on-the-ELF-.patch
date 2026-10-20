@@ -1,0 +1,163 @@
+From 18c6599ba8de2b502759c404c0471932161b2776 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 7 Sep 2026 16:44:59 +0800
+Subject: [PATCH 141/206] fix: DataRegionSize bounds guard was dead on the ELF
+ path (F19)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The region_size == 0 || escape made the memmove unconditional for all
+ELF and MachO inputs because ElfAppSnapshot never overrode SetDataSizes(),
+which defaults to 0.  The guard existed but could never fire.
+
+Fix: expose the data-symbol sizes from the ELF dynamic symbol table
+(sym.size, set by the linker to the section length including any
+appended Shorebird extras) through a new Dart_GetELFDataSizes API.
+ElfAppSnapshot queries it in its constructor and overrides SetDataSizes()
+to return the real values.  DataRegionSize then drops the escape and
+uses the bounds check as originally intended.
+
+Judgment:
+  false  negative-control   → 463732 B (extra block skipped)
+  real   size after fix      → 666708 B (extra block read, identical to before)
+  verify_all: 24/0, no regression
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/bin/elf_loader.cc b/runtime/bin/elf_loader.cc
+index e8aed40caf6..c023450d4a9 100644
+--- a/runtime/bin/elf_loader.cc
++++ b/runtime/bin/elf_loader.cc
+@@ -62,6 +62,9 @@ class LoadedElf {
+ 
+   const char* error() { return error_; }
+ 
++  uword vm_data_size() const { return vm_data_size_; }
++  uword isolate_data_size() const { return isolate_data_size_; }
++
+  private:
+   bool ReadHeader();
+   bool ReadProgramTable();
+@@ -95,6 +98,10 @@ class LoadedElf {
+   // Initialized by LoadSegments().
+   std::unique_ptr<VirtualMemory> base_;
+ 
++  // Sizes of the vm/isolate snapshot data symbols; set by ResolveSymbols().
++  uword vm_data_size_ = 0;
++  uword isolate_data_size_ = 0;
++
+   // Initialized by ReadSectionTable().
+   std::unique_ptr<MappedMemory> section_table_mapping_;
+   const dart::elf::SectionHeader* section_table_ = nullptr;
+@@ -382,10 +389,12 @@ bool LoadedElf::ResolveSymbols(const uint8_t** vm_data,
+ 
+     if (strcmp(name, kVmSnapshotDataAsmSymbol) == 0) {
+       output = vm_data;
++      vm_data_size_ = sym.size;
+     } else if (strcmp(name, kVmSnapshotInstructionsAsmSymbol) == 0) {
+       output = vm_instrs;
+     } else if (strcmp(name, kIsolateSnapshotDataAsmSymbol) == 0) {
+       output = isolate_data;
++      isolate_data_size_ = sym.size;
+     } else if (strcmp(name, kIsolateSnapshotInstructionsAsmSymbol) == 0) {
+       output = isolate_instrs;
+     }
+@@ -537,3 +546,11 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
+ DART_EXPORT void Dart_UnloadELF(Dart_LoadedElf* loaded) {
+   delete reinterpret_cast<LoadedElf*>(loaded);
+ }
++
++DART_EXPORT void Dart_GetELFDataSizes(Dart_LoadedElf* loaded,
++                                      intptr_t* vm_data_size,
++                                      intptr_t* isolate_data_size) {
++  const LoadedElf* elf = reinterpret_cast<const LoadedElf*>(loaded);
++  *vm_data_size = static_cast<intptr_t>(elf->vm_data_size());
++  *isolate_data_size = static_cast<intptr_t>(elf->isolate_data_size());
++}
+diff --git a/runtime/bin/elf_loader.h b/runtime/bin/elf_loader.h
+index 18063fab796..f5c5d5ddc41 100644
+--- a/runtime/bin/elf_loader.h
++++ b/runtime/bin/elf_loader.h
+@@ -74,6 +74,13 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
+ /// each time it is called, and the results must be unloaded separately.
+ DART_EXPORT void Dart_UnloadELF(Dart_LoadedElf* loaded);
+ 
++/// Returns the byte sizes of the vm and isolate snapshot data symbols as
++/// recorded in the ELF dynamic symbol table. Both are 0 if ResolveSymbols was
++/// not called with non-null data output parameters (e.g. isolate-only ELF).
++DART_EXPORT void Dart_GetELFDataSizes(Dart_LoadedElf* loaded,
++                                      intptr_t* vm_data_size,
++                                      intptr_t* isolate_data_size);
++
+ #ifdef __cplusplus
+ namespace dart {
+ namespace bin {
+diff --git a/runtime/bin/snapshot_utils.cc b/runtime/bin/snapshot_utils.cc
+index 828b6e8dc54..1f496844063 100644
+--- a/runtime/bin/snapshot_utils.cc
++++ b/runtime/bin/snapshot_utils.cc
+@@ -304,7 +304,9 @@ class ElfAppSnapshot : public AppSnapshot {
+         vm_snapshot_data_(vm_snapshot_data),
+         vm_snapshot_instructions_(vm_snapshot_instructions),
+         isolate_snapshot_data_(isolate_snapshot_data),
+-        isolate_snapshot_instructions_(isolate_snapshot_instructions) {}
++        isolate_snapshot_instructions_(isolate_snapshot_instructions) {
++    Dart_GetELFDataSizes(elf_, &vm_data_size_, &isolate_data_size_);
++  }
+ 
+   virtual ~ElfAppSnapshot() { Dart_UnloadELF(elf_); }
+ 
+@@ -318,12 +320,20 @@ class ElfAppSnapshot : public AppSnapshot {
+     *isolate_instructions_buffer = isolate_snapshot_instructions_;
+   }
+ 
++  void SetDataSizes(intptr_t* vm_data_size,
++                    intptr_t* isolate_data_size) override {
++    *vm_data_size = vm_data_size_;
++    *isolate_data_size = isolate_data_size_;
++  }
++
+  private:
+   Dart_LoadedElf* elf_;
+   const uint8_t* vm_snapshot_data_;
+   const uint8_t* vm_snapshot_instructions_;
+   const uint8_t* isolate_snapshot_data_;
+   const uint8_t* isolate_snapshot_instructions_;
++  intptr_t vm_data_size_ = 0;
++  intptr_t isolate_data_size_ = 0;
+ };
+ 
+ static AppSnapshot* TryReadAppSnapshotElf(const char* script_name,
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index f60ebb16c79..e429af34413 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1808,11 +1808,9 @@ bool ShorebirdHasIdentity(const std::string& name) {
+ // The order -- both data regions, then both instructions regions -- is taken
+ // from their output: it begins with the vm data magic and the instructions
+ // bytes appear after all of the data.
+-// region_size: known byte count of the mapped region, or 0 if unknown.
+-// When 0, the extra-block header is read unconditionally (legacy behaviour
+-// required for ELF/MachO loaders that do not expose segment sizes). When > 0,
+-// the read is bounds-checked; if the extra-block header would fall outside the
+-// region we fall back to snap_len (no Shorebird extras assumed).
++// region_size: byte count of the mapped region as reported by the loader.
++// The extra-block header is only read when it falls within the region;
++// otherwise (no Shorebird extras) we fall back to snap_len.
+ static intptr_t DataRegionSize(const uint8_t* region, intptr_t region_size) {
+   if (region == nullptr) return 0;
+   const Snapshot* snapshot = Snapshot::SetupFromBuffer(region);
+@@ -1824,8 +1822,7 @@ static intptr_t DataRegionSize(const uint8_t* region, intptr_t region_size) {
+   const intptr_t aligned_off =
+       (snap_len + kExtraAlignment - 1) & ~(kExtraAlignment - 1);
+   uint32_t extra_size = 0;
+-  if (region_size == 0 ||
+-      aligned_off + static_cast<intptr_t>(sizeof(extra_size)) <= region_size) {
++  if (aligned_off + static_cast<intptr_t>(sizeof(extra_size)) <= region_size) {
+     memmove(&extra_size, region + aligned_off, sizeof(extra_size));
+   }
+   return snap_len + static_cast<intptr_t>(extra_size);
+-- 
+2.53.0
+

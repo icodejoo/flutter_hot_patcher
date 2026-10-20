@@ -1,0 +1,250 @@
+From b283033b4df856ce4e17e67656da66bbd603f073 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 21:41:44 +0800
+Subject: [PATCH 071/206] feat(shorebird): the three C entry points the
+ embedder loads a patch through
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Their whole patch-loading path goes through three functions in
+runtime/vm/shorebird.cc, and both callers are open source, so the argument
+order and the use of every return value are read rather than inferred:
+
+  runtime/shorebird/patch_cache.cc:39   int off = Shorebird_ReadLinkHeader(...)
+                                        Dart_LoadELF(path, off, ...)
+  shell/common/shorebird/shorebird.cc:93  Shorebird_SetBaseSnapshots(
+                                            iso_data, iso_instrs,
+                                            vm_data, vm_instrs)
+
+A .vmcode is a link header followed by an ordinary ELF, and ReadLinkHeader's
+return value is where the ELF starts -- which is also why zero is the right
+answer for a buffer with no header rather than an error: it loads the file as
+a plain ELF.
+
+This retires LinkOracle::Install as an invention. It was added because a
+singleton nothing can populate is not testable, with a note saying their
+installer had not been recovered. It has been: Shorebird_ReadLinkHeader is it.
+Install stays as the mechanism underneath, now with a real caller.
+
+UsingLinking ands the oracle with two of the base-snapshot globals (0x7ba16c).
+Which two is not recoverable -- they are file-scope statics with no symbols --
+but SetBaseSnapshots writes all four in one call, so "those two" and "all four"
+cannot disagree at runtime, and the code says that rather than picking a pair.
+
+Three tests. Negative control: not installing the oracle turns two of them red
+and leaves the garbage-input one green.
+
+⚠️ Reimplemented once mid-turn. `git checkout <file>` was used to undo a
+negative-control patch on a file whose real changes were not committed yet, and
+took both. Commit before mutating.
+
+83 of 83 shorebird tests before this, 86 after.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/include/dart_api.h b/runtime/include/dart_api.h
+index ef085ce0c25..b88c07389dd 100644
+--- a/runtime/include/dart_api.h
++++ b/runtime/include/dart_api.h
+@@ -4346,5 +4346,44 @@ DART_EXPORT void Dart_SetDwarfStackTraceFootnoteCallback(
+  */
+ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path);
+ 
++/**
++ * Shorebird: hand the VM the base snapshot the running patch was linked
++ * against.
++ *
++ * Called once per process, before any patch is loaded. The four mappings are
++ * the ones the embedder already holds for the unpatched app; the VM keeps the
++ * pointers, not copies, so they have to outlive the isolate group.
++ *
++ * Their engine calls this from SetBaseSnapshot in
++ * shell/common/shorebird/shorebird.cc, in that argument order.
++ */
++DART_EXPORT void Shorebird_SetBaseSnapshots(
++    const uint8_t* isolate_snapshot_data,
++    const uint8_t* isolate_snapshot_instructions,
++    const uint8_t* vm_snapshot_data,
++    const uint8_t* vm_snapshot_instructions);
++
++/**
++ * Shorebird: whether a patch is linked against a base, so that entry points
++ * have to be resolved through the link table rather than taken at face value.
++ *
++ * True only once both halves are present -- a link header has been read and the
++ * base snapshots have been set.
++ */
++DART_EXPORT bool Shorebird_UsingLinking(void);
++
++/**
++ * Shorebird: read a `.vmcode` file's link header and install it.
++ *
++ * A `.vmcode` is a Shorebird link header followed by an ordinary ELF. Returns
++ * the offset the ELF begins at, which is what the caller passes to
++ * Dart_LoadELF; zero when the buffer carries no usable header, which loads the
++ * file as a plain ELF.
++ *
++ * Their engine calls this from PatchCacheEntry::Create in
++ * runtime/shorebird/patch_cache.cc and uses the result exactly that way.
++ */
++DART_EXPORT int Shorebird_ReadLinkHeader(const uint8_t* buffer, size_t size);
++
+ 
+ #endif /* INCLUDE_DART_API_H_ */ /* NOLINT */
+diff --git a/runtime/vm/shorebird.cc b/runtime/vm/shorebird.cc
+index 0ba7f4ef530..e3ccf8bf364 100644
+--- a/runtime/vm/shorebird.cc
++++ b/runtime/vm/shorebird.cc
+@@ -8,6 +8,8 @@
+ 
+ #include "vm/shorebird/shorebird.h"
+ 
++#include "include/dart_api.h"
++
+ #include <cstring>
+ #include <utility>
+ 
+@@ -133,4 +135,55 @@ void LinkOracle::Install(std::unique_ptr<LinkOracle> oracle) {
+   *shared_oracle() = std::move(oracle);
+ }
+ 
++// The base snapshot the running patch was linked against. Four file-scope
++// pointers, matching the four theirs carries in this file -- their DWARF names
++// them base_app_snapshot_data, base_app_snapshot_instructions,
++// base_vm_snapshot_data and base_vm_snapshot_instructions.
++//
++// Pointers, not copies: the embedder maps these out of the app binary and keeps
++// them alive for the life of the process.
++static const uint8_t* base_app_snapshot_data = nullptr;
++static const uint8_t* base_app_snapshot_instructions = nullptr;
++static const uint8_t* base_vm_snapshot_data = nullptr;
++static const uint8_t* base_vm_snapshot_instructions = nullptr;
++
++static bool BaseSnapshotsAreSet() {
++  return base_app_snapshot_data != nullptr &&
++         base_app_snapshot_instructions != nullptr &&
++         base_vm_snapshot_data != nullptr &&
++         base_vm_snapshot_instructions != nullptr;
++}
++
+ }  // namespace dart
++
++DART_EXPORT void Shorebird_SetBaseSnapshots(
++    const uint8_t* isolate_snapshot_data,
++    const uint8_t* isolate_snapshot_instructions,
++    const uint8_t* vm_snapshot_data,
++    const uint8_t* vm_snapshot_instructions) {
++  dart::base_app_snapshot_data = isolate_snapshot_data;
++  dart::base_app_snapshot_instructions = isolate_snapshot_instructions;
++  dart::base_vm_snapshot_data = vm_snapshot_data;
++  dart::base_vm_snapshot_instructions = vm_snapshot_instructions;
++}
++
++// Theirs ands three things (0x7ba16c): the oracle, and two of the base-snapshot
++// globals. Which two is not recoverable -- they are file-scope statics with no
++// symbols -- but SetBaseSnapshots writes all four in one call, so "those two
++// are set" and "all four are set" cannot disagree at runtime.
++DART_EXPORT bool Shorebird_UsingLinking(void) {
++  return dart::LinkOracle::shared() != nullptr && dart::BaseSnapshotsAreSet();
++}
++
++DART_EXPORT int Shorebird_ReadLinkHeader(const uint8_t* buffer, size_t size) {
++  std::unique_ptr<dart::LinkOracle> oracle =
++      dart::LinkOracle::fromBuffer(buffer, size);
++  if (oracle == nullptr) {
++    // No usable header. Zero tells the caller to load the file as a plain ELF,
++    // which is what their PatchCacheEntry::Create does with the return value.
++    return 0;
++  }
++  const int elf_offset = static_cast<int>(oracle->header_size());
++  dart::LinkOracle::Install(std::move(oracle));
++  return elf_offset;
++}
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index b303f88f7b5..b10fca7b28b 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -8,6 +8,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "include/dart_api.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -207,4 +208,71 @@ VM_UNIT_TEST_CASE(LinkOracle_SharedIsNullUntilInstalled) {
+   EXPECT(LinkOracle::shared() == nullptr);
+ }
+ 
++// The three C entry points the embedder actually calls. Their engine reaches
++// the whole patch-loading path through these and nothing else:
++// PatchCacheEntry::Create calls Shorebird_ReadLinkHeader and passes the result
++// straight to Dart_LoadELF, and SetBaseSnapshot calls
++// Shorebird_SetBaseSnapshots. Both call sites are open source, which is how the
++// argument order and the use of the return value are known rather than guessed.
++VM_UNIT_TEST_CASE(Shorebird_ReadLinkHeaderInstallsTheOracle) {
++  LinkOracle::Install(nullptr);
++  EXPECT(LinkOracle::shared() == nullptr);
++
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}, {256, 52100}});
++  const int elf_offset =
++      Shorebird_ReadLinkHeader(bytes.data(), bytes.size());
++
++  // The ELF starts where the header ends -- that is the contract with
++  // Dart_LoadELF, whose second argument this becomes.
++  EXPECT_EQ(static_cast<int>(LinkOracle::ReadHeaderSize(bytes.data(),
++                                                        bytes.size())),
++            elf_offset);
++  EXPECT(elf_offset > 0);
++
++  // Installed, and carrying the table that was handed in.
++  EXPECT(LinkOracle::shared() != nullptr);
++  EXPECT(LinkOracle::shared()->HasPatch());
++  EXPECT_EQ(static_cast<intptr_t>(2), LinkOracle::shared()->entry_count());
++
++  LinkOracle::Install(nullptr);
++}
++
++// A buffer with no usable header has to come back as zero rather than as a
++// failure: their caller feeds the result to Dart_LoadELF, and zero is what
++// loads the file as a plain ELF.
++VM_UNIT_TEST_CASE(Shorebird_ReadLinkHeaderRejectsGarbage) {
++  LinkOracle::Install(nullptr);
++
++  const uint8_t truncated[3] = {0xff, 0xff, 0xff};
++  EXPECT_EQ(0, Shorebird_ReadLinkHeader(truncated, sizeof(truncated)));
++  EXPECT(LinkOracle::shared() == nullptr);
++}
++
++// UsingLinking needs both halves. Theirs ands the oracle with two of the
++// base-snapshot globals, so neither one alone is enough.
++VM_UNIT_TEST_CASE(Shorebird_UsingLinkingNeedsBothHalves) {
++  LinkOracle::Install(nullptr);
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++  EXPECT(!Shorebird_UsingLinking());
++
++  // Base snapshots alone.
++  const uint8_t a = 0, b = 0, c = 0, d = 0;
++  Shorebird_SetBaseSnapshots(&a, &b, &c, &d);
++  EXPECT(!Shorebird_UsingLinking());
++
++  // Oracle alone.
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++  const std::vector<uint8_t> bytes = MakeHeader({{128, 52016}});
++  EXPECT(Shorebird_ReadLinkHeader(bytes.data(), bytes.size()) > 0);
++  EXPECT(!Shorebird_UsingLinking());
++
++  // Both.
++  Shorebird_SetBaseSnapshots(&a, &b, &c, &d);
++  EXPECT(Shorebird_UsingLinking());
++
++  LinkOracle::Install(nullptr);
++  Shorebird_SetBaseSnapshots(nullptr, nullptr, nullptr, nullptr);
++}
++
++
+ }  // namespace dart
+-- 
+2.53.0
+

@@ -1,0 +1,206 @@
+From 1e0cd9ee422800eb15ef50933830de737e388e98 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 12:17:18 +0800
+Subject: [PATCH 025/206] =?UTF-8?q?fix(shorebird):=20*LinkInfo=20must=20no?=
+ =?UTF-8?q?t=20be=20ZoneObjects=20=E2=80=94=20unique=5Fptr=20needs=20delet?=
+ =?UTF-8?q?e?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+ShorebirdLinker holds these types in std::unique_ptr, and their binary's
+mangled symbol shows the DEFAULT deleter:
+
+  dart::ShorebirdLinker::InitializeWithClassTableLinkInfo(
+      std::unique_ptr<dart::ClassTableLinkInfo,
+                      std::default_delete<dart::ClassTableLinkInfo>>, ...)
+
+so their objects are plain-heap and genuinely `delete`d. Ours could not be:
+ZoneObject::operator new(size) is Allocate(size, Thread::Current()->zone()),
+which faults with no isolate (SEGV at +0x18, matching the observed si_addr),
+and ZoneObject::operator delete is UNREACHABLE() == FATAL(...) which is NOT
+DEBUG-gated. So unique_ptr<*LinkInfo> would have aborted in Release and
+Product too -- a latent production crash behind an interface nothing had
+called yet, not merely a unit-test problem.
+
+Eight sites: drop the ZoneObject base from the three classes, return
+unique_ptr from GetClassTableLinkInfo/GetFieldTableLinkInfo, make_unique at
+the three former `new (zone)` sites, and adjust the two local consumers.
+Only external reference (dispatch_table_generator.cc) calls
+WantsDispatchTableLinkInfo()/Print*IfRequested, not Get*, so it is unaffected.
+
+Proven byte-neutral against the strongest oracle this project has. Six
+fixtures (hello + the five variants), three binary artifacts and their three
+JSON twins each, driven from cached identical dills:
+
+  ours before vs ours after : 36/36 identical  <- the regression guard
+  ours after  vs theirs     : 24/36 (unchanged from before the refactor)
+  theirs before vs after    : 36/36 (harness determinism control)
+
+The 12 non-matching files are field_table.{bin,json} on all six fixtures --
+a pre-existing, documented difference, not a regression: entry count,
+max_field_id and the id sequence all match, and the entries are multiset-equal
+(622 for hello), differing only in ordering within equal ids. Establishing the
+before baseline first is what proved this, since measuring only afterwards
+would have mis-attributed those 12 to this change.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 2998b17275b..ab5c834f06b 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -6,7 +6,9 @@
+ 
+ #include <algorithm>
+ #include <map>
++#include <memory>
+ #include <string>
++#include <utility>
+ 
+ #include "platform/utils.h"
+ #include "vm/class_table.h"
+@@ -156,7 +158,7 @@ void ClassTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
+   free(output);
+ }
+ 
+-ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread) {
++std::unique_ptr<ClassTableLinkInfo> GetClassTableLinkInfo(Thread* thread) {
+   Zone* zone = thread->zone();
+   ClassTable* table = thread->isolate_group()->class_table();
+   const intptr_t num_cids = table->NumCids();
+@@ -187,7 +189,7 @@ ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread) {
+     classes.push_back(ClassInfo{cid, key, std::move(hash)});
+   }
+ 
+-  return new (zone) ClassTableLinkInfo(std::move(classes), num_cids);
++  return std::make_unique<ClassTableLinkInfo>(std::move(classes), num_cids);
+ }
+ 
+ void FieldTableLinkInfo::WriteToFile(const char* path) const {
+@@ -237,7 +239,7 @@ void FieldTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
+ // has dropped fields from Class::fields(), but the Field objects themselves are
+ // still live on the heap. Iterating class dictionaries finds a strict subset --
+ // 360 of 622 on our fixture.
+-FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread) {
++std::unique_ptr<FieldTableLinkInfo> GetFieldTableLinkInfo(Thread* thread) {
+   Zone* zone = thread->zone();
+ 
+   GrowableArray<FieldPtr> raw_fields;
+@@ -313,7 +315,7 @@ FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread) {
+                      return a.id < b.id;
+                    });
+ 
+-  return new (zone) FieldTableLinkInfo(std::move(fields), max_field_id);
++  return std::make_unique<FieldTableLinkInfo>(std::move(fields), max_field_id);
+ }
+ 
+ void PrintFieldTableLinkInfoIfRequested(Thread* thread) {
+@@ -321,7 +323,7 @@ void PrintFieldTableLinkInfoIfRequested(Thread* thread) {
+   const bool want_json = FLAG_print_field_table_link_debug_info_to != nullptr;
+   if (!want_binary && !want_json) return;
+ 
+-  const FieldTableLinkInfo* info = GetFieldTableLinkInfo(thread);
++  const std::unique_ptr<FieldTableLinkInfo> info = GetFieldTableLinkInfo(thread);
+   if (want_binary) info->WriteToFile(FLAG_print_field_table_link_info_to);
+   if (want_json) {
+     info->WriteDebugInfoToFile(FLAG_print_field_table_link_debug_info_to);
+@@ -333,7 +335,7 @@ void PrintClassTableLinkInfoIfRequested(Thread* thread) {
+   const bool want_json = FLAG_print_class_table_link_debug_info_to != nullptr;
+   if (!want_binary && !want_json) return;
+ 
+-  const ClassTableLinkInfo* info = GetClassTableLinkInfo(thread);
++  const std::unique_ptr<ClassTableLinkInfo> info = GetClassTableLinkInfo(thread);
+   if (want_binary) info->WriteToFile(FLAG_print_class_table_link_info_to);
+   if (want_json) {
+     info->WriteDebugInfoToFile(FLAG_print_class_table_link_debug_info_to);
+@@ -400,8 +402,11 @@ void PrintDispatchTableLinkInfoIfRequested(
+     Thread* thread,
+     std::vector<SelectorRowInfo> selectors) {
+   if (!WantsDispatchTableLinkInfo()) return;
+-  auto* info =
+-      new (thread->zone()) DispatchTableLinkInfo(std::move(selectors));
++  // Heap-allocated, not zone-allocated: DispatchTableLinkInfo is no longer a
++  // ZoneObject (see link_info.h). `thread` is retained in the signature because
++  // it is part of the declared API and the generator's call site passes it.
++  (void)thread;
++  auto info = std::make_unique<DispatchTableLinkInfo>(std::move(selectors));
+   if (FLAG_print_dispatch_table_link_info_to != nullptr) {
+     info->WriteToFile(FLAG_print_dispatch_table_link_info_to);
+   }
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index d1e3a18b938..78b95ab7891 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -5,10 +5,10 @@
+ #ifndef RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+ #define RUNTIME_VM_SHOREBIRD_LINK_INFO_H_
+ 
++#include <memory>
+ #include <string>
+ #include <vector>
+ 
+-#include "vm/allocation.h"
+ #include "vm/globals.h"
+ 
+ namespace dart {
+@@ -33,7 +33,20 @@ struct ClassInfo {
+   std::string hash;
+ };
+ 
+-class ClassTableLinkInfo : public ZoneObject {
++// Deliberately NOT a ZoneObject. ShorebirdLinker holds these in
++// std::unique_ptr, and their own binary's mangled symbol shows the DEFAULT
++// deleter:
++//
++//   dart::ShorebirdLinker::InitializeWithClassTableLinkInfo(
++//       std::unique_ptr<dart::ClassTableLinkInfo,
++//                       std::default_delete<dart::ClassTableLinkInfo>>, ...)
++//
++// so their type is plain-heap allocated and really is `delete`d. A ZoneObject
++// cannot be: its operator new needs a current Zone (so it faults with no
++// isolate) and its operator delete is UNREACHABLE(), i.e. FATAL() in every
++// build mode -- not DEBUG-gated. Deriving from ZoneObject here would therefore
++// abort in Release and Product too, not merely in tests.
++class ClassTableLinkInfo {
+  public:
+   ClassTableLinkInfo(std::vector<ClassInfo> classes, intptr_t num_cids)
+       : classes_(std::move(classes)), num_cids_(num_cids) {}
+@@ -66,7 +79,8 @@ struct FieldInfo {
+   std::string hash;
+ };
+ 
+-class FieldTableLinkInfo : public ZoneObject {
++// Not a ZoneObject -- see the note on ClassTableLinkInfo.
++class FieldTableLinkInfo {
+  public:
+   FieldTableLinkInfo(std::vector<FieldInfo> fields, intptr_t max_field_id)
+       : fields_(std::move(fields)), max_field_id_(max_field_id) {}
+@@ -90,7 +104,8 @@ struct SelectorRowInfo {
+   std::vector<std::pair<intptr_t, intptr_t>> ranges;  // Interval begin/end, end exclusive
+ };
+ 
+-class DispatchTableLinkInfo : public ZoneObject {
++// Not a ZoneObject -- see the note on ClassTableLinkInfo.
++class DispatchTableLinkInfo {
+  public:
+   explicit DispatchTableLinkInfo(std::vector<SelectorRowInfo> selectors)
+       : selectors_(std::move(selectors)) {}
+@@ -117,10 +132,12 @@ void PrintDispatchTableLinkInfoIfRequested(
+ bool WantsDispatchTableLinkInfo();
+ 
+ // Walks the class table and computes the link info for the current isolate.
+-ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread);
++// Heap-allocated (not Zone), so the caller owns it -- these types are no longer
++// ZoneObjects; see the note on ClassTableLinkInfo.
++std::unique_ptr<ClassTableLinkInfo> GetClassTableLinkInfo(Thread* thread);
+ 
+ // Walks every library's classes (and their toplevel class) collecting fields.
+-FieldTableLinkInfo* GetFieldTableLinkInfo(Thread* thread);
++std::unique_ptr<FieldTableLinkInfo> GetFieldTableLinkInfo(Thread* thread);
+ 
+ // Honour the --print_*_link_info_to flags. No-op when none are set.
+ void PrintClassTableLinkInfoIfRequested(Thread* thread);
+-- 
+2.53.0
+

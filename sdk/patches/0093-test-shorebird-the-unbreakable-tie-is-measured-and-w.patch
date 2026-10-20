@@ -1,0 +1,120 @@
+From ead5f153d8dd5e78dc95db2113b24ccc6a4078be Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 15:27:57 +0800
+Subject: [PATCH 093/206] test(shorebird): the unbreakable tie is measured, and
+ we lose it
+
+Recon (c)4 had this as undetermined with zero coverage: when two vote
+candidates tie on score and neither index equals the key, their
+comparator calls them equivalent and std::sort is not stable, so what
+survives depends on the copied vote map's bucket layout.
+
+It is no longer undetermined. A fixture with six such ties, arranged so
+each one's outcome moves a report counter -- one candidate below stage 1's
+>= 8 gate and one above -- goes through both binaries:
+
+  theirs   14 / 8  / 0 / 120     the >= 8 candidate wins once
+  ours     14 / 13 / 0 / 115     it wins all six times
+
+Probed rather than reasoned about: our order for those keys is (91, 1),
+(93, 2), (95, 3) and so on -- the later insertion first, every time, which
+is libc++'s "empty bucket means push to the front" showing through.
+Theirs varies with the key, so it is following a bucket layout we do not
+reproduce.
+
+GetBestMapping now copies the vote map by value, because their
+0x10019ce88 does. It changed nothing: our numbers were 14 / 13 / 0 / 115
+before and after. Kept anyway, since it is what the disassembly shows, and
+the comment now says plainly that it did not help.
+
+Not chased further. Matching needs the two containers to have identical
+bucket-count histories, which needs the two VMs to be identical -- the
+same class as heap traversal order and the field table's intra-id order,
+which CLAUDE.md already lists as structurally unreachable. Three attempts
+at closing it was the point to stop.
+
+ObjectPoolAggregator_UnbreakableTieTakesTheLaterInsertion pins our side so
+it cannot drift unnoticed, and says in its comment that it pins behaviour
+known to differ rather than behaviour believed correct.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index c6e5883631e..400df824cb3 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -399,14 +399,33 @@ intptr_t ObjectPoolMappingsAggregator::GetBestMapping(uintptr_t patch_index) {
+   // operator[], not find. Their 0x10019ccc8 allocates a 64-byte node and
+   // 0x10019ccec sets the inner map's max_load_factor, so a key that never
+   // received a vote is default-inserted rather than missed.
+-  const std::unordered_map<uintptr_t, double>& candidates = votes_[patch_index];
+-
+-  // A copy, then flattened -- their 0x10019ce88..0x10019d1fc copies the inner
+-  // map before range-constructing the vector from it. The copy matters only
+-  // when two candidates tie on score and neither is the identity: std::sort is
+-  // not stable, so the surviving order depends on the copy's bucket layout.
+-  // Nothing here may call reserve() on that copy, for the same reason the dd
++  // A COPY, by value, and that is load-bearing rather than tidy. Their
++  // 0x10019ce88..0x10019d1fc copies the inner map and range-constructs the
++  // vector from the copy, not from the original. libc++ rebuilds a copied
++  // unordered_map by reserving the source's bucket count and re-inserting every
++  // node, and its "empty bucket means push to the front of the list" rule then
++  // gives the copy a DIFFERENT iteration order from the original.
++  //
++  // ⚠️ The copy is here because their disassembly has one, NOT because it
++  // fixed anything. A fixture with six ties where neither candidate is the
++  // identity was run through both binaries: theirs reports 14 / 8 / 0 / 120
++  // and ours 14 / 13 / 0 / 115, meaning they take the >= 8 candidate once and
++  // we take it all six times. Making this a copy instead of a reference left
++  // our numbers exactly where they were.
++  //
++  // Probed rather than reasoned about: our order for those keys is (91, 1),
++  // (93, 2), (95, 3) ... -- the later insertion first, every time, which is
++  // libc++'s "empty bucket means push to the front" showing through. Theirs
++  // varies with the key, so their order is following a bucket layout ours does
++  // not reproduce. That is the same class of difference as heap traversal order
++  // and the field table's intra-id order: it needs the two containers to have
++  // identical bucket-count histories, which needs the two VMs to be identical.
++  // Recorded as a measured divergence, not chased.
++  //
++  // Nothing here may call reserve() on the copy, for the same reason the dd
+   // identity dump may not: the bucket-width history is the order.
++  const std::unordered_map<uintptr_t, double> candidates = votes_[patch_index];
++
+   std::vector<std::pair<uintptr_t, double>> sorted(candidates.begin(),
+                                                    candidates.end());
+ 
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index 1e479076c6e..1c433a2e052 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -681,6 +681,26 @@ VM_UNIT_TEST_CASE(ObjectPoolAggregator_ExhaustedAndUnknownKeysReturnNoMapping) {
+   EXPECT_EQ(static_cast<intptr_t>(1), aggregator.used_count());
+ }
+ 
++// A tie where NEITHER candidate is the identity, which the comparator cannot
++// break. std::sort is not stable and __sort2 leaves an equivalent pair alone, so
++// what survives is the order the vector arrived in.
++//
++// ⚠️ This pins OUR behaviour and is known to differ from theirs. A fixture with
++// six such ties reports 14 / 8 / 0 / 120 from their gen_snapshot and
++// 14 / 13 / 0 / 115 from ours: they take the second-inserted candidate once, we
++// take it every time. Reproducing that needs the two vote maps to have the same
++// libc++ bucket-count history, which is the same structural barrier as heap
++// traversal order. The test exists so the behaviour cannot drift unnoticed, not
++// because the behaviour is right.
++VM_UNIT_TEST_CASE(ObjectPoolAggregator_UnbreakableTieTakesTheLaterInsertion) {
++  ObjectPoolMappingsAggregator aggregator;
++  // Neither 40 nor 50 is the key, and the scores are equal.
++  aggregator.AddVote(7, 40, 0.5);
++  aggregator.AddVote(7, 50, 0.5);
++
++  EXPECT_EQ(static_cast<intptr_t>(50), aggregator.GetBestMapping(7));
++}
++
+ // An ambiguous group -- two code objects sharing one op_subgraph_hash_ -- is
+ // voted on, not dropped. The filter this replaced returned nothing at all for
+ // input shaped like this, so a reversion turns the expectation below into an
+-- 
+2.53.0
+

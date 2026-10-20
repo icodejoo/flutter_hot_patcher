@@ -1,0 +1,716 @@
+From 08c26ab7558ae090f61df3a4ddc2608a16c8bde7 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 12:42:43 +0800
+Subject: [PATCH 028/206] feat(shorebird): gen_snapshot link-data options, with
+ validated input
+
+Adds base_ct_link_data / patch_ct_link_data / base_ft_link_data /
+base_dt_link_data to STRING_OPTIONS_LIST and wires them into
+CreateAndWritePrecompiledSnapshot, ahead of both the kVMAOTAssembly early
+return and Dart_Precompile(), in their _main order: CT (base+patch), FT, DT.
+
+Verified against their binary, not just against the recon notes:
+  - all four spellings produce byte-identical "Empty value for option <x>"
+    messages to theirs (the string set the spellings were recovered from)
+  - the pairing error is verbatim identical:
+    "Error: --base_ct_link_data must be used with --patch_ct_link_data."
+  - none of the four appear in --help --verbose, matching theirs (0 vs 0):
+    they are bin options, not DEFINE_FLAG VM flags
+
+Input validation, because these paths are now user-supplied and ReadStream's
+bounds checks are ASSERTs that compile out in Release and Product:
+  - zero-length files rejected (no valid encoding is zero bytes)
+  - decoded counts and string lengths validated against the bytes actually
+    remaining, before any reserve() or read loop
+  - buffers over-allocated and padded with 0xFF
+
+That padding byte is load-bearing and was wrong on the first attempt. The
+decoder continues while a byte is <= 127 and stops at >= 128, so 0x00 is a
+CONTINUATION byte: zero-padding invited the overrun it was meant to prevent.
+Measured on a 4-byte corrupt file, the first ReadUnsigned ran 4831 bytes past
+the end (PendingBytes() == -4831); with a 0xFF sentinel it stops 1 byte in
+(-1), inside our own allocation. Only running it revealed this.
+
+Readers gained an `ok` out-parameter. Without it a caller cannot distinguish a
+correct parse of an empty table from a missing file, an unreadable file, or
+corrupt data, since all of those return an empty object -- so a mistyped
+filename would have produced an empty link table and still exited 0. All four
+gen_snapshot options treat ok==false as fatal.
+
+Observable assertion, both halves. Positive: a real file is written with the
+real encoder, read back through the file-path reader, and the singleton is
+shown to hold exactly its contents -- null before Initialize*, correct entry
+count, num_cids and specific name/hash values after. Negative: a bogus path,
+an empty file, a truncated file and an absurd count are each rejected rather
+than silently yielding an empty table.
+
+Six fixtures re-checked even though link_info.{h,cc} was untouched this round,
+because gen_snapshot.cc is the binary that emits those artifacts:
+ours-pre-D1 vs ours-now 36/36 identical, ours vs theirs 24/36 unchanged.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index 7de8017c5d8..7d709cc9902 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -35,6 +35,7 @@
+ #include "platform/hashmap.h"
+ #include "platform/syslog.h"
+ #include "platform/text_buffer.h"
++#include "vm/shorebird/linker.h"
+ 
+ namespace dart {
+ namespace bin {
+@@ -115,7 +116,11 @@ static const char* const kSnapshotKindNames[] = {
+   V(loading_unit_manifest, loading_unit_manifest_filename)                     \
+   V(save_debugging_info, debugging_info_filename)                              \
+   V(save_obfuscation_map, obfuscation_map_filename)                            \
+-  V(load_obfuscation_map, load_obfuscation_map_filename)
++  V(load_obfuscation_map, load_obfuscation_map_filename)                       \
++  V(base_ct_link_data, base_ct_link_data_filename)                             \
++  V(patch_ct_link_data, patch_ct_link_data_filename)                           \
++  V(base_ft_link_data, base_ft_link_data_filename)                             \
++  V(base_dt_link_data, base_dt_link_data_filename)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(compile_all, compile_all)                                                  \
+@@ -639,9 +644,79 @@ static void NextElfCallback(void* callback_data,
+                   write_debug_callback_data, elf_filename, "so");
+ }
+ 
++// Loads any --base_*/--patch_* link data into the ShorebirdLinker singleton.
++//
++// Ordering follows their _main (LINKER_RECON.md section 2): CT (base+patch),
++// then FT (base), then DT (base), all before compilation begins.
++//
++// Every read passes `ok` and treats false as fatal. Without that, a mistyped
++// filename or an unreadable file yields an empty link table and the compile
++// still exits 0 -- indistinguishable from having loaded the data correctly.
++static void InitializeShorebirdLinkData() {
++  // CT is a pair. Their binary carries the matching error string, and the XOR
++  // catches either half being supplied alone.
++  if ((base_ct_link_data_filename == nullptr) !=
++      (patch_ct_link_data_filename == nullptr)) {
++    Syslog::PrintErr(
++        "Error: --base_ct_link_data must be used with"
++        " --patch_ct_link_data.\n\n");
++    exit(kErrorExitCode);
++  }
++
++  if (base_ct_link_data_filename != nullptr) {
++    bool base_ok = false;
++    bool patch_ok = false;
++    auto base =
++        dart::ReadClassTableLinkInfo(base_ct_link_data_filename, &base_ok);
++    auto patch =
++        dart::ReadClassTableLinkInfo(patch_ct_link_data_filename, &patch_ok);
++    if (!base_ok) {
++      Syslog::PrintErr("Error: could not read --base_ct_link_data=%s\n\n",
++                       base_ct_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    if (!patch_ok) {
++      Syslog::PrintErr("Error: could not read --patch_ct_link_data=%s\n\n",
++                       patch_ct_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    dart::ShorebirdLinker::shared()->InitializeWithClassTableLinkInfo(
++        std::move(base), std::move(patch));
++  }
++
++  if (base_ft_link_data_filename != nullptr) {
++    bool ok = false;
++    auto base = dart::ReadFieldTableLinkInfo(base_ft_link_data_filename, &ok);
++    if (!ok) {
++      Syslog::PrintErr("Error: could not read --base_ft_link_data=%s\n\n",
++                       base_ft_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    dart::ShorebirdLinker::shared()->InitializeWithFieldTableLinkInfo(
++        std::move(base));
++  }
++
++  if (base_dt_link_data_filename != nullptr) {
++    bool ok = false;
++    auto base =
++        dart::ReadDispatchTableLinkInfo(base_dt_link_data_filename, &ok);
++    if (!ok) {
++      Syslog::PrintErr("Error: could not read --base_dt_link_data=%s\n\n",
++                       base_dt_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    dart::ShorebirdLinker::shared()->InitializeWithDispatchTableLinkInfo(
++        std::move(base));
++  }
++}
++
+ static void CreateAndWritePrecompiledSnapshot() {
+   ASSERT(IsSnapshottingForPrecompilation());
+ 
++  // Before any compilation, and before the kVMAOTAssembly early return below,
++  // so both snapshot paths see the same linker state.
++  InitializeShorebirdLinkData();
++
+   if (snapshot_kind == kVMAOTAssembly) {
+     File* file = OpenFile(assembly_filename);
+     RefCntReleaseScope<File> rs(file);
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index d697ebb6ac3..06c3df903dd 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -76,14 +77,38 @@ void ShorebirdLinker::InitializeWithDispatchTableLinkInfo(
+ 
+ namespace {
+ 
+-// Reads a file entirely into a heap-allocated buffer. Returns true and sets
+-// *buf/*size on success, false on any error. Caller must free(*buf).
++// Slack allocated past the logical end of every file buffer, filled with
++// varint TERMINATOR bytes.
+ //
+-// An empty file is reported as an error rather than handed on as a zero-length
+-// buffer: every one of these formats begins with a count, so zero bytes cannot
+-// be a valid encoding, and ReadStream's bounds ASSERT is compiled out in
+-// Release/Product builds -- decoding a zero-length buffer would read off the
+-// end of the allocation instead of failing.
++// ReadStream's bounds checks are ASSERTs and compile out in Release and
++// Product, so a truncated varint at the end of a malformed file would otherwise
++// read until it happened to find a terminator -- unbounded, and measured at
++// 4831 bytes past the end on a 4-byte corrupt file before this was fixed.
++//
++// The decoder (ReadStream::Read, datastream.h) continues while the byte is
++// <= kMaxUnsignedDataPerByte (127) and stops on any byte >= 128, identically for
++// the signed and unsigned forms. So the fill byte MUST be >= 128. Zero-filling
++// is precisely wrong: 0x00 is a continuation byte and would invite the very
++// overrun this guards against. With 0xFF here, a varint starting at the last
++// logical byte terminates at most one byte into the slack, so any overread stays
++// inside our own allocation and PendingBytes() bottoms out at -1.
++constexpr uint8_t kVarintTerminator = 0xFF;
++constexpr intptr_t kReadSlack = 16;
++
++// The fewest bytes a single entry can occupy in any of the three formats: three
++// varints at one byte each. Used to reject a count that the remaining bytes
++// could not possibly hold, before it reaches reserve().
++constexpr intptr_t kMinBytesPerEntry = 3;
++
++// A (lo, hi) range pair is two varints, so at least two bytes.
++constexpr intptr_t kMinBytesPerRange = 2;
++
++// Reads a file entirely into a heap-allocated, zero-padded buffer. Returns true
++// and sets *buf/*size (the LOGICAL size, excluding slack) on success, false on
++// any error. Caller must free(*buf).
++//
++// An empty file is an error rather than a zero-length buffer: every one of these
++// formats begins with a count, so zero bytes cannot be a valid encoding.
+ bool ReadFileIntoBuffer(const char* path, uint8_t** buf, intptr_t* size) {
+   FILE* f = fopen(path, "rb");
+   if (f == nullptr) {
+@@ -103,7 +128,7 @@ bool ReadFileIntoBuffer(const char* path, uint8_t** buf, intptr_t* size) {
+     return false;
+   }
+   rewind(f);
+-  uint8_t* data = reinterpret_cast<uint8_t*>(malloc(len));
++  uint8_t* data = reinterpret_cast<uint8_t*>(malloc(len + kReadSlack));
+   if (data == nullptr) {
+     fclose(f);
+     return false;
+@@ -114,54 +139,92 @@ bool ReadFileIntoBuffer(const char* path, uint8_t** buf, intptr_t* size) {
+     return false;
+   }
+   fclose(f);
++  memset(data + len, kVarintTerminator, kReadSlack);
+   *buf = data;
+   *size = static_cast<intptr_t>(len);
+   return true;
+ }
+ 
++bool AtEnd(ReadStream* stream) {
++  return stream->PendingBytes() <= 0;
++}
++
++// Reads one unsigned varint, refusing to start a read at the end of the buffer.
++bool TryReadUnsigned(ReadStream* stream, intptr_t* out) {
++  if (AtEnd(stream)) return false;
++  *out = stream->ReadUnsigned<intptr_t>();
++  return true;
++}
++
++// True only if `count` entries of at least `min_bytes_each` could fit in what
++// remains. This is the guard that stops a corrupt count from driving an
++// unbounded reserve() or a very long read loop.
++bool PlausibleCount(ReadStream* stream, intptr_t count, intptr_t min_bytes_each) {
++  if (count < 0) return false;
++  return count <= stream->PendingBytes() / min_bytes_each;
++}
++
+ // str := len:u, char:s * len
+ // Mirrors WriteString() in link_info.cc, which length-prefixes and then writes
+ // each character with Write<int32_t> -- the signed varint form, so this must
+-// read back with Read<int32_t> (kEndByteMarker), not ReadUnsigned.
+-std::string ReadString(ReadStream* stream) {
+-  const intptr_t len = stream->ReadUnsigned<intptr_t>();
+-  std::string result;
+-  result.reserve(static_cast<size_t>(len));
++// read back with Read<int32_t> (kEndByteMarker), not ReadUnsigned. Each
++// character occupies at least one byte, so a length exceeding the bytes
++// remaining is corrupt.
++bool TryReadString(ReadStream* stream, std::string* out) {
++  intptr_t len = 0;
++  if (!TryReadUnsigned(stream, &len)) return false;
++  if (len < 0 || len > stream->PendingBytes()) return false;
++  out->clear();
++  out->reserve(static_cast<size_t>(len));
+   for (intptr_t i = 0; i < len; i++) {
+-    const int32_t ch = stream->Read<int32_t>();
+-    result.push_back(static_cast<char>(ch));
++    if (AtEnd(stream)) return false;
++    out->push_back(static_cast<char>(stream->Read<int32_t>()));
+   }
+-  return result;
++  return true;
+ }
+ 
+ }  // namespace
+ 
+-std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream) {
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream,
++                                                           bool* ok) {
++  if (ok != nullptr) *ok = true;
++  auto fail = [&]() -> std::unique_ptr<ClassTableLinkInfo> {
++    if (ok != nullptr) *ok = false;
++    return std::make_unique<ClassTableLinkInfo>(std::vector<ClassInfo>{},
++                                                /*num_cids=*/0);
++  };
++
+   // count:u, { id:u, name:str, hash:str } * count, num_cids:u
+   //
+   // Count-driven: read the count, loop exactly that many times, and only then
+   // read the trailer. Looping until the buffer is exhausted would swallow
+   // num_cids as a phantom entry while still looking like a clean parse.
+-  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  intptr_t count = 0;
++  if (!TryReadUnsigned(stream, &count)) return fail();
++  if (!PlausibleCount(stream, count, kMinBytesPerEntry)) return fail();
++
+   std::vector<ClassInfo> classes;
+   classes.reserve(static_cast<size_t>(count));
+   for (intptr_t i = 0; i < count; i++) {
+     ClassInfo info;
+-    info.cid = stream->ReadUnsigned<intptr_t>();
+-    info.name = ReadString(stream);
+-    info.hash = ReadString(stream);
++    if (!TryReadUnsigned(stream, &info.cid)) return fail();
++    if (!TryReadString(stream, &info.name)) return fail();
++    if (!TryReadString(stream, &info.hash)) return fail();
+     classes.push_back(std::move(info));
+   }
+   // Trailing scalar -- after the loop, not inside it.
+-  const intptr_t num_cids = stream->ReadUnsigned<intptr_t>();
++  intptr_t num_cids = 0;
++  if (!TryReadUnsigned(stream, &num_cids)) return fail();
+ 
+   return std::make_unique<ClassTableLinkInfo>(std::move(classes), num_cids);
+ }
+ 
+-std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path) {
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path,
++                                                           bool* ok) {
+   uint8_t* buf = nullptr;
+   intptr_t size = 0;
+   if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    if (ok != nullptr) *ok = false;
+     return std::make_unique<ClassTableLinkInfo>(std::vector<ClassInfo>{},
+                                                 /*num_cids=*/0);
+   }
+@@ -169,56 +232,85 @@ std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path) {
+   std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
+ 
+   ReadStream stream(buf, size);
+-  return ReadClassTableLinkInfo(&stream);
++  return ReadClassTableLinkInfo(&stream, ok);
+ }
+ 
+-std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream) {
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream,
++                                                           bool* ok) {
++  if (ok != nullptr) *ok = true;
++  auto fail = [&]() -> std::unique_ptr<FieldTableLinkInfo> {
++    if (ok != nullptr) *ok = false;
++    return std::make_unique<FieldTableLinkInfo>(std::vector<FieldInfo>{},
++                                                /*max_field_id=*/0);
++  };
++
+   // count:u, { id:u, name:str, hash:str } * count, max_field_id:u
+-  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  intptr_t count = 0;
++  if (!TryReadUnsigned(stream, &count)) return fail();
++  if (!PlausibleCount(stream, count, kMinBytesPerEntry)) return fail();
++
+   std::vector<FieldInfo> fields;
+   fields.reserve(static_cast<size_t>(count));
+   for (intptr_t i = 0; i < count; i++) {
+     FieldInfo info;
+-    info.id = stream->ReadUnsigned<intptr_t>();
+-    info.name = ReadString(stream);
+-    info.hash = ReadString(stream);
++    if (!TryReadUnsigned(stream, &info.id)) return fail();
++    if (!TryReadString(stream, &info.name)) return fail();
++    if (!TryReadString(stream, &info.hash)) return fail();
+     fields.push_back(std::move(info));
+   }
+   // Trailing scalar.
+-  const intptr_t max_field_id = stream->ReadUnsigned<intptr_t>();
++  intptr_t max_field_id = 0;
++  if (!TryReadUnsigned(stream, &max_field_id)) return fail();
+ 
+   return std::make_unique<FieldTableLinkInfo>(std::move(fields), max_field_id);
+ }
+ 
+-std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path) {
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path,
++                                                           bool* ok) {
+   uint8_t* buf = nullptr;
+   intptr_t size = 0;
+   if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    if (ok != nullptr) *ok = false;
+     return std::make_unique<FieldTableLinkInfo>(std::vector<FieldInfo>{},
+                                                 /*max_field_id=*/0);
+   }
+   std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
+ 
+   ReadStream stream(buf, size);
+-  return ReadFieldTableLinkInfo(&stream);
++  return ReadFieldTableLinkInfo(&stream, ok);
+ }
+ 
+ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+-    ReadStream* stream) {
++    ReadStream* stream,
++    bool* ok) {
++  if (ok != nullptr) *ok = true;
++  auto fail = [&]() -> std::unique_ptr<DispatchTableLinkInfo> {
++    if (ok != nullptr) *ok = false;
++    return std::make_unique<DispatchTableLinkInfo>(
++        std::vector<SelectorRowInfo>{});
++  };
++
+   // count:u, { offset:u, hash:str, nranges:u, (lo:u, hi:u)*nranges } * count
+   // No trailing scalar; the end of the entry loop is the end of the data.
+-  const intptr_t count = stream->ReadUnsigned<intptr_t>();
++  intptr_t count = 0;
++  if (!TryReadUnsigned(stream, &count)) return fail();
++  if (!PlausibleCount(stream, count, kMinBytesPerEntry)) return fail();
++
+   std::vector<SelectorRowInfo> selectors;
+   selectors.reserve(static_cast<size_t>(count));
+   for (intptr_t i = 0; i < count; i++) {
+     SelectorRowInfo row;
+-    row.offset = stream->ReadUnsigned<intptr_t>();
+-    row.hash = ReadString(stream);
+-    const intptr_t nranges = stream->ReadUnsigned<intptr_t>();
++    if (!TryReadUnsigned(stream, &row.offset)) return fail();
++    if (!TryReadString(stream, &row.hash)) return fail();
++    intptr_t nranges = 0;
++    if (!TryReadUnsigned(stream, &nranges)) return fail();
++    if (!PlausibleCount(stream, nranges, kMinBytesPerRange)) return fail();
+     row.ranges.reserve(static_cast<size_t>(nranges));
+     for (intptr_t j = 0; j < nranges; j++) {
+-      const intptr_t lo = stream->ReadUnsigned<intptr_t>();
+-      const intptr_t hi = stream->ReadUnsigned<intptr_t>();
++      intptr_t lo = 0;
++      intptr_t hi = 0;
++      if (!TryReadUnsigned(stream, &lo)) return fail();
++      if (!TryReadUnsigned(stream, &hi)) return fail();
+       row.ranges.push_back({lo, hi});
+     }
+     selectors.push_back(std::move(row));
+@@ -228,17 +320,19 @@ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+ }
+ 
+ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+-    const char* path) {
++    const char* path,
++    bool* ok) {
+   uint8_t* buf = nullptr;
+   intptr_t size = 0;
+   if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    if (ok != nullptr) *ok = false;
+     return std::make_unique<DispatchTableLinkInfo>(
+         std::vector<SelectorRowInfo>{});
+   }
+   std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
+ 
+   ReadStream stream(buf, size);
+-  return ReadDispatchTableLinkInfo(&stream);
++  return ReadDispatchTableLinkInfo(&stream, ok);
+ }
+ 
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 9756b541aec..1c6dcae2fac 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -165,37 +165,55 @@ class ShorebirdLinker {
+ //
+ // Objects are allocated with plain `new` (heap, not Zone) so they can be created
+ // before an isolate exists, matching the _main call-site pattern in their
+-// binary. ClassTableLinkInfo and friends derive from ZoneObject, whose
+-// destructor is virtual, so unique_ptr's default deleter is correct here.
++// binary. These types deliberately do NOT derive from ZoneObject -- see the note
++// in link_info.h -- which is exactly what makes unique_ptr's default deleter
++// correct here.
+ //
+ // Because the overloads are both on pointer types, calling these with a bare
+ // `nullptr` is ambiguous; callers passing a null path must cast explicitly.
++//
++// THE `ok` OUT-PARAMETER MATTERS. On failure these return an *empty* object
++// rather than null, so a caller that only checks the pointer cannot distinguish
++// a correct parse of an empty table from a missing file, an unreadable file, or
++// malformed data. Anything driven by a user-supplied path -- i.e. the
++// gen_snapshot options -- must pass `ok` and treat false as fatal; otherwise a
++// mistyped filename silently yields an empty link table and the compile still
++// reports success. Pass nullptr only where a silent empty result is genuinely
++// acceptable.
++//
++// Malformed input is rejected rather than trusted: ReadStream's bounds checks
++// are ASSERTs that compile out in Release and Product, so every decoded count
++// and string length is validated against the bytes actually remaining before
++// any allocation or loop runs. See linker.cc.
+ 
+ // count:u, { id:u, name:str, hash:str } * count, num_cids:u
+-std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream);
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream,
++                                                           bool* ok = nullptr);
+ 
+-// Reads the file produced by --print_class_table_link_info_to.
+-// Returns an empty object (count=0, num_cids=0) on a null path, an unreadable
+-// file, or an empty file. Never returns null, so callers need no null check
+-// before handing the result to Initialize*.
+-std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path);
++// Reads the file produced by --print_class_table_link_info_to. Returns an empty
++// object and sets *ok=false on a null path, an unreadable or empty file, or
++// malformed content. Never returns null.
++std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path,
++                                                           bool* ok = nullptr);
+ 
+ // count:u, { id:u, name:str, hash:str } * count, max_field_id:u
+-std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream);
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream,
++                                                           bool* ok = nullptr);
+ 
+ // Reads the file produced by --print_field_table_link_info_to.
+-// Returns an empty object (count=0, max_field_id=0) on error, never null.
+-std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path);
++std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(const char* path,
++                                                           bool* ok = nullptr);
+ 
+ // count:u, { offset:u, hash:str, nranges:u, (lo:u, hi:u)*nranges } * count
+ // No trailing scalar -- the end of the entry loop is the end of the data.
+ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+-    ReadStream* stream);
++    ReadStream* stream,
++    bool* ok = nullptr);
+ 
+ // Reads the file produced by --print_dispatch_table_link_info_to.
+-// Returns an empty object (count=0) on error, never null.
+ std::unique_ptr<DispatchTableLinkInfo> ReadDispatchTableLinkInfo(
+-    const char* path);
++    const char* path,
++    bool* ok = nullptr);
+ 
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index f2409b128db..3e80de95d40 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -4,10 +4,13 @@
+ 
+ #include "vm/shorebird/linker.h"
+ 
++#include <cstdio>
+ #include <utility>
+ #include <vector>
+ 
++#include "platform/utils.h"
+ #include "vm/datastream.h"
++#include "vm/os.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -212,4 +215,164 @@ VM_UNIT_TEST_CASE(RoundTrip_DispatchTableLinkInfo) {
+   EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
+ }
+ 
++// ---------------------------------------------------------------------------
++// File-path reader tests, and the singleton actually holding what was read.
++//
++// WriteToFile needs Dart's file open/write/close callbacks, which no
++// VM_UNIT_TEST_CASE registers, so these write bytes with plain stdio. The
++// ENCODER is still the real one (WriteToStream) -- only the file write is done
++// directly, so the wire format is never re-implemented here.
++// ---------------------------------------------------------------------------
++
++namespace {
++
++// Per-process temp path, so concurrent runs cannot collide.
++void MakeTempPath(char* out, intptr_t out_len, const char* tag) {
++  Utils::SNPrint(out, out_len, "/tmp/fhp_linker_%s_%" Pd ".bin", tag,
++                 OS::ProcessId());
++}
++
++bool WriteBytesToPath(const char* path, const void* data, intptr_t len) {
++  FILE* f = fopen(path, "wb");
++  if (f == nullptr) return false;
++  const bool wrote =
++      (len == 0) ||
++      (fwrite(data, 1, static_cast<size_t>(len), f) ==
++       static_cast<size_t>(len));
++  fclose(f);
++  return wrote;
++}
++
++}  // namespace
++
++// POSITIVE half of the observable assertion: after reading a real file, the
++// singleton holds exactly what that file contained. The null->populated
++// transition is checked in one test so it carries its own baseline.
++//
++// NOTE: this mutates the process-wide singleton, so it must run in its own
++// process -- which is how this harness is driven (one named test per
++// invocation). It would otherwise perturb ShorebirdLinker_FreshHasNullSlots.
++// No test-only Reset() is added: their class has no such method, and inventing
++// one to make tests convenient is the divergence this reproduction avoids.
++VM_UNIT_TEST_CASE(ShorebirdLinker_SingletonHoldsWhatTheFileContained) {
++  std::vector<ClassInfo> classes = {
++      ClassInfo{1, "String", "12345671"},
++      ClassInfo{7, "Function", "9096549271"},
++      ClassInfo{42, "Function", "9096549272"},
++  };
++  const intptr_t num_cids = 500;
++  ClassTableLinkInfo original(classes, num_cids);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);  // the real encoder
++
++  char path[256];
++  MakeTempPath(path, sizeof(path), "ct");
++  EXPECT(WriteBytesToPath(path, ws.buffer(), ws.bytes_written()));
++
++  // The file-path reader, through a real file.
++  bool ok = false;
++  std::unique_ptr<ClassTableLinkInfo> parsed =
++      ReadClassTableLinkInfo(path, &ok);
++  EXPECT(ok);
++  EXPECT_EQ(classes.size(), parsed->classes().size());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(classes.size()); i++) {
++    EXPECT_EQ(classes[i].cid, parsed->classes()[i].cid);
++    EXPECT_STREQ(classes[i].name.c_str(), parsed->classes()[i].name.c_str());
++    EXPECT_STREQ(classes[i].hash.c_str(), parsed->classes()[i].hash.c_str());
++  }
++  EXPECT_EQ(num_cids, parsed->num_cids());
++
++  // The singleton: null before, holding the file's contents after.
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  EXPECT(linker->base_class_table() == nullptr);
++  EXPECT(linker->patch_class_table() == nullptr);
++
++  bool base_ok = false;
++  bool patch_ok = false;
++  linker->InitializeWithClassTableLinkInfo(
++      ReadClassTableLinkInfo(path, &base_ok),
++      ReadClassTableLinkInfo(path, &patch_ok));
++  EXPECT(base_ok);
++  EXPECT(patch_ok);
++
++  EXPECT(linker->base_class_table() != nullptr);
++  EXPECT(linker->patch_class_table() != nullptr);
++  EXPECT_EQ(classes.size(), linker->base_class_table()->classes().size());
++  EXPECT_EQ(num_cids, linker->base_class_table()->num_cids());
++  EXPECT_STREQ("String", linker->base_class_table()->classes()[0].name.c_str());
++  EXPECT_STREQ("9096549272",
++               linker->base_class_table()->classes()[2].hash.c_str());
++  EXPECT_EQ(classes.size(), linker->patch_class_table()->classes().size());
++
++  remove(path);
++}
++
++// NEGATIVE half: a bogus path must not look like a successful parse. Without the
++// `ok` signal this is indistinguishable from correctly reading an empty table --
++// the hole that made the original Task 4 verification vacuous.
++VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_BogusPathIsNotSilentSuccess) {
++  bool ok = true;
++  std::unique_ptr<ClassTableLinkInfo> parsed =
++      ReadClassTableLinkInfo("/nonexistent/fhp/definitely_not_here.bin", &ok);
++  EXPECT(!ok);
++  EXPECT(parsed != nullptr);
++  EXPECT_EQ(static_cast<size_t>(0), parsed->classes().size());
++}
++
++// A zero-length file is rejected: no valid encoding is zero bytes, and decoding
++// one would read past the allocation with ReadStream's ASSERTs compiled out.
++VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_EmptyFileIsRejected) {
++  char path[256];
++  MakeTempPath(path, sizeof(path), "empty");
++  EXPECT(WriteBytesToPath(path, "", 0));
++
++  bool ok = true;
++  std::unique_ptr<ClassTableLinkInfo> parsed =
++      ReadClassTableLinkInfo(path, &ok);
++  EXPECT(!ok);
++  EXPECT_EQ(static_cast<size_t>(0), parsed->classes().size());
++  remove(path);
++}
++
++// A truncated file must be rejected, not silently yield a short table: the
++// header count still says 3, but the entry bytes are not all present.
++VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_TruncatedFileIsRejected) {
++  std::vector<ClassInfo> classes = {
++      ClassInfo{1, "String", "12345671"},
++      ClassInfo{7, "Function", "9096549271"},
++      ClassInfo{42, "Function", "9096549272"},
++  };
++  ClassTableLinkInfo original(classes, 500);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);
++
++  char path[256];
++  MakeTempPath(path, sizeof(path), "trunc");
++  EXPECT(WriteBytesToPath(path, ws.buffer(), ws.bytes_written() / 2));
++
++  bool ok = true;
++  std::unique_ptr<ClassTableLinkInfo> parsed =
++      ReadClassTableLinkInfo(path, &ok);
++  EXPECT(!ok);
++  remove(path);
++}
++
++// A corrupt count must not reach reserve(). These bytes decode to a varint far
++// larger than any 4-byte file could hold.
++VM_UNIT_TEST_CASE(ReadClassTableLinkInfo_AbsurdCountIsRejected) {
++  const uint8_t corrupt[] = {0x7F, 0x7F, 0x7F, 0x7F};
++  char path[256];
++  MakeTempPath(path, sizeof(path), "absurd");
++  EXPECT(WriteBytesToPath(path, corrupt, sizeof(corrupt)));
++
++  bool ok = true;
++  std::unique_ptr<ClassTableLinkInfo> parsed =
++      ReadClassTableLinkInfo(path, &ok);
++  EXPECT(!ok);
++  EXPECT_EQ(static_cast<size_t>(0), parsed->classes().size());
++  remove(path);
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

@@ -1,0 +1,312 @@
+From 99fe5206f9c067bca8453b9e18eabb1e26aa4807 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 18:17:38 +0800
+Subject: [PATCH 043/206] feat(shorebird): decode the Sim->CPU brk hypercall
+ block, RunDartOnCPUCode live
+
+Task 6b-ii. Shorebird leaves the Simulator through a `brk`, not a call: their
+Sim->CPU wrapper's shared body ends
+
+  ldr x17, [THR, #is_simulating_] ; cbz x17, +8 ; brk #0xb12d ; br x16
+
+so with the flag set the brk hands x16 -- already loaded with the target by
+instruction 2 -- back to the simulator, and with it clear the br goes straight
+there. Both arms agree the target is in R16. Our simulator sent every brk to the
+debugger, so the block had to be filtered out ahead of that.
+
+Names and values are theirs, spelling is ours. Their
+Simulator::DecodeSimulatorToNativeTransition does `ubfx w8, w1, #5, #16` and
+compares against the contiguous range 0xb128..0xb130, pairing each imm16 with a
+log string next to "[%s] Calling %s at 0x%llx on the CPU". The imm16 values and
+those strings are observed; the C++ identifiers are not in the binary. The
+method keeps their name because that one *is* observed.
+
+Only kRunDartOnCPUCode (0xb12d) is implemented -- the one the body uses and the
+only one this fork can exercise. The other eight FATAL with their own name, so
+hitting one says which instead of dropping into the debugger. Declaring all nine
+also stops the range being reused for something else.
+
+It reuses A2/A5's escape (InvokeWithTHR + SimulatorSetjmpBuffer) rather than
+adding a second mechanism, and emulates the tail transfer by continuing from LR,
+which is where `br x16`'s target would have returned anyway since br leaves LR
+alone. That LR reading is inference from "their handler does not advance the PC
+for this arm", which is the only thing observed about it; it is not from running
+their code.
+
+Four negative controls, each run and each red before restoring:
+
+  - target built into x15 instead of x16 -> "RunDartOnCPUCode with a null target
+    in R16", abort. R16 is really where it comes from; a size or round-trip
+    assertion would have been blind to this, which is the failure mode recorded
+    in project_wrapper_upstream_ancestor.
+  - brk #0xb12e instead -> "hypercall CallRuntimeOnCPUCode (brk #0xb12e) is not
+    implemented". The imm16 decoding is exact and the unimplemented arms are loud.
+  - brk #0xb127, one below the block -> "Simulator hit brk #0xb127" and the sim>
+    prompt. The lower boundary is exact and ordinary brk still behaves as before.
+  - the instruction after the brk poisons x0 with 99 rather than being a bare
+    ret, so a fallthrough returns 99. It returns 42, so the hypercall really did
+    the returning.
+
+75/75 shorebird, sim_bridge, sim_transition and shorebird_sim_to_cpu tests pass
+by exit code and by absence of "error:".
+
+Next is 6b-iii: emit the seven instructions and turn on the 28-byte assertion.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/constants_arm64.h b/runtime/vm/constants_arm64.h
+index dbf99bd2195..5e4e674a229 100644
+--- a/runtime/vm/constants_arm64.h
++++ b/runtime/vm/constants_arm64.h
+@@ -1365,6 +1365,30 @@ class Instr {
+   static constexpr int32_t kSimulatorFfiRedirectCode =
+       0xca12;  // For redirection.
+ 
++  // Shorebird's Simulator -> CPU hypercall block, dispatched on the brk imm16.
++  // Their Simulator::DecodeSimulatorToNativeTransition does `ubfx w8, w1, #5,
++  // #16` and compares against this contiguous range; each arm pairs an imm16
++  // with a log string. What is observed in their binary is the imm16 values and
++  // those strings -- these C++ identifiers are ours. See WRAPPER_STUBS.md 7.3.
++  //
++  // Only kRunDartOnCPUCode is implemented; it is the one the Sim->CPU wrapper's
++  // shared body uses, and the only one this fork has a way to exercise. The
++  // other eight are declared so the range is not reused for something else and
++  // so hitting one reports which it was instead of dropping into the debugger.
++  static constexpr int32_t kCallNativeThroughSafepointOnCPUCode = 0xb128;
++  static constexpr int32_t kCallFFIOnCPUCode = 0xb129;
++  static constexpr int32_t kCallLeafRuntimeOnCPUCode = 0xb12a;
++  static constexpr int32_t kCallAutoScopeNativeOnCPUCode = 0xb12b;
++  static constexpr int32_t kCallNoScopeNativeOnCPUCode = 0xb12c;
++  static constexpr int32_t kRunDartOnCPUCode = 0xb12d;
++  static constexpr int32_t kCallRuntimeOnCPUCode = 0xb12e;
++  static constexpr int32_t kCallBootstrapNativeOnCPUCode = 0xb12f;
++  static constexpr int32_t kResumeDartOnCPUCode = 0xb130;
++
++  static constexpr int32_t kFirstSimToCpuHypercallCode =
++      kCallNativeThroughSafepointOnCPUCode;
++  static constexpr int32_t kLastSimToCpuHypercallCode = kResumeDartOnCPUCode;
++
+   // Breakpoint instruction filling assembler code buffers in debug mode.
+   static constexpr int32_t kBreakPointInstruction =  // brk(0xdeb0).
+       BRK | (kBreakPointCode << kImm16Shift);
+diff --git a/runtime/vm/shorebird_sim_to_cpu_test.cc b/runtime/vm/shorebird_sim_to_cpu_test.cc
+index cb113610089..d0fc25fbfc0 100644
+--- a/runtime/vm/shorebird_sim_to_cpu_test.cc
++++ b/runtime/vm/shorebird_sim_to_cpu_test.cc
+@@ -60,5 +60,59 @@ ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_BasicCall) {
+   sim->SetLinkedFunction(target, 0);
+ }
+ 
++// Test: brk #kRunDartOnCPUCode leaves the Simulator and runs the target in R16,
++// which is how Shorebird's Sim->CPU wrapper body reaches the CPU. Unlike the
++// BLR intercept above this needs no link table -- the target is whatever the
++// wrapper's metadata put in x16.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_RunDartOnCpuHypercall) {
++  Simulator* sim = Simulator::Current();
++  const uword target = reinterpret_cast<uword>(&ShorebirdTestNativeDoubler);
++
++  std::unique_ptr<VirtualMemory> mem(
++      VirtualMemory::Allocate(4096, false, false, "hypercalltest"));
++  ASSERT(mem != nullptr);
++  uint32_t* code = reinterpret_cast<uint32_t*>(mem->address());
++  const uint64_t addr = static_cast<uint64_t>(target);
++  // movz x0, #21; then x16 = target, exactly as the wrapper body leaves it.
++  code[0] = 0xD2800000u | (21u << 5);                       // movz x0, #21
++  code[1] = 0xD2800010u | ((addr & 0xFFFF) << 5);           // movz x16, lo16
++  code[2] = 0xF2A00010u | (((addr >> 16) & 0xFFFF) << 5);   // movk x16, [31:16]
++  code[3] = 0xF2C00010u | (((addr >> 32) & 0xFFFF) << 5);   // movk x16, [47:32]
++  code[4] = 0xF2E00010u | (((addr >> 48) & 0xFFFF) << 5);   // movk x16, [63:48]
++  code[5] = BRK | (Instr::kRunDartOnCPUCode << kImm16Shift);
++  // Unreachable, and the test depends on that: the hypercall continues from LR,
++  // which is the tail transfer `br x16` would have made, so it never falls
++  // through to the next instruction. Poisoning x0 here rather than putting a
++  // bare ret means a fallthrough shows up as 99 instead of silently returning
++  // the right answer for the wrong reason.
++  code[6] = 0xD2800000u | (99u << 5);                       // movz x0, #99
++  code[7] = 0xD65F03C0u;                                    // ret
++  mem->Protect(VirtualMemory::kReadExecute);
++
++  const int64_t result = sim->Call(
++      static_cast<int64_t>(reinterpret_cast<uword>(code)), 0, 0, 0, 0);
++  EXPECT_EQ(42, result);  // ShorebirdTestNativeDoubler(21) = 42, not 99
++}
++
++// The nine imm16 values and their names are read out of their binary, so a
++// typo in the block is worth catching -- the range has to stay contiguous and
++// every value in it has to name itself.
++ISOLATE_UNIT_TEST_CASE(ShorebirdSimToCpu_HypercallBlockIsContiguous) {
++  EXPECT_EQ(0xb128, Instr::kFirstSimToCpuHypercallCode);
++  EXPECT_EQ(0xb130, Instr::kLastSimToCpuHypercallCode);
++  EXPECT_EQ(0xb12d, Instr::kRunDartOnCPUCode);
++  for (int32_t imm = Instr::kFirstSimToCpuHypercallCode;
++       imm <= Instr::kLastSimToCpuHypercallCode; imm++) {
++    EXPECT(Simulator::NameOfSimToCpuHypercall(imm) != nullptr);
++  }
++  // Just outside the block on either side, and Dart's own brk code, must not be
++  // mistaken for hypercalls.
++  EXPECT(Simulator::NameOfSimToCpuHypercall(
++             Instr::kFirstSimToCpuHypercallCode - 1) == nullptr);
++  EXPECT(Simulator::NameOfSimToCpuHypercall(
++             Instr::kLastSimToCpuHypercallCode + 1) == nullptr);
++  EXPECT(Simulator::NameOfSimToCpuHypercall(Instr::kBreakPointCode) == nullptr);
++}
++
+ }  // namespace dart
+ #endif  // TARGET_ARCH_ARM64 && DART_INCLUDE_SIMULATOR
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index c428f75cb83..8a33ca5c9b1 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -1953,6 +1953,107 @@ void Simulator::DoRedirectedFfiCall(Instr* instr) {
+ #endif
+ }
+ 
++const char* Simulator::NameOfSimToCpuHypercall(int32_t imm16) {
++  // The strings are the ones their DecodeSimulatorToNativeTransition pairs with
++  // each imm16 -- they are in their binary, next to
++  // "[%s] Calling %s at 0x%llx on the CPU".
++  switch (imm16) {
++    case Instr::kCallNativeThroughSafepointOnCPUCode:
++      return "CallNativeThroughSafepointOnCPUCode";
++    case Instr::kCallFFIOnCPUCode:
++      return "CallFFIOnCPUCode";
++    case Instr::kCallLeafRuntimeOnCPUCode:
++      return "CallLeafRuntimeOnCPUCode";
++    case Instr::kCallAutoScopeNativeOnCPUCode:
++      return "CallAutoScopeNativeOnCPUCode";
++    case Instr::kCallNoScopeNativeOnCPUCode:
++      return "CallNoScopeNativeOnCPUCode";
++    case Instr::kRunDartOnCPUCode:
++      return "RunDartOnCPUCode";
++    case Instr::kCallRuntimeOnCPUCode:
++      return "CallRuntimeOnCPUCode";
++    case Instr::kCallBootstrapNativeOnCPUCode:
++      return "CallBootstrapNativeOnCPUCode";
++    case Instr::kResumeDartOnCPUCode:
++      return "ResumeDartOnCPUCode";
++    default:
++      return nullptr;
++  }
++}
++
++// Shorebird reaches the CPU from inside the Simulator through a brk rather than
++// a call: their Sim->CPU wrapper's shared body ends with
++//
++//   ldr x17, [THR, #is_simulating_] ; cbz x17, +8 ; brk #0xb12d ; br x16
++//
++// so when the flag says "still interpreting", the brk hands the target -- which
++// instruction 2 of that body has already loaded into x16 -- back to the
++// simulator, and when it says "already on the CPU" the br takes it directly.
++// Both arms therefore agree that the target lives in R16.
++//
++// Of the nine imm16 values in their block only kRunDartOnCPUCode is implemented
++// here; see the constants in constants_arm64.h for why.
++bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
++  const int32_t imm = instr->Imm16Field();
++  if (imm < Instr::kFirstSimToCpuHypercallCode ||
++      imm > Instr::kLastSimToCpuHypercallCode) {
++    return false;
++  }
++  const char* name = NameOfSimToCpuHypercall(imm);
++  if (imm != Instr::kRunDartOnCPUCode) {
++    FATAL("Simulator->CPU hypercall %s (brk #0x%x) is not implemented", name,
++          imm);
++  }
++
++#if defined(__aarch64__)
++  const uword target = static_cast<uword>(get_register(R16));
++  if (target == 0) {
++    FATAL("%s with a null target in R16", name);
++  }
++
++  // Their handler does not advance the simulated PC for this arm, which is what
++  // makes `br x16` at the end of the body unreachable as a fallthrough. We
++  // emulate the tail transfer the br would have made: call the target natively,
++  // then continue simulating from LR, which is where the br's target would have
++  // returned to anyway since br leaves LR alone.
++  //
++  // This reuses A2/A5's escape (InvokeWithTHR + SimulatorSetjmpBuffer) rather
++  // than adding a second mechanism. THR comes from Thread::Current() for the
++  // same reason it does there: during startup the simulated x26 still holds an
++  // icount value.
++  const int64_t a0 = get_register(R0), a1 = get_register(R1);
++  const int64_t a2 = get_register(R2), a3 = get_register(R3);
++  const int64_t a4 = get_register(R4), a5 = get_register(R5);
++  const int64_t a6 = get_register(R6), a7 = get_register(R7);
++  Thread* current_thr = Thread::Current();
++  const int64_t thr_val = (current_thr != nullptr)
++                              ? reinterpret_cast<int64_t>(current_thr)
++                              : get_register(THR);
++  const int64_t pp_val = get_register(PP);
++  const int64_t return_pc = get_register(LR);
++
++  set_pc(return_pc);
++  memory_.FlushAll();
++  {
++    SimulatorSetjmpBuffer buffer(this);
++    if (!setjmp(buffer.buffer_)) {
++      const int64_t result =
++          InvokeWithTHR(target, static_cast<uword>(thr_val),
++                        static_cast<uword>(pp_val), a0, a1, a2, a3, a4, a5, a6,
++                        a7);
++      set_register(instr, R0, result);
++    }
++    // else: a Dart exception was thrown out of the target; JumpToFrame has
++    // already moved PC/SP/FP to the handler.
++  }
++  return true;
++#else
++  // gen_snapshot cross-compiles this file for x86_64, where there is no way to
++  // enter arm64 code natively.
++  FATAL("%s needs an arm64 host", name);
++#endif  // defined(__aarch64__)
++}
++
+ struct CallbackContext {
+   uword integer_arguments[8];
+   uword double_arguments[8];
+@@ -2078,6 +2179,11 @@ void Simulator::DecodeExceptionGen(Instr* instr) {
+   } else if ((instr->Bits(0, 2) == 0) && (instr->Bits(2, 3) == 0) &&
+              (instr->Bits(21, 3) == 1)) {
+     // Format(instr, "brk 'imm16");
++    // Shorebird's Sim->CPU hypercalls are brk, not hlt, so they have to be
++    // filtered out before an ordinary brk drops into the debugger.
++    if (DecodeSimulatorToNativeTransition(instr)) {
++      return;
++    }
+     SimulatorDebugger dbg(this);
+     int32_t imm = instr->Imm16Field();
+     char buffer[32];
+diff --git a/runtime/vm/simulator_arm64.h b/runtime/vm/simulator_arm64.h
+index 99302f05352..f2597a58b9b 100644
+--- a/runtime/vm/simulator_arm64.h
++++ b/runtime/vm/simulator_arm64.h
+@@ -154,6 +154,11 @@ class Simulator {
+ 
+   void JumpToFrame(uword pc, uword sp, uword fp, Thread* thread);
+ 
++  // The log-string name their DecodeSimulatorToNativeTransition pairs with each
++  // brk imm16 in the Sim -> CPU hypercall block, or nullptr for anything
++  // outside it. Public so a test can assert the block stays contiguous.
++  static const char* NameOfSimToCpuHypercall(int32_t imm16);
++
+  private:
+   // Known bad pc value to ensure that the simulator does not execute
+   // without being properly setup.
+@@ -285,6 +290,13 @@ class Simulator {
+   void DoRedirectedCall(Instr* instr);
+   void DoRedirectedFfiCall(Instr* instr);
+ 
++  // Shorebird's Simulator -> CPU hypercall block: a brk whose imm16 falls in
++  // [Instr::kFirstSimToCpuHypercallCode, Instr::kLastSimToCpuHypercallCode].
++  // The name and signature are theirs, observed in gen_snapshot_arm64
++  // (WRAPPER_STUBS.md 7.3); the body is ours. Returns false if `instr` is an
++  // ordinary brk, which then falls through to the debugger as before.
++  bool DecodeSimulatorToNativeTransition(Instr* instr);
++
+   // Decode instructions.
+   void InstructionDecode(Instr* instr);
+   void InstructionDecodeImpl(Instr* instr);
+-- 
+2.53.0
+

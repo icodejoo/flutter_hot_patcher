@@ -1,0 +1,164 @@
+From efa07a3774e3edb073717ee8ce35001a5ffd7fc1 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 10:08:42 +0800
+Subject: [PATCH 078/206] test(shorebird): put the base instructions table's
+ success path under test
+
+ReadBaseSnapshotHeader's accepting branch -- the one every patched app takes --
+had no regression. The snapshot this test binary is built from is a JIT one,
+declares no instructions table, and so only ever exercised the declining branch.
+The accepting branch had been verified once, by hand, by feeding an app its own
+AOT snapshot as a base. That was an experiment; it proved something on the day
+and guarded nothing afterwards.
+
+Giving dartaotruntime a flag to load a base would be inventing an API they do
+not have. So the real snapshot's header is kept byte for byte through the
+version and features the check reads, and only the five clustered-stream values
+after it are rewritten. That leaves under test exactly the part the
+DART_PRECOMPILED_RUNTIME guard used to hide and the part most likely to be
+wrong: the order of the five reads and where the stream starts.
+
+The five values are distinct (11/22/33/44/55) so a misordered read returns one
+of the others rather than something still plausible, and they are encoded with
+the VM's own MallocWriteStream rather than by hand -- the varint format treats
+0x00 as a continuation byte, which is the kind of detail a second
+implementation gets subtly wrong.
+
+Two tests, sensitive in opposite directions: a non-zero length must be accepted
+and reported exactly, and a zero length must decline. Either alone would pass
+against a reader that ignored the fourth value.
+
+Negative control: dropping one ReadUnsigned before the length turns both new
+tests and the pre-existing real-snapshot test red, while the garbage test stays
+green. Reverted by the reverse patch, not git checkout. 97 tests pass, and
+verify_all.sh reports 4 ran, 0 failed, 0 skipped.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/shorebird_test.cc b/runtime/vm/shorebird/shorebird_test.cc
+index afe376d740e..abb3567166d 100644
+--- a/runtime/vm/shorebird/shorebird_test.cc
++++ b/runtime/vm/shorebird/shorebird_test.cc
+@@ -410,6 +410,119 @@ ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderParsesARealSnapshot) {
+   EXPECT(offset > 0);
+ }
+ 
++// Rewrites the five clustered-stream values of a real snapshot, leaving
++// everything the version check looks at byte for byte identical.
++//
++// The success path of the base-snapshot header parse had no test until now: the
++// snapshot this binary is built from is a JIT one, declares no instructions
++// table, and so only ever exercises the declining branch. The branch a patched
++// app actually takes was verified once, by hand, by feeding an app its own AOT
++// snapshot as a base -- an experiment, not a regression. Adding a
++// dartaotruntime flag to load a base would be inventing an API they do not
++// have, so instead the real header is kept and only what follows it is
++// replaced. What that leaves under test is exactly the part most likely to be
++// wrong and most likely to go unnoticed: the order of the five reads and the
++// offset the stream starts at.
++//
++// Caller owns the returned buffer.
++static uint8_t* SnapshotWithClusterHeader(Thread* thread,
++                                          const uint8_t* data,
++                                          intptr_t num_base_objects,
++                                          intptr_t num_objects,
++                                          intptr_t num_clusters,
++                                          intptr_t instructions_table_len,
++                                          intptr_t instruction_table_data_offset,
++                                          intptr_t* out_length) {
++  const Snapshot* const raw = Snapshot::SetupFromBuffer(data);
++  if (raw == nullptr) return nullptr;
++  SnapshotHeaderReader header_reader(raw);
++  intptr_t offset = 0;
++  char* error =
++      header_reader.VerifyVersionAndFeatures(thread->isolate_group(), &offset);
++  if (error != nullptr) {
++    free(error);
++    return nullptr;
++  }
++
++  // Encoded by the VM's own writer rather than by hand. The varint format has a
++  // continuation scheme where 0x00 is a continuation byte, which is exactly the
++  // sort of thing a second implementation gets subtly wrong.
++  MallocWriteStream five(64);
++  five.WriteUnsigned(num_base_objects);
++  five.WriteUnsigned(num_objects);
++  five.WriteUnsigned(num_clusters);
++  five.WriteUnsigned(instructions_table_len);
++  five.WriteUnsigned(instruction_table_data_offset);
++  intptr_t five_length = 0;
++  uint8_t* const five_bytes = five.Steal(&five_length);
++
++  const intptr_t total = raw->length();
++  ASSERT(total > offset + five_length);
++  uint8_t* const buffer = static_cast<uint8_t*>(malloc(total));
++  memcpy(buffer, data, total);
++  memcpy(buffer + offset, five_bytes, five_length);
++  free(five_bytes);
++
++  *out_length = total;
++  return buffer;
++}
++
++ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderAcceptsAnInstructionsTable) {
++  const uint8_t* const data = dart::bin::vm_snapshot_data;
++  // Asserted, not skipped: an early return would pass without parsing anything.
++  EXPECT(data != nullptr);
++  if (data == nullptr) return;
++
++  // Five distinct values, so a misordered read yields one of the others rather
++  // than something that still looks plausible.
++  intptr_t length = 0;
++  uint8_t* const buffer =
++      SnapshotWithClusterHeader(thread, data, 11, 22, 33, 44, 55, &length);
++  EXPECT(buffer != nullptr);
++  if (buffer == nullptr) return;
++
++  const Snapshot* snapshot = nullptr;
++  intptr_t instructions_table_len = 0;
++  uint32_t instruction_table_data_offset = 0;
++  const bool ok = ReadBaseSnapshotHeader(thread, buffer, &snapshot,
++                                         &instructions_table_len,
++                                         &instruction_table_data_offset);
++
++  EXPECT(ok);
++  EXPECT(snapshot != nullptr);
++  // The fourth and fifth values, and only those. Reading one varint too few or
++  // too many lands on 33 or runs off the end.
++  EXPECT_EQ(static_cast<intptr_t>(44), instructions_table_len);
++  EXPECT_EQ(static_cast<uint32_t>(55), instruction_table_data_offset);
++
++  free(buffer);
++}
++
++// The same snapshot with a zero-length table declines, and it does so for that
++// reason rather than because anything before it failed. Without this the test
++// above cannot distinguish "the fourth value was read" from "some non-zero
++// number was read"; together they pin the guard on the length itself.
++ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderDeclinesAnEmptyTable) {
++  const uint8_t* const data = dart::bin::vm_snapshot_data;
++  EXPECT(data != nullptr);
++  if (data == nullptr) return;
++
++  intptr_t length = 0;
++  uint8_t* const buffer =
++      SnapshotWithClusterHeader(thread, data, 11, 22, 33, 0, 55, &length);
++  EXPECT(buffer != nullptr);
++  if (buffer == nullptr) return;
++
++  const Snapshot* snapshot = nullptr;
++  intptr_t instructions_table_len = -1;
++  uint32_t instruction_table_data_offset = 0;
++  EXPECT(!ReadBaseSnapshotHeader(thread, buffer, &snapshot,
++                                 &instructions_table_len,
++                                 &instruction_table_data_offset));
++
++  free(buffer);
++}
++
+ // Garbage in, false out, and nothing dereferenced. Their reader is handed a
+ // mapping the embedder chose; a wrong one must not walk off it.
+ ISOLATE_UNIT_TEST_CASE(Shorebird_BaseSnapshotHeaderRejectsGarbage) {
+-- 
+2.53.0
+

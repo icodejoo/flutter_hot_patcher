@@ -1,0 +1,165 @@
+From 4d9beaf06af8536353519381a4045a5dbbc05953 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 16:55:54 +0800
+Subject: [PATCH 060/206] feat(shorebird): trace DDTableBuilder's map to the
+ linker's DDSlotMapping
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Last commit said the column semantics could not be named because
+VisitCode reaches its map through an untraced pointer. That pointer is
+now traced, and the chain closes:
+
+  DDTableBuilder is constructed at 0x10021b420 inside DoCompileAll (which
+  is where FinalizeIndirectStaticCallTable gets inlined to). Its +0x10
+  member comes from `ldr x19, [x26, #0x40]`, and a null there skips the
+  whole table build.
+
+  x26 comes from `ldr x26, [x23, #0x4b0]` at 0x10021b2a4, with x23 set by
+  `adrp x23, 0x100521000`. That resolves to 0x1005214b0 --- the exact
+  address ShorebirdLinker::shared() loads its singleton from, same page
+  and same offset. So x26 is the ShorebirdLinker.
+
+  ShorebirdLinker+0x40 is dd_slot_mapping_, which LINKER_RECON §3 had
+  already established independently from InitializeWithDDSlotMapping's
+  own null check. Two routes, one offset.
+
+  DDSlotMapping is {map_a_ @0x00, map_b_ @0x28}, so the map read at
+  pointee+0x28 is map_b_.
+
+So column b is the dd_slot -- the name their own IL printer gives the
+field this indexes -- and column c is a Function's kernel_offset_. Column
+a stays unnamed: it maps to the same b, so it is a second identity for
+the same slot, and nothing measured distinguishes it from any other
+per-function identity yet. The obvious base-vs-patch reading is exactly
+what evidence does not yet support.
+
+Adds SlotForKernelOffset() for the now-established direction. map_b_ keeps
+its name rather than being renamed to its meaning: their field names are
+not recoverable, and a meaningful name would read as reproduced when it is
+ours -- the DDFunctionIdentity mistake.
+
+Verification: ninja exit 0, timestamp guard passed, 77 of 77 shorebird
+tests exit 0 (IsolateReload_ShapeChange_Const_AddSlot needs --dfe and
+passes with it). Negative control: returning 0 instead of -1 for an absent
+key gives exit 255, failing exactly the two assertions that separate "maps
+to slot 0" from "not present" -- slot 0 being legal is already pinned by
+DDSlotResolution_MaxSlot_ZeroIsALegalSlot.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+index 96a7c41dec0..a2e35d2aae5 100644
+--- a/runtime/vm/shorebird/dd_voting.h
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -191,12 +191,32 @@ class DDSlotVoters {
+ // keys addressing one value. Whatever a and c are, they are alternative
+ // identities for the same b.
+ //
+-// What a, b and c MEAN is deliberately not asserted here. The nearby evidence
+-// (DDTableBuilder::VisitCode looks up a Function's kernel_offset_ in a
+-// long→long map and treats the result as a table index) suggests one of these
+-// maps is kernel_offset → slot, but VisitCode reaches its map through a pointer
+-// this code has not yet traced to a DDSlotMapping, so naming the columns would
+-// be a guess. Shape is established; semantics are not.
++// Column semantics, traced 2026-08-24. The chain, each link measured:
++//
++//   1. DDTableBuilder (local to Precompiler::FinalizeIndirectStaticCallTable,
++//      which is inlined into DoCompileAll) is built at 0x10021b420 with its
++//      +0x10 member set from `ldr x19, [x26, #0x40]`, and skips the entire
++//      table build when that pointer is null.
++//   2. x26 comes from `ldr x26, [x23, #0x4b0]` at 0x10021b2a4, with x23 set by
++//      `adrp x23, 0x100521000` at 0x10021b1a4 — i.e. it loads 0x1005214b0.
++//   3. ShorebirdLinker::shared() loads its singleton from that exact address,
++//      same page and same offset. So x26 IS the ShorebirdLinker.
++//   4. ShorebirdLinker+0x40 is dd_slot_mapping_, established independently in
++//      LINKER_RECON §3 from InitializeWithDDSlotMapping's own null check.
++//   5. Therefore DDTableBuilder's +0x10 is a DDSlotMapping*, and the map it
++//      reads at pointee+0x28 is map_b_ (map_a_ occupies 0x00..0x28).
++//   6. VisitCode keys that map by the owning Function's kernel_offset_ and uses
++//      the result as an index into the table it is building, tracking the
++//      maximum to size it.
++//
++// So: b is the dd_slot (the name their own IL printer gives the field this
++// indexes, via " %s<%ld> [dd_slot=%ld]"), and c is a Function's kernel_offset_.
++//
++// STILL NOT ESTABLISHED: what column a keys on. It maps to the same b, so it is
++// a second identity for the same slot. In a base↔patch linker the obvious guess
++// is "the other build's kernel_offset", and that is exactly why it is not
++// written down as fact here — nothing measured so far distinguishes it from any
++// other per-function identity.
+ class DDSlotMapping {
+  public:
+   // Reads a DDSlotMapping from *stream. Returns true on success.
+@@ -209,11 +229,25 @@ class DDSlotMapping {
+   const std::unordered_map<long, long>& map_a() const { return map_a_; }
+   const std::unordered_map<long, long>& map_b() const { return map_b_; }
+ 
++  // Named for what step 6 above established. The underlying map is map_b_; this
++  // spelling exists so call sites read as what they mean rather than as "b".
++  // Returns -1 when the function has no slot, matching VisitCode's own
++  // treatment of a negative value as "skip this Code".
++  long SlotForKernelOffset(long kernel_offset) const {
++    auto it = map_b_.find(kernel_offset);
++    return it == map_b_.end() ? -1 : it->second;
++  }
++
+  private:
+-  // Keyed by wire column a; value is column b. Every row contributes.
++  // Keyed by wire column a; value is column b, the dd_slot. Every row
++  // contributes. What a keys on is not established — see above.
+   std::unordered_map<long, long> map_a_;
+-  // Keyed by wire column c; value is the same column b. Rows with c == 0 are
+-  // skipped, so this map is a subset of map_a_'s rows under a different key.
++  // Keyed by wire column c, a Function's kernel_offset_; value is the same
++  // column b. Rows with c == 0 are skipped, so this is a subset of map_a_'s
++  // rows under a different key. This is the map DDTableBuilder::VisitCode
++  // consults. Kept named map_b_ rather than renamed to its meaning: their field
++  // names are not recoverable, and inventing one would read as reproduced when
++  // it is ours.
+   std::unordered_map<long, long> map_b_;
+ };
+ 
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index c734f1f9f49..23b5b0836ab 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -790,6 +790,34 @@ VM_UNIT_TEST_CASE(DDSlotMapping_RejectsImplausibleRowCount) {
+   EXPECT_EQ(static_cast<size_t>(0), mapping.map_a().size());
+ }
+ 
++// SlotForKernelOffset is the traced meaning of map_b_: kernel_offset -> dd_slot.
++// The -1 for an absent key is not a convenience — it is what VisitCode itself
++// does, returning early when the looked-up value has its sign bit set. A test
++// that only checked present keys would pass on a version that returned 0, which
++// is a legal slot (DDSlotResolution_MaxSlot_ZeroIsALegalSlot pins that), so the
++// absent case is the one that carries weight here.
++VM_UNIT_TEST_CASE(DDSlotMapping_SlotForKernelOffset) {
++  MallocWriteStream ws(256);
++  ws.WriteUnsigned<intptr_t>(2);
++  ws.WriteUnsigned<intptr_t>(10); ws.WriteUnsigned<intptr_t>(100);
++  ws.WriteUnsigned<intptr_t>(55);
++  ws.WriteUnsigned<intptr_t>(20); ws.WriteUnsigned<intptr_t>(0);
++  ws.WriteUnsigned<intptr_t>(77);  // slot 0 — legal, and must not read as absent
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  DDSlotMapping mapping;
++  EXPECT(mapping.ReadFromStream(&rs));
++
++  EXPECT_EQ(100L, mapping.SlotForKernelOffset(55));
++  // Slot 0 is a real slot. Returning -1 here would mean the accessor confused
++  // "maps to zero" with "not present".
++  EXPECT_EQ(0L, mapping.SlotForKernelOffset(77));
++  // Absent.
++  EXPECT_EQ(-1L, mapping.SlotForKernelOffset(999));
++  // Keyed by c, not by a: 10 and 20 are column-a keys and must not resolve.
++  EXPECT_EQ(-1L, mapping.SlotForKernelOffset(10));
++}
++
+ // A count that passes the plausibility bound but runs off the end mid-way. This
+ // is the case the count check alone cannot catch, so the per-row guard has to.
+ VM_UNIT_TEST_CASE(DDSlotMapping_RejectsTruncatedRow) {
+-- 
+2.53.0
+

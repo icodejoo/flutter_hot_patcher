@@ -1,0 +1,217 @@
+From eacf8f1dd0dddc49121f993c50846b01f4e20d5c Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 19 Oct 2026 15:12:36 +0800
+Subject: [PATCH 204/206] [vm] Fix the LoadDFromOffset footprint check; measure
+ unpadded emission in tests
+
+Since the pool emitters pad in JIT as well as AOT (b93028d6307), the unit
+tests that measured "the bare emitter" were measuring the padded footprint,
+and two of them crashed on a real mismatch the gate used to hide:
+
+- LoadDFromOffset emits fldrd through PrepareLargeOffset with kDWord but told
+  PadLoadStore kEightBytes. The counter gives kEightBytes+Offset the word
+  ladder (always movz+movk past the add range), so at an offset of exactly
+  2^24 the RELEASE_ASSERT in PadLoadStore fired. Pass kDWord, as emitted.
+  Only the check changes; the padding is computed from what was emitted.
+- Tests now count instructions up to the trailing NOPs to get the unpadded
+  emission, and the decodability tests decode the unpadded form at the end
+  of its real instructions instead of toggling FLAG_precompiled_mode.
+
+Arm64*/ObjectPoolEditor_* : 18/18 pass in DebugSIMARM64 and ProductSIMARM64.
+Reverting the kDWord change brings back the PadLoadStore abort in
+Arm64InstructionCountForLoadStoreFromOffset and
+ObjectPoolEditor_InstructionCountMatchesTheEmitters.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index b2814ea742b..4b19b304d97 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1294,7 +1294,9 @@ void Assembler::LoadDFromOffset(VRegister dest, Register base, int32_t offset) {
+     fldrd(dest, PrepareLargeOffset(base, offset, kDWord, type));
+   };
+   if (base == PP) {
+-    PadLoadStore(emit, base, offset, kEightBytes, Address::Offset);
++    // kDWord, as emitted: the counter gives kEightBytes the word ladder, which
++    // disagrees with PrepareLargeOffset at an offset of exactly 2^24.
++    PadLoadStore(emit, base, offset, kDWord, Address::Offset);
+   } else {
+     emit();
+   }
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.h b/runtime/vm/compiler/assembler/assembler_arm64.h
+index f7091f97a4c..97036b9b828 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.h
++++ b/runtime/vm/compiler/assembler/assembler_arm64.h
+@@ -1916,7 +1916,7 @@ class Assembler : public AssemblerBase {
+                     Address::AddressType addr_type);
+ 
+   // Shorebird. Set for the duration of the outermost PadLoadStore. The pool
+-  // emitters call PadLoadStore on themselves under FLAG_precompiled_mode and
++  // emitters call PadLoadStore on themselves and
+   // ObjectPoolEditor::AssembleReplacement calls it on them, so the two nest;
+   // this is how the outer one still gets to measure an unpadded emission. See
+   // PadLoadStore.
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index 2c45532309b..a9a14fe7ce7 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -27,6 +27,21 @@ namespace compiler {
+   EXPECT_STREQ(expected, test->RelativeDisassembly())
+ #endif
+ 
++// Shorebird: the pool emitters pad themselves to a fixed footprint in every
++// mode, so their unpadded emission is whatever precedes the trailing NOPs. A
++// real load or store never ends in one.
++static intptr_t UnpaddedInstructionCount(compiler::Assembler* assembler,
++                                         intptr_t start) {
++  const uint32_t* words =
++      reinterpret_cast<const uint32_t*>(assembler->CodeAddress(start));
++  intptr_t count = (assembler->CodeSize() - start) / Instr::kInstrSize;
++  while (count > 0 &&
++         words[count - 1] == static_cast<uint32_t>(Instr::kNopInstruction)) {
++    count--;
++  }
++  return count;
++}
++
+ // Shorebird's ObjectPoolEditor asks how many instructions a load from a given
+ // offset costs, so it can tell whether moving a pool entry changes code size.
+ // The answer has to match what the assembler really emits, so this checks it
+@@ -71,8 +86,7 @@ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+       } else {
+         assembler.LoadWordFromPoolIndex(R0, index);
+       }
+-      const intptr_t emitted =
+-          (assembler.CodeSize() - before) / Instr::kInstrSize;
++      const intptr_t emitted = UnpaddedInstructionCount(&assembler, before);
+ 
+       const intptr_t counted =
+           compiler::Assembler::InstructionCountForLoadStoreFromOffset(
+@@ -94,7 +108,7 @@ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+       compiler::Assembler assembler(&pool_builder);
+       const intptr_t before = assembler.CodeSize();
+       assembler.LoadDFromOffset(V0, PP, offset);
+-      EXPECT_EQ((assembler.CodeSize() - before) / Instr::kInstrSize,
++      EXPECT_EQ(UnpaddedInstructionCount(&assembler, before),
+                 compiler::Assembler::InstructionCountForLoadStoreFromOffset(
+                     offset, compiler::kDWord));
+     }
+@@ -103,7 +117,7 @@ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+       compiler::Assembler assembler(&pool_builder);
+       const intptr_t before = assembler.CodeSize();
+       assembler.LoadQFromOffset(V0, PP, offset);
+-      EXPECT_EQ((assembler.CodeSize() - before) / Instr::kInstrSize,
++      EXPECT_EQ(UnpaddedInstructionCount(&assembler, before),
+                 compiler::Assembler::InstructionCountForLoadStoreFromOffset(
+                     offset, compiler::kQWord));
+     }
+@@ -138,7 +152,7 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStore) {
+     compiler::Assembler bare(&bare_pool);
+     bare.set_constant_pool_allowed(true);
+     bare.LoadWordFromPoolIndex(R3, index);
+-    const intptr_t natural = bare.CodeSize() / Instr::kInstrSize;
++    const intptr_t natural = UnpaddedInstructionCount(&bare, 0);
+     EXPECT(natural >= 1);
+     EXPECT(natural <=
+            compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount);
+@@ -213,17 +227,17 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreRemainsDecodable) {
+       compiler::Assembler bare(&pool_builder);
+       bare.set_constant_pool_allowed(true);
+       bare.LoadWordFromPoolIndex(R3, index);
+-      natural = bare.CodeSize() / Instr::kInstrSize;
++      natural = UnpaddedInstructionCount(&bare, 0);
++      // The end of the real instructions, as if there were no padding.
+       dart::InstructionPattern::DecodeLoadWordFromPool(
+-          reinterpret_cast<uword>(bare.CodeAddress(0)) + bare.CodeSize(),
++          reinterpret_cast<uword>(bare.CodeAddress(0)) +
++              natural * Instr::kInstrSize,
+           &bare_reg, &bare_index);
+     }
+     EXPECT_EQ(R3, bare_reg);
+     EXPECT_EQ(index, bare_index);
+ 
+-    // Now the same load with the gate open, which is what an AOT snapshot gets.
+-    const bool saved = FLAG_precompiled_mode;
+-    FLAG_precompiled_mode = true;
++    // Now the padded footprint every snapshot gets.
+     Register padded_reg = kNoRegister;
+     intptr_t padded_index = -1;
+     intptr_t footprint = 0;
+@@ -239,7 +253,6 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreRemainsDecodable) {
+           reinterpret_cast<uword>(padded.CodeAddress(0)) + padded.CodeSize(),
+           &padded_reg, &padded_index);
+     }
+-    FLAG_precompiled_mode = saved;
+ 
+     EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
+               footprint);
+@@ -263,16 +276,16 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreDoubleWordRemainsDecodable) {
+       compiler::Assembler bare(&pool_builder);
+       bare.set_constant_pool_allowed(true);
+       bare.LoadDoubleWordFromPoolIndex(R3, R4, index);
++      const intptr_t natural = UnpaddedInstructionCount(&bare, 0);
+       dart::InstructionPattern::DecodeLoadDoubleWordFromPool(
+-          reinterpret_cast<uword>(bare.CodeAddress(0)) + bare.CodeSize(),
++          reinterpret_cast<uword>(bare.CodeAddress(0)) +
++              natural * Instr::kInstrSize,
+           &bare_lower, &bare_upper, &bare_index);
+     }
+     EXPECT_EQ(R3, bare_lower);
+     EXPECT_EQ(R4, bare_upper);
+     EXPECT_EQ(index, bare_index);
+ 
+-    const bool saved = FLAG_precompiled_mode;
+-    FLAG_precompiled_mode = true;
+     Register padded_lower = kNoRegister, padded_upper = kNoRegister;
+     intptr_t padded_index = -1;
+     intptr_t footprint = 0;
+@@ -286,7 +299,6 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreDoubleWordRemainsDecodable) {
+           reinterpret_cast<uword>(padded.CodeAddress(0)) + padded.CodeSize(),
+           &padded_lower, &padded_upper, &padded_index);
+     }
+-    FLAG_precompiled_mode = saved;
+ 
+     EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
+               footprint);
+diff --git a/runtime/vm/shorebird/object_pool_editor_test.cc b/runtime/vm/shorebird/object_pool_editor_test.cc
+index c7b43193ed5..f9e43ca68d1 100644
+--- a/runtime/vm/shorebird/object_pool_editor_test.cc
++++ b/runtime/vm/shorebird/object_pool_editor_test.cc
+@@ -63,7 +63,7 @@ static int32_t OffsetOfIndex(intptr_t index) {
+       compiler::target::ObjectPool::element_offset(index));
+ }
+ 
+-// The bare emitter for each kind, with no padding.
++// The emitter for each kind. They pad themselves; MeasuredCount looks past it.
+ static void EmitRaw(compiler::Assembler* a, int32_t kind, intptr_t index) {
+   const int32_t offset = OffsetOfIndex(index);
+   switch (kind) {
+@@ -92,14 +92,22 @@ static void EmitRaw(compiler::Assembler* a, int32_t kind, intptr_t index) {
+ 
+ // How many instructions the emitter really uses, measured rather than reasoned
+ // about. This is the number ObjectPoolEditor::InstructionCountNoPadding is
+-// supposed to predict.
++// supposed to predict. The emitters pad themselves in every mode, so the
++// count stops at the trailing NOPs; a real load or store never ends in one.
+ static intptr_t MeasuredCount(int32_t kind, intptr_t index) {
+   compiler::ObjectPoolBuilder pool_builder;
+   compiler::Assembler assembler(&pool_builder);
+   assembler.set_constant_pool_allowed(true);
+   const intptr_t before = assembler.CodeSize();
+   EmitRaw(&assembler, kind, index);
+-  return (assembler.CodeSize() - before) / Instr::kInstrSize;
++  const uint32_t* words =
++      reinterpret_cast<const uint32_t*>(assembler.CodeAddress(before));
++  intptr_t count = (assembler.CodeSize() - before) / Instr::kInstrSize;
++  while (count > 0 &&
++         words[count - 1] == static_cast<uint32_t>(Instr::kNopInstruction)) {
++    count--;
++  }
++  return count;
+ }
+ 
+ // Assemble a padded access -- the same emitter and the same PadLoadStore call
+-- 
+2.53.0
+

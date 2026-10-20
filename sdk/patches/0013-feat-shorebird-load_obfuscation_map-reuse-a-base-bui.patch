@@ -1,0 +1,426 @@
+From 0d9a23200284824849b2f6008d9544675f1f40b3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 19 Aug 2026 18:26:21 +0800
+Subject: [PATCH 013/206] feat(shorebird): load_obfuscation_map -- reuse a base
+ build's renames
+
+Reproduces Shorebird's --load-obfuscation-map, so a patch build renames the
+identifiers it shares with its base identically. gen_snapshot --help is now
+byte-identical to theirs, as is the VM flag description.
+
+It has to be a VM flag, not an embedder API: Dart_CreateIsolateGroupFromKernel
+loads dart:core and already renames while loading, so a map installed from the
+embedder arrives after the class members were registered under a fresh
+counter's renames, and later lookups fail (Lookup failed: _normalized in
+dart:core in @constructors in _BigIntImpl). Only compiling a program different
+from the map's origin exposes it -- a self-round-trip passes because the fresh
+renames coincide. So the map is seeded lazily from the Obfuscator constructor,
+which the first rename triggers, i.e. before kernel translation.
+
+SerializeMap never writes the counter at kSavedStateNameIndex, so a loader has
+to recover it. We resume past the largest rename in the map, ordering by
+NextName's numeral system (little-endian digits a..z A..Z). Shorebird resumes
+short of that and re-issues 44 names already taken by library URIs, breaking
+the injectivity their own fresh builds hold; we decline to reproduce that.
+
+Verified against their binary on a base/extended fixture pair:
+  - round-trip base -> load -> save: dict-equal
+  - all 4568 base renames preserved when compiling a changed program
+  - duplicate renames: ours 0, theirs 8
+  - seeded with their map, our output equals theirs exactly (4568/4568) on the
+    same program; on a changed one only the 12 new-symbol entries differ
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index ab04917dc5f..7de8017c5d8 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -114,7 +114,8 @@ static const char* const kSnapshotKindNames[] = {
+   V(macho_object, macho_object_filename)                                       \
+   V(loading_unit_manifest, loading_unit_manifest_filename)                     \
+   V(save_debugging_info, debugging_info_filename)                              \
+-  V(save_obfuscation_map, obfuscation_map_filename)
++  V(save_obfuscation_map, obfuscation_map_filename)                            \
++  V(load_obfuscation_map, load_obfuscation_map_filename)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(compile_all, compile_all)                                                  \
+@@ -170,6 +171,7 @@ static void PrintUsage() {
+ "[--obfuscate]                                                               \n"
+ "[--save-debugging-info=<debug-filename>]                                    \n"
+ "[--save-obfuscation-map=<map-filename>]                                     \n"
++"[--load-obfuscation-map=<map-filename>]                                     \n"
+ "<dart-kernel-file>                                                          \n"
+ "                                                                            \n"
+ "To create an AOT application snapshot as an ELF shared library:             \n"
+@@ -179,6 +181,7 @@ static void PrintUsage() {
+ "[--obfuscate]                                                               \n"
+ "[--save-debugging-info=<debug-filename>]                                    \n"
+ "[--save-obfuscation-map=<map-filename>]                                     \n"
++"[--load-obfuscation-map=<map-filename>]                                     \n"
+ "<dart-kernel-file>                                                          \n"
+ "                                                                            \n"
+ "To create an AOT application snapshot as an Mach-O dynamic library (dylib): \n"
+@@ -188,13 +191,16 @@ static void PrintUsage() {
+ "[--obfuscate]                                                               \n"
+ "[--save-debugging-info=<debug-filename>]                                    \n"
+ "[--save-obfuscation-map=<map-filename>]                                     \n"
++"[--load-obfuscation-map=<map-filename>]                                     \n"
+ "<dart-kernel-file>                                                          \n"
+ "                                                                            \n"
+ "AOT snapshots can be obfuscated: that is all identifiers will be renamed    \n"
+ "during compilation. This mode is enabled with --obfuscate flag. Mapping     \n"
+ "between original and obfuscated names can be serialized as a JSON array     \n"
+-"using --save-obfuscation-map=<filename> option. See dartbug.com/30524       \n"
+-"for implementation details and limitations of the obfuscation pass.         \n"
++"using --save-obfuscation-map=<filename> option. A previously saved map can  \n"
++"be loaded using --load-obfuscation-map=<filename> to ensure consistent      \n"
++"obfuscation across separate compilations. See dartbug.com/30524 for         \n"
++"implementation details and limitations of the obfuscation pass.             \n"
+ "                                                                            \n"
+ "\n");
+   if (verbose) {
+@@ -317,6 +323,13 @@ static int ParseArguments(int argc,
+     return -1;
+   }
+ 
++  if (!obfuscate && load_obfuscation_map_filename != nullptr) {
++    Syslog::PrintErr(
++        "--load-obfuscation-map=<...> should only be specified when "
++        "obfuscation is enabled by the --obfuscate flag.\n\n");
++    return -1;
++  }
++
+   if (!IsSnapshottingForPrecompilation()) {
+     if (obfuscate) {
+       Syslog::PrintErr(
+@@ -892,6 +905,12 @@ int main(int argc, char** argv) {
+     // so generated code should not depend on the CPU features
+     // of the system where snapshot was generated.
+     vm_options.AddArgument("--target_unknown_cpu");
++    // The map has to be in place before kernel translation renames anything,
++    // which is earlier than any embedder call can reach, so the VM reads it.
++    if (load_obfuscation_map_filename != nullptr) {
++      vm_options.AddArgument(Utils::SCreate("--load_obfuscation_map=%s",
++                                            load_obfuscation_map_filename));
++    }
+   } else if (snapshot_kind == kAppJIT) {
+     // App-jit snapshot can be deployed to another machine,
+     // so generated code should not depend on the CPU features
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index cc5768174aa..20947813055 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -35,6 +35,7 @@
+ #include "vm/compiler/frontend/flow_graph_builder.h"
+ #include "vm/compiler/frontend/kernel_to_il.h"
+ #include "vm/compiler/jit/compiler.h"
++#include "vm/dart.h"
+ #include "vm/dart_entry.h"
+ #include "vm/exceptions.h"
+ #include "vm/ffi/native_assets.h"
+@@ -79,6 +80,11 @@ DEFINE_FLAG(charp,
+             write_retained_reasons_to,
+             nullptr,
+             "Print reasons for retaining objects to the given file");
++DEFINE_FLAG(charp,
++            load_obfuscation_map,
++            nullptr,
++            "Path to a JSON obfuscation map file to load before kernel "
++            "translation. Used for consistent obfuscation across patch builds.");
+ 
+ DECLARE_FLAG(bool, print_flow_graph);
+ DECLARE_FLAG(bool, print_flow_graph_optimized);
+@@ -3726,6 +3732,145 @@ void Precompiler::CompileFunction(Precompiler* precompiler,
+   }
+ }
+ 
++// Reads one JSON string literal, undoing the escaping BaseTextBuffer applies in
++// EscapeAndAddCodeUnit. |cursor| points at the opening quote and is left just
++// past the closing one. Returns false if the literal is malformed.
++static bool ReadEscapedString(const char** cursor,
++                              const char* end,
++                              BaseTextBuffer* out) {
++  const char* p = *cursor;
++  if ((p == end) || (*p != '"')) return false;
++  p++;
++  while ((p != end) && (*p != '"')) {
++    if (*p != '\\') {
++      out->AddChar(*p++);
++      continue;
++    }
++    if (++p == end) return false;
++    switch (*p) {
++      case '"':
++      case '\\':
++      case '/':
++        out->AddChar(*p);
++        break;
++      case 'b':
++        out->AddChar('\b');
++        break;
++      case 'f':
++        out->AddChar('\f');
++        break;
++      case 'n':
++        out->AddChar('\n');
++        break;
++      case 'r':
++        out->AddChar('\r');
++        break;
++      case 't':
++        out->AddChar('\t');
++        break;
++      case 'u': {
++        if ((end - p) < 5) return false;
++        uint32_t code_unit = 0;
++        for (intptr_t i = 1; i <= 4; i++) {
++          const char digit = p[i];
++          if ((digit >= '0') && (digit <= '9')) {
++            code_unit = (code_unit << 4) | (digit - '0');
++          } else if ((digit >= 'a') && (digit <= 'f')) {
++            code_unit = (code_unit << 4) | (digit - 'a' + 10);
++          } else if ((digit >= 'A') && (digit <= 'F')) {
++            code_unit = (code_unit << 4) | (digit - 'A' + 10);
++          } else {
++            return false;
++          }
++        }
++        p += 4;
++        // Only control characters and unpaired surrogates are written this
++        // way, so a direct UTF-8 encoding round-trips them.
++        if (code_unit < 0x80) {
++          out->AddChar(static_cast<char>(code_unit));
++        } else if (code_unit < 0x800) {
++          out->AddChar(static_cast<char>(0xC0 | (code_unit >> 6)));
++          out->AddChar(static_cast<char>(0x80 | (code_unit & 0x3F)));
++        } else {
++          out->AddChar(static_cast<char>(0xE0 | (code_unit >> 12)));
++          out->AddChar(static_cast<char>(0x80 | ((code_unit >> 6) & 0x3F)));
++          out->AddChar(static_cast<char>(0x80 | (code_unit & 0x3F)));
++        }
++        break;
++      }
++      default:
++        return false;
++    }
++    p++;
++  }
++  if (p == end) return false;
++  *cursor = p + 1;  // Skip the closing quote.
++  return true;
++}
++
++// Reads the file named by --load_obfuscation_map and installs the renaming map
++// it holds, which is the JSON array of names Dart_GetObfuscationMap writes.
++static void LoadObfuscationMapFromFile(Thread* thread) {
++  auto file_open = Dart::file_open_callback();
++  auto file_read = Dart::file_read_callback();
++  auto file_close = Dart::file_close_callback();
++  if ((file_open == nullptr) || (file_read == nullptr) ||
++      (file_close == nullptr)) {
++    FATAL("Could not load obfuscation map: file callbacks not set");
++  }
++
++  void* stream = file_open(FLAG_load_obfuscation_map, /*write=*/false);
++  if (stream == nullptr) {
++    FATAL("Could not load obfuscation map: failed to open %s",
++          FLAG_load_obfuscation_map);
++  }
++  uint8_t* buffer = nullptr;
++  intptr_t length = 0;
++  file_read(&buffer, &length, stream);
++  file_close(stream);
++  if (buffer == nullptr) {
++    FATAL("Could not load obfuscation map: failed to read %s",
++          FLAG_load_obfuscation_map);
++  }
++
++  Zone* zone = thread->zone();
++  const char* cursor = reinterpret_cast<const char*>(buffer);
++  const char* end = cursor + length;
++  if ((cursor == end) || (*cursor++ != '[')) {
++    FATAL("Obfuscation map %s is not a JSON array", FLAG_load_obfuscation_map);
++  }
++
++  const GrowableObjectArray& pairs =
++      GrowableObjectArray::Handle(zone, GrowableObjectArray::New());
++  ZoneTextBuffer name(zone);
++  while ((cursor != end) && (*cursor != ']')) {
++    if ((pairs.Length() > 0) && (*cursor++ != ',')) {
++      FATAL("Obfuscation map %s: entries must be comma separated",
++            FLAG_load_obfuscation_map);
++    }
++    name.Clear();
++    if (!ReadEscapedString(&cursor, end, &name)) {
++      FATAL("Obfuscation map %s: entry %" Pd " is not a valid string",
++            FLAG_load_obfuscation_map, pairs.Length());
++    }
++    // The renaming map is keyed by identity, so every name has to be a Symbol.
++    pairs.Add(
++        String::Handle(zone, Symbols::New(thread, name.buffer(), name.length())));
++  }
++  if (cursor == end) {
++    FATAL("Obfuscation map %s is missing its closing bracket",
++          FLAG_load_obfuscation_map);
++  }
++  if ((pairs.Length() % 2) != 0) {
++    FATAL("Obfuscation map %s holds %" Pd
++          " names, expected pairs of (original, obfuscated)",
++          FLAG_load_obfuscation_map, pairs.Length());
++  }
++  free(buffer);
++
++  Obfuscator::DeserializeMap(thread, pairs);
++}
++
+ Obfuscator::Obfuscator(Thread* thread, const String& private_key)
+     : state_(nullptr) {
+   auto isolate_group = thread->isolate_group();
+@@ -3737,6 +3882,15 @@ Obfuscator::Obfuscator(Thread* thread, const String& private_key)
+ 
+   // Create ObfuscationState from ObjectStore::obfuscation_map().
+   ObjectStore* store = isolate_group->object_store();
++
++  // Seed the renaming map from a previous compilation the first time an
++  // Obfuscator is asked for. Doing it here rather than from the embedder is
++  // what gets it in before kernel translation, which renames as it loads.
++  if ((store->obfuscation_map() == Array::null()) &&
++      (FLAG_load_obfuscation_map != nullptr)) {
++    LoadObfuscationMapFromFile(thread);
++  }
++
+   Array& obfuscation_state = Array::Handle(zone, store->obfuscation_map());
+ 
+   if (store->obfuscation_map() == Array::null()) {
+@@ -4093,6 +4247,93 @@ const char** Obfuscator::SerializeMap(Thread* thread) {
+   return result;
+ }
+ 
++// Digit value of |ch| in the numeral system NextName() counts in, or -1 if
++// |ch| is not one of its digits.
++static intptr_t RenameDigit(char ch) {
++  if ((ch >= 'a') && (ch <= 'z')) return ch - 'a';
++  if ((ch >= 'A') && (ch <= 'Z')) return ch - 'A' + 26;
++  return -1;
++}
++
++// Recover the raw counter value (ObfuscationState::name_) from a rename handed
++// out by NewAtomicRename(). BuildRename() wraps that value in a 'get:'/'set:'
++// prefix, a leading '_' and a trailing '@<private-key>'. Returns the length of
++// the counter value and sets |start| to its first character, or returns 0 if
++// |rename| was not generated by the obfuscator.
++static intptr_t AtomicRenameCore(const char* rename, const char** start) {
++  const char* cursor = rename;
++  if ((strncmp(cursor, "get:", 4) == 0) || (strncmp(cursor, "set:", 4) == 0)) {
++    cursor += 4;
++  }
++  if (*cursor == '_') cursor++;
++  *start = cursor;
++  while (RenameDigit(*cursor) >= 0) {
++    cursor++;
++  }
++  if ((*cursor != '\0') && (*cursor != '@')) return 0;
++  return cursor - *start;
++}
++
++// Renames are little-endian numerals (NextName() carries from name_[0] up), so
++// a longer one is always generated later and within one length the last
++// character is the most significant digit.
++static bool IsLaterRename(const char* a,
++                          intptr_t a_length,
++                          const char* b,
++                          intptr_t b_length) {
++  if (a_length != b_length) return a_length > b_length;
++  for (intptr_t i = a_length - 1; i >= 0; i--) {
++    const intptr_t a_digit = RenameDigit(a[i]);
++    const intptr_t b_digit = RenameDigit(b[i]);
++    if (a_digit != b_digit) return a_digit > b_digit;
++  }
++  return false;
++}
++
++void Obfuscator::DeserializeMap(Thread* thread,
++                                const GrowableObjectArray& pairs) {
++  ASSERT((pairs.Length() % 2) == 0);
++  Zone* zone = thread->zone();
++
++  const Array& renames = Array::Handle(
++      zone, HashTables::New<ObfuscationMap>(pairs.Length(), Heap::kOld));
++  ObfuscationMap renames_map(renames.ptr());
++
++  // SerializeMap() does not record the obfuscator's counter, only the renames
++  // it produced. Recovering the last name handed out is what keeps a continued
++  // compilation from issuing a rename the previous one already used: renames
++  // are dense, so the largest one is the last one. Identity entries are skipped
++  // because those names come from the program, not from the counter.
++  char last_name[kMaxRenameLength] = {0};
++  intptr_t last_length = 0;
++
++  String& original = String::Handle(zone);
++  String& renamed = String::Handle(zone);
++  for (intptr_t i = 0; i < pairs.Length(); i += 2) {
++    original ^= pairs.At(i);
++    renamed ^= pairs.At(i + 1);
++    renames_map.UpdateOrInsert(original, renamed);
++
++    if (original.ptr() == renamed.ptr()) continue;
++    const char* core = nullptr;
++    const intptr_t length =
++        AtomicRenameCore(renamed.ToCString(), &core);
++    if ((length > 0) && (length < kMaxRenameLength) &&
++        IsLaterRename(core, length, last_name, last_length)) {
++      memmove(last_name, core, length);
++      last_name[length] = '\0';
++      last_length = length;
++    }
++  }
++
++  const Array& obfuscation_state = Array::Handle(zone, Array::New(kSavedStateSize));
++  obfuscation_state.SetAt(kSavedStateNameIndex,
++                          String::Handle(zone, String::New(last_name, Heap::kOld)));
++  obfuscation_state.SetAt(kSavedStateRenamesIndex, renames_map.Release());
++  thread->isolate_group()->object_store()->set_obfuscation_map(
++      obfuscation_state);
++}
++
+ #endif  // defined(DART_PRECOMPILER) && !defined(TARGET_ARCH_IA32)
+ 
+ }  // namespace dart
+diff --git a/runtime/vm/compiler/aot/precompiler.h b/runtime/vm/compiler/aot/precompiler.h
+index 44d049ffdaa..2d42048db75 100644
+--- a/runtime/vm/compiler/aot/precompiler.h
++++ b/runtime/vm/compiler/aot/precompiler.h
+@@ -500,6 +500,11 @@ class Obfuscator : public ValueObject {
+   // Serialize renaming map as a mallocated array of strings.
+   static const char** SerializeMap(Thread* thread);
+ 
++  // Restore a renaming map produced by SerializeMap, so that a separate
++  // compilation renames shared identifiers exactly as the previous one did.
++  // |pairs| is the flat original/renamed sequence; both must be Symbols.
++  static void DeserializeMap(Thread* thread, const GrowableObjectArray& pairs);
++
+   void PreventRenaming(const char* name);
+   void PreventRenaming(const String& name) { state_->PreventRenaming(name); }
+ 
+@@ -515,6 +520,9 @@ class Obfuscator : public ValueObject {
+   static constexpr intptr_t kSavedStateRenamesIndex = 1;
+   static constexpr intptr_t kSavedStateSize = 2;
+ 
++  // Size of the buffer holding the last used rename.
++  static constexpr intptr_t kMaxRenameLength = 100;
++
+   static ArrayPtr GetRenamesFromSavedState(const Array& saved_state) {
+     Array& renames = Array::Handle();
+     renames ^= saved_state.At(kSavedStateRenamesIndex);
+@@ -598,7 +606,7 @@ class Obfuscator : public ValueObject {
+ 
+     // Last used rename. Renames are only using a-zA-Z characters
+     // and are generated in order: a, b, ..., z, A, ..., Z, aa, ba, ...
+-    char name_[100];
++    char name_[kMaxRenameLength];
+ 
+     ObfuscationMap renames_;
+ 
+-- 
+2.53.0
+

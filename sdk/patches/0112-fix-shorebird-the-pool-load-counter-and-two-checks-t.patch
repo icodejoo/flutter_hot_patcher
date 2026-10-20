@@ -1,0 +1,541 @@
+From 6e5fdd71fe23260b52dac3da78010b9c27e894c6 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 11:33:28 +0800
+Subject: [PATCH 112/206] fix(shorebird): the pool load counter, and two checks
+ that release builds threw away
+
+InstructionCountForLoadStoreFromOffset measured PrepareLargeOffset. Two of the
+six object pool kinds do not use it: LoadWordFromPoolIndex and
+StoreWordToPoolIndex have a ladder of their own whose last rung is always
+movz+movk, where PrepareLargeOffset goes through LoadImmediate and drops the
+movk when the low sixteen bits are zero. So the count came out one low at
+offset 2^24, and the editor -- which locates the start of a sequence by
+counting backwards from its last instruction -- would have started a rewrite
+inside the sequence. The recon agreed with the emitters all along: their folded
+Address::Offset ladder is 1 / 2 / 3 and is 3 at 2^24. The counter now follows
+that ladder for kEightBytes + Address::Offset and keeps measuring for every
+other size and address type, which really is PrepareLargeOffset.
+
+PadLoadStore's two checks were ASSERTs, so they existed in no build that runs
+them: PadLoadStore is gated on FLAG_precompiled_mode, and the only builds that
+open that gate are release and product. Both are RELEASE_ASSERTs now, and
+turning them on found the thing an ASSERT could not: AssembleReplacement wraps
+PadLoadStore around emitters that wrap it around themselves, so every rewritten
+access in gen_snapshot ran two nested PadLoadStores and the outer one measured
+an already-padded emission. The bytes were right -- padding is idempotent --
+but the invariant was unmeetable. PadLoadStore is now re-entrancy aware: the
+outermost call measures, checks and pads, and a nested one just runs its body.
+The outer wrapper cannot simply be dropped, because with the gate shut it is
+the only thing doing the padding.
+
+Not changed: the pair kind. LoadDoubleWordFromPoolIndex takes `add TMP, PP,
+#imm` for any immediate an add can hold where PrepareLargeOffset insists the low
+twelve bits fit an imm7, so the two disagree from index 62 up -- which is not a
+corner, flow_graph_compiler_arm64.cc emits it for every AOT instance call, and
+making the new check unconditional aborts gen_snapshot on the fixture. That
+emitter is upstream code this fork has not diverged from, so it says nothing
+about which ladder theirs follows; guessing would be invention. The release
+check is applied only where the ladder is known, and the case stays pinned in
+ObjectPoolEditor_CountFollowsPrepareLargeOffset.
+
+The two tests that pinned the counter to LoadFromOffset now pin it to the pool
+emitter, which is the emission anything ever asks it about.
+
+Verified: verify_all.sh 16 ran / 0 failed, verify_reproduction.sh 28 artifacts
+/ 0 failures, run_vm_tests 157 passed. Negative controls, each with ninja at
+exit 0: breaking the last rung to 2 aborts Arm64PadLoadStore at the
+RELEASE_ASSERT in the Release build and reddens two more tests; the same break
+with the check written as ASSERT passes silently, which is the point; breaking
+the first rung aborts the Product gen_snapshot on a real compile.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index 4f3ca2ad5c4..ac6f4e3724e 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1070,26 +1070,72 @@ void Assembler::CompareImmediate(Register rn, int64_t imm, OperandSize sz) {
+   }
+ }
+ 
+-// Shorebird. Counted by assembling, not by reasoning about the cases.
++// Shorebird. How long an object pool access at this offset is.
+ //
+-// PrepareLargeOffset below decides between a bare offset, an add plus a
+-// 12-bit offset, and LoadImmediate plus a register offset, and LoadImmediate
+-// itself is a movz/movk sequence whose length depends on the bits set. A
+-// hand-written count of all that would be a second implementation of the same
+-// rules, free to drift from the first the moment either changes. Running the
+-// real one and measuring cannot.
++// Everything that asks is asking about an object pool access: PadLoadStore,
++// which only the three pool emitters call, and
++// ObjectPoolEditor::InstructionCountNoPadding, whose six kinds are those three
++// plus the float, double and quad loads. So "the emission this predicts" always
++// means one of those, never Load or Store in general -- which matters, because
++// the two do not agree.
++//
++// Two ladders, not one:
++//
++//   * kEightBytes + Address::Offset is LoadWordFromPoolIndex and
++//     StoreWordToPoolIndex, which do NOT go through PrepareLargeOffset. Their
++//     rungs are a bare ldr/str, an `add` off PP plus a 12-bit offset, and
++//     finally an unconditional
++//
++//         movz TMP, #lo16 ; movk TMP, #hi16, lsl 16 ; ldr/str Rt, [PP, TMP]
++//
++//     which is always two instructions of address setup, whatever the bits.
++//
++//   * every other (sz, addr_type) is PrepareLargeOffset itself --
++//     LoadSFromOffset, LoadDFromOffset, LoadQFromOffset -- so it is measured
++//     by assembling, which
++//     cannot drift from what is emitted.
++//
++// ⚠️ The distinction is what this function got wrong. It measured
++// PrepareLargeOffset for all of them, and PrepareLargeOffset reaches its last
++// rung through LoadImmediate, which is free to be shorter than movz+movk --
++// it drops the movk when the low sixteen bits are zero, and takes a single
++// `orr` when the value happens to be a logical immediate. So the count came out
++// one low at offset 2^24, the first offset where that bites, and the editor
++// then located the start of the sequence one instruction too late. An
++// undercount is the dangerous direction: it starts the rewrite inside the
++// sequence rather than in front of it.
++//
++// The recon agrees with the emitters and not with the old body: their folded
++// Address::Offset ladder is "1 below 32768, else 2 while offset >> 24 == 0,
++// else 3", which is 3 at 2^24. The rungs below are written as the emitters'
++// own predicates rather than as those constants, so that they cannot drift
++// from the code they describe the way a table of numbers would.
+ //
+ // PP as the base because it is what an object pool load actually uses, and
+ // because PrepareLargeOffset takes a different path for CSP.
+ //
+-// ⚠️ Needs a current thread: AssemblerBase is a StackResource, so constructing
+-// one without a ThreadState dereferences null. The editor runs with a thread,
+-// so this is not a restriction in practice -- but it is asserted rather than
+-// left to segfault, which is how it first showed up.
++// ⚠️ Needs a current thread on the measured path: AssemblerBase is a
++// StackResource, so constructing one without a ThreadState dereferences null.
++// The editor runs with a thread, so this is not a restriction in practice --
++// but it is asserted rather than left to segfault, which is how it first
++// showed up.
+ intptr_t Assembler::InstructionCountForLoadStoreFromOffset(
+     int32_t offset,
+     OperandSize sz,
+     Address::AddressType addr_type) {
++  if (sz == kEightBytes && addr_type == Address::AddressType::Offset) {
++    if (Address::CanHoldOffset(offset, addr_type, sz)) {
++      return 1;  // ldr/str Rt, [PP, #offset]
++    }
++    Operand op;
++    const uint32_t upper20 = static_cast<uint32_t>(offset) & 0xfffff000;
++    const uint32_t lower12 = static_cast<uint32_t>(offset) & 0x00000fff;
++    if (Operand::CanHold(upper20, kXRegSizeInBits, &op) == Operand::Immediate &&
++        Address::CanHoldOffset(static_cast<int32_t>(lower12), addr_type, sz)) {
++      return 2;  // add Rn, PP, #upper20 ; ldr/str Rt, [Rn, #lower12]
++    }
++    return 3;  // movz ; movk ; ldr/str Rt, [PP, TMP]
++  }
+   ASSERT(ThreadState::Current() != nullptr);
+   compiler::ObjectPoolBuilder pool_builder;
+   Assembler assembler(&pool_builder);
+@@ -1111,20 +1157,56 @@ intptr_t Assembler::InstructionCountForLoadStoreFromOffset(
+ // `cmp #3`. That is the compiler's encoding of the comparison, not a comparison
+ // anybody wrote, so what is below is the condition rather than the xor.
+ //
+-// The padding count comes from the measured emission and not from the counter,
+-// because the two do not always agree in this tree. The counter counts
+-// PrepareLargeOffset; three of the object pool emitters use it, and the other
+-// three -- LoadWordFromPoolIndex, StoreWordToPoolIndex and
+-// LoadDoubleWordFromPoolIndex -- have ladders of their own that can come out one
+-// instruction different. ObjectPoolEditor_CountFollowsPrepareLargeOffset pins
+-// both cases rather than leaving them to be discovered. Measuring cannot be
+-// wrong about what was just emitted; the counter can.
++// The padding count comes from the measured emission and not from the counter.
++// Measuring cannot be wrong about what was just emitted; the counter can.
++//
++// Both checks are RELEASE_ASSERTs. They were ASSERTs, on the grounds that the
++// first one was not a property this tree had -- the counter measured
++// PrepareLargeOffset, and LoadWordFromPoolIndex and StoreWordToPoolIndex have a
++// ladder of their own that came out one instruction shorter at offset 2^24.
++// That was our bug and it is fixed in the counter, so the check is now true for
++// every offset those two emitters can be given, and a check that only exists in
++// debug builds is no check at all here: PadLoadStore is gated on
++// FLAG_precompiled_mode, so the only builds that run it at all are gen_snapshot
++// builds, and those are release or product. Leaving it as an ASSERT meant the
++// property was never once tested. (Their release build likewise still contains
++// the two calls to the counter, which an ASSERT would have compiled out.)
++//
++// ⚠️ The exception, still open, is LoadDoubleWordFromPoolIndex, the PairOffset
++// kind. Its second rung takes `add TMP, PP, #offset` for any immediate an add
++// can hold; PrepareLargeOffset, which the counter still measures for that kind,
++// additionally insists the low twelve bits be a valid imm7 pair offset. So the
++// two disagree from the first pool index whose offset exceeds the imm7 range
++// until the offset passes 4096 -- index 62 upwards, which is not a corner:
++// flow_graph_compiler_arm64.cc emits this for every AOT instance call, and
++// making the check below unconditional aborts gen_snapshot on hello.dart.
++//
++// That abort is what makes the carve-out a finding rather than a convenience:
++// the disagreement is reachable, so today the editor declines those sites. But
++// which of the two ladders their counter follows is undetermined, and their
++// emitter here is upstream code we have not diverged from, so guessing would be
++// free invention. Nothing is changed to suit either side, and the release check
++// is applied only where the ladder is known. ObjectPoolEditor_CountFollows-
++// PrepareLargeOffset pins the case, and ObjectPoolEditor::Edit's own self-check
++// declines such a site instead of corrupting it.
++//
++// ⚠️ Re-entrant, and the guard below is not defensive tidiness. AssembleReplace-
++// ment wraps this around LoadWordFromPoolIndex, StoreWordToPoolIndex and
++// LoadDoubleWordFromPoolIndex, and under FLAG_precompiled_mode those three wrap
++// it around themselves -- so in gen_snapshot, and only in gen_snapshot, every
++// rewritten access ran two nested PadLoadStores. The bytes came out right,
++// because padding to a fixed footprint is idempotent, but the outer call then
++// measured `emitted` as the already-padded three and compared it against the
++// unpadded count. That is why the outer wrapper cannot be dropped instead: with
++// the gate shut -- every unit test, and any non-AOT use -- the inner one never
++// runs and the outer one is the only thing doing the padding.
+ //
+-// Their two checks are reproduced as ASSERTs, matching the recon, and not as
+-// RELEASE_ASSERTs: the disagreement above means the first one is not a property
+-// this tree has, and a check known to be false is worse than no check. (Their
+-// release build does still contain the two calls to the counter, which an ASSERT
+-// would have compiled out. That is unexplained.)
++// So the outermost call owns the footprint: it measures the raw emission,
++// checks
++// it and pads it once, and a nested call just runs its body. That was invisible
++// until the checks became RELEASE_ASSERTs, because the only builds that open
++// the
++// gate are release and product builds, which is exactly where an ASSERT is not.
+ //
+ // Note also that this fork does not make Shorebird's companion change, which is
+ // to route the nineteen upstream emitters -- Load, LoadImmediate,
+@@ -1135,17 +1217,25 @@ void Assembler::PadLoadStore(std::function<void()> emit,
+                              int32_t offset,
+                              OperandSize sz,
+                              Address::AddressType addr_type) {
++  if (in_pad_load_store_) {
++    emit();
++    return;
++  }
++  in_pad_load_store_ = true;
+   const intptr_t start = CodeSize();
+   emit();
++  in_pad_load_store_ = false;
+   const intptr_t emitted = (CodeSize() - start) / Instr::kInstrSize;
+-  ASSERT(emitted ==
+-         InstructionCountForLoadStoreFromOffset(offset, sz, addr_type));
++  if (addr_type != Address::AddressType::PairOffset) {
++    RELEASE_ASSERT(emitted == InstructionCountForLoadStoreFromOffset(
++                                  offset, sz, addr_type));
++  }
+   if (base != PP) return;
+   for (intptr_t i = emitted; i < kObjectPoolLoadStoreMinInstructionCount; i++) {
+     nop();
+   }
+-  ASSERT((CodeSize() - start) <=
+-         kObjectPoolLoadStoreMinInstructionCount * Instr::kInstrSize);
++  RELEASE_ASSERT((CodeSize() - start) <=
++                 kObjectPoolLoadStoreMinInstructionCount * Instr::kInstrSize);
+ }
+ 
+ Address Assembler::PrepareLargeOffset(Register base,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.h b/runtime/vm/compiler/assembler/assembler_arm64.h
+index c7509dad630..f7091f97a4c 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.h
++++ b/runtime/vm/compiler/assembler/assembler_arm64.h
+@@ -1879,9 +1879,16 @@ class Assembler : public AssemblerBase {
+   //
+   // Not derived from their disassembly: their InstructionCountNoPadding at
+   // 0x1001a2b54 calls this and does not inline it, so only the signature and
+-  // the fact that it exists are theirs. The counts come from PrepareLargeOffset
+-  // below, which is the code being counted, and the test assembles at each
+-  // offset and compares -- so this cannot drift from what is actually emitted.
++  // the fact that it exists are theirs.
++  //
++  // ⚠️ "A load or store" here means an object pool access, which is the only
++  // thing that ever asks. kEightBytes + Address::Offset is the word pool ladder
++  // in LoadWordFromPoolIndex / StoreWordToPoolIndex, which is NOT
++  // PrepareLargeOffset and is one instruction longer than it wherever
++  // LoadImmediate can fold; every other size and address type is
++  // PrepareLargeOffset, and is measured by assembling rather than reasoned
++  // about. Handing this an offset that Load or Store in general will emit gives
++  // the wrong answer for the first case, on purpose. See the definition.
+   static intptr_t InstructionCountForLoadStoreFromOffset(
+       int32_t offset,
+       OperandSize sz = kEightBytes,
+@@ -1908,6 +1915,13 @@ class Assembler : public AssemblerBase {
+                     OperandSize sz,
+                     Address::AddressType addr_type);
+ 
++  // Shorebird. Set for the duration of the outermost PadLoadStore. The pool
++  // emitters call PadLoadStore on themselves under FLAG_precompiled_mode and
++  // ObjectPoolEditor::AssembleReplacement calls it on them, so the two nest;
++  // this is how the outer one still gets to measure an unpadded emission. See
++  // PadLoadStore.
++  bool in_pad_load_store_ = false;
++
+   Address PrepareLargeOffset(Register base,
+                              int32_t offset,
+                              OperandSize sz,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index 772c45dd964..2c45532309b 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -33,31 +33,80 @@ namespace compiler {
+ // against the emission rather than against a table of expected numbers -- a
+ // table would be a third copy of the same rules.
+ //
+-// The offsets are chosen to land on each branch PrepareLargeOffset has: inside
+-// the 12-bit scaled range, past it but with a representable upper half, and
+-// past that.
++// ⚠️ The reference emission is the pool emitter, not LoadFromOffset. It used to
++// be LoadFromOffset, and that was half of the bug this test exists to catch:
++// for
++// kEightBytes off PP the emitter is LoadWordFromPoolIndex, whose last rung is
++// always movz+movk, while LoadFromOffset goes through PrepareLargeOffset and
++// LoadImmediate -- which drops the movk when the low sixteen bits are zero, and
++// collapses to a single `orr` when the offset is a logical immediate. Pinning
++// the counter to LoadFromOffset pinned it to an emission nothing asks it about,
++// and did so silently, because none of the offsets listed reached the fold.
++//
++// The indices are chosen to land on each rung: inside the 12-bit scaled range,
++// past it but with a representable upper half, and past that. 2097150 is the
++// first index whose offset is exactly 2^24, which is where the fold bites;
++// 2097152 is past it with a non-zero low half, where the two agreed all along.
++//
+ // ISOLATE_UNIT_TEST_CASE, not VM_UNIT_TEST_CASE: an Assembler is a
+ // StackResource and needs a current thread. Getting that wrong is a segfault
+ // at construction, not a compile error.
+ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+-  const int32_t kOffsets[] = {
+-      0,      8,      0x1000, 0x7ff8,  // bare offset
+-      0x8000, 0x9000, 0x10000,         // add + 12-bit offset
+-      0x12345, 0x7ffffff8,             // LoadImmediate + register offset
++  const intptr_t kIndices[] = {
++      0,       1,       100,     4000,  // bare offset
++      4096,    8192,    300000,         // add + 12-bit offset
++      2097150, 2097152, 4194304,        // movz + movk + ldr/str
+   };
+ 
++  for (intptr_t index : kIndices) {
++    const int32_t offset =
++        static_cast<int32_t>(target::ObjectPool::element_offset(index));
++    for (int store = 0; store < 2; store++) {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler assembler(&pool_builder);
++      assembler.set_constant_pool_allowed(true);
++      const intptr_t before = assembler.CodeSize();
++      if (store != 0) {
++        assembler.StoreWordToPoolIndex(R0, index);
++      } else {
++        assembler.LoadWordFromPoolIndex(R0, index);
++      }
++      const intptr_t emitted =
++          (assembler.CodeSize() - before) / Instr::kInstrSize;
++
++      const intptr_t counted =
++          compiler::Assembler::InstructionCountForLoadStoreFromOffset(
++              offset, compiler::kEightBytes);
++      EXPECT_EQ(emitted, counted);
++    }
++  }
++
++  // Every other size and address type really is PrepareLargeOffset, and the
++  // counter still measures it there. Raw offsets, including ones no pool index
++  // can produce, because that path has no ladder of its own to disagree with.
++  const int32_t kOffsets[] = {
++      0,       8,       0x1000,    0x7ff8,    0x8000,
++      0x9000,  0x10000, 0x12345,   0x1000000, 0x7ffffff8,
++  };
+   for (int32_t offset : kOffsets) {
+-    compiler::ObjectPoolBuilder pool_builder;
+-    compiler::Assembler assembler(&pool_builder);
+-    const intptr_t before = assembler.CodeSize();
+-    assembler.LoadFromOffset(R0, PP, offset, compiler::kEightBytes);
+-    const intptr_t emitted =
+-        (assembler.CodeSize() - before) / Instr::kInstrSize;
+-
+-    const intptr_t counted =
+-        compiler::Assembler::InstructionCountForLoadStoreFromOffset(
+-            offset, compiler::kEightBytes);
+-    EXPECT_EQ(emitted, counted);
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler assembler(&pool_builder);
++      const intptr_t before = assembler.CodeSize();
++      assembler.LoadDFromOffset(V0, PP, offset);
++      EXPECT_EQ((assembler.CodeSize() - before) / Instr::kInstrSize,
++                compiler::Assembler::InstructionCountForLoadStoreFromOffset(
++                    offset, compiler::kDWord));
++    }
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler assembler(&pool_builder);
++      const intptr_t before = assembler.CodeSize();
++      assembler.LoadQFromOffset(V0, PP, offset);
++      EXPECT_EQ((assembler.CodeSize() - before) / Instr::kInstrSize,
++                compiler::Assembler::InstructionCountForLoadStoreFromOffset(
++                    offset, compiler::kQWord));
++    }
+   }
+ }
+ 
+@@ -68,17 +117,27 @@ ISOLATE_UNIT_TEST_CASE(Arm64InstructionCountForLoadStoreFromOffset) {
+ // The counts are deliberately not written down. What is asserted is that the
+ // padded form is the unpadded form followed by NOPs and nothing else, so this
+ // cannot pass by agreeing with a stale table of expected sizes.
++//
++// ⚠️ Indices and the pool emitter, not raw offsets and LoadFromOffset. The old
++// form told PadLoadStore it was padding a pool access while handing it an
++// emission no pool access uses, which is a combination production never makes;
++// at offset 2^24 the two are different lengths, so PadLoadStore's own check --
++// now a RELEASE_ASSERT -- rejects it, correctly.
+ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStore) {
+-  const int32_t kOffsets[] = {
+-      0,         8,         0x1000, 0x7ff8,  // one instruction
+-      0x8000,    0x9000,    0x10000,         // two
+-      0x1000000, 0x1234568,                  // three
++  const intptr_t kIndices[] = {
++      0,       1,       4000,  // one instruction
++      4096,    300000,         // two
++      2097150, 2097152,        // three
+   };
+ 
+-  for (int32_t offset : kOffsets) {
++  for (intptr_t index : kIndices) {
++    const int32_t offset =
++        static_cast<int32_t>(target::ObjectPool::element_offset(index));
++
+     compiler::ObjectPoolBuilder bare_pool;
+     compiler::Assembler bare(&bare_pool);
+-    bare.LoadFromOffset(R3, PP, offset, compiler::kEightBytes);
++    bare.set_constant_pool_allowed(true);
++    bare.LoadWordFromPoolIndex(R3, index);
+     const intptr_t natural = bare.CodeSize() / Instr::kInstrSize;
+     EXPECT(natural >= 1);
+     EXPECT(natural <=
+@@ -86,9 +145,10 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStore) {
+ 
+     compiler::ObjectPoolBuilder padded_pool;
+     compiler::Assembler padded(&padded_pool);
+-    padded.PadLoadStore(
+-        [&]() { padded.LoadFromOffset(R3, PP, offset, compiler::kEightBytes); },
+-        PP, offset, compiler::kEightBytes, compiler::Address::Offset);
++    padded.set_constant_pool_allowed(true);
++    padded.PadLoadStore([&]() { padded.LoadWordFromPoolIndex(R3, index); }, PP,
++                        offset, compiler::kEightBytes,
++                        compiler::Address::Offset);
+     EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
+               padded.CodeSize() / Instr::kInstrSize);
+ 
+diff --git a/runtime/vm/shorebird/object_pool_editor_test.cc b/runtime/vm/shorebird/object_pool_editor_test.cc
+index 2ec35087479..4b46fcf5975 100644
+--- a/runtime/vm/shorebird/object_pool_editor_test.cc
++++ b/runtime/vm/shorebird/object_pool_editor_test.cc
+@@ -337,35 +337,43 @@ ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_InstructionCountMatchesTheEmitters) {
+   EXPECT(OffsetOfIndex(kIndices[0]) < (1 << 24));
+ }
+ 
+-// Two divergences found while landing this, recorded rather than papered over
+-// -- and recorded here rather than "fixed", because the recon is explicit that
+-// InstructionCountNoPadding calls InstructionCountForLoadStoreFromOffset for
+-// all six kinds and that re-deriving their constant-folded ladder would be
+-// copying an optimiser artifact.
++// Two divergences were found while landing this. One is closed and one is not,
++// and the difference between them is what this test is for.
+ //
+-// Both have the same cause. The counter counts PrepareLargeOffset, and three of
++// Both had the same cause. The counter measured PrepareLargeOffset, and three
++// of
+ // the six emitters use it. The other three -- LoadWordFromPoolIndex,
+ // StoreWordToPoolIndex and LoadDoubleWordFromPoolIndex -- each have a ladder of
+ // their own, which can disagree:
+ //
+-//   * pair, index 62 (offset 512). LoadDoubleWordFromPoolIndex will take
+-//     `add TMP, PP, #imm` for any immediate an add can hold; PrepareLargeOffset
+-//     additionally insists the low twelve bits fit an imm7. Emitter 2,
+-//     counter 3.
+ //   * word, index 2097150 (offset exactly 2^24). LoadWordFromPoolIndex always
+ //     emits movz *and* movk, where PrepareLargeOffset goes through
+ //     LoadImmediate, which drops the movk when the low sixteen bits are zero.
+-//     Emitter 3, counter 2.
++//     Emitter 3, counter 2.  ✅ FIXED -- this one was ours, not theirs: the
++//     recon reads their folded Address::Offset ladder as "1 if
++//     -256 <= offset < 32768, else 2 if offset >> 24 == 0, else 3", which is 3
++//     at 2^24 and so agrees with the emitter all along. The counter now follows
++//     the word pool ladder for kEightBytes + Address::Offset instead of
++//     measuring PrepareLargeOffset, so all three word rungs agree, and
++//     PadLoadStore's check on that is a RELEASE_ASSERT.
+ //
+-// The second one is ours rather than theirs: the recon reads their folded
+-// Address::Offset ladder as "1 if -256 <= offset < 32768, else 2 if
+-// offset >> 24 == 0, else 3", which is 3 at 2^24 and so agrees with the
+-// emitter. Our counter is written against PrepareLargeOffset instead.
++//   * pair, index 62 (offset 512). LoadDoubleWordFromPoolIndex will take
++//     `add TMP, PP, #imm` for any immediate an add can hold; PrepareLargeOffset
++//     additionally insists the low twelve bits fit an imm7. Emitter 2,
++//     counter 3.  ⚠️ STILL OPEN. Not "fixed" to match the emitter, because that
++//     emitter is upstream code this fork has not diverged from, so it says
++//     nothing about which ladder *their* counter follows -- and the recon's
++//     folded ladder was read off the Address::Offset path, not this one.
++//     Guessing would be free invention. The evidence that would close it is
++//     their ImageWriter::Write self-check, which re-assembles every access the
++//     mapping leaves alone and prints "Expected:" / "Actual:" on a mismatch.
+ //
+ // The consequence of either is visible end to end: with the count wrong, the
+ // editor locates the start of the sequence at the wrong instruction, and its own
+ // self-check catches it and declines the site instead of corrupting it. Which is
+-// at least the self-check working.
++// at least the self-check working. ⚠️ For the pair kind that is not a corner
++// case -- flow_graph_compiler_arm64.cc emits it for every AOT instance call, so
++// real snapshots have declined sites in them today.
+ ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_CountFollowsPrepareLargeOffset) {
+   // Where the pair emitter agrees: inside the imm7 range, and past it when the
+   // low twelve bits still fit one.
+@@ -375,16 +383,30 @@ ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_CountFollowsPrepareLargeOffset) {
+               ObjectPoolEditor::InstructionCountNoPadding(op));
+   }
+ 
++  // The two word kinds now agree at every rung, which is the half that is
++  // closed. 2097150 is offset 2^24 exactly -- the case that used to be a
++  // divergence -- and 4194304 is past it with a non-zero low half, where the
++  // two agreed even before. Asserted against MeasuredCount rather than against
++  // written-down numbers, so it cannot pass by agreeing with a stale table.
++  for (intptr_t index : {intptr_t{0}, intptr_t{1}, intptr_t{4000},
++                         intptr_t{4096}, intptr_t{300000}, intptr_t{2097150},
++                         intptr_t{2097152}, intptr_t{4194304}}) {
++    for (int32_t kind : {kObjectPoolOpLoadWord, kObjectPoolOpStoreWord}) {
++      const ObjectPoolOp op = {index, kind};
++      EXPECT_EQ(MeasuredCount(kind, index),
++                ObjectPoolEditor::InstructionCountNoPadding(op));
++    }
++  }
++
+   struct Divergence {
+     int32_t kind;
+     intptr_t index;
+     intptr_t emitted;
+     intptr_t counted;
+   };
++  // The half that is still open. One row, and it is the pair kind.
+   static const Divergence kDivergences[] = {
+       {kObjectPoolOpLoadDoubleWord, 62, 2, 3},
+-      {kObjectPoolOpLoadWord, 2097150, 3, 2},
+-      {kObjectPoolOpStoreWord, 2097150, 3, 2},
+   };
+ 
+   for (const Divergence& d : kDivergences) {
+@@ -392,11 +414,6 @@ ISOLATE_UNIT_TEST_CASE(ObjectPoolEditor_CountFollowsPrepareLargeOffset) {
+     EXPECT_EQ(d.emitted, MeasuredCount(d.kind, d.index));
+     EXPECT_EQ(d.counted, ObjectPoolEditor::InstructionCountNoPadding(op));
+ 
+-    // The store's three-instruction form is not detectable at all (see
+-    // ObjectPoolEditor_DeclinesTheThreeInstructionStore), so there is no site
+-    // for the editor to decline.
+-    if (d.kind == kObjectPoolOpStoreWord) continue;
+-
+     // Two words of slack in front, because a count that is too high makes the
+     // editor look further back than the sequence actually starts.
+     uint32_t buffer[8];
+-- 
+2.53.0
+

@@ -1,0 +1,76 @@
+From 9b539408c48cb15384ffa0e5b2506f1975077b2e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 19:08:52 +0800
+Subject: [PATCH 135/206] feat(shorebird): emit subgraph_pp in --shorebird
+ per-function JSON (F1)
+
+ShorebirdSelfAndOpHashes() already computes classified.subgraph_pp[ci]
+via a DFS walk over the function's callees (lines 1626-1709).  The field
+was previously absent because an earlier version emitted self_pp as a
+stand-in -- wrong, since the subgraph list must include what callees
+touch.  Now that the callee walk is complete (task 59), the data is
+correct and this is a pure emission gap.
+
+Self-consistency verified: --shorebird subgraph_pp[i] == decoded
+--dump_object_pool_link_data subgraph_pp_indices[i] for all 1589/1589
+functions on our own snapshot (subgraph_pp_check.sh, verify_all.sh 21/0).
+Negative control: appending a sentinel to the binary output makes all
+1589 comparisons fail.
+
+Closes F1 from the F-table audit.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 8542690ef0a..8cbcb1abcae 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -2231,6 +2231,15 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("self_pp");
+     for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
+     js.CloseArray();
++    // subgraph_pp is the DFS-inclusive version: every pool reference the root
++    // itself and its entire callee subgraph make, in walk order with repeats.
++    // Verified against their own base.so via --dump_object_pool_link_data
++    // (subgraph_pp_indices, 1380/1380 on their own binary) which uses the same
++    // classified.subgraph_pp[ci] source. ShorebirdSelfAndOpHashes already does
++    // the callee walk internally (lines 1626-1709); this is the output of that.
++    js.OpenArray("subgraph_pp");
++    for (intptr_t slot : classified.subgraph_pp[ci]) js.PrintValue64(slot);
++    js.CloseArray();
+     // Computable for the same reason self_pp is: the field table sequences are
+     // already recognised by the scan above. subgraph_field_table stays absent,
+     // because that one needs the callee walk.
+@@ -2245,21 +2254,15 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("callees");
+     for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
+     js.CloseArray();
+-    // subgraph_pp, self_selectors, subgraph_selectors and subgraph_field_table
+-    // are DELIBERATELY ABSENT, for the same reason the subgraph hashes are: we
+-    // cannot compute them, and emitting a plausible value is worse than
+-    // emitting nothing.
+-    //
+-    // subgraph_pp was a copy of self_pp, which is wrong -- the subgraph list
+-    // has to include what the callees touch. The other four were hardcoded
+-    // empty arrays, which a consumer reads as "this function has none" rather
+-    // than "we did not compute this".
++    // self_selectors, subgraph_selectors and subgraph_field_table are
++    // DELIBERATELY ABSENT: they are not computed anywhere in this file.
++    // subgraph_field_table additionally needs the full callee walk beyond what
++    // ShorebirdSelfAndOpHashes provides today.
+     //
+-    // Measured on the one consumer that exists: tools/linker.py reads only
+-    // name, offset, size and subgraph_hash, so unlike the hashes these were not
+-    // live bad data -- but the shape is identical and a future consumer would
+-    // have no way to tell. They come back when the subgraph walk exists; having
+-    // callees is a prerequisite for that walk, not the walk itself.
++    // subgraph_pp is now emitted (see above); it was previously absent because
++    // an earlier version emitted self_pp as a stand-in (wrong -- the subgraph
++    // list must include what callees touch). The correct data has always been
++    // in classified.subgraph_pp[ci]; the block above simply reads it.
+     js.CloseObject();
+   }
+   js.CloseArray();
+-- 
+2.53.0
+

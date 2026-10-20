@@ -1,0 +1,156 @@
+From d0c9511ca67d6a1760a78cd1be04ca48e61a574f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 20:34:16 +0800
+Subject: [PATCH 105/206] fix(shorebird): complete self_pp, and drop six fields
+ we cannot compute
+
+Applies the rule task 43 settled -- a field we cannot compute is omitted, not
+faked -- to the rest of the --shorebird output.
+
+Dropped: subgraph_pp, which was a copy of self_pp and therefore wrong, since a
+subgraph list has to include what the callees touch; and self_selectors,
+subgraph_selectors, self_field_table, subgraph_field_table and callees, which
+were hardcoded empty arrays that a consumer reads as "this function has none"
+rather than "we did not compute this".
+
+Checked first, as with the hashes: tools/linker.py reads only name, offset, size
+and subgraph_hash, so unlike those these were not live bad data. The shape is
+identical though, and a future consumer would have no way to tell.
+
+self_pp was the more interesting case: it was correct and INCOMPLETE, which is
+the same shape again. It recognised only ldr xN,[PP,#imm12] and emitted the
+result as if it were the whole list, so a function using a large-displacement
+pool access would report fewer references than it makes. It now handles the
+forms the pool emitters actually produce and shares ShorebirdSelfHash's
+decoders, so the two cannot drift.
+
+Cross-checked against an independent implementation in the same binary: the
+number of entries in self_pp equals the number of distinct pool ordinals the
+hash model derives, for all 1589 functions.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index b257f1d2258..700755ed102 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -775,9 +775,6 @@ static void FhpSHA1(const uint8_t* data, size_t len, uint8_t digest[20]) {
+ 
+ namespace {
+ 
+-// ARM64 Dart register constants for PP load detection
+-static constexpr int kDartPPReg = 27;   // x27 = Object Pool pointer
+-
+ // Compute SHA-1 of instruction bytes as hex string.
+ std::string Sha1HexOf(const uint8_t* data, size_t len) {
+   uint8_t digest[20];
+@@ -1019,19 +1016,65 @@ std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
+ }
+ 
+ std::vector<intptr_t> GetSelfPPIndices(const uint8_t* code, intptr_t size) {
++  // Every pool access the function makes, in order of first appearance.
++  //
++  // ⚠️ This used to recognise only `ldr xN,[PP,#imm12]` and emit the result as
++  // though it were the whole list. A partial list that reads as complete is the
++  // same shape as a wrong hash: the consumer has no way to tell. It now handles
++  // the forms the object pool emitters actually produce, sharing the decoders
++  // ShorebirdSelfHash uses so the two cannot drift apart.
+   std::vector<intptr_t> slots;
+-  for (intptr_t i = 0; i + 4 <= size; i += 4) {
+-    uint32_t instr;
+-    memcpy(&instr, code + i, 4);
+-    // 64-bit LDR unsigned offset: bits[31:22] = 0b1111100101 = 0x3E5
+-    if (((instr >> 22) & 0x3FF) == 0x3E5) {
+-      int rn = (instr >> 5) & 0x1F;
+-      if (rn == kDartPPReg) {
+-        intptr_t imm12 = (instr >> 10) & 0xFFF;
+-        // PP slot N is at offset (N+2)*8, so imm12 = N+2 → N = imm12-2
+-        if (imm12 >= 2) slots.push_back(imm12 - 2);
++  const intptr_t words = size / 4;
++  auto word_at = [&](intptr_t i) {
++    uint32_t w;
++    memcpy(&w, code + i * 4, 4);
++    return w;
++  };
++  auto add = [&](intptr_t index) {
++    for (intptr_t existing : slots) {
++      if (existing == index) return;
++    }
++    slots.push_back(index);
++  };
++
++  intptr_t i = 0;
++  while (i < words) {
++    const uint32_t w = word_at(i);
++    uint32_t base, dest, offset, imm;
++
++    // add xN,PP,#imm{,lsl 12} [; add xN,xN,#imm] ; ldr/ldp through xN
++    if (DecodeAddImmediate(w, &base, &dest, &imm) && base == kPPRegister &&
++        i + 1 < words) {
++      uint32_t total = imm, consumed = 2, b2, d2, i2;
++      if (DecodeAddImmediate(word_at(i + 1), &b2, &d2, &i2) && b2 == dest &&
++          d2 == dest && i + 2 < words) {
++        total += i2;
++        consumed = 3;
++      }
++      const uint32_t tail = word_at(i + consumed - 1);
++      uint32_t tb, td, to;
++      bool ok = DecodeLoadStore(tail, &tb, &td, &to) && tb == dest;
++      if (!ok && DecodePair(tail, &tb, &to)) ok = (tb == dest);
++      if (ok) {
++        add((total + to - 16) / 8);
++        i += consumed;
++        continue;
+       }
+     }
++
++    if (DecodePair(w, &base, &offset) && base == kPPRegister) {
++      add((offset - 16) / 8);
++      i++;
++      continue;
++    }
++
++    if (DecodeLoadStore(w, &base, &dest, &offset) && base == kPPRegister) {
++      add((offset - 16) / 8);
++      i++;
++      continue;
++    }
++
++    i++;
+   }
+   return slots;
+ }
+@@ -1290,16 +1333,20 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("self_pp");
+     for (intptr_t s : pp_slots) js.PrintValue64(s);
+     js.CloseArray();
+-    js.OpenArray("subgraph_pp");
+-    for (intptr_t s : pp_slots) js.PrintValue64(s);
+-    js.CloseArray();
+-    
+-    // Empty arrays for other fields (simplified)
+-    js.OpenArray("self_selectors"); js.CloseArray();
+-    js.OpenArray("subgraph_selectors"); js.CloseArray();
+-    js.OpenArray("self_field_table"); js.CloseArray();
+-    js.OpenArray("subgraph_field_table"); js.CloseArray();
+-    js.OpenArray("callees"); js.CloseArray();
++    // subgraph_pp, self_selectors, subgraph_selectors, self_field_table,
++    // subgraph_field_table and callees are DELIBERATELY ABSENT, for the same
++    // reason the subgraph hashes are: we cannot compute them, and emitting a
++    // plausible value is worse than emitting nothing.
++    //
++    // subgraph_pp was a copy of self_pp, which is wrong -- the subgraph list
++    // has to include what the callees touch. The other five were hardcoded
++    // empty arrays, which a consumer reads as "this function has none" rather
++    // than "we did not compute this".
++    //
++    // Measured on the one consumer that exists: tools/linker.py reads only
++    // name, offset, size and subgraph_hash, so unlike the hashes these were not
++    // live bad data -- but the shape is identical and a future consumer would
++    // have no way to tell. They come back when the callee walk exists.
+     js.CloseObject();
+   }
+   js.CloseArray();
+-- 
+2.53.0
+

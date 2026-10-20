@@ -1,0 +1,59 @@
+From 5bd4d2a67dc644d96081c24191240246d0d55e07 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 11:09:01 +0800
+Subject: [PATCH 023/206] test(shorebird): assert wrapper.cc is not
+ dead-stripped
+
+Currently FAILS at 0 symbols, deliberately. wrapper.cc has no call site yet,
+so -ffunction-sections plus dead-stripping removes it entirely -- the same
+failure that kept sim_bridge.cc out of every production artifact while its
+.o file existed. Landing it is plan #2's job; this makes the gap measurable
+instead of invisible.
+
+Confirmed "compiled then discarded", not "never compiled":
+
+  libdart_vm_precompiler.wrapper.o   57080 bytes, 15 matching symbols, all T
+  gen_snapshot                        0 matching symbols
+
+The .o carries real emitted code for WrapEntryPoint, AllocateWrapperPage,
+EnsureNextWrapperEntry, the constructor and both GetStubCodeRange overloads.
+The linker dropped all of it because nothing references any of it.
+
+Note for whoever runs this next: the product gen_snapshot in the tree was
+stale (built before wrapper.cc existed), and the script reported 0 against it
+for the wrong reason -- wrapper.cc was not in that binary at all. Rebuild
+ProductARM64 before believing the number, the same way a failed ninja leaves
+a stale run_vm_tests printing "Done:".
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper_symbols_check.sh b/runtime/vm/shorebird/wrapper_symbols_check.sh
+new file mode 100755
+index 00000000000..d9d2aa8bc2d
+--- /dev/null
++++ b/runtime/vm/shorebird/wrapper_symbols_check.sh
+@@ -0,0 +1,21 @@
++#!/usr/bin/env bash
++# Fails if wrapper.cc got dead-stripped out of the product gen_snapshot.
++#
++# Compiling is not landing. sim_bridge.cc produced a .o for months while
++# `nm gen_snapshot` found zero of its symbols, because no call site referenced
++# it. Expect this check to FAIL until plan #2 wires WrapEntryPoint into the
++# simulator -- that is the point of it.
++set -euo pipefail
++
++BIN=${1:-$HOME/dart-3122/sdk/xcodebuild/ProductARM64/gen_snapshot}
++[ -x "$BIN" ] || { echo "missing binary: $BIN" >&2; exit 2; }
++
++n=$(nm -a "$BIN" 2>/dev/null | c++filt \
++    | grep -cE 'shorebird::(WrapperAllocator|Layout|CPUToSimConfig|SimToCPUConfig)' || true)
++
++echo "wrapper.cc symbols in $(basename "$BIN"): $n"
++if [ "$n" -eq 0 ]; then
++  echo "FAIL: dead-stripped -- compiled but not referenced by anything" >&2
++  exit 1
++fi
++echo "PASS: wrapper.cc is present in the product artifact"
+-- 
+2.53.0
+

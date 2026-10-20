@@ -1,0 +1,366 @@
+From afe8874959771bad663d095b2c38cf1f690b659f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 12:25:55 +0800
+Subject: [PATCH 027/206] test(shorebird): round-trip tests through the real
+ encoder and decoder
+
+Extracts WriteToStream(BaseWriteStream*) out of WriteToFile for all three
+types, WriteToFile becoming a thin wrapper. The split exists so the round-trip
+tests can drive the actual production encoder into memory. Hand-rolling the
+encoding in the test would have compared the reader against the test's own copy
+of the format and would still have passed if the real writer disagreed --
+the one bug a round-trip is for.
+
+Five tests, all field-by-field: every cid/id/name/hash, num_cids for the class
+table, max_field_id for the field table, and every (lo, hi) range for the
+dispatch table. Each also asserts PendingBytes() == 0, so a decoder that
+stopped early or over-read cannot pass. Dispatch rows with zero, one and three
+ranges are all covered so an off-by-one in the inner loop cannot survive.
+Nothing routes through ShorebirdLinker::shared(); the *LinkInfo objects are
+constructed directly, so there is no process-wide state and no ordering
+dependency between tests.
+
+Byte-neutrality re-verified on the six fixtures (hello + five variants), three
+binary artifacts plus their three JSON twins, from cached identical dills:
+
+  ours pre-D1 baseline vs ours now : 36/36 identical
+  ours now             vs theirs   : 24/36 (the same 12 pre-existing
+                                     field_table intra-id ordering misses)
+
+So neither D1 nor this extraction changed a single emitted byte, measured
+cumulatively against the baseline taken before any of this work started.
+
+Negative control: swapped the name/hash reads in ReadClassTableLinkInfo --
+a realistic typo that keeps entry count, the trailing scalar and stream
+alignment all perfectly intact. RoundTrip_ClassTableLinkInfo caught it on all
+three entries (exit 255) while the trailing-scalar test and the null-path
+smoke test both still exited 0. That is the point: the content assertions are
+load-bearing, and a count-only or trailer-only suite would have shipped it.
+
+Copyability of the three *LinkInfo types is left unconstrained deliberately,
+for lack of evidence -- not a finding that their types are copyable. Noted in
+link_info.h rather than encoding a guess as DISALLOW_COPY_AND_ASSIGN.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index ab5c834f06b..3e166068738 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -116,16 +116,21 @@ void WriteString(BaseWriteStream* stream, const std::string& s) {
+ 
+ }  // namespace
+ 
+-void ClassTableLinkInfo::WriteToFile(const char* path) const {
+-  MallocWriteStream stream(/*initial_size=*/1 * MB);
+-  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(classes_.size()));
++void ClassTableLinkInfo::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(classes_.size()));
+   for (const ClassInfo& info : classes_) {
+-    stream.WriteUnsigned<intptr_t>(info.cid);
+-    WriteString(&stream, info.name);
+-    WriteString(&stream, info.hash);
++    stream->WriteUnsigned<intptr_t>(info.cid);
++    WriteString(stream, info.name);
++    WriteString(stream, info.hash);
+   }
+-  // The class table size is a trailer, not a header field.
+-  stream.WriteUnsigned<intptr_t>(num_cids_);
++  // The class table size is a trailer, not a header field. Deliberately last --
++  // this is precisely what makes a count-driven reader mandatory.
++  stream->WriteUnsigned<intptr_t>(num_cids_);
++}
++
++void ClassTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/1 * MB);
++  WriteToStream(&stream);
+ 
+   CallbackFile file(path);
+   if (file.is_open()) {
+@@ -192,15 +197,20 @@ std::unique_ptr<ClassTableLinkInfo> GetClassTableLinkInfo(Thread* thread) {
+   return std::make_unique<ClassTableLinkInfo>(std::move(classes), num_cids);
+ }
+ 
+-void FieldTableLinkInfo::WriteToFile(const char* path) const {
+-  MallocWriteStream stream(/*initial_size=*/1 * MB);
+-  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(fields_.size()));
++void FieldTableLinkInfo::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(fields_.size()));
+   for (const FieldInfo& info : fields_) {
+-    stream.WriteUnsigned<intptr_t>(info.id);
+-    WriteString(&stream, info.name);
+-    WriteString(&stream, info.hash);
++    stream->WriteUnsigned<intptr_t>(info.id);
++    WriteString(stream, info.name);
++    WriteString(stream, info.hash);
+   }
+-  stream.WriteUnsigned<intptr_t>(max_field_id_);
++  // Trailer, as with the class table.
++  stream->WriteUnsigned<intptr_t>(max_field_id_);
++}
++
++void FieldTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/1 * MB);
++  WriteToStream(&stream);
+ 
+   CallbackFile file(path);
+   if (file.is_open()) {
+@@ -343,18 +353,24 @@ void PrintClassTableLinkInfoIfRequested(Thread* thread) {
+ }
+ 
+ 
+-void DispatchTableLinkInfo::WriteToFile(const char* path) const {
+-  MallocWriteStream stream(/*initial_size=*/64 * KB);
+-  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(selectors_.size()));
++void DispatchTableLinkInfo::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(selectors_.size()));
+   for (const SelectorRowInfo& row : selectors_) {
+-    stream.WriteUnsigned<intptr_t>(row.offset);
+-    WriteString(&stream, row.hash);
+-    stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(row.ranges.size()));
++    stream->WriteUnsigned<intptr_t>(row.offset);
++    WriteString(stream, row.hash);
++    stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(row.ranges.size()));
+     for (const auto& range : row.ranges) {
+-      stream.WriteUnsigned<intptr_t>(range.first);
+-      stream.WriteUnsigned<intptr_t>(range.second);
++      stream->WriteUnsigned<intptr_t>(range.first);
++      stream->WriteUnsigned<intptr_t>(range.second);
+     }
+   }
++  // No trailing scalar here, unlike the class and field tables.
++}
++
++void DispatchTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/64 * KB);
++  WriteToStream(&stream);
++
+   CallbackFile file(path);
+   if (file.is_open()) {
+     file.Write(stream.buffer(), stream.bytes_written());
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 78b95ab7891..432fda27bcc 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -14,6 +14,8 @@
+ namespace dart {
+ 
+ class Thread;
++// Forward declared rather than including vm/datastream.h, which is heavy.
++class BaseWriteStream;
+ 
+ // Link information describing a base snapshot's class table, so a patch
+ // compiled later can be mapped onto it.
+@@ -46,6 +48,13 @@ struct ClassInfo {
+ // isolate) and its operator delete is UNREACHABLE(), i.e. FATAL() in every
+ // build mode -- not DEBUG-gated. Deriving from ZoneObject here would therefore
+ // abort in Release and Product too, not merely in tests.
++//
++// COPYABILITY IS DELIBERATELY UNCONSTRAINED, for lack of evidence -- this is
++// NOT a finding that their type is copyable. Their interface tells us ownership
++// moves through unique_ptr and says nothing either way about copying, so adding
++// DISALLOW_COPY_AND_ASSIGN would encode a guess as a constraint. (Dropping the
++// ZoneObject base did remove the copy prohibition these classes used to inherit
++// from it, so this is a real change in behaviour, just not an evidenced one.)
+ class ClassTableLinkInfo {
+  public:
+   ClassTableLinkInfo(std::vector<ClassInfo> classes, intptr_t num_cids)
+@@ -58,6 +67,12 @@ class ClassTableLinkInfo {
+   // WriteStream varint encoding:
+   //   count, { cid, name, hash }, num_cids
+   // Note num_cids is written *last*, not in the header.
++  //
++  // WriteToStream is the real encoder; WriteToFile is a thin wrapper over it.
++  // The split exists so round-trip tests can drive the actual encoder into
++  // memory instead of re-implementing the format, which would still pass if the
++  // writer and the test's copy of the format disagreed.
++  void WriteToStream(BaseWriteStream* stream) const;
+   void WriteToFile(const char* path) const;
+ 
+   // JSON form, matching --print_class_table_link_debug_info_to. Same data, and
+@@ -89,6 +104,8 @@ class FieldTableLinkInfo {
+   intptr_t max_field_id() const { return max_field_id_; }
+ 
+   // count, { id, name, hash }, max_field_id -- the scalar is again a trailer.
++  // WriteToStream is the real encoder; see the note on ClassTableLinkInfo.
++  void WriteToStream(BaseWriteStream* stream) const;
+   void WriteToFile(const char* path) const;
+   void WriteDebugInfoToFile(const char* path) const;
+ 
+@@ -114,6 +131,8 @@ class DispatchTableLinkInfo {
+ 
+   // count, { offset, hash, nranges, (lo,hi) * nranges }. No trailing scalar,
+   // unlike the class and field tables.
++  // WriteToStream is the real encoder; see the note on ClassTableLinkInfo.
++  void WriteToStream(BaseWriteStream* stream) const;
+   void WriteToFile(const char* path) const;
+   void WriteDebugInfoToFile(const char* path) const;
+ 
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index 12672cec96a..f2409b128db 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "vm/shorebird/linker.h"
+ 
++#include <utility>
++#include <vector>
++
++#include "vm/datastream.h"
+ #include "vm/unit_test.h"
+ 
+ namespace dart {
+@@ -63,4 +67,149 @@ VM_UNIT_TEST_CASE(ReadDispatchTableLinkInfo_NullPathReturnsEmpty) {
+   EXPECT_EQ(static_cast<size_t>(0), result->selectors().size());
+ }
+ 
++// ---------------------------------------------------------------------------
++// Round-trip tests: real encoder -> bytes -> real decoder.
++//
++// These are the first tests in this file that actually exercise the decoder.
++// Three deliberate properties:
++//
++//   1. The bytes come from the REAL encoder (WriteToStream), never hand-rolled
++//      here. Hand-encoding would compare the reader against this file's copy of
++//      the format and would still pass if the production writer disagreed --
++//      which is the one bug a round-trip exists to catch.
++//   2. Nothing goes through ShorebirdLinker::shared(). The singleton is
++//      process-wide, so a test that stored into it would leak state into every
++//      later test in the same process and make results order-dependent.
++//   3. Assertions are field-by-field, including the trailing scalars. A
++//      count-only assertion passes on a decoder that returns the right number
++//      of wrong entries.
++//
++// No file callbacks are involved, so these run correctly with no isolate.
++// ---------------------------------------------------------------------------
++
++VM_UNIT_TEST_CASE(RoundTrip_ClassTableLinkInfo) {
++  std::vector<ClassInfo> classes = {
++      ClassInfo{1, "String", "12345671"},
++      ClassInfo{7, "Function", "9096549271"},
++      // Duplicate scrubbed name: the hashes differ only by occurrence index,
++      // so a decoder that mixed up entries would still produce plausible data.
++      ClassInfo{42, "Function", "9096549272"},
++  };
++  const intptr_t num_cids = 500;
++  ClassTableLinkInfo original(classes, num_cids);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);  // the real encoder
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  std::unique_ptr<ClassTableLinkInfo> parsed = ReadClassTableLinkInfo(&rs);
++  EXPECT(parsed != nullptr);
++
++  EXPECT_EQ(classes.size(), parsed->classes().size());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(classes.size()); i++) {
++    EXPECT_EQ(classes[i].cid, parsed->classes()[i].cid);
++    EXPECT_STREQ(classes[i].name.c_str(), parsed->classes()[i].name.c_str());
++    EXPECT_STREQ(classes[i].hash.c_str(), parsed->classes()[i].hash.c_str());
++  }
++  // The assertion a read-until-EOF parser fails.
++  EXPECT_EQ(num_cids, parsed->num_cids());
++  // The decoder must have consumed the whole buffer and nothing more.
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
++// num_cids is deliberately far from the entry count, so a decoder that confused
++// the trailer for an entry (or dropped it) cannot coincidentally look right.
++VM_UNIT_TEST_CASE(RoundTrip_ClassTableLinkInfo_TrailingNumCidsIsPreserved) {
++  std::vector<ClassInfo> one_class = {ClassInfo{3, "int", "11111111"}};
++  const intptr_t num_cids = 999;
++  ClassTableLinkInfo original(one_class, num_cids);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  std::unique_ptr<ClassTableLinkInfo> parsed = ReadClassTableLinkInfo(&rs);
++
++  EXPECT_EQ(static_cast<size_t>(1), parsed->classes().size());
++  EXPECT_EQ(static_cast<intptr_t>(999), parsed->num_cids());
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
++VM_UNIT_TEST_CASE(RoundTrip_FieldTableLinkInfo) {
++  std::vector<FieldInfo> fields = {
++      FieldInfo{0, "_identityHashCode", "Object._identityHashCode 3 1"},
++      FieldInfo{1, "_uri", "Library._uri 3 1"},
++      // Duplicate: their encoding repeats " 1" rather than incrementing.
++      FieldInfo{2, "_uri", "Library._uri 3 1 1"},
++  };
++  const intptr_t max_field_id = 1023;
++  FieldTableLinkInfo original(fields, max_field_id);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  std::unique_ptr<FieldTableLinkInfo> parsed = ReadFieldTableLinkInfo(&rs);
++  EXPECT(parsed != nullptr);
++
++  EXPECT_EQ(fields.size(), parsed->fields().size());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(fields.size()); i++) {
++    EXPECT_EQ(fields[i].id, parsed->fields()[i].id);
++    EXPECT_STREQ(fields[i].name.c_str(), parsed->fields()[i].name.c_str());
++    EXPECT_STREQ(fields[i].hash.c_str(), parsed->fields()[i].hash.c_str());
++  }
++  EXPECT_EQ(max_field_id, parsed->max_field_id());
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
++VM_UNIT_TEST_CASE(RoundTrip_FieldTableLinkInfo_TrailingMaxFieldIdIsPreserved) {
++  std::vector<FieldInfo> one_field = {FieldInfo{5, "x", "Foo.x 1 1"}};
++  const intptr_t max_field_id = 888;
++  FieldTableLinkInfo original(one_field, max_field_id);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  std::unique_ptr<FieldTableLinkInfo> parsed = ReadFieldTableLinkInfo(&rs);
++
++  EXPECT_EQ(static_cast<size_t>(1), parsed->fields().size());
++  EXPECT_EQ(static_cast<intptr_t>(888), parsed->max_field_id());
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
++// DispatchTableLinkInfo has no trailing scalar; the nested per-row ranges array
++// is the complexity worth testing. Rows with zero, one and several ranges all
++// appear, so an off-by-one in the inner loop cannot pass.
++VM_UNIT_TEST_CASE(RoundTrip_DispatchTableLinkInfo) {
++  std::vector<SelectorRowInfo> selectors = {
++      SelectorRowInfo{0, "", {}},
++      SelectorRowInfo{256, "abc", {{10, 20}}},
++      SelectorRowInfo{512, "", {{1, 5}, {100, 200}, {999, 1000}}},
++  };
++  DispatchTableLinkInfo original(selectors);
++
++  MallocWriteStream ws(1 * MB);
++  original.WriteToStream(&ws);
++
++  ReadStream rs(ws.buffer(), ws.bytes_written());
++  std::unique_ptr<DispatchTableLinkInfo> parsed =
++      ReadDispatchTableLinkInfo(&rs);
++  EXPECT(parsed != nullptr);
++
++  EXPECT_EQ(selectors.size(), parsed->selectors().size());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(selectors.size()); i++) {
++    const SelectorRowInfo& want = selectors[i];
++    const SelectorRowInfo& got = parsed->selectors()[i];
++    EXPECT_EQ(want.offset, got.offset);
++    EXPECT_STREQ(want.hash.c_str(), got.hash.c_str());
++    EXPECT_EQ(want.ranges.size(), got.ranges.size());
++    for (intptr_t j = 0; j < static_cast<intptr_t>(want.ranges.size()); j++) {
++      EXPECT_EQ(want.ranges[j].first, got.ranges[j].first);
++      EXPECT_EQ(want.ranges[j].second, got.ranges[j].second);
++    }
++  }
++  EXPECT_EQ(static_cast<intptr_t>(0), rs.PendingBytes());
++}
++
+ }  // namespace dart
+-- 
+2.53.0
+

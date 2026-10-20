@@ -1,0 +1,209 @@
+From 86dbf623588a49a9428f0c10e76a5ff7a8d3b244 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 19:31:49 +0800
+Subject: [PATCH 101/206] fix(analyze_snapshot): enumerate the
+ InstructionsTable, not the heap
+
+--shorebird reported zero functions on every snapshot we produce. It now
+reports 1589, with its first entry at offset 128 size 44 -- byte for byte what
+Shorebird's own dump gives for the same program.
+
+The cause was not the base address, which is what the symptom looked like for
+three rounds: every payload sat below info.vm_isolate_instructions, and that
+base is in fact exactly the image's start_pc. It was the enumeration. In bare
+instructions AOT -- every snapshot gen_snapshot produces -- app functions have
+no individual Code object on the heap, so walking the heap for Code found 1608
+objects that were all VM and stub code and not one app function.
+
+The entries from first_entry_with_code onwards are what Shorebird's functions
+array is, so that is what this walks now.
+
+Two index conventions had to be got right and are commented, because they
+differ inside the same class: EntryPointAt takes an absolute entry index, while
+InstructionsLengthAt takes one relative to first_entry_with_code and adds it
+itself. PayloadStartAt looks like the natural accessor and is declared but never
+defined anywhere in the tree.
+
+Code::PayloadStart() is also wrong here and was tried first: in bare mode a Code
+does not own its instructions, and asking it put every payload about 1.5MB below
+the image -- once again looking like a bad base. The address has to come from
+the table.
+
+Names now come from Code::QualifiedName, which is where upstream's "[Optimized]
+" prefix is produced, so our names match their format rather than having it
+pasted on.
+
+The count is 1589 against their 1380 and that is expected rather than a defect:
+our VM carries additional stubs, so our snapshot of the same program has more
+entries.
+
+Measured on the result: no negative offsets, no bad sizes, no overlapping
+entries, and 351 of the first 400 entries end in ret, b, br or brk.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index c5b2ed81c10..7c76423a261 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -824,91 +824,78 @@ void CollectAllCodes(
+     std::vector<CodeEntry>& out_codes) {
+   Thread* thread = Thread::Current();
+   Zone* zone = thread->zone();
+-  Heap* heap = isolate_group->heap();
+ 
+-  std::vector<const Code*> discovered;
+-
+-  heap->ResetObjectIdTable();
+-  {
+-    NoSafepointScope ns(thread);
+-
+-    FieldVisitor visitor(isolate_group);
+-    std::function<void(ObjectPtr)> handle_object = [&](ObjectPtr value) {
+-      if (!value.IsHeapObject()) return;
+-      // 每个对象只处理一次。
+-      if (heap->GetObjectId(value) != 0) return;
+-      heap->SetObjectId(value, 1);
+-
+-      if (value->GetClassId() == kCodeCid) {
+-        discovered.push_back(&Code::Handle(zone, Code::RawCast(value)));
+-      }
+-
+-      value->untag()->VisitPointers(&visitor);
+-    };
+-    visitor.init(&handle_object);
+-
+-    Object& object = Object::Handle(zone);
+-
+-    // 对象池中可达的一切（AOT 下绝大多数 Code 由此可达）
+-    object = isolate_group->object_store()->global_object_pool();
+-    if (!object.IsNull()) handle_object(object.ptr());
+-
+-    // 所有库
+-    object = isolate_group->object_store()->libraries();
+-    if (!object.IsNull()) {
+-      object = GrowableObjectArray::Cast(object).data();
+-      if (!object.IsNull()) object.ptr().untag()->VisitPointers(&visitor);
+-    }
+-
+-    // 所有类
+-    auto class_table = isolate_group->class_table();
+-    for (intptr_t cid = 0; cid < class_table->NumCids(); ++cid) {
+-      if (!class_table->HasValidClassAt(cid)) continue;
+-      object = class_table->At(cid);
+-      if (!object.IsNull()) handle_object(object.ptr());
+-    }
+-
+-    // 闭包函数（只需一次；旧实现误置于 cid 循环内，重复了 NumCids 遍）
+-    object = isolate_group->object_store()->closure_functions();
+-    if (!object.IsNull()) handle_object(object.ptr());
+-
+-    // AOT 的 bare-instructions 模式下，绝大多数 Code 不再从类/库可达，
+-    // 而是挂在 InstructionsTable 的 code_objects_ 上。把这些表交给遍历器，
+-    // 其内部指针会被 VisitPointers 走到，从而覆盖 app 自身的代码。
+-    object = isolate_group->object_store()->instructions_tables();
+-    if (!object.IsNull()) handle_object(object.ptr());
+-  }
+-
+-  Function& func = Function::Handle(zone);
++  // In AOT with bare instructions -- which is every snapshot gen_snapshot
++  // produces -- app functions have NO individual Code object on the heap. They
++  // exist only as entries in the InstructionsTable. Walking the heap looking
++  // for Code, which is what this used to do, finds 1608 objects on a hello.dart
++  // snapshot and every one of them is VM or stub code: measured, all their
++  // payloads land below the isolate instructions image, the closest 3.6KB under
++  // its base and the furthest 74MB under.
++  //
++  // ⚠️ That is worth stating because the symptom pointed somewhere else for
++  // three rounds. Every payload being below the base looks exactly like a wrong
++  // base, and it is not: the image's start_pc is exactly
++  // info.vm_isolate_instructions. The base was always right and the enumeration
++  // was always wrong.
++  //
++  // The entries from first_entry_with_code onwards are the ones that carry a
++  // Code, and they are what Shorebird's functions array is: their
++  // index_in_entries runs 0..1379 on this fixture.
++  Object& tables = Object::Handle(
++      zone, isolate_group->object_store()->instructions_tables());
++  if (tables.IsNull()) return;
++
++  const auto& table_list = GrowableObjectArray::Cast(tables);
++  InstructionsTable& table = InstructionsTable::Handle(zone);
++  Array& code_objects = Array::Handle(zone);
++  Code& code = Code::Handle(zone);
+   Object& owner = Object::Handle(zone);
+ 
+-  for (const Code* code_ptr : discovered) {
+-    const Code& code = *code_ptr;
+-    if (code.IsNull()) continue;
+-
+-    const uintptr_t payload = static_cast<uintptr_t>(code.PayloadStart());
+-    // payload == 0 出现在被树摇掉的 VM 快照条目上；
+-    // payload < base 表示该 Code 位于 VM instructions 区，不属于本快照。
+-    if (payload == 0 || payload < isolate_instr_base) continue;
+-
+-    CodeEntry entry;
+-    owner = code.owner();
+-    if (!owner.IsNull() && owner.IsFunction()) {
+-      func ^= owner.ptr();
+-      entry.name = func.QualifiedUserVisibleNameCString();
+-    } else if (code.IsStubCode()) {
+-      entry.name = std::string("[Stub] ") + code.Name();
+-    } else {
+-      entry.name = code.Name();
++  for (intptr_t t = 0; t < table_list.Length(); t++) {
++    table ^= table_list.At(t);
++    if (table.IsNull()) continue;
++    code_objects = table.code_objects();
++    if (code_objects.IsNull()) continue;
++
++    const intptr_t first = table.FirstEntryWithCode();
++    for (intptr_t i = 0; i < code_objects.Length(); i++) {
++      code ^= code_objects.At(i);
++      if (code.IsNull()) continue;
++
++      // The table's own address, not Code::PayloadStart(). In bare
++      // instructions mode a Code object does not own its instructions, and
++      // asking it produced payloads about 1.5MB below the image -- which looks
++      // like a wrong base and is not one. EntryPointAt takes an ABSOLUTE entry
++      // index, so first_entry_with_code has to be added; InstructionsLengthAt
++      // takes a relative one and adds it itself.
++      const uintptr_t payload =
++          static_cast<uintptr_t>(table.EntryPointAt(first + i));
++      if (payload == 0) continue;
++
++      CodeEntry entry;
++      owner = code.owner();
++      if (!owner.IsNull() && owner.IsFunction()) {
++        // Code::QualifiedName is what produces their "[Optimized] X" form; it
++        // is the same function Dart uses everywhere else, so the prefix comes
++        // from upstream rather than being pasted on here.
++        entry.name = code.QualifiedName(
++            NameFormattingParams(Object::kUserVisibleName));
++      } else if (code.IsStubCode()) {
++        entry.name = std::string("[Stub] ") + code.Name();
++      } else {
++        entry.name = code.Name();
++      }
++      entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
++      // The table knows the real extent, including trimming the `brk #0`
++      // padding off the last entry; Code::Size() does not.
++      entry.size = table.InstructionsLengthAt(i);
++      entry.payload = reinterpret_cast<const uint8_t*>(payload);
++      entry.index_in_entries = -1;
++      out_codes.push_back(std::move(entry));
+     }
+-    entry.offset = static_cast<intptr_t>(payload - isolate_instr_base);
+-    entry.size = code.Size();
+-    entry.payload = reinterpret_cast<const uint8_t*>(payload);
+-    entry.index_in_entries = -1;  // 排序后填充
+-    out_codes.push_back(std::move(entry));
+   }
+ 
+-  // 按偏移排序并按偏移去重（同一段代码可能被多个 owner 引用）
+   std::sort(out_codes.begin(), out_codes.end(),
+             [](const CodeEntry& a, const CodeEntry& b) {
+               return a.offset < b.offset;
+-- 
+2.53.0
+

@@ -1,0 +1,125 @@
+From 03d7efb21e88b1d8e8d7e7a251a02a5031895762 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 11:32:49 +0800
+Subject: [PATCH 150/206] analyze_snapshot: recover dispatch selectors lost to
+ a 0 sentinel
+
+DecodeDispatchCall recognises four dispatch-call head forms and computed a
+selector for exactly one of them. The other three assigned 0, and the walk in
+ShorebirdSelfAndOpHashes dropped anything whose selector was 0. Two distinct
+losses came out of that:
+
+  mov lr, x0        the row index with no adjustment, so the selector is
+                    kOriginElement (4096 on arm64). Writing 0 lost it.
+  selector == 0     a real selector -- `sub lr, x0, #kOriginElement` -- which
+                    the fourth form decodes correctly and the filter then threw
+                    away, because 0 was doing double duty as "none".
+
+Measured against their --shorebird output on the prog fixture beforehand:
+4096 appeared in 898 of their functions and none of ours; 0 appeared in 803 of
+theirs and none of ours. Neither is reachable for us while 0 means "no
+selector".
+
+Fix: kNoSelector = -1 as the sentinel, kOriginElement for the mov head, and the
+filter tests against the sentinel rather than against a value selectors can
+take. The movz/movk and logical-immediate heads still carry a recoverable
+immediate and are still not decoded -- they now say so with kNoSelector instead
+of colliding with a valid selector. Reconstructing those two is its own change
+with its own negative control.
+
+Effect, measured with evidence_shorebird_components.sh in the research tree:
+
+  distinct selector values, ours        31 -> 33   (4096 and 0 now present)
+  subgraph_selectors distinct_missing 4572 -> 2127
+  self_selectors     distinct_missing  603 ->  139
+  total real gap                      5179 -> 2270
+  diff_units.sh shorebird            75034 -> 70223
+
+Containment still holds 3216/3216: we did not start emitting anything they do
+not have, which is what would have shown up if the sentinel change had let
+garbage through.
+
+Control: the first build of this change went to ProductARM64, which
+parity_matrix.sh does not use (it reads ProductSimARM64). Regenerating with it
+reproduced the pre-fix numbers bit for bit; rebuilding the binary the harness
+actually reads moved every one of them. The binary was the only variable.
+
+verify_all.sh in the research tree: 31 ran, 0 failed, including run_vm_tests
+152/152 after rebuilding ReleaseARM64, which the staleness guard correctly
+blocked on first attempt.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 998c90987bc..ff5f177c194 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1058,6 +1058,15 @@ static bool DecodeFieldReference(const uint32_t* words, intptr_t count,
+   return true;
+ }
+ 
++// No selector could be recovered from this dispatch head.
++//
++// This has to be a value no selector can take, and 0 is not one: selector 0 is
++// `sub lr, x0, #kOriginElement`, which theirs reports for 803 functions in the
++// prog fixture. Using 0 for "unknown" made those indistinguishable from the
++// heads below that simply were not decoded, and ShorebirdSelfAndOpHashes
++// dropped both.
++static constexpr intptr_t kNoSelector = -1;
++
+ // Instructions consumed by a dispatch-table call opening at words[i].
+ //
+ // 0x100196e64-0x100196fe4. The tail is always `ldr lr,[x21,lr,lsl 3]` ;
+@@ -1082,7 +1091,9 @@ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+     if ((w & 0x201F001F) != 0x2000001E) return false;
+     j = i + 1;
+     n = 3;
+-    if (selector_offset) *selector_offset = 0;
++    // `mov lr, x0` is the row index with no adjustment, so the selector is the
++    // origin itself. Reporting 0 here lost it on 898 functions in prog.
++    if (selector_offset) *selector_offset = DispatchTable::kOriginElement;
+   } else if ((w & 0x1F800000) == 0x12800000) {          // move wide immediate
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     j = i + 1;
+@@ -1094,13 +1105,18 @@ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+     }
+     if (j >= count || (words[j] & 0x1F1F03FF) != 0x0B11001E) return false;
+     j++;
+-    if (selector_offset) *selector_offset = 0;
++    // movz/movk into IP1 then `add lr, x0, x17`. The immediate is recoverable;
++    // reconstructing it is its own change with its own negative control, so
++    // for now say "not decoded" rather than a value this can never be.
++    if (selector_offset) *selector_offset = kNoSelector;
+   } else if ((w & 0x1F800000) == 0x12000000) {          // logical immediate
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     if ((words[i + 1] & 0x1F1F03FF) != 0x0B11001E) return false;
+     j = i + 2;
+     n = 4;
+-    if (selector_offset) *selector_offset = 0;
++    // Logical immediate into IP1. Recoverable via DecodeBitMasks; same note as
++    // the movz head above.
++    if (selector_offset) *selector_offset = kNoSelector;
+   } else if ((w & 0x1F0003FF) == 0x1100001E) {          // add/sub lr, x0, #imm
+     j = i + 1;
+     n = 3;
+@@ -1224,7 +1240,7 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       continue;
+     }
+ 
+-    intptr_t sel_offset = 0;
++    intptr_t sel_offset = kNoSelector;
+     if (DecodeDispatchCall(w_at, words, i, &used, &sel_offset)) {
+       facts.classified.push_back({ShorebirdClassifiedStep::kDispatch, used, sel_offset});
+       i += used;
+@@ -1684,7 +1700,7 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+         case ShorebirdClassifiedStep::kDispatch:
+           kind = kEntryDispatchTableCall;
+           value = 1;
+-          if (step.value != 0) {
++          if (step.value != kNoSelector) {
+             if (selector_subgraph_seen.insert(step.value).second) {
+               subgraph_selectors.push_back(step.value);
+             }
+-- 
+2.53.0
+

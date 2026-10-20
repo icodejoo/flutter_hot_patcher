@@ -1,0 +1,347 @@
+From 099a127a94c537ed91e9361c099601246bdcd7ee Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 18:32:44 +0800
+Subject: [PATCH 063/206] test(shorebird): execute IndirectStaticCallInstr for
+ the first time
+
+The instruction landed with its nineteen method names matching theirs
+exactly, and nothing ever constructed it. Symbol-set parity proves the
+shape was transcribed correctly and says nothing about whether any of it
+runs, which is the same gap AllocateMetadata has been sitting in.
+
+Five tests, each with a negative control run before committing:
+
+  TypeFromSignatureOnly        type comes from the declared return type
+  ConstantPropagatorDoesNotFold  the call is never folded
+  PrintOperandsFormat          their format, including the no-argument case
+  ArgumentsSizeAndTypeArgs     argument words, and the type-args slot
+  SerializationRoundTrip       dd_slot and target survive the IL serializer
+
+Three of these pin judgment calls a reader cannot recover from their
+stripped binary -- not folding, not narrowing from the target's body, and
+a format that ends at `]` where upstream's ends in a space. Each would
+otherwise be silently "fixed" back to the StaticCallInstr behaviour.
+
+Negative controls, two rounds: breaking constant propagation, the format
+string, ComputeType and ArgumentsSize turned exactly those four red and
+left the fifth green; storing dd_slot+1 turned the round-trip red and left
+ArgumentsSize green. Without that the tests only prove they can pass.
+
+The round-trip test is the one that needs a real function from a script:
+WriteTrait<const Function&> encodes a target as (owner cid, index within
+owner), and a synthetic Function::New is not in its owner's function list.
+
+81 of 81 shorebird tests pass.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/backend/il_indirect_static_call_test.cc b/runtime/vm/compiler/backend/il_indirect_static_call_test.cc
+new file mode 100644
+index 00000000000..dbe5b554f03
+--- /dev/null
++++ b/runtime/vm/compiler/backend/il_indirect_static_call_test.cc
+@@ -0,0 +1,289 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++// Tests for IndirectStaticCallInstr, the Shorebird IL instruction that
++// dispatches through Thread::indirect_static_call_table_ instead of calling a
++// target directly.
++//
++// The instruction landed with its method set matching theirs one for one, but
++// nothing constructed it: all nineteen methods were dead on arrival. Byte
++// identity with their gen_snapshot proves the shape was copied correctly and
++// says nothing about whether the thing runs. These tests are the other half.
++//
++// Three of the behaviours pinned here are judgment calls that a reader cannot
++// recover from their stripped binary, so each has a test that fails if someone
++// later "fixes" it back to the upstream StaticCallInstr behaviour:
++//   - constant propagation must not fold the call,
++//   - ComputeType must not narrow using the target's body,
++//   - PrintOperandsTo ends at `]` and emits its separator only when arguments
++//     follow, where upstream's format ends in an unconditional space.
++
++#include "vm/compiler/backend/il.h"
++
++#include "vm/compiler/backend/block_builder.h"
++#include "vm/compiler/backend/constant_propagator.h"
++#include "vm/compiler/backend/il_printer.h"
++#include "vm/compiler/backend/il_serializer.h"
++#include "vm/compiler/backend/il_test_helper.h"
++#include "vm/compiler/backend/type_propagator.h"
++#include "vm/object_store.h"
++#include "vm/symbols.h"
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// A static function with an int return type, owned by Object. Synthetic, so it
++// is not registered in its owner's function list -- fine for everything except
++// serialization, which encodes a Function as (owner cid, index in owner). The
++// round-trip test below uses a real function from a script for that reason.
++static const Function& MakeDummyTarget(Thread* thread, const char* name) {
++  const Class& object_class =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const FunctionType& signature = FunctionType::Handle(FunctionType::New());
++  const Function& target = Function::ZoneHandle(Function::New(
++      signature, String::Handle(Symbols::New(thread, name)),
++      UntaggedFunction::kRegularFunction,
++      /*is_static=*/true,
++      /*is_const=*/false,
++      /*is_abstract=*/false,
++      /*is_external=*/false,
++      /*is_native=*/true, object_class, TokenPosition::kNoSource));
++  signature.set_result_type(AbstractType::Handle(Type::IntType()));
++  return target;
++}
++
++// The type comes from the target's declared return type and nothing else.
++// Deliberately not sharpened from the target's body: the table entry is
++// repointed when a patch is linked, so anything inferred from the pre-patch
++// target is a claim about code that may not be the code that runs.
++ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_TypeFromSignatureOnly) {
++  using compiler::BlockBuilder;
++  CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
++  HierarchyInfo hierarchy_info(thread);
++
++  const Function& target = MakeDummyTarget(thread, "dd_target_type");
++
++  FlowGraphBuilderHelper H;
++  IndirectStaticCallInstr* call;
++  {
++    BlockBuilder builder(H.flow_graph(),
++                         H.flow_graph()->graph_entry()->normal_entry());
++    call = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/7,
++        /*type_args_len=*/0, Array::empty_array(), InputsArray(0),
++        S.GetNextDeoptId()));
++    builder.AddReturn(new Value(call));
++  }
++  H.FinishGraph();
++  FlowGraphTypePropagator::Propagate(H.flow_graph());
++
++  EXPECT_EQ(7, call->dd_slot());
++  EXPECT(call->function().ptr() == target.ptr());
++  EXPECT_PROPERTY(call->Type(), it.IsNullableInt());
++}
++
++// Never fold an indirect static call. Non-constant is the correct answer here,
++// not a conservative placeholder: folding would bake in the pre-patch target's
++// result and quietly defeat the whole mechanism.
++ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_ConstantPropagatorDoesNotFold) {
++  using compiler::BlockBuilder;
++  CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
++  HierarchyInfo hierarchy_info(thread);
++
++  const Function& target = MakeDummyTarget(thread, "dd_target_fold");
++
++  FlowGraphBuilderHelper H;
++  IndirectStaticCallInstr* call;
++  {
++    BlockBuilder builder(H.flow_graph(),
++                         H.flow_graph()->graph_entry()->normal_entry());
++    call = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/0,
++        /*type_args_len=*/0, Array::empty_array(), InputsArray(0),
++        S.GetNextDeoptId()));
++    builder.AddReturn(new Value(call));
++  }
++  H.FinishGraph();
++  FlowGraphTypePropagator::Propagate(H.flow_graph());
++  ConstantPropagator::Optimize(H.flow_graph());
++
++  // The lattice value is the sentinel, and the call is still in the graph --
++  // both matter. A folded call would have been replaced by its constant.
++  EXPECT(call->constant_value().ptr() == Object::non_constant().ptr());
++  EXPECT(call->previous() != nullptr);
++  EXPECT(call->HasUnknownSideEffects());
++  EXPECT(call->CanCallDart());
++  EXPECT(!call->ComputeCanDeoptimize());
++  EXPECT(call->CanBecomeDeoptimizationTarget());
++  EXPECT_EQ(call->deopt_id(), call->DeoptimizationTarget());
++
++  // dd_slot 0 is a legal slot, not an "absent" marker. If someone later makes
++  // the constructor reject it, this line goes red before anything subtler does.
++  EXPECT_EQ(0, call->dd_slot());
++}
++
++// Their format, transcribed byte for byte from the disassembly:
++//   " %s<%" Pd "> [dd_slot=%" Pd "]"
++// followed by a separator space only when arguments follow -- their code gates
++// that on `cmp x0, #1`. Upstream's StaticCallInstr format ends in an
++// unconditional trailing space instead, so the no-argument case is exactly
++// where the two differ and is the reason this test spells out both.
++ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_PrintOperandsFormat) {
++  using compiler::BlockBuilder;
++  CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
++  HierarchyInfo hierarchy_info(thread);
++
++  const Function& target = MakeDummyTarget(thread, "dd_target_print");
++
++  FlowGraphBuilderHelper H;
++  IndirectStaticCallInstr* no_args;
++  IndirectStaticCallInstr* one_arg;
++  ConstantInstr* argument = H.IntConstant(3);
++  {
++    BlockBuilder builder(H.flow_graph(),
++                         H.flow_graph()->graph_entry()->normal_entry());
++    no_args = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/42,
++        /*type_args_len=*/0, Array::empty_array(), InputsArray(0),
++        S.GetNextDeoptId()));
++
++    InputsArray args(1);
++    args.Add(new Value(argument));
++    one_arg = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/42,
++        /*type_args_len=*/0, Array::empty_array(), std::move(args),
++        S.GetNextDeoptId()));
++    builder.AddReturn(new Value(one_arg));
++  }
++  H.FinishGraph();
++
++  char buffer[256];
++  {
++    BufferFormatter f(buffer, sizeof(buffer));
++    no_args->PrintOperandsTo(&f);
++    EXPECT_STREQ(" dd_target_print<0> [dd_slot=42]", buffer);
++  }
++  {
++    BufferFormatter f(buffer, sizeof(buffer));
++    one_arg->PrintOperandsTo(&f);
++    // The separator space appears only because an argument follows it. The
++    // operand's own name is whatever SSA index the graph handed the constant,
++    // so build the expectation from it rather than pinning a number that moves
++    // whenever FlowGraphBuilderHelper's common constants change.
++    const char* expected =
++        OS::SCreate(thread->zone(), " dd_target_print<0> [dd_slot=42] v%" Pd,
++                    argument->ssa_temp_index());
++    EXPECT_STREQ(expected, buffer);
++  }
++}
++
++// A call with no arguments occupies no argument words; type_args_len > 0 adds
++// exactly one for the type-arguments vector. RequiredInputRepresentation routes
++// index 0 to kTagged in that case rather than to the target's parameter list.
++ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_ArgumentsSizeAndTypeArgs) {
++  using compiler::BlockBuilder;
++  CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
++  HierarchyInfo hierarchy_info(thread);
++
++  const Function& target = MakeDummyTarget(thread, "dd_target_args");
++
++  FlowGraphBuilderHelper H;
++  IndirectStaticCallInstr* plain;
++  IndirectStaticCallInstr* with_type_args;
++  {
++    BlockBuilder builder(H.flow_graph(),
++                         H.flow_graph()->graph_entry()->normal_entry());
++    plain = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/1,
++        /*type_args_len=*/0, Array::empty_array(), InputsArray(0),
++        S.GetNextDeoptId()));
++
++    InputsArray targs(1);
++    targs.Add(new Value(H.flow_graph()->constant_null()));
++    with_type_args = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/2,
++        /*type_args_len=*/1, Array::empty_array(), std::move(targs),
++        S.GetNextDeoptId()));
++    builder.AddReturn(new Value(with_type_args));
++  }
++  H.FinishGraph();
++
++  EXPECT_EQ(0, plain->ArgumentsSize());
++  EXPECT_EQ(0, plain->type_args_len());
++
++  EXPECT_EQ(1, with_type_args->type_args_len());
++  EXPECT_EQ(1, with_type_args->ArgumentsSize());
++  EXPECT_EQ(kTagged, with_type_args->RequiredInputRepresentation(0));
++
++  // The declared return type is int, which is a tagged Dart value.
++  EXPECT_EQ(kTagged, plain->representation());
++}
++
++// Round-trips the instruction through the IL serializer, which is what
++// --test_il_serialization runs over every AOT graph. This is the only test here
++// that needs a real function: WriteTrait<const Function&> encodes a target as
++// (owner class id, index within owner), and a synthetic Function::New is not in
++// its owner's function list, so FindFunctionIndex would return -1.
++ISOLATE_UNIT_TEST_CASE(IL_IndirectStaticCall_SerializationRoundTrip) {
++  using compiler::BlockBuilder;
++  const char* kScript = R"(
++    int ddTarget(int x) => x + 1;
++    void main() { ddTarget(1); }
++  )";
++  const Library& lib = Library::Handle(LoadTestScript(kScript));
++  const Function& target = Function::ZoneHandle(GetFunction(lib, "ddTarget"));
++
++  CompilerState S(thread, /*is_aot=*/true, /*is_optimizing=*/true);
++  HierarchyInfo hierarchy_info(thread);
++
++  FlowGraphBuilderHelper H;
++  IndirectStaticCallInstr* call;
++  {
++    BlockBuilder builder(H.flow_graph(),
++                         H.flow_graph()->graph_entry()->normal_entry());
++    InputsArray args(1);
++    args.Add(new Value(H.IntConstant(1)));
++    call = builder.AddDefinition(new IndirectStaticCallInstr(
++        InstructionSource(), target, /*dd_slot=*/13,
++        /*type_args_len=*/0, Array::empty_array(), std::move(args),
++        S.GetNextDeoptId()));
++    builder.AddReturn(new Value(call));
++  }
++  H.FinishGraph();
++
++  Zone* const zone = H.flow_graph()->zone();
++  auto* detached_defs = new (zone) ZoneGrowableArray<Definition*>(zone, 0);
++  H.flow_graph()->CompactSSA(detached_defs);
++
++  ZoneWriteStream write_stream(zone, 1024);
++  FlowGraphSerializer serializer(&write_stream);
++  serializer.WriteFlowGraph(*H.flow_graph(), *detached_defs);
++
++  ReadStream read_stream(write_stream.buffer(), write_stream.bytes_written());
++  FlowGraphDeserializer deserializer(H.flow_graph()->parsed_function(),
++                                     &read_stream);
++  FlowGraph* const decoded = deserializer.ReadFlowGraph();
++  EXPECT(decoded != nullptr);
++
++  IndirectStaticCallInstr* decoded_call = nullptr;
++  for (BlockIterator block_it = decoded->reverse_postorder_iterator();
++       !block_it.Done(); block_it.Advance()) {
++    for (ForwardInstructionIterator it(block_it.Current()); !it.Done();
++         it.Advance()) {
++      if (it.Current()->IsIndirectStaticCall()) {
++        decoded_call = it.Current()->AsIndirectStaticCall();
++      }
++    }
++  }
++
++  // Both serialized fields survive: the dd_slot is what makes the call
++  // dispatchable, the function is what records what it originally meant.
++  EXPECT(decoded_call != nullptr);
++  EXPECT_EQ(13, decoded_call->dd_slot());
++  EXPECT_STREQ("ddTarget",
++               String::Handle(decoded_call->function().name()).ToCString());
++  EXPECT_EQ(1, decoded_call->ArgumentCount());
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/compiler/compiler_sources.gni b/runtime/vm/compiler/compiler_sources.gni
+index 4cf854ae4ea..79564f45c04 100644
+--- a/runtime/vm/compiler/compiler_sources.gni
++++ b/runtime/vm/compiler/compiler_sources.gni
+@@ -168,6 +168,7 @@ compiler_sources_tests = [
+   "backend/bce_test.cc",
+   "backend/constant_propagator_test.cc",
+   "backend/flow_graph_test.cc",
++  "backend/il_indirect_static_call_test.cc",
+   "backend/il_test.cc",
+   "backend/il_test_helper.h",
+   "backend/il_test_helper.cc",
+-- 
+2.53.0
+

@@ -1,0 +1,814 @@
+From ee99498bfb16607ce03123e703d3cde2074ebe14 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 26 Aug 2026 15:52:01 +0800
+Subject: [PATCH 109/206] feat(shorebird): analyze_snapshot self_hash +
+ op_subgraph_hash, 1380/1380
+
+Solves SubgraphHasher's per-instruction classifier, which task 58 left at
+1185/1380 for self_hash and 842/1380 for op_subgraph_hash. Both now reproduce
+all 1380 of Shorebird's own values on their base.so, as digests, and
+op_subgraph_hash comes out of the deliberate-absence list.
+
+Transcribed from their AccumulateRecursive (0x100196694); addresses and the
+negative controls are in SUBGRAPH_CLASSIFIER_RECON.md. The four changes, by
+size of effect on self_hash:
+
+  * the pool and field ordinals count REFERENCES, not distinct indices --
+    0x100196c28 pushes onto the walk-global vector unconditionally and only
+    then try_emplaces size-1 (1212 -> 1350). The external-target map at +0x128
+    genuinely does store map.size(), so the two rules had to be read
+    separately.
+  * the field-table gate is (w & 0x0A3FFBE0) == 0x08003B40, which pins Rn to
+    THR and imm12 to {0x0e,0x0f} -- THR+0x70, field_table_values_ -- not any
+    ldr [THR,#x] (1350 -> 1379).
+  * the dispatch-table head is 3, 4 or 5 instructions (1379 -> 1380).
+  * the classifier looks backwards from the load and pops the entries already
+    emitted for the address-forming instructions, then skips 3-n forward, so a
+    pool access owns exactly kObjectPoolLoadStoreMinInstructionCount words.
+
+Of the three arms task 58 named, only the x16 pair form is exercised by either
+corpus; the movz/movk arm and the Instr::ImmLogical arm have zero coverage and
+are implemented because they are in their code, not because anything checks
+them.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index cdb15b10b01..e8b7a243c92 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -800,11 +800,11 @@ std::string Sha1HexOf(const uint8_t* data, size_t len) {
+ // function rather than the real index, which is what lets the hash survive
+ // relinking, and a local branch carries a constant.
+ //
+-// ⚠️ Reproduces 1185 of Shorebird's own 1380 functions exactly. The remaining
+-// 195 need the callee walk simulated, because the ordinal counters are shared
+-// across it -- so this is a faithful implementation of a partly-solved
+-// algorithm, not a finished one. Do not read a matching hash as proof that two
+-// builds agree; read a differing one as proof that they do not.
++// Reproduces all 1380 of Shorebird's own self_hash values, and all 1380 of
++// their op_subgraph_hash, on their own base.so. The classifier arms below and
++// the walk in ShorebirdClassifiedHashes were transcribed from their
++// AccumulateRecursive (0x100196694); SUBGRAPH_CLASSIFIER_RECON.md in the
++// research tree carries the addresses for every one of them.
+ enum ShorebirdEntryKind {
+   kEntryCodeName = 0,
+   kEntryOffsetFromPayloadStart = 1,
+@@ -817,29 +817,18 @@ enum ShorebirdEntryKind {
+   kEntryIndirectStaticCall = 8,
+ };
+ 
+-static constexpr uint32_t kArm64Nop = 0xD503201F;
+ static constexpr uint32_t kPPRegister = 27;
+-static constexpr uint32_t kTHRRegister = 26;
+-static constexpr uint32_t kDispatchTableRegister = 21;
+-
+-// (base, dest, byte offset) for an unsigned-offset load or store.
+-static bool DecodeLoadStore(uint32_t w, uint32_t* base, uint32_t* dest,
+-                            uint32_t* offset) {
+-  if ((w & 0x3B000000) != 0x39000000) return false;
+-  *base = (w >> 5) & 0x1F;
+-  *dest = w & 0x1F;
+-  *offset = ((w >> 10) & 0xFFF) << (w >> 30);
+-  return true;
++static constexpr uint32_t kIP0Register = 16;
++static constexpr uint32_t kIP1Register = 17;
++// The whole body of their dart::LoadStoreFromSingle (0x100195774) once the kind
++// half of its return value is dropped: 0x1001957d0-0x1001957f8 is `sub #1`,
++// `subs #0xf`, `sub #8`, `csel mi`, `asr #3` -- C's truncating division, not an
++// arithmetic shift, so a negative offset rounds toward zero.
++static intptr_t PoolIndexFromOffset(int64_t offset) {
++  return static_cast<intptr_t>((offset - 16) / 8);
+ }
+ 
+-// ldar / stlr, which the field table path also reaches through.
+-static bool DecodeAcquireRelease(uint32_t w, uint32_t* base, uint32_t* dest) {
+-  const uint32_t masked = w & 0x3FDFFC00;
+-  if (masked != 0x08DFFC00 && masked != 0x089FFC00) return false;
+-  *base = (w >> 5) & 0x1F;
+-  *dest = w & 0x1F;
+-  return true;
+-}
++
+ 
+ // 64-bit `add xD, xN, #imm{, lsl 12}`.
+ //
+@@ -856,13 +845,6 @@ static bool DecodeAddImmediate(uint32_t w, uint32_t* base, uint32_t* dest,
+   return true;
+ }
+ 
+-// ldp / stp with a signed-offset immediate.
+-static bool DecodePair(uint32_t w, uint32_t* base, uint32_t* offset) {
+-  if ((w & 0x3A000000) != 0x28000000) return false;
+-  *base = (w >> 5) & 0x1F;
+-  *offset = ((w >> 15) & 0x7F) * 8;
+-  return true;
+-}
+ 
+ // Branch displacement in instructions, for the forms that carry one.
+ static bool DecodeBranchDelta(uint32_t w, int32_t* delta) {
+@@ -888,17 +870,239 @@ static bool DecodeBranchDelta(uint32_t w, int32_t* delta) {
+   return false;
+ }
+ 
+-// Assigns each key an ordinal on first sight and records the keys in that
+-// order, so the caller gets the ordinal stream and the key list from one pass.
+-static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen,
+-                        std::vector<intptr_t>* order,
+-                        intptr_t key) {
+-  auto it = seen->find(key);
+-  if (it != seen->end()) return it->second;
+-  const intptr_t next = static_cast<intptr_t>(seen->size());
+-  (*seen)[key] = next;
+-  order->push_back(key);
+-  return next;
++// dart::Instr::ImmLogical, constants_arm64.h:1618. Copied rather than called
++// because this file decodes raw words out of a snapshot payload and never
++// builds an Instr; the algorithm is upstream's, verbatim.
++static uint64_t DecodeImmLogical(uint32_t w) {
++  const int reg_size = ((w >> 31) & 1) != 0 ? 64 : 32;
++  const int n = (w >> 22) & 1;
++  const int imm_s = (w >> 10) & 0x3F;
++  const int imm_r = (w >> 16) & 0x3F;
++  auto rotate_right = [](uint64_t value, int rotate, int width) -> uint64_t {
++    rotate &= 63;
++    if (rotate == 0) return value;
++    const uint64_t mask = (width == 64) ? ~0ULL : ((1ULL << width) - 1);
++    return ((value << (width - rotate)) | (value >> rotate)) & mask;
++  };
++  if (n == 1) {
++    if (imm_s == 0x3F) return 0;
++    return rotate_right((1ULL << (imm_s + 1)) - 1, imm_r, 64);
++  }
++  if ((imm_s >> 1) == 0x1F) return 0;
++  for (int width = 32; width >= 2; width /= 2) {
++    if ((imm_s & width) == 0) {
++      const int mask = width - 1;
++      if ((imm_s & mask) == mask) return 0;
++      uint64_t result =
++          rotate_right((1ULL << ((imm_s & mask) + 1)) - 1, imm_r & mask, width);
++      for (int w2 = width; w2 < reg_size; w2 *= 2) result |= result << w2;
++      return (reg_size == 64) ? result : (result & 0xFFFFFFFFULL);
++    }
++  }
++  return 0;
++}
++
++// An object pool reference opening at words[i], as (index, instructions).
++//
++// A transcription of 0x100196b98-0x1001975a0. Seven shapes, all of them ending
++// in their LoadStoreFromSingle:
++//
++//   ldr/str Xt,[PP,#imm12]                                            1
++//   add Xd,PP,#imm ; ldr/str Xt,[Xd,#imm12]                           2
++//   movz Wm,#imm16 ; ldr Xt,[PP,Xm]                                   2
++//   movz Wm,#lo ; movk Wm,#hi,lsl 16 ; ldr Xt,[PP,Xm]                 3
++//   ldp Xt,Xt2,[PP,#imm7]                                             1
++//   add x16,PP,#imm ; ldp Xt,Xt2,[x16,#imm7]                          2
++//   add Xd,PP,#imm ; add x16,Xd,#imm ; ldp Xt,Xt2,[x16,#imm7]         3
++//
++// ⚠️ `i` is the index of the LOAD, and the address-forming instructions are
++// BEHIND it -- their classifier looks backwards and then pops the entries it
++// already emitted for them (see ComputeShorebirdCodeFacts). Matching forwards
++// from the first instruction instead agrees on the one-instruction shapes,
++// which are the overwhelming majority, and shifts the stream on the others.
++static bool DecodePoolReference(const uint32_t* words, intptr_t count,
++                                intptr_t i, intptr_t* index, int32_t* used) {
++  const uint32_t w = words[i];
++
++  // --- single load/store, 0x100196b98 ---------------------------------
++  if ((w & 0x3A000000) == 0x38000000 && (w & 0x04400000) != 0x04000000 &&
++      ((w & 0x04000000) != 0 || (w >> 30) == 3)) {
++    const uint32_t scale = (w & 0x00800000) != 0 ? 4 : (w >> 30);
++    if ((w & 0x01000000) != 0) {                    // unsigned imm12
++      int64_t offset = static_cast<int64_t>((w >> 10) & 0xFFF) << scale;
++      const uint32_t rn = (w >> 5) & 0x1F;
++      if (rn == kPPRegister) {
++        *index = PoolIndexFromOffset(offset);
++        *used = 1;
++        return true;
++      }
++      if (i < 1) return false;
++      const uint32_t prev = words[i - 1];           // 0x100196d9c
++      if ((prev & 0x9F0003E0) != 0x91000360 || (prev & 0x1F) != rn) {
++        return false;
++      }
++      // ⚠️ Shifted by 12 unconditionally: nothing between 0x100196d9c and
++      // 0x100196ddc looks at the add's `sh` bit.
++      offset += static_cast<int64_t>((prev >> 10) & 0xFFF) << 12;
++      *index = PoolIndexFromOffset(offset);
++      *used = 2;
++      return true;
++    }
++    // register offset off PP, 0x100196cf8
++    if ((w & 0xFE0) != 0xB60 || i < 1) return false;
++    const uint32_t prev = words[i - 1];
++    if ((prev & 0x1F800000) != 0x12800000) return false;   // move wide imm
++    const uint32_t rd = prev & 0x1F;
++    if (rd != ((w >> 16) & 0x1F)) return false;
++    if ((w & 0x04000000) == 0 && rd != (w & 0x1F)) return false;
++    const uint32_t opc = (prev >> 29) & 3;
++    if (opc == 3) {                                        // movk, 0x100197550
++      if ((prev & 0x600000) != 0x200000 || i < 2) return false;
++      const uint32_t prev2 = words[i - 2];
++      if ((prev2 & 0x7FE00000) != 0x52800000 || (prev2 & 0x1F) != rd) {
++        return false;
++      }
++      *index = PoolIndexFromOffset(((prev2 >> 5) & 0xFFFF) |
++                                   (((prev >> 5) & 0xFFFF) << 16));
++      *used = 3;
++      return true;
++    }
++    if (opc == 2) {                                        // movz, 0x100196d60
++      if ((prev & 0x600000) != 0) return false;
++      *index = PoolIndexFromOffset((prev >> 5) & 0xFFFF);
++      *used = 2;
++      return true;
++    }
++    return false;
++  }
++
++  // --- 64-bit load pair, 0x100196bd4 -----------------------------------
++  if ((w & 0xFB400000) != 0xA9400000) return false;
++  const uint32_t rn = (w >> 5) & 0x1F;
++  int64_t offset = (w >> 12) & 0x3F8;             // imm7 * 8, unsigned
++  if (rn == kPPRegister) {
++    *index = PoolIndexFromOffset(offset);
++    *used = 1;
++    return true;
++  }
++  if (rn != kIP0Register || i < 1) return false;
++  const uint32_t prev = words[i - 1];             // 0x100196c64
++  uint32_t b, d, imm;
++  if ((prev & 0x9F00001F) != 0x91000010) return false;
++  if (!DecodeAddImmediate(prev, &b, &d, &imm)) return false;
++  offset += imm;
++  if (b == kPPRegister) {
++    *index = PoolIndexFromOffset(offset);
++    *used = 2;
++    return true;
++  }
++  if (b != kIP0Register || i < 2) return false;
++  const uint32_t prev2 = words[i - 2];            // 0x100196df0
++  if ((prev2 & 0x9F0003E0) != 0x91000360) return false;
++  if (!DecodeAddImmediate(prev2, &b, &d, &imm)) return false;
++  *index = PoolIndexFromOffset(offset + imm);
++  *used = 3;
++  return true;
++}
++
++// A field-table access opening at words[i], as (key, instructions).
++//
++// 0x10019705c-0x1001971a4. 🔑 The gate is `(w & 0x0A3FFBE0) == 0x08003B40`,
++// which pins Rn to THR *and* bits 11..21, leaving imm12 in {0x0e, 0x0f} for a
++// 64-bit load -- THR+0x70 or THR+0x78, `field_table_values_`. A rule that fires
++// on any `ldr Xt,[THR,#anything]` scores nearly as well on self_hash alone and
++// wrecks it once the ordinal counter is shared across the walk, because every
++// spurious hit shifts every later ordinal.
++static bool DecodeFieldReference(const uint32_t* words, intptr_t count,
++                                 intptr_t i, intptr_t* key, int32_t* used) {
++  if ((words[i] & 0x0A3FFBE0) != 0x08003B40 || i + 1 >= count) return false;
++  const uint32_t rt = words[i] & 0x1F;
++  const uint32_t second = words[i + 1];
++  uint32_t extra = 0, access, middle;
++  int32_t n;
++  if ((second & 0x1F000000) == 0x11000000) {            // add immediate
++    if ((second & 0x1F) != kIP1Register ||
++        ((second >> 5) & 0x1F) != rt || i + 2 >= count) {
++      return false;
++    }
++    extra = (second >> 10) & 0xFFF;
++    if ((second & 0xC00000) == 0x400000) extra <<= 12;
++    access = words[i + 2];
++    middle = second;
++    n = 3;
++  } else if ((second & 0x1F800000) == 0x12000000) {     // logical immediate
++    if ((second & 0x1F) != kIP1Register || i + 2 >= count) return false;
++    const uint32_t third = words[i + 2];
++    if ((third & 0x0A1F0000) != 0x08110000) return false;
++    if (((third >> 5) & 0x1F) != rt) return false;
++    *key = static_cast<intptr_t>(DecodeImmLogical(second));
++    *used = 3;
++    return true;
++  } else {
++    access = second;
++    middle = words[i];
++    n = 2;
++  }
++  if ((access & 0x0A000000) != 0x08000000) return false;
++  if ((middle & 0x1F000000) != 0x11000000 &&
++      (middle & 0x1F800000) != 0x12000000) {
++    if (((access >> 5) & 0x1F) != rt) return false;
++  }
++  *key = static_cast<intptr_t>(((access >> 7) & 0x7FF8) + extra);
++  *used = n;
++  return true;
++}
++
++// Instructions consumed by a dispatch-table call opening at words[i].
++//
++// 0x100196e64-0x100196fe4. The tail is always `ldr lr,[x21,lr,lsl 3]` ;
++// `blr lr`; the head is one of four ways of getting the row index into LR, and
++// the length is 3, 4 or 5:
++//
++//   mov lr, x0                                                    3
++//   add/sub lr, x0, #imm12{,lsl 12}                               3
++//   <logical immediate -> x17> ; add lr, x0, x17                  4
++//   movz x17,#imm ; add lr, x0, x17                               4
++//   movz x17,#lo ; movk x17,#hi ; add lr, x0, x17                 5
++//
++// Keying off the ldr/blr pair alone -- what the previous rule did -- is right
++// for the three-instruction heads and one word short on the others.
++static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
++                               intptr_t i, int32_t* used) {
++  const uint32_t w = words[i];
++  intptr_t j;
++  int32_t n;
++  if ((w & 0x1F000000) == 0x0A000000) {
++    if ((w & 0x201F001F) != 0x2000001E) return false;
++    j = i + 1;
++    n = 3;
++  } else if ((w & 0x1F800000) == 0x12800000) {          // move wide immediate
++    if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
++    j = i + 1;
++    n = 4;
++    if ((words[j] & 0x1F800000) == 0x12800000) {
++      if ((words[j] & 0x1F) != kIP1Register) return false;
++      j++;
++      n = 5;
++    }
++    if (j >= count || (words[j] & 0x1F1F03FF) != 0x0B11001E) return false;
++    j++;
++  } else if ((w & 0x1F800000) == 0x12000000) {          // logical immediate
++    if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
++    if ((words[i + 1] & 0x1F1F03FF) != 0x0B11001E) return false;
++    j = i + 2;
++    n = 4;
++  } else if ((w & 0x1F0003FF) == 0x1100001E) {          // add/sub lr, x0, #imm
++    j = i + 1;
++    n = 3;
++  } else {
++    return false;
++  }
++  if (j + 1 >= count) return false;
++  if ((words[j] & 0x0A0003FF) != 0x080002BE) return false;
++  if ((words[j + 1] & 0xFE0003FF) != 0xD60003C0) return false;
++  *used = n;
++  return true;
+ }
+ 
+ // One scan, four outputs. self_hash, the pool references, the field table
+@@ -924,8 +1128,25 @@ struct ShorebirdSubgraphStep {
+   intptr_t external_rel;  // byte offset from this payload's start; may be < 0
+ };
+ 
++// One step of the classifying scan. Unlike ShorebirdSubgraphStep this may cover
++// more than one instruction: a pool access owns exactly three words
++// (kObjectPoolLoadStoreMinInstructionCount), a field access two or three, a
++// dispatch-table call three to five.
++//
++// The ORDINALS ARE NOT HERE, deliberately. They come from maps that live on
++// SubgraphHasher (+0x100 and +0x198) and are updated at every depth of the
++// walk, so the value a pool reference contributes to a hash depends on
++// everything the walk did before reaching it. That is the whole reason
++// self_hash is not a function of the entry's own bytes.
++struct ShorebirdClassifiedStep {
++  enum Tag { kRaw, kLocalBranch, kCall, kPool, kField, kDispatch };
++  int8_t tag;
++  int32_t words;
++  intptr_t value;  // raw bits | rel target | pool index | field key
++};
++
+ struct ShorebirdCodeFacts {
+-  std::string self_hash;
++  std::vector<ShorebirdClassifiedStep> classified;
+   std::vector<intptr_t> pool_indices;   // first-seen order
+   std::vector<intptr_t> field_indices;  // first-seen order
+   std::vector<ShorebirdSubgraphStep> subgraph_steps;
+@@ -942,131 +1163,80 @@ struct ShorebirdCodeFacts {
+ 
+ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+                                              intptr_t size) {
+-  std::vector<uint8_t> stream;
+-  std::map<intptr_t, intptr_t> pool, external, field;
+-  std::vector<intptr_t> pool_order, field_order, external_order;
+-
+-  auto emit = [&](int32_t kind, uint32_t value) {
+-    for (int i = 0; i < 4; i++) stream.push_back((kind >> (i * 8)) & 0xFF);
+-    for (int i = 0; i < 4; i++) stream.push_back((value >> (i * 8)) & 0xFF);
+-  };
+-
++  ShorebirdCodeFacts facts;
+   const intptr_t words = size / 4;
+-  auto word_at = [&](intptr_t i) {
+-    uint32_t w;
+-    memcpy(&w, code + i * 4, 4);
+-    return w;
+-  };
++  std::vector<uint32_t> code_words(words);
++  for (intptr_t k = 0; k < words; k++) memcpy(&code_words[k], code + k * 4, 4);
++  const uint32_t* w_at = code_words.data();
+ 
+-
+-  emit(kEntryOffsetFromPayloadStart, 0);
++  std::set<intptr_t> pool_seen, field_seen, external_seen;
+ 
+   intptr_t i = 0;
+   while (i < words) {
+-    const uint32_t w = word_at(i);
+-    uint32_t base, dest, offset, imm;
+-
+-    // A pool access with a large displacement, the PrepareLargeOffset shape.
+-    if (DecodeAddImmediate(w, &base, &dest, &imm) && base == kPPRegister &&
+-        i + 1 < words) {
+-      uint32_t total = imm, consumed = 2;
+-      uint32_t b2, d2, i2;
+-      if (DecodeAddImmediate(word_at(i + 1), &b2, &d2, &i2) && b2 == dest &&
+-          d2 == dest && i + 2 < words) {
+-        total += i2;
+-        consumed = 3;
+-      }
+-      const uint32_t tail = word_at(i + consumed - 1);
+-      uint32_t tb, td, to;
+-      bool ok = DecodeLoadStore(tail, &tb, &td, &to) && tb == dest;
+-      if (!ok && DecodePair(tail, &tb, &to)) ok = (tb == dest);
+-      if (ok) {
+-        emit(kEntryObjectPoolLoadIndex,
+-             Ordinal(&pool, &pool_order, (total + to - 16) / 8));
+-        i += consumed;
+-        while (i < words && word_at(i) == kArm64Nop) i++;
+-        continue;
++    const uint32_t w = w_at[i];
++
++    intptr_t index;
++    int32_t used;
++    if (DecodePoolReference(w_at, words, i, &index, &used)) {
++      // 🔑 The classifier fires on the LOAD and pops the RawInstructionBits
++      // entries it already emitted for the used-1 instructions that formed the
++      // address: 0x100197440 `subs w9,w14,#2`, 0x10019744c `mvn x9,x9` (making
++      // the delta (1-n)*8), 0x100197458 storing the shortened `end` back. Then
++      // 0x100197434 `mov w9,#3; sub w9,w9,w14` skips 3-n instructions forward,
++      // so the form owns exactly kObjectPoolLoadStoreMinInstructionCount words.
++      const int32_t back = used - 1;
++      ASSERT(static_cast<intptr_t>(facts.classified.size()) >= back);
++      for (int32_t k = 0; k < back; k++) {
++        ASSERT(facts.classified.back().tag == ShorebirdClassifiedStep::kRaw &&
++               facts.classified.back().words == 1);
++        facts.classified.pop_back();
+       }
+-    }
+-
+-    if (DecodePair(w, &base, &offset) && base == kPPRegister) {
+-      emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, &pool_order, (offset - 16) / 8));
+-      i++;
+-      while (i < words && word_at(i) == kArm64Nop) i++;
++      int32_t ahead = 3 - used;
++      if (ahead > words - 1 - i) ahead = static_cast<int32_t>(words - 1 - i);
++      facts.classified.push_back(
++          {ShorebirdClassifiedStep::kPool, used + ahead, index});
++      if (pool_seen.insert(index).second) facts.pool_indices.push_back(index);
++      i += 1 + ahead;
+       continue;
+     }
+ 
+-    if (DecodeLoadStore(w, &base, &dest, &offset)) {
+-      if (base == kPPRegister) {
+-        emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, &pool_order, (offset - 16) / 8));
+-        // The load owns its whole padded footprint; the NOPs after it are not
+-        // entries of their own.
+-        i++;
+-        while (i < words && word_at(i) == kArm64Nop) i++;
+-        continue;
+-      }
+-      if (base == kTHRRegister && i + 1 < words) {
+-        uint32_t nb, nd, no = 0;
+-        if ((DecodeLoadStore(word_at(i + 1), &nb, &nd, &no) ||
+-             DecodeAcquireRelease(word_at(i + 1), &nb, &nd)) &&
+-            nb == dest) {
+-          emit(kEntryFieldTableLoadIndex, Ordinal(&field, &field_order, no / 8));
+-          i += 2;
+-          continue;
+-        }
+-        uint32_t ab, ad, ai;
+-        if (i + 2 < words && DecodeAddImmediate(word_at(i + 1), &ab, &ad, &ai) &&
+-            ab == dest) {
+-          uint32_t tb, td, to = 0;
+-          if ((DecodeLoadStore(word_at(i + 2), &tb, &td, &to) ||
+-               DecodeAcquireRelease(word_at(i + 2), &tb, &td)) &&
+-              tb == ad) {
+-            emit(kEntryFieldTableLoadIndex, Ordinal(&field, &field_order, (ai + to) / 8));
+-            i += 3;
+-            continue;
+-          }
+-        }
+-      }
++    if (DecodeFieldReference(w_at, words, i, &index, &used)) {
++      facts.classified.push_back(
++          {ShorebirdClassifiedStep::kField, used, index});
++      if (field_seen.insert(index).second) facts.field_indices.push_back(index);
++      i += used;
++      continue;
+     }
+ 
+-    // Dispatch table call: <compute cid> ; ldr xN,[x21,xM,lsl 3] ; blr xN.
+-    if (i + 2 < words) {
+-      const uint32_t table = word_at(i + 1), call = word_at(i + 2);
+-      if ((table & 0xFFE0FC00) == 0xF8607800 &&
+-          ((table >> 5) & 0x1F) == kDispatchTableRegister &&
+-          (call & 0xFFFFFC1F) == 0xD63F0000 &&
+-          ((call >> 5) & 0x1F) == (table & 0x1F)) {
+-        emit(kEntryDispatchTableCall, 1);
+-        i += 3;
+-        continue;
+-      }
++    if (DecodeDispatchCall(w_at, words, i, &used)) {
++      facts.classified.push_back({ShorebirdClassifiedStep::kDispatch, used, 0});
++      i += used;
++      continue;
+     }
+ 
+     int32_t delta;
+     if (DecodeBranchDelta(w, &delta)) {
+       const int64_t target = i * 4 + static_cast<int64_t>(delta) * 4;
+       if (target >= 0 && target < size) {
+-        emit(kEntryLocalBranch, 1);
++        facts.classified.push_back(
++            {ShorebirdClassifiedStep::kLocalBranch, 1, 0});
+       } else if ((w & 0x7C000000) == 0x14000000) {
+-        emit(kEntryExternalBranchTargetIndex,
+-             Ordinal(&external, &external_order, static_cast<intptr_t>(target)));
++        facts.classified.push_back({ShorebirdClassifiedStep::kCall, 1,
++                                    static_cast<intptr_t>(target)});
++        if (external_seen.insert(static_cast<intptr_t>(target)).second) {
++          facts.external_targets.push_back(static_cast<intptr_t>(target));
++        }
+       } else {
+-        emit(kEntryRawInstructionBits, w);
++        facts.classified.push_back({ShorebirdClassifiedStep::kRaw, 1, w});
+       }
+       i++;
+       continue;
+     }
+ 
+-    emit(kEntryRawInstructionBits, w);
++    facts.classified.push_back({ShorebirdClassifiedStep::kRaw, 1, w});
+     i++;
+   }
+ 
+-  ShorebirdCodeFacts facts;
+-  facts.self_hash = Sha1HexOf(stream.data(), stream.size());
+-  facts.pool_indices = std::move(pool_order);
+-  facts.field_indices = std::move(field_order);
+-  facts.external_targets = std::move(external_order);
+-
+   // A second pass over the same instructions, which the note above warns
+   // against -- so here is why it is not the drift that note is about. The loop
+   // above advances by a variable stride, because a pool load owns its padding
+@@ -1077,7 +1247,7 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   // target with [0, size).
+   facts.subgraph_steps.reserve(words);
+   for (intptr_t k = 0; k < words; k++) {
+-    ShorebirdSubgraphStep step = {word_at(k), false, 0};
++    ShorebirdSubgraphStep step = {w_at[k], false, 0};
+     int32_t delta;
+     if (DecodeBranchDelta(step.word, &delta)) {
+       const int64_t target = k * 4 + static_cast<int64_t>(delta) * 4;
+@@ -1363,6 +1533,167 @@ std::vector<std::string> ShorebirdSubgraphHashes(
+   return out;
+ }
+ 
++// Shorebird's self_hash and op_subgraph_hash, one pair per entry.
++//
++// These are the other two of SubgraphHasher's three Hashers -- "self" (its
++// vector at this+0xb0) and "object_pool" (this+0x78) -- and they take the
++// CLASSIFIED stream, where "subgraph" takes the words verbatim. What separates
++// them from each other:
++//
++//   * every push into "self" sits behind `cbnz w21`, so it receives entries
++//     only at depth 0. It is still NOT a function of the entry's own bytes,
++//     because the ordinal maps it reads are members of SubgraphHasher and are
++//     updated at every depth.
++//   * "object_pool" opens with a CodeName entry carrying
++//     Utils::StringHash(Code::Name()), pushed once by the constructor at
++//     0x100195f68 into this+0x78 -- and that is the only Hasher that gets one.
++//   * an external branch is where the two diverge structurally: "self" encodes
++//     it as ExternalBranchTargetIndex with a per-root ordinal (the try_emplace
++//     at 0x100196a28 is inside the depth-0 branch), while "object_pool"
++//     recurses and splices the callee's stream in at that point.
++//
++// 🔑 The pool ordinal COUNTS REPEATS. At 0x100196c28 the index is pushed onto
++// the walk-global vector at +0xe8 unconditionally, and only then does
++// try_emplace(index, that_vector.size() - 1) run against the map at +0x100
++// (0x100196c34-0x100196c50). So a first-seen index is numbered by how many pool
++// REFERENCES the walk has made, not how many distinct indices it has seen. The
++// field table at +0x180/+0x198 works the same way. The external-target map at
++// +0x128 does NOT -- it stores map.size(), which is distinct -- and the two
++// rules had to be read separately rather than assumed uniform.
++//
++// Measured on their own base.so: 1380 of 1380 self_hash and 1380 of 1380
++// op_subgraph_hash, as digests. Their self_hash takes 1170 distinct values over
++// 1380 functions and their op_subgraph_hash takes 1380, so for the latter the
++// truth partition is the discrete one and a partition comparison would have
++// been vacuous; digest equality is the criterion for both.
++struct ShorebirdClassifiedHashes {
++  std::vector<std::string> self_hash;
++  std::vector<std::string> op_subgraph_hash;
++};
++
++ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
++    const std::vector<CodeEntry>& codes,
++    const std::vector<ShorebirdCodeFacts>& facts) {
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  ShorebirdClassifiedHashes out;
++  out.self_hash.reserve(n);
++  out.op_subgraph_hash.reserve(n);
++
++  std::vector<uint8_t> self_stream, op_stream;
++  std::vector<bool> visited(n);
++  std::vector<std::pair<intptr_t, intptr_t>> stack;
++
++  auto push = [](std::vector<uint8_t>* s, int32_t kind, uint32_t value) {
++    for (int i = 0; i < 4; i++) s->push_back((kind >> (i * 8)) & 0xFF);
++    for (int i = 0; i < 4; i++) s->push_back((value >> (i * 8)) & 0xFF);
++  };
++
++  for (intptr_t root = 0; root < n; root++) {
++    self_stream.clear();
++    op_stream.clear();
++    visited.assign(n, false);
++    stack.clear();
++
++    std::map<intptr_t, intptr_t> pool_map, field_map, external;
++    intptr_t pool_refs = 0, field_refs = 0;
++
++    push(&op_stream, kEntryCodeName,
++         Utils::StringHash(codes[root].name.c_str(),
++                           static_cast<int>(codes[root].name.size())));
++    push(&op_stream, kEntryOffsetFromPayloadStart, 0);
++    push(&self_stream, kEntryOffsetFromPayloadStart, 0);
++    visited[root] = true;
++    stack.push_back({root, 0});
++
++    while (!stack.empty()) {
++      const bool depth0 = stack.size() == 1;
++      const intptr_t u = stack.back().first;
++      const intptr_t k = stack.back().second;
++      const std::vector<ShorebirdClassifiedStep>& steps = facts[u].classified;
++      if (k >= static_cast<intptr_t>(steps.size())) {
++        stack.pop_back();
++        continue;
++      }
++      stack.back().second = k + 1;
++      const ShorebirdClassifiedStep& step = steps[k];
++
++      int32_t kind = -1;
++      uint32_t value = 0;
++      switch (step.tag) {
++        case ShorebirdClassifiedStep::kRaw:
++          kind = kEntryRawInstructionBits;
++          value = static_cast<uint32_t>(step.value);
++          break;
++        case ShorebirdClassifiedStep::kLocalBranch:
++          kind = kEntryLocalBranch;
++          value = 1;
++          break;
++        case ShorebirdClassifiedStep::kDispatch:
++          kind = kEntryDispatchTableCall;
++          value = 1;
++          break;
++        case ShorebirdClassifiedStep::kPool: {
++          pool_refs++;
++          auto it = pool_map.find(step.value);
++          if (it == pool_map.end()) {
++            it = pool_map.emplace(step.value, pool_refs - 1).first;
++          }
++          kind = kEntryObjectPoolLoadIndex;
++          value = static_cast<uint32_t>(it->second);
++          break;
++        }
++        case ShorebirdClassifiedStep::kField: {
++          field_refs++;
++          auto it = field_map.find(step.value);
++          if (it == field_map.end()) {
++            it = field_map.emplace(step.value, field_refs - 1).first;
++          }
++          kind = kEntryFieldTableLoadIndex;
++          value = static_cast<uint32_t>(it->second);
++          break;
++        }
++        default:
++          break;
++      }
++      if (kind >= 0) {
++        push(&op_stream, kind, value);
++        if (depth0) push(&self_stream, kind, value);
++        continue;
++      }
++
++      // A branch leaving the entry.
++      const intptr_t target = codes[u].offset + step.value;
++      if (depth0) {
++        auto it = external.find(target);
++        if (it == external.end()) {
++          it = external.emplace(target,
++                                static_cast<intptr_t>(external.size())).first;
++        }
++        push(&self_stream, kEntryExternalBranchTargetIndex,
++             static_cast<uint32_t>(it->second));
++      }
++      const intptr_t v = ShorebirdEntryContaining(codes, target);
++      if (v < 0) {
++        // Reaches the padding between entries; their walk would index the
++        // visited bitset with -1, so this is not a shape their input takes.
++        push(&op_stream, kEntryRawInstructionBits,
++             facts[u].subgraph_steps.empty() ? 0
++                                             : facts[u].subgraph_steps[0].word);
++        continue;
++      }
++      push(&op_stream, kEntryOffsetFromPayloadStart,
++           static_cast<uint32_t>(target - codes[v].offset));
++      if (visited[v]) continue;
++      visited[v] = true;
++      stack.push_back({v, 0});
++    }
++    out.self_hash.push_back(Sha1HexOf(self_stream.data(), self_stream.size()));
++    out.op_subgraph_hash.push_back(
++        Sha1HexOf(op_stream.data(), op_stream.size()));
++  }
++  return out;
++}
++
+ // Whether a function has an identity to key a DD table entry on: the owner is a
+ // Function, or it is an allocation stub. Type-test stubs and the owner-less
+ // stubs do not, even though many of them do have callers.
+@@ -1493,11 +1824,15 @@ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+   for (intptr_t i = 0; i < n; i++) {
+     facts.push_back(ComputeShorebirdCodeFacts(codes[i].payload, codes[i].size));
+     sizes[i] = static_cast<int64_t>(codes[i].size);
++  }
++  const ShorebirdClassifiedHashes classified =
++      ShorebirdSelfAndOpHashes(codes, facts);
++  for (intptr_t i = 0; i < n; i++) {
+     // An empty hash is how CascadeLimiter::Run is told a node is ineligible;
+     // see the note in cascade_limiter.h. The other half of eligibility ("has a
+     // caller") it derives from the graph itself.
+     if (ShorebirdHasIdentity(codes[i].name)) {
+-      hashes[i] = facts[i].self_hash;
++      hashes[i] = classified.self_hash[i];
+     }
+   }
+ 
+@@ -1560,6 +1895,8 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+       ShorebirdCallGraph(codes, all_facts);
+   const std::vector<std::string> subgraph_hashes =
+       ShorebirdSubgraphHashes(codes, all_facts);
++  const ShorebirdClassifiedHashes classified =
++      ShorebirdSelfAndOpHashes(codes, all_facts);
+ 
+   // functions array
+   js.OpenArray("functions");
+@@ -1572,31 +1909,22 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.PrintProperty64("size", entry.size);
+ 
+     const ShorebirdCodeFacts& facts = all_facts[ci];
+-    js.PrintProperty("self_hash", facts.self_hash.c_str());
++    js.PrintProperty("self_hash", classified.self_hash[ci].c_str());
+     // The walk is implemented, so subgraph_hash is back -- and it is back
+     // because it is checked against their artifact rather than because it is
+     // plausible: ShorebirdSubgraphHashes reproduces the subgraph_hash of all
+     // 1380 functions of their own base.so exactly. See the comment on that
+     // function for the disassembly it came from.
+     js.PrintProperty("subgraph_hash", subgraph_hashes[ci].c_str());
+-    // op_subgraph_hash is still DELIBERATELY ABSENT, and the reason is now
+-    // narrow rather than "the walk is unsolved". Its routing is known -- the
+-    // "object_pool" Hasher gets a leading CodeName entry, whose value is
+-    // Utils::StringHash of Code::Name(), plus the CLASSIFIED entry stream of
+-    // the whole walk with the pool and field-table ordinal maps shared across
+-    // it. That last part is the gap: those ordinals come from the same
+-    // classifier self_hash uses, and it is right for 1208 of their 1380
+-    // functions, so op_subgraph_hash reproduces only 842 of 1380. A hash that
+-    // is right five times in six is worse than a missing key, because a
+-    // consumer cannot tell which.
+-    //
+-    // Omitting beats emitting a wrong value here, and the reason is a specific
+-    // consumer rather than taste. tools/linker.py matches patch functions to
+-    // base functions by subgraph_hash and, in its own words, "unmatched
+-    // functions are silently excluded". It takes the analyzer binary as a
+-    // parameter, so pointing it at this one would have produced a quietly
+-    // degraded patch with no error anywhere. A missing key raises KeyError on
+-    // the first function instead.
++    // op_subgraph_hash is present now, and for the same reason subgraph_hash
++    // is: ShorebirdSelfAndOpHashes reproduces all 1380 of theirs on their own
++    // base.so, as digests. It was withheld for three rounds while the
++    // classifier was right for only five functions in six -- a hash that is
++    // usually right is worse than a missing key, because tools/linker.py
++    // silently excludes functions it cannot match.
++
++    js.PrintProperty("op_subgraph_hash",
++                     classified.op_subgraph_hash[ci].c_str());
+ 
+     js.OpenArray("self_pp");
+     for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
+-- 
+2.53.0
+

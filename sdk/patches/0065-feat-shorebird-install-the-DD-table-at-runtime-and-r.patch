@@ -1,0 +1,527 @@
+From c14537ce1ae3e4c95dca3e59a90754a14a6cae56 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 19:37:52 +0800
+Subject: [PATCH 065/206] feat(shorebird): install the DD table at runtime --
+ and run it
+
+Closes the loop from the precompiler's Array of Code to the entry points
+IndirectStaticCallInstr branches through. Their engine's dSYM carries the
+whole contract, so almost none of this is inferred:
+
+  Thread::indirect_static_call_table_      const uword*        thread.h:1685
+  IsolateGroup::indirect_static_call_table_
+                                  unique_ptr<unsigned long[]>  isolate.h:987
+  IsolateGroup::indirect_static_call_table_size_   intptr_t    isolate.h:988
+  Deserializer::ReadIndirectStaticCallTable()  app_snapshot.cc:1031, called
+                                               from :7717
+
+The field sits between the dispatch table's fields and saved_unlinked_calls_,
+which is where ours now sits too. Thread's is a pointer, not the uword ours
+was -- the emitted code cannot tell, but the ownership reads wrong otherwise.
+
+ReadIndirectStaticCallTable is transcribed from their 0x741f1c..0x74204c: a
+length, then one reference per slot, each resolved through refs and reduced
+to entry_point_. A zero reference is fatal there rather than a stand-in for
+"absent", which is why the precompiler now fills unclaimed slots with a
+sentinel before serialization.
+
+Their ObjectStore field name turned out to be recoverable after all, and the
+comment claiming otherwise is gone: WriteRoots emits the field list as a
+strtab, so their gen_snapshot spells out indirect_static_call_table_code_-
+entries_ in list order, right where we had put ours. The same strtab shows a
+selector_row_entries_ we do not have, noted where it matters.
+
+Three bugs, all found by loading a snapshot rather than by reading one:
+
+  * Slots could hold a Code that DiscardCodeObjects or Dedup had superseded.
+    Pushing one as a root makes two Code objects share Instructions and trips
+    CodeSerializationCluster::Insert. RefreshIndirectStaticCallTable re-points
+    each slot after dedup. Theirs shows no such step; ours does not load
+    without it.
+  * FlowGraph::InsertMoveArguments picks the target by instruction type, and
+    did not know this one, so target stayed null and every argument went on
+    the stack while the callee expected registers. RangeError.checkValidRange
+    read an address where a length belonged. InsertRecordBoxing had the same
+    gap, behind an UNREACHABLE.
+  * linker.cc uses Class::allocation_stub(), which the AOT runtime does not
+    have, so dartaotruntime had never linked. Guarded; BuildKeyMap is only
+    reachable from the precompiler.
+
+End to end, with our own gen_snapshot and dartaotruntime on their fixture:
+
+  no mapping                                   0 sites   correct output
+  _StringBase._interpolate                   102 sites   correct output
+  RangeError.checkValidRange                  79 sites   correct output
+  StringBuffer.write                          73 sites   correct output
+  1043 functions, collision-free            1622 sites   correct output
+
+The last line is the one that matters: 1622 calls dispatched through
+Thread::indirect_static_call_table_ and every one arrived. A mapping over all
+1106 functions instead overflows the stack, and that is the fixture, not the
+mechanism -- 63 kernel offsets are shared by more than one function, so
+several land on one slot and calls to one arrive at another.
+
+81 of 81 shorebird tests, verify_reproduction.sh clean at 24 artifacts and 14
+stubs, dd_pass_check.sh clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 9b6082acb3b..0d31009eeeb 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -533,6 +533,7 @@ class Serializer : public ThreadStackResource {
+   intptr_t GetDataSize() const;
+ 
+   void WriteDispatchTable(const Array& entries);
++  void WriteIndirectStaticCallTable(const Array& entries);
+ 
+   Heap* heap() const { return heap_; }
+   Zone* zone() const { return zone_; }
+@@ -778,6 +779,8 @@ class Deserializer : public ThreadStackResource {
+                          intptr_t deferred_code_start_index,
+                          intptr_t deferred_code_end_index);
+ 
++  void ReadIndirectStaticCallTable();
++
+   intptr_t next_index() const { return next_ref_index_; }
+   Heap* heap() const { return heap_; }
+   Zone* zone() const { return zone_; }
+@@ -7228,6 +7231,20 @@ class ProgramSerializationRoots : public SerializationRoots {
+         s->Push(dispatch_table_entries_.At(i));
+       }
+     }
++
++    // Shorebird: same reasoning one table over. A DD slot's Code is reachable
++    // only through this table when the call sites that used to name it have all
++    // been rewritten to dispatch through the slot, which is exactly what the
++    // IL pass does -- so without pushing these, the entry would be a reference
++    // to something the snapshot never wrote.
++    indirect_static_call_table_entries_ =
++        object_store_->indirect_static_call_table_code_entries();
++    if (!indirect_static_call_table_entries_.IsNull()) {
++      for (intptr_t i = 0; i < indirect_static_call_table_entries_.Length();
++           i++) {
++        s->Push(indirect_static_call_table_entries_.At(i));
++      }
++    }
+ #endif
+   }
+ 
+@@ -7268,6 +7285,7 @@ class ProgramSerializationRoots : public SerializationRoots {
+ 
+     // The dispatch table is serialized only for precompiled snapshots.
+     s->WriteDispatchTable(dispatch_table_entries_);
++    s->WriteIndirectStaticCallTable(indirect_static_call_table_entries_);
+   }
+ 
+   virtual const CompressedStackMaps& canonicalized_stack_map_entries() const {
+@@ -7279,6 +7297,7 @@ class ProgramSerializationRoots : public SerializationRoots {
+   ObjectStore* const object_store_;
+   const Snapshot::Kind snapshot_kind_;
+   Array& dispatch_table_entries_ = Array::Handle();
++  Array& indirect_static_call_table_entries_ = Array::Handle();
+ 
+ #define ONLY_IN_AOT(code) code
+ #define DECLARE_FIELD(name, Type, init) Type& saved_##name##_ = Type::Handle();
+@@ -7333,6 +7352,8 @@ class ProgramDeserializationRoots : public DeserializationRoots {
+ 
+     // Deserialize dispatch table (when applicable)
+     d->ReadDispatchTable();
++    // Shorebird: theirs is called from the same place, immediately after.
++    d->ReadIndirectStaticCallTable();
+   }
+ 
+   void PostLoad(Deserializer* d, const Array& refs) override {
+@@ -8912,6 +8933,38 @@ static constexpr intptr_t kDispatchTableMaxRepeat =
+ static constexpr intptr_t kDispatchTableIndexBase = kDispatchTableMaxRepeat + 1;
+ #endif  // defined(DART_PRECOMPILER) || defined(DART_PRECOMPILED_RUNTIME)
+ 
++// Shorebird's DD table. Deliberately not the encoding WriteDispatchTable uses
++// below: no first-code-id base, no recent-entry window, no repeat runs, just a
++// length and one reference per slot. Their reader is the reason it can be that
++// plain -- it decodes an unsigned per entry and indexes refs directly, which
++// rules the compressed forms out.
++//
++// A zero reference is not writable here. Their reader treats zero as fatal
++// rather than as "absent", so the table this receives must already have a
++// sentinel in every slot no Code claimed -- Precompiler::FinalizeIndirect-
++// StaticCallTable is where that happens.
++void Serializer::WriteIndirectStaticCallTable(const Array& entries) {
++#if defined(DART_PRECOMPILER)
++  if (kind() != Snapshot::kFullAOT) return;
++
++  const intptr_t length = entries.IsNull() ? 0 : entries.Length();
++  ASSERT(length <= compiler::target::kWordMax);
++  WriteUnsigned(length);
++  if (length == 0) return;
++
++  Object& entry = Object::Handle(zone_);
++  for (intptr_t i = 0; i < length; i++) {
++    entry = entries.At(i);
++    const intptr_t id = RefId(entry.ptr());
++    // Would deserialize as a fatal zero. Reaching this means the sentinel fill
++    // was skipped or the Code was not pushed as a root, and both produce a
++    // snapshot that dies on load rather than here.
++    ASSERT(id != 0);
++    WriteUnsigned(id);
++  }
++#endif  // defined(DART_PRECOMPILER)
++}
++
+ void Serializer::WriteDispatchTable(const Array& entries) {
+ #if defined(DART_PRECOMPILER)
+   if (kind() != Snapshot::kFullAOT) return;
+@@ -9393,6 +9446,37 @@ DeserializationCluster* Deserializer::ReadCluster() {
+   return nullptr;
+ }
+ 
++// Shorebird. Transcribed from their engine: Deserializer::ReadIndirectStatic-
++// CallTable, declared at their app_snapshot.cc:1031 and inlined into their
++// 0x741f1c..0x74204c, which is where every step below was read off.
++//
++// The shape is much smaller than ReadDispatchTable's because the entries are
++// plain references rather than a delta encoding, and because there is no
++// deferred variant -- the table is complete when the object graph is.
++void Deserializer::ReadIndirectStaticCallTable() {
++#if defined(DART_PRECOMPILED_RUNTIME)
++  const intptr_t length = ReadUnsigned();
++  if (length == 0) return;
++
++  auto* const IG = isolate_group();
++  std::unique_ptr<uword[]> table(new uword[length]);
++
++  for (intptr_t i = 0; i < length; i++) {
++    const intptr_t ref = ReadUnsigned();
++    // Theirs branches a zero straight into an Assert::Fail rather than
++    // substituting a null-error entry the way ReadDispatchTable does. Keeping
++    // that is what makes a missing sentinel fail at the snapshot that caused
++    // it, instead of at the first call through the slot.
++    if (ref == 0) {
++      FATAL("Indirect static call table slot %" Pd " has no code", i);
++    }
++    table[i] = Code::RawCast(Ref(ref))->untag()->entry_point_;
++  }
++
++  IG->set_indirect_static_call_table(std::move(table), length);
++#endif  // defined(DART_PRECOMPILED_RUNTIME)
++}
++
+ void Deserializer::ReadDispatchTable(
+     ReadStream* stream,
+     bool deferred,
+diff --git a/runtime/vm/compiler/aot/precompiler.cc b/runtime/vm/compiler/aot/precompiler.cc
+index 36233b30167..ce1858643fb 100644
+--- a/runtime/vm/compiler/aot/precompiler.cc
++++ b/runtime/vm/compiler/aot/precompiler.cc
+@@ -680,6 +680,8 @@ void Precompiler::DoCompileAll() {
+       ProgramVisitor::Dedup(T);
+     }
+ 
++    RefreshIndirectStaticCallTable();
++
+     PruneDictionaries();
+ 
+     if (retained_reasons_writer_ != nullptr) {
+@@ -2204,7 +2206,73 @@ void Precompiler::FinalizeIndirectStaticCallTable() {
+   for (const auto& entry : builder.slot_to_code()) {
+     table.SetAt(entry.first, *entry.second);
+   }
+-  IG->object_store()->set_indirect_static_call_table(table);
++
++  // Slots below max_slot that no Code claimed are still null here, and null is
++  // not a value this table can carry: their Deserializer::ReadIndirectStatic-
++  // CallTable treats a zero reference as fatal rather than as an absent entry,
++  // the way ReadDispatchTable treats zero as "use the null-error stub". So the
++  // gap has to be closed before serialization, and their own linker report
++  // names the closure -- "unrewritten-null filled with sentinel".
++  //
++  // ⚠️ Which Code they use as that sentinel is not established. The phase this
++  // reproduces shows no fill loop, so theirs may fill from the linker instead.
++  // dispatch_table_null_error_stub is upstream's answer to the identical
++  // question one table over: a slot that must exist and must not be called.
++  const Code& sentinel =
++      Code::Handle(Z, IG->object_store()->dispatch_table_null_error_stub());
++  ASSERT(!sentinel.IsNull());
++  Object& entry = Object::Handle(Z);
++  for (intptr_t i = 0, n = table.Length(); i < n; i++) {
++    entry = table.At(i);
++    if (entry.IsNull()) {
++      table.SetAt(i, sentinel);
++    }
++  }
++
++  IG->object_store()->set_indirect_static_call_table_code_entries(table);
++}
++
++// The table is built before DropFunctions, because the retain pass above has to
++// run before anything is dropped. DiscardCodeObjects and ProgramVisitor::Dedup
++// come after, and both can leave a slot holding a Code object that is no longer
++// its function's current one -- a discarded duplicate that happens to share
++// Instructions with the survivor.
++//
++// That is not a cosmetic difference. The serializer pushes every slot's Code as
++// a root, so a stale duplicate becomes reachable, and two Code objects with one
++// Instructions trips CodeSerializationCluster::Insert's
++// RELEASE_ASSERT(!FLAG_precompiled_mode). It cost a real snapshot: gen_snapshot
++// died at app_snapshot.cc:2791 the first time a mapping covering the whole
++// program was run through it, and nothing before that point had noticed,
++// because every check until then read the emitted call sites rather than
++// loading the result.
++//
++// ⚠️ Theirs does all of this in one pass at the earlier position, with no
++// refresh that the disassembly shows. Either their ordering differs or they
++// reconcile it somewhere not yet found; this step is ours, and it is here
++// because the snapshot does not otherwise load.
++void Precompiler::RefreshIndirectStaticCallTable() {
++  HANDLESCOPE(T);
++
++  const Array& table = Array::Handle(
++      Z, IG->object_store()->indirect_static_call_table_code_entries());
++  if (table.IsNull()) return;
++
++  Code& code = Code::Handle(Z);
++  Object& owner = Object::Handle(Z);
++  Function& function = Function::Handle(Z);
++
++  for (intptr_t i = 0, n = table.Length(); i < n; i++) {
++    code ^= table.At(i);
++    if (code.IsNull()) continue;
++    owner = code.owner();
++    if (!owner.IsFunction()) continue;  // The sentinel stub owns nothing.
++    function ^= owner.ptr();
++    if (!function.HasCode()) continue;
++    if (function.CurrentCode() != code.ptr()) {
++      table.SetAt(i, Code::Handle(Z, function.CurrentCode()));
++    }
++  }
+ }
+ 
+ void Precompiler::ReplaceFunctionStaticCallEntries() {
+diff --git a/runtime/vm/compiler/aot/precompiler.h b/runtime/vm/compiler/aot/precompiler.h
+index 111be36c940..29af655c0a1 100644
+--- a/runtime/vm/compiler/aot/precompiler.h
++++ b/runtime/vm/compiler/aot/precompiler.h
+@@ -350,6 +350,11 @@ class Precompiler : public ValueObject {
+   // function the table can dispatch to, which is what keeps them alive.
+   void FinalizeIndirectStaticCallTable();
+ 
++  // Re-points each slot at its function's current Code. Must run after
++  // DiscardCodeObjects() and ProgramVisitor::Dedup(), which can leave a slot
++  // holding a discarded duplicate; serializing one of those is fatal.
++  void RefreshIndirectStaticCallTable();
++
+   void ReplaceFunctionStaticCallEntries();
+   void DropFunctions();
+   void DropFields();
+diff --git a/runtime/vm/compiler/backend/flow_graph.cc b/runtime/vm/compiler/backend/flow_graph.cc
+index c8a0db47ff2..3c62ef5975d 100644
+--- a/runtime/vm/compiler/backend/flow_graph.cc
++++ b/runtime/vm/compiler/backend/flow_graph.cc
+@@ -2281,6 +2281,11 @@ void FlowGraph::InsertRecordBoxing(Definition* def) {
+     target = &(call->interface_target());
+   } else if (auto* call = def->AsDispatchTableCall()) {
+     target = &(call->interface_target());
++  } else if (auto* call = def->AsIndirectStaticCall()) {
++    // Same reason as in InsertMoveArguments: a DD-routed call returns whatever
++    // its target returns, records included, and the unboxing metadata is read
++    // off the target either way.
++    target = &(call->function());
+   } else {
+     UNREACHABLE();
+   }
+@@ -3275,6 +3280,17 @@ void FlowGraph::InsertMoveArguments() {
+         target = dispatch_call->interface_target().ptr();
+       } else if (auto cachable_call = instruction->AsCachableIdempotentCall()) {
+         target = cachable_call->function().ptr();
++      } else if (auto indirect_call = instruction->AsIndirectStaticCall()) {
++        // Shorebird: the dispatch changed, the calling convention did not. Miss
++        // this and target stays null, ComputeCallingConvention falls back to
++        // passing everything on the stack, and the callee -- which was compiled
++        // for registers -- reads its arguments from the wrong place.
++        //
++        // That is what a DD-routed RangeError.checkValidRange did: "Not in
++        // inclusive range 0..8: 4455421777", an address where a length belonged.
++        // Silent, target-dependent, and invisible to every check that reads the
++        // emitted call sites rather than running them.
++        target = indirect_call->function().ptr();
+       }
+ 
+       MoveArgumentsArray* arguments =
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index c17349f8358..7e841ef0987 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -668,7 +668,15 @@ void FlowGraphCompiler::EmitIndirectStaticCall(
+     const Array& arguments_descriptor) {
+   ASSERT(CanCallDart());
+   ASSERT(dd_slot >= 0);
+-  if (!arguments_descriptor.IsNull()) {
++  // Gate on the callee, exactly as EmitOptimizedStaticCall above does, and not
++  // on whether a descriptor exists -- ToArgumentsDescriptor always builds one,
++  // so "is it null" is never false and this loaded unconditionally.
++  //
++  // ⚠️ This was changed while chasing a wrong-argument bug and did not fix it;
++  // the cause was the calling convention, in FlowGraph::InsertMoveArguments.
++  // Kept because it matches EmitOptimizedStaticCall, not because it repaired
++  // anything -- writing it up as the fix would leave a false lead behind.
++  if (function.PrologueNeedsArgumentsDescriptor()) {
+     __ LoadObject(ARGS_DESC_REG, arguments_descriptor);
+   }
+   CLOBBERS_LR({
+diff --git a/runtime/vm/isolate.h b/runtime/vm/isolate.h
+index dd5beb70d6d..9ae95ab31b8 100644
+--- a/runtime/vm/isolate.h
++++ b/runtime/vm/isolate.h
+@@ -424,6 +424,23 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
+     dispatch_table_snapshot_size_ = size;
+   }
+ 
++  // Shorebird's DD table, live form: entry points indexed by dd_slot, which is
++  // what IndirectStaticCallInstr's emitted sequence loads and branches to. Note
++  // it is a bare uword[] and not wrapped the way DispatchTable is -- theirs is
++  // a unique_ptr<unsigned long[]> plus a size, straight on IsolateGroup (engine
++  // dSYM, isolate.h:987-988, at 0x450 and 0x458).
++  const uword* indirect_static_call_table() const {
++    return indirect_static_call_table_.get();
++  }
++  intptr_t indirect_static_call_table_size() const {
++    return indirect_static_call_table_size_;
++  }
++  void set_indirect_static_call_table(std::unique_ptr<uword[]> table,
++                                      intptr_t size) {
++    indirect_static_call_table_ = std::move(table);
++    indirect_static_call_table_size_ = size;
++  }
++
+   ClassTableAllocator* class_table_allocator() {
+     return &class_table_allocator_;
+   }
+@@ -948,6 +965,13 @@ class IsolateGroup : public IntrusiveDListEntry<IsolateGroup> {
+   std::unique_ptr<DispatchTable> dispatch_table_;
+   const uint8_t* dispatch_table_snapshot_ = nullptr;
+   intptr_t dispatch_table_snapshot_size_ = 0;
++  // Shorebird: theirs sits in exactly this position, right after the dispatch
++  // table's fields and before saved_unlinked_calls_ (engine dSYM, isolate.h:987
++  // and :988). Placed by name rather than by offset -- ours is at a different
++  // address because our IsolateGroup differs elsewhere, and matching the
++  // neighbourhood is what makes the intent legible.
++  std::unique_ptr<uword[]> indirect_static_call_table_;
++  intptr_t indirect_static_call_table_size_ = 0;
+   std::shared_ptr<FieldTable> initial_field_table_;
+   std::shared_ptr<FieldTable> sentinel_field_table_;
+   std::shared_ptr<FieldTable> shared_initial_field_table_;
+diff --git a/runtime/vm/object_store.h b/runtime/vm/object_store.h
+index 9a615e987fd..bc969b8d5a3 100644
+--- a/runtime/vm/object_store.h
++++ b/runtime/vm/object_store.h
+@@ -311,10 +311,18 @@ class ObjectPointerVisitor;
+   /* is possible here and not for Thread only because the five ObjectStore   */ \
+   /* fields CheckOffsets pins all live far earlier in this list, so nothing  */ \
+   /* shifts underneath them.                                                 */ \
+-  /* The name is borrowed from Thread::indirect_static_call_table_, which IS */ \
+-  /* theirs (engine dSYM, by name). The ObjectStore field's own name is not  */ \
+-  /* recoverable from a stripped gen_snapshot, so this spelling is ours.     */ \
+-  RW(Array, indirect_static_call_table)                                        \
++  /* The name is theirs, and is recoverable after all: WriteRoots emits this */ \
++  /* whole list as a strtab (see EMIT_FIELD_NAME in app_snapshot.cc), so the */ \
++  /* field names sit in their gen_snapshot in list order. Theirs reads       */ \
++  /*   ... suspend_sync_star_at_yield_stub_, dispatch_table_code_entries_,   */ \
++  /*   indirect_static_call_table_code_entries_, selector_row_entries_,      */ \
++  /*   instructions_tables_ ...                                             */ \
++  /* which also confirms the position independently of the 0x810 offset.     */ \
++  /* ⚠️ selector_row_entries_ is a second Shorebird field we do not have, so */ \
++  /* everything past this point is one slot off theirs. That costs nothing   */ \
++  /* today -- no reproduction compares ObjectStore offsets past here -- but  */ \
++  /* it is the reason not to read a later field's offset off their binary.   */ \
++  RW(Array, indirect_static_call_table_code_entries)                           \
+   RW(GrowableObjectArray, instructions_tables)                                 \
+   RW(GrowableObjectArray, tag_table)                                           \
+   RW(Array, obfuscation_map)                                                   \
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 9706d425a91..7e91e98b2a6 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -393,7 +393,9 @@ void BuildKeyMap(Thread* thread, Zone* zone, KeyMap* out) {
+   Class& cls = Class::Handle(zone);
+   Array& functions = Array::Handle(zone);
+   Function& function = Function::Handle(zone);
++#if !defined(DART_PRECOMPILED_RUNTIME)
+   Code& code = Code::Handle(zone);
++#endif
+ 
+   for (intptr_t i = 0; i < libraries.Length(); i++) {
+     library ^= libraries.At(i);
+@@ -413,11 +415,22 @@ void BuildKeyMap(Thread* thread, Zone* zone, KeyMap* out) {
+         }
+       }
+ 
++#if !defined(DART_PRECOMPILED_RUNTIME)
++      // Class::allocation_stub() only exists while compiling: the AOT runtime
++      // has no per-class allocation stubs to hand out. This file is in the
++      // runtime's source list as well as gen_snapshot's, so without the guard
++      // the AOT runtime does not build at all -- which is how this was found,
++      // the first time anything tried to link dartaotruntime here.
++      //
++      // Guarding rather than stubbing is safe because BuildKeyMap is reached
++      // only from ResolveDDSlots, and that runs inside Precompiler::DoCompile-
++      // All. In an AOT runtime build the whole function is unreachable.
+       code = cls.allocation_stub();
+       if (!code.IsNull()) {
+         (*out)[FunctionKey::ForAllocStub(cls)].push_back(
+             static_cast<uword>(code.ptr()));
+       }
++#endif  // !defined(DART_PRECOMPILED_RUNTIME)
+     }
+   }
+ }
+diff --git a/runtime/vm/thread.cc b/runtime/vm/thread.cc
+index 290ab68f394..0e8e5a62027 100644
+--- a/runtime/vm/thread.cc
++++ b/runtime/vm/thread.cc
+@@ -1659,6 +1659,11 @@ void Thread::SetupDartMutatorStateDependingOnSnapshot(IsolateGroup* group) {
+     if (dispatch_table != nullptr) {
+       dispatch_table_array_ = dispatch_table->ArrayOrigin();
+     }
++
++    // Shorebird's DD table. No origin bias, unlike the dispatch table above:
++    // their emitted sequence indexes it as table[dd_slot] with the slot folded
++    // straight into the load's immediate, so element 0 is the origin.
++    indirect_static_call_table_ = group->indirect_static_call_table();
+ #define INIT_ENTRY_POINT(name)                                                 \
+   if (object_store->name() != Object::null()) {                                \
+     name##_entry_point_ = Function::EntryPointOf(object_store->name());        \
+diff --git a/runtime/vm/thread.h b/runtime/vm/thread.h
+index 45aa6a4dd67..3a738779294 100644
+--- a/runtime/vm/thread.h
++++ b/runtime/vm/thread.h
+@@ -650,10 +650,15 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   // indirect_static_call_table_offset() and never a literal -- hardcoding
+   // 0x978 would read an unrelated field of our Thread and the mistake would
+   // look like a table-contents bug rather than an offset bug.
+-  uword indirect_static_call_table() const {
++  // const uword* rather than uword: that is the type their engine's dSYM gives
++  // it (thread.h:1685), and it is what dispatch_table_array_ carries one
++  // mechanism over. Emitted code cannot tell the difference -- it loads the
++  // word and dereferences it either way -- but this makes it read as what it
++  // is, a borrowed pointer into storage IsolateGroup owns.
++  const uword* indirect_static_call_table() const {
+     return indirect_static_call_table_;
+   }
+-  void set_indirect_static_call_table(uword v) {
++  void set_indirect_static_call_table(const uword* v) {
+     indirect_static_call_table_ = v;
+   }
+   static intptr_t indirect_static_call_table_offset() {
+@@ -1832,7 +1837,7 @@ class Thread : public ThreadState, public IntrusiveDListEntry<Thread> {
+   uword resume_on_cpu_entry_point_ = 0;
+   uword base_instructions_entry_point_ = 0;
+   uword base_instructions_end_ = 0;
+-  uword indirect_static_call_table_ = 0;
++  const uword* indirect_static_call_table_ = nullptr;
+ 
+   explicit Thread(bool is_vm_isolate);
+ 
+-- 
+2.53.0
+

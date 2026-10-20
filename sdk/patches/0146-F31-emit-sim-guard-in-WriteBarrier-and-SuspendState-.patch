@@ -1,0 +1,70 @@
+From eaa31ba680fb98abbc0b11f7a0e9eaf39a7737de Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 8 Sep 2026 09:23:53 +0800
+Subject: [PATCH 146/206] F31: emit sim guard in WriteBarrier and SuspendState
+ stubs
+
+Under ProductSimARM64 (dart_force_simulator=true), add ldr/cbz/brk
+sim guards before leaf-runtime calls in GenerateWriteBarrierStubHelper
+(mark_stack_push lambda x2 and StoreBufferBlockProcess) and
+GenerateSuspendStub (EnsureRememberedAndMarkingDeferred).
+
+Uses the existing 4-arg LeafRuntimeScope::Call overload with
+Thread::is_simulating_offset() and Instr::kCallLeafRuntimeOnCPUCode.
+
+Before: ours sim guard 61, theirs 84. After: ours 76 (>= 64).
+Negative control: removing StoreBufferBlock guard drops count to 73.
+
+diff --git a/runtime/vm/compiler/stub_code_compiler.cc b/runtime/vm/compiler/stub_code_compiler.cc
+index ca97bb5784d..cf22d177848 100644
+--- a/runtime/vm/compiler/stub_code_compiler.cc
++++ b/runtime/vm/compiler/stub_code_compiler.cc
+@@ -2258,7 +2258,13 @@ void StubCodeCompiler::GenerateSuspendStub(
+     __ MoveRegister(CallingConventions::ArgumentRegisters[0], kSuspendState);
+     __ MoveRegister(CallingConventions::ArgumentRegisters[1], THR);
+ #endif
++#if defined(DART_INCLUDE_SIMULATOR) && defined(TARGET_ARCH_ARM64)
++    rt.Call(kEnsureRememberedAndMarkingDeferredRuntimeEntry, 2,
++            dart::Thread::is_simulating_offset(),
++            Instr::kCallLeafRuntimeOnCPUCode);
++#else
+     rt.Call(kEnsureRememberedAndMarkingDeferredRuntimeEntry, 2);
++#endif
+   }
+   if (!call_suspend_function) {
+     __ PopRegister(kArgument);
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 5700902dd74..f2c7de35f71 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -2951,7 +2951,13 @@ static void GenerateWriteBarrierStubHelper(Assembler* assembler, bool cards) {
+                             /*frame_size=*/0,
+                             /*preserve_registers=*/true);
+         __ mov(R0, THR);
++#if defined(DART_INCLUDE_SIMULATOR)
++        rt.Call(entry, /*argument_count=*/1,
++                dart::Thread::is_simulating_offset(),
++                Instr::kCallLeafRuntimeOnCPUCode);
++#else
+         rt.Call(entry, /*argument_count=*/1);
++#endif
+       }
+     };
+ 
+@@ -3034,7 +3040,13 @@ static void GenerateWriteBarrierStubHelper(Assembler* assembler, bool cards) {
+                           /*frame_size=*/0,
+                           /*preserve_registers=*/true);
+       __ mov(R0, THR);
++#if defined(DART_INCLUDE_SIMULATOR)
++      rt.Call(kStoreBufferBlockProcessRuntimeEntry, /*argument_count=*/1,
++              dart::Thread::is_simulating_offset(),
++              Instr::kCallLeafRuntimeOnCPUCode);
++#else
+       rt.Call(kStoreBufferBlockProcessRuntimeEntry, /*argument_count=*/1);
++#endif
+     }
+ 
+     __ Bind(&done);
+-- 
+2.53.0
+

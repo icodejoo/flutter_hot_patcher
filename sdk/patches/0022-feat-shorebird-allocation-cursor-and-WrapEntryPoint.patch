@@ -1,0 +1,221 @@
+From 633150ce542701c6c91b3fbb414562d7d90a77f0 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 11:05:42 +0800
+Subject: [PATCH 022/206] feat(shorebird): allocation cursor and WrapEntryPoint
+
+WrapEntryPoint's only effect is an 8-byte store into metadata -- no
+instructions are written at runtime, matching what their disassembly shows.
+The cursor hands out sequential landing pads and rolls onto a freshly mapped
+page when one is exhausted.
+
+Deviation from the plan, forced by their DWARF: the plan adds a current_page_
+field, but their WrapperAllocator has exactly five members summing to 0x98
+(layout_ at 0x38 + 0x60) and no current-page slot. Adding the field grows the
+class to 0xA0 and fires the static_assert -- measured, not assumed. The most
+recently mapped page is already wrapper_pages_.Last(), so the current page is
+derived through a private CurrentPage() accessor instead. Member functions do
+not affect sizeof, so 0x98 is preserved and the layout still matches theirs.
+
+Negative control on the roll-over test, which was the vacuity risk here:
+consuming one FEWER than a full page (2043 of 2044) fails with exit 255 on
+both the contiguity assertion (off by exactly one 8-byte pad) and the
+page-difference assertion, which reports the overflow wrapper landing on the
+same page. So 2044 is exactly the page capacity and the loop consuming all of
+it is load-bearing -- the roll-over is not an artifact of the test.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index aaeb9ec53de..31c9bca46c3 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -108,5 +108,53 @@ bool WrapperAllocator::AllocateWrapperPage(const CodeRange& stub_code,
+   return true;
+ }
+ 
++uword WrapperAllocator::EnsureNextWrapperEntry(const CodeRange& stub_code) {
++  if (wrappers_left_in_current_page_ <= 0) {
++    uword page = 0;
++    if (!AllocateWrapperPage(stub_code, &page)) {
++      return 0;
++    }
++    // AllocateWrapperPage appended the page, so CurrentPage() is now it.
++    wrappers_left_in_current_page_ = layout_.num_wrappers_per_page;
++  }
++  const intptr_t index =
++      layout_.num_wrappers_per_page - wrappers_left_in_current_page_;
++  wrappers_left_in_current_page_--;
++  return CurrentPage() + offset_of_first_wrapper_in_page_ +
++         index * layout_.landing_pad_size;
++}
++
++uword WrapperAllocator::WrapEntryPoint(const CodeRange& stub_code,
++                                       uword target) {
++  const uword wrapper = EnsureNextWrapperEntry(stub_code);
++  if (wrapper == 0) {
++    return 0;
++  }
++  // The only runtime write. No instructions are emitted here -- the landing pad
++  // and shared body were generated at build time and arrived via the COW remap.
++  Metadata* metadata =
++      reinterpret_cast<Metadata*>(MetadataForWrapper(CurrentPage(), wrapper));
++  metadata->target_entry_point = target;
++  return wrapper;
++}
++
++uword WrapperAllocator::PageOfWrapper(uword wrapper) const {
++  for (intptr_t i = 0; i < wrapper_pages_.length(); i++) {
++    if (ContainsEntryPoint(wrapper_pages_[i], wrapper)) {
++      return wrapper_pages_[i];
++    }
++  }
++  return 0;
++}
++
++uword WrapperAllocator::TargetOfWrapper(uword wrapper) const {
++  const uword page = PageOfWrapper(wrapper);
++  if (page == 0) {
++    return 0;
++  }
++  return reinterpret_cast<Metadata*>(MetadataForWrapper(page, wrapper))
++      ->target_entry_point;
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index 948c2aaeb16..fa68aef95be 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -121,9 +121,32 @@ class WrapperAllocator {
+   // leaves *page untouched if the range is empty or the kernel refuses.
+   bool AllocateWrapperPage(const CodeRange& stub_code, uword* page);
+ 
++  // Reserves the next landing pad and stores target into its metadata.
++  // Returns the wrapper entry point, or 0 if a page could not be mapped.
++  uword WrapEntryPoint(const CodeRange& stub_code, uword target);
++
++  // Reads back the target stored for a wrapper. Test and diagnostic use.
++  uword TargetOfWrapper(uword wrapper) const;
++
++  // Page that contains a wrapper, or 0 if none does.
++  uword PageOfWrapper(uword wrapper) const;
++
+   const Layout& layout() const { return layout_; }
+ 
+  private:
++  // Ensures a current page with at least one free landing pad, mapping a new
++  // one if needed. Returns 0 on failure.
++  uword EnsureNextWrapperEntry(const CodeRange& stub_code);
++
++  // The page currently being handed out of. Deliberately *not* a field: their
++  // DWARF lists exactly five members summing to 0x98, with no current-page
++  // slot, and the most recently mapped page is already the last element of
++  // wrapper_pages_. Adding a field would grow the class to 0xA0 and break the
++  // static_assert in wrapper.cc. Member functions do not affect sizeof.
++  uword CurrentPage() const {
++    return wrapper_pages_.is_empty() ? 0 : wrapper_pages_.Last();
++  }
++
+   uword stub_page_ = 0;                            // 0x00
+   MallocGrowableArray<uword> wrapper_pages_;       // 0x08
+   intptr_t offset_of_first_wrapper_in_page_ = 0;   // 0x28
+diff --git a/runtime/vm/shorebird/wrapper_test.cc b/runtime/vm/shorebird/wrapper_test.cc
+index 3bd4340101b..ed51d25783e 100644
+--- a/runtime/vm/shorebird/wrapper_test.cc
++++ b/runtime/vm/shorebird/wrapper_test.cc
+@@ -188,5 +188,91 @@ VM_UNIT_TEST_CASE(WrapperAllocator_RxHalfIsCopyOnWrite) {
+                 source_size);
+ }
+ 
++// Allocates a stand-in stub range for tests that need a real mapped page.
++static CodeRange AllocateFakeStub(intptr_t size, void** out) {
++  void* p = nullptr;
++  EXPECT_EQ(KERN_SUCCESS,
++            vm_allocate(mach_task_self(), reinterpret_cast<vm_address_t*>(&p),
++                        size, VM_FLAGS_ANYWHERE));
++  *out = p;
++  CodeRange r;
++  r.begin = reinterpret_cast<uword>(p);
++  r.end = r.begin + size;
++  return r;
++}
++
++VM_UNIT_TEST_CASE(WrapperAllocator_WrapEntryPointStoresTargetOnly) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  WrapperAllocator allocator(l);
++
++  void* stub = nullptr;
++  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
++
++  const uword target = static_cast<uword>(0xcafef00d);
++  const uword wrapper = allocator.WrapEntryPoint(range, target);
++  EXPECT(wrapper != 0);
++
++  // The only effect is an 8-byte store into metadata.
++  EXPECT_EQ(target, allocator.TargetOfWrapper(wrapper));
++
++  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
++                l.rx_mapping_size);
++}
++
++// Distinct targets must get distinct landing pads, advancing by exactly one
++// pad each time, and all within the first page until it is full.
++VM_UNIT_TEST_CASE(WrapperAllocator_HandsOutDistinctSequentialPads) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  WrapperAllocator allocator(l);
++
++  void* stub = nullptr;
++  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
++
++  const uword a = allocator.WrapEntryPoint(range, static_cast<uword>(0x1111));
++  const uword b = allocator.WrapEntryPoint(range, static_cast<uword>(0x2222));
++  const uword c = allocator.WrapEntryPoint(range, static_cast<uword>(0x3333));
++
++  EXPECT_EQ(a + l.landing_pad_size, b);
++  EXPECT_EQ(b + l.landing_pad_size, c);
++  EXPECT_EQ(static_cast<uword>(0x1111), allocator.TargetOfWrapper(a));
++  EXPECT_EQ(static_cast<uword>(0x2222), allocator.TargetOfWrapper(b));
++  EXPECT_EQ(static_cast<uword>(0x3333), allocator.TargetOfWrapper(c));
++
++  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
++                l.rx_mapping_size);
++}
++
++// Exhausting a page must roll onto a fresh one instead of running off the end.
++VM_UNIT_TEST_CASE(WrapperAllocator_RollsOntoANewPageWhenFull) {
++  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++  WrapperAllocator allocator(l);
++
++  void* stub = nullptr;
++  const CodeRange range = AllocateFakeStub(l.rx_mapping_size, &stub);
++
++  uword first = 0;
++  uword last_on_first_page = 0;
++  for (intptr_t i = 0; i < l.num_wrappers_per_page; i++) {
++    const uword w = allocator.WrapEntryPoint(range, static_cast<uword>(i + 1));
++    EXPECT(w != 0);
++    if (i == 0) first = w;
++    last_on_first_page = w;
++  }
++  // The whole page was consumed, contiguously.
++  EXPECT_EQ(first + (l.num_wrappers_per_page - 1) * l.landing_pad_size,
++            last_on_first_page);
++
++  // One more must land on a different page. Comparing addresses would be
++  // flaky -- a fresh mapping can legitimately land adjacent to the old one --
++  // so compare the owning pages instead.
++  const uword overflow = allocator.WrapEntryPoint(range, static_cast<uword>(0x9999));
++  EXPECT(overflow != 0);
++  EXPECT(allocator.PageOfWrapper(overflow) != allocator.PageOfWrapper(first));
++  EXPECT_EQ(static_cast<uword>(0x9999), allocator.TargetOfWrapper(overflow));
++
++  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(stub),
++                l.rx_mapping_size);
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+-- 
+2.53.0
+

@@ -1,0 +1,48 @@
+From 724093dd006020f2d4085e47fab5a93dcdab5780 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 7 Sep 2026 17:53:54 +0800
+Subject: [PATCH 142/206] analyze_snapshot: add GetCStackPointer stub (F21)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Closes the last gap in the parity matrix. Shorebird's VM has a
+GetCStackPointer stub placed after JumpToFrame that returns the C stack
+pointer (sp) in x0. Body: mov x0, sp; ret (8 bytes, 0x910003e0 +
+0xd65f03c0). Confirmed by reading the stub section of their shipped .so.
+
+With this change disassemble×3 are fully structural (Thread+0x678 is
+the only remaining diff cause, now backed by evidence row). Phase gate
+advances unknown=12→9, structural=12→15.
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 9737835bac3..3fda8fab338 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -4263,6 +4263,11 @@ void StubCodeCompiler::GenerateJumpToFrameStub() {
+   __ ret(CALLEE_SAVED_TEMP);  // Jump to continuation point.
+ }
+ 
++void StubCodeCompiler::GenerateGetCStackPointerStub() {
++  __ mov(R0, CSP);
++  __ Ret();
++}
++
+ // Run an exception handler.  Execution comes from JumpToFrame
+ // stub or from the simulator.
+ //
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 2ecdae43356..f54da13c4f1 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -30,6 +30,7 @@ namespace dart {
+ // isolates running in this dart process.
+ #define VM_STUB_CODE_LIST(V)                                                   \
+   V(JumpToFrame)                                                               \
++  V(GetCStackPointer)                                                          \
+   V(RunExceptionHandler)                                                       \
+   V(RunExceptionHandlerUnbox)                                                  \
+   V(DeoptForRewind)                                                            \
+-- 
+2.53.0
+

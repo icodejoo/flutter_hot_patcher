@@ -1,0 +1,250 @@
+From 71cc44105c72c8df7a110a52a3a0ec319bd14328 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 12:58:11 +0800
+Subject: [PATCH 052/206] feat(shorebird): SimulatorCallToRuntime, and factor
+ the shared return tail
+
+Eight of sixteen. 39 instructions / 156 bytes, matching theirs, with 32 of 39
+words byte-identical and the other seven differing only in a Thread
+displacement. Same exit-frame shape as the three Native stubs, but the argument
+block is computed from the argument count in R4 -- argv = FP + 8 + argc*8,
+retval = argv + 8 -- and it returns 0.
+
+The eleven-instruction tail that comes back from the hypercall and reloads
+HEAP_BITS, NULL_REG, PP and DISPATCH_TABLE_REG is byte-identical across all four
+stubs, so it is now GenerateSimulatorReturnToDart rather than repeated. The
+Native stubs still compare 27/34 after the refactor, so it changed no bytes.
+
+One oddity kept: the stub opens by loading call_to_runtime_stub_ into CODE_REG
+and nothing below uses it. Dropping it would give a 152-byte stub against their
+156.
+
+Verified: 85 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures.
+
+A note on the negative control, because the first attempt did not run. The
+sabotage patch asserted on a string that had been reflowed, so python exited 1
+and the harness reported "SABOTAGED exit=1" -- which reads like a failing test
+but was a failing patch, with the binary never rebuilt. Redone by line number:
+changing the argv shift from LSL 3 to LSL 2 makes the test exit 255, and
+reverting returns it to 0. A negative control that silently does not run is
+worth less than no negative control at all.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 98bce8fa407..617f142fe62 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -936,6 +936,33 @@ void StubCodeCompiler::GenerateCallSimulatorFromFfiTrampolineStub() {
+   __ ret();
+ }
+ 
++// The tail every Shorebird simulator-call stub shares: come back from the
++// hypercall onto the Dart stack, clear the exit-frame bookkeeping, and reload
++// the Dart global registers the C side is allowed to clobber. Byte-identical
++// across all four stubs that use it, which is why it is factored here rather
++// than repeated.
++static void GenerateSimulatorReturnToDart(Assembler* assembler) {
++  __ ldr(HEAP_BITS, Address(THR, target::Thread::write_barrier_mask_offset()),
++         kEightBytes);
++  __ LslImmediate(HEAP_BITS, HEAP_BITS, 32);
++  __ ldr(NULL_REG, Address(THR, target::Thread::object_null_offset()),
++         kEightBytes);
++  __ LoadImmediate(R2, VMTag::kDartTagId);
++  __ str(R2, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++  __ str(ZR, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ str(ZR, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ ldr(PP, Address(THR, target::Thread::global_object_pool_offset()),
++         kEightBytes);
++  __ sub(PP, PP, Operand(kHeapObjectTag));
++  __ ldr(DISPATCH_TABLE_REG,
++         Address(THR, target::Thread::dispatch_table_array_offset()),
++         kEightBytes);
++  __ mov(SPREG, FP);
++  __ ldp(FP, R30, Address::Pair(SPREG, 16, Address::PairPostIndex));
++}
++
+ // Shorebird. The three SimulatorCall*Native stubs are the same 34 instructions
+ // with a different hypercall immediate, so they share a generator. Transcribed
+ // from their emitted stubs (136 bytes each); every Thread displacement in them
+@@ -977,26 +1004,7 @@ static void GenerateSimulatorCallNativeStub(Assembler* assembler,
+   __ mov(SPREG, CSP);
+   __ mov(CSP, R25);
+ 
+-  __ ldr(HEAP_BITS, Address(THR, target::Thread::write_barrier_mask_offset()),
+-         kEightBytes);
+-  __ LslImmediate(HEAP_BITS, HEAP_BITS, 32);
+-  __ ldr(NULL_REG, Address(THR, target::Thread::object_null_offset()),
+-         kEightBytes);
+-  __ LoadImmediate(R2, VMTag::kDartTagId);
+-  __ str(R2, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
+-  __ str(ZR, Address(THR, target::Thread::exit_through_ffi_offset()),
+-         kEightBytes);
+-  __ str(ZR, Address(THR, target::Thread::top_exit_frame_info_offset()),
+-         kEightBytes);
+-  __ ldr(PP, Address(THR, target::Thread::global_object_pool_offset()),
+-         kEightBytes);
+-  __ sub(PP, PP, Operand(kHeapObjectTag));
+-  __ ldr(DISPATCH_TABLE_REG,
+-         Address(THR, target::Thread::dispatch_table_array_offset()),
+-         kEightBytes);
+-
+-  __ mov(SPREG, FP);
+-  __ ldp(FP, R30, Address::Pair(SPREG, 16, Address::PairPostIndex));
++  GenerateSimulatorReturnToDart(assembler);
+   __ ret();
+ }
+ 
+@@ -1012,6 +1020,50 @@ void StubCodeCompiler::GenerateSimulatorCallNoScopeNativeStub() {
+   GenerateSimulatorCallNativeStub(assembler, Instr::kCallNoScopeNativeOnCPUCode);
+ }
+ 
++// Shorebird. The simulator's route into a runtime entry: same exit-frame shape
++// as the SimulatorCall*Native stubs, but the argument block is computed from
++// the argument count in R4 rather than passed in, and it returns 0.
++//
++// 39 instructions, transcribed from their emitted stub (156 bytes). The leading
++// load of call_to_runtime_stub_ into CODE_REG is theirs; the value is not used
++// by anything below, but a stub that omitted it would be 152 bytes.
++void StubCodeCompiler::GenerateSimulatorCallToRuntimeStub() {
++  __ ldr(CODE_REG, Address(THR, target::Thread::call_to_runtime_stub_offset()),
++         kEightBytes);
++  __ stp(FP, R30, Address::Pair(SPREG, -16, Address::PairPreIndex));
++  __ mov(FP, SPREG);
++  __ str(FP, Address(THR, target::Thread::top_exit_frame_info_offset()),
++         kEightBytes);
++  __ LoadImmediate(R8, target::Thread::exit_through_runtime_call());
++  __ str(R8, Address(THR, target::Thread::exit_through_ffi_offset()),
++         kEightBytes);
++  __ str(R5, Address(THR, target::Thread::vm_tag_offset()), kEightBytes);
++
++  __ sub(SPREG, SPREG, Operand(0x20));
++  __ andi(SPREG, SPREG, Immediate(~static_cast<int64_t>(15)));
++  __ mov(R0, THR);
++  __ mov(R1, R4);
++  // argv = FP + 8 + argc * 8, and retval = argv + 8.
++  __ add(R2, ZR, Operand(R4, LSL, 3));
++  __ add(R2, FP, Operand(R2));
++  __ AddImmediate(R2, 8);
++  __ AddImmediate(R3, R2, 8);
++  __ str(R0, Address(SPREG, 0), kEightBytes);
++  __ str(R1, Address(SPREG, 8), kEightBytes);
++  __ str(R2, Address(SPREG, 16), kEightBytes);
++  __ str(R3, Address(SPREG, 24), kEightBytes);
++  __ mov(R0, SPREG);
++  __ mov(R25, CSP);
++  __ mov(CSP, SPREG);
++  __ brk(Instr::kCallRuntimeOnCPUCode);
++  __ mov(SPREG, CSP);
++  __ mov(CSP, R25);
++
++  GenerateSimulatorReturnToDart(assembler);
++  __ LoadImmediate(R0, 0);
++  __ ret();
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 543a245a38d..998fbecaef5 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -400,6 +400,79 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimulatorCallNativeStubsMatchTheirBytes
+                                Instr::kCallNoScopeNativeOnCPUCode);
+ }
+ 
++// Shorebird SimulatorCallToRuntime, 39 instructions / 156 bytes. Same exit-frame
++// shape as the three Native stubs, but the argument block is computed from the
++// argument count in R4 and it returns 0. Eight words encode a Thread offset and
++// are re-derived; the rest are pinned.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimulatorCallToRuntimeMatchesTheirBytes) {
++  const Code& stub = StubCode::SimulatorCallToRuntime();
++  EXPECT_EQ(static_cast<intptr_t>(156), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[39] = {
++      0u,  // [0]  derived
++      0xa9bf79fdu,  // [1]
++      0xaa0f03fdu,  // [2]
++      0u,  // [3]  derived
++      0xd2800048u,  // [4]
++      0u,  // [5]  derived
++      0u,  // [6]  derived
++      0xd10081efu,  // [7]
++      0x927cedefu,  // [8]
++      0xaa1a03e0u,  // [9]
++      0xaa0403e1u,  // [10]
++      0x8b040fe2u,  // [11]
++      0x8b0203a2u,  // [12]
++      0x91002042u,  // [13]
++      0x91002043u,  // [14]
++      0xf90001e0u,  // [15]
++      0xf90005e1u,  // [16]
++      0xf90009e2u,  // [17]
++      0xf9000de3u,  // [18]
++      0xaa0f03e0u,  // [19]
++      0x910003f9u,  // [20]
++      0x910001ffu,  // [21]
++      0xd43625c0u,  // [22]
++      0x910003efu,  // [23]
++      0x9100033fu,  // [24]
++      0xf9402b5cu,  // [25]
++      0xd3607f9cu,  // [26]
++      0xf9404356u,  // [27]
++      0xd2800102u,  // [28]
++      0u,  // [29]  derived
++      0u,  // [30]  derived
++      0u,  // [31]  derived
++      0u,  // [32]  derived
++      0xd100077bu,  // [33]
++      0xf9403755u,  // [34]
++      0xaa1d03efu,  // [35]
++      0xa8c179fdu,  // [36]
++      0xd2800000u,  // [37]
++      0xd65f03c0u,  // [38]
++  };
++
++  auto st_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  using T = compiler::target::Thread;
++  EXPECT_EQ(st_thr(kLdr, T::call_to_runtime_stub_offset(), 24), w[0]);
++  EXPECT_EQ(st_thr(kStr, T::top_exit_frame_info_offset(), 29), w[3]);
++  EXPECT_EQ(st_thr(kStr, T::exit_through_ffi_offset(), 8), w[5]);
++  EXPECT_EQ(st_thr(kStr, T::vm_tag_offset(), 5), w[6]);
++  EXPECT_EQ(st_thr(kStr, T::vm_tag_offset(), 2), w[29]);
++  EXPECT_EQ(st_thr(kStr, T::exit_through_ffi_offset(), 31), w[30]);
++  EXPECT_EQ(st_thr(kStr, T::top_exit_frame_info_offset(), 31), w[31]);
++  EXPECT_EQ(st_thr(kLdr, T::global_object_pool_offset(), 27), w[32]);
++
++  for (intptr_t i = 0; i < 39; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 25d55e0313f..6470182aeaf 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -163,6 +163,7 @@ namespace dart {
+   V(SimulatorCallBootstrapNative)                                              \
+   V(SimulatorCallAutoScopeNative)                                              \
+   V(SimulatorCallNoScopeNative)                                                \
++  V(SimulatorCallToRuntime)                                                    \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

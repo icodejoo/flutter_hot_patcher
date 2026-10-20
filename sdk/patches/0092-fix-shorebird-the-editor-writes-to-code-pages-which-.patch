@@ -1,0 +1,104 @@
+From 041fe7f24a32f4b46249f13057120bb49820f735 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 15:09:46 +0800
+Subject: [PATCH 092/206] fix(shorebird): the editor writes to code pages,
+ which are write protected
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The rewrite branch had never run. ImageWriter::Write detected 2324 sites
+on the fixture and re-assembled every one, but base.op and patch.op
+describe near-identical programs, so all 1421 pool entries mapped to
+themselves and Edit only ever took its self-check path.
+
+Giving it a non-identity mapping -- base indices shifted by one -- made it
+run, and it was a bus error on the first memcpy: BUS_ADRALN inside
+_platform_memmove, called from EditObjectPoolAccesses. Instructions
+payloads live on code pages and those are write protected. Nothing had
+ever written to one here, because until now the editor only read.
+
+CodeRelocator::Relocate patches instructions in place too and needs the
+same scope for the same reason, and picks its isolate group the same way
+(app_snapshot.cc:157), so the hook now takes `vm` and does likewise.
+
+⚠️ Whether theirs has an equivalent scope is not observable. The recon
+shows a plain memcpy, but a StackResource around it would be inlined away
+and leave nothing to see.
+
+Verified by where the accesses landed rather than by the absence of a
+crash: with mapping[i] = i + 1 every PP-relative offset moves by eight
+bytes. The rewritten snapshot's offset distribution is 58 sites away from
+the baseline's shifted by a slot, and 2440 away from the baseline itself.
+
+This is what production coverage buys that a unit test does not. The
+rewrite branch has had unit tests since f426f46f5b0 and they all passed
+throughout.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/image_snapshot.cc b/runtime/vm/image_snapshot.cc
+index ddd4ded0737..00a7df76ec8 100644
+--- a/runtime/vm/image_snapshot.cc
++++ b/runtime/vm/image_snapshot.cc
+@@ -15,6 +15,7 @@
+ #include "vm/elf.h"
+ #include "vm/hash.h"
+ #include "vm/hash_map.h"
++#include "vm/dart.h"
+ #include "vm/heap/heap.h"
+ #include "vm/instructions.h"
+ #include "vm/json_writer.h"
+@@ -562,7 +563,7 @@ void ImageWriter::Write(NonStreamingWriteStream* clustered_stream, bool vm) {
+     }
+   }
+ 
+-  EditObjectPoolAccesses();
++  EditObjectPoolAccesses(vm);
+ 
+   WriteBss(vm);
+ 
+@@ -592,12 +593,26 @@ void ImageWriter::Write(NonStreamingWriteStream* clustered_stream, bool vm) {
+ // self-check is theirs, and it is the closest thing this file has to a free
+ // oracle -- it compares the editor's decoder and emitters against code the same
+ // emitters produced during compilation.
+-void ImageWriter::EditObjectPoolAccesses() {
++void ImageWriter::EditObjectPoolAccesses(bool vm) {
+ #if defined(TARGET_ARCH_ARM64)
+   const std::vector<intptr_t>* mapping =
+       ShorebirdLinker::shared()->object_pool_mapping();
+   if (mapping == nullptr || mapping->empty()) return;
+ 
++  // The payloads are code pages, and code pages are write protected. Editing
++  // them without lifting that is a bus error on the first rewrite -- which is
++  // exactly what happened the first time the rewrite path ever ran, because
++  // until then every index mapped to itself and Edit only ever read.
++  //
++  // CodeRelocator::Relocate needs the same thing for the same reason, and picks
++  // its isolate group the same way (app_snapshot.cc:157). Whether theirs has an
++  // equivalent scope is not observable -- the recon shows a plain memcpy, but a
++  // StackResource around it would be inlined away.
++  auto* thread = Thread::Current();
++  auto* isolate_group =
++      vm ? Dart::vm_isolate()->group() : thread->isolate_group();
++  WritableCodePages writable_code_pages(thread, isolate_group);
++
+   bool ok = true;
+   for (intptr_t i = 0; i < instructions_.length(); i++) {
+     InstructionsData& data = instructions_[i];
+diff --git a/runtime/vm/image_snapshot.h b/runtime/vm/image_snapshot.h
+index 112f5eafcf2..c3c262b2b27 100644
+--- a/runtime/vm/image_snapshot.h
++++ b/runtime/vm/image_snapshot.h
+@@ -439,7 +439,7 @@ class ImageWriter : public ValueObject {
+   void Write(NonStreamingWriteStream* clustered_stream, bool vm);
+   // Shorebird: renumber object pool accesses in place before the payload
+   // is serialised. See the definition for why it can be a no-op.
+-  void EditObjectPoolAccesses();
++  void EditObjectPoolAccesses(bool vm);
+   intptr_t data_size() const { return next_data_offset_; }
+   intptr_t text_size() const { return next_text_offset_; }
+   intptr_t GetTextObjectCount() const;
+-- 
+2.53.0
+

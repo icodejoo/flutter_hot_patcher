@@ -1,0 +1,540 @@
+From 40d82013929bc76f9b31a0b05a5ff37883cd24f5 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 13:47:38 +0800
+Subject: [PATCH 030/206] feat(shorebird): DDSlotVoters/DDSlotResolution data
+ structures
+
+FunctionKey (32 bytes, DWARF-confirmed), DDSlotVoters wire reader with magic/
+version validation, DDSlotResolution with SetSlotOwner / Has/Owner/Key/Slot
+accessors. DDSlotMapping::ReadFromStream is a documented stub (TODO: slice-2c)
+because the wire format at 0x100198fb0 has not been disassembled yet.
+size_asserts enforce sizeof(DDSlotResolution)==128 and sizeof(FunctionKey)==32.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting.cc b/runtime/vm/shorebird/dd_voting.cc
+new file mode 100644
+index 00000000000..e37fa97d2ce
+--- /dev/null
++++ b/runtime/vm/shorebird/dd_voting.cc
+@@ -0,0 +1,204 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/dd_voting.h"
++
++#include <cstring>
++#include <functional>
++
++#include "platform/assert.h"
++#include "vm/datastream.h"
++#include "vm/os.h"
++
++namespace dart {
++
++// Layout assertions. size matches are weak (same-width substitutions pass
++// through them) but are the strongest compile-time check available for types
++// where DWARF gives us sizeof but not the instantiation details.
++//
++// For DDSlotResolution, the three unordered_map<> headers are each 0x28 bytes
++// on libc++ (bucket ptr + bucket count + head node + size + load_factor float,
++// 5*8 = 40 = 0x28), so the sum is 3*0x28 + 8 (long) = 128.
++static_assert(sizeof(DDSlotResolution) == 128,
++              "DDSlotResolution must be 128 bytes per DWARF");
++
++// FunctionKey is 32 bytes: 3 intptr_t (8 each) + 1 uint8_t + 3 pad + 1
++// uint32_t = 24 + 4 + 4 = 32.  (The 3-byte gap between kind and
++// signature_hash comes from uint32_t's 4-byte alignment requirement.)
++static_assert(sizeof(FunctionKey) == 32,
++              "FunctionKey must be 32 bytes per DWARF");
++
++// ===========================================================================
++// FunctionKey
++// ===========================================================================
++
++void FunctionKey::ReadFromStream(ReadStream* stream) {
++  library_kernel_offset      = stream->ReadUnsigned<intptr_t>();
++  owner_class_kernel_offset  = stream->ReadUnsigned<intptr_t>();
++  kernel_offset              = stream->ReadUnsigned<intptr_t>();
++  kind = static_cast<uint8_t>(stream->ReadUnsigned<intptr_t>());
++  signature_hash = static_cast<uint32_t>(stream->ReadUnsigned<intptr_t>());
++}
++
++void FunctionKey::WriteToStream(BaseWriteStream* stream) const {
++  stream->WriteUnsigned<intptr_t>(library_kernel_offset);
++  stream->WriteUnsigned<intptr_t>(owner_class_kernel_offset);
++  stream->WriteUnsigned<intptr_t>(kernel_offset);
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(kind));
++  stream->WriteUnsigned<intptr_t>(static_cast<intptr_t>(signature_hash));
++}
++
++/*static*/ uint32_t FunctionKey::ComputeSignatureHash(
++    uint32_t num_fixed,
++    uint32_t num_optional_positional,
++    uint32_t num_optional_named,
++    uint32_t num_type_params) {
++  // From FunctionKey::FromFunction disassembly: base-31 Horner evaluation.
++  return num_fixed * 29791u + num_optional_positional * 961u +
++         num_optional_named * 31u + num_type_params;
++}
++
++size_t FunctionKeyHash::operator()(const FunctionKey& k) const {
++  // Combine the five fields with the same basis used by signature_hash so
++  // that keys with identical signature_hash values still spread across buckets.
++  // The exact hash function is not measured from their binary; we only need
++  // correctness (equal keys → equal hashes), not bit-for-bit agreement.
++  size_t h = static_cast<size_t>(k.library_kernel_offset);
++  h = h * 31 + static_cast<size_t>(k.owner_class_kernel_offset);
++  h = h * 31 + static_cast<size_t>(k.kernel_offset);
++  h = h * 31 + static_cast<size_t>(k.kind);
++  h = h * 31 + static_cast<size_t>(k.signature_hash);
++  return h;
++}
++
++// ===========================================================================
++// DDSlotVoters
++// ===========================================================================
++
++const std::vector<size_t>* DDSlotVoters::voters_for_slot(
++    intptr_t slot_id) const {
++  auto it = slots_.find(slot_id);
++  if (it == slots_.end()) return nullptr;
++  return &it->second;
++}
++
++bool DDSlotVoters::ReadFromStream(ReadStream* stream) {
++  // Fixed-width magic + version — u32 LE, not varints.
++  // This is the only fixed-width header in this file family (README §DDSlotVoters).
++  if (stream->PendingBytes() < 8) {
++    OS::PrintErr("DDSlotVoters::ReadFromStream: too short for header\n");
++    return false;
++  }
++  // ReadStream reads varints via Read<T>(). The magic is raw LE u32 bytes —
++  // not varint-encoded. Use ReadBytes() for raw memcpy of 4 bytes at a time,
++  // then assemble little-endian. ReadBytes() is the public raw-copy path on
++  // ReadStream; ReadByte() is private.
++  uint32_t magic = 0;
++  uint32_t version = 0;
++  stream->ReadBytes(&magic, 4);
++  stream->ReadBytes(&version, 4);
++  // On a little-endian host (ARM64 macOS), the four bytes are already in LE
++  // order in memory, so memcpy into uint32_t gives the correct value directly.
++
++  if (magic != kMagic) {
++    OS::PrintErr("DDSlotVoters: bad magic (0x%x, expected 0x%x)\n",
++                 magic, kMagic);
++    return false;
++  }
++  if (version != kVersion) {
++    OS::PrintErr("DDSlotVoters: bad version (%u, expected %u)\n",
++                 version, kVersion);
++    return false;
++  }
++
++  if (stream->PendingBytes() <= 0) return false;
++  const intptr_t num_slots = stream->ReadUnsigned<intptr_t>();
++  if (num_slots < 0 || num_slots > stream->PendingBytes() / 2) {
++    OS::PrintErr("DDSlotVoters: implausible num_slots %" Pd "\n", num_slots);
++    return false;
++  }
++
++  slots_.reserve(static_cast<size_t>(num_slots));
++
++  for (intptr_t s = 0; s < num_slots; s++) {
++    if (stream->PendingBytes() <= 0) return false;
++    const intptr_t slot_id = stream->ReadUnsigned<intptr_t>();
++    if (stream->PendingBytes() <= 0) return false;
++    const intptr_t num_voters = stream->ReadUnsigned<intptr_t>();
++    if (num_voters < 0 || num_voters > stream->PendingBytes() / 10) {
++      // Each SlotVoter is 10 varints minimum (5+5, one byte each minimum).
++      OS::PrintErr("DDSlotVoters: implausible num_voters %" Pd
++                   " for slot %" Pd "\n",
++                   num_voters, slot_id);
++      return false;
++    }
++
++    std::vector<size_t> indices;
++    indices.reserve(static_cast<size_t>(num_voters));
++    for (intptr_t v = 0; v < num_voters; v++) {
++      if (stream->PendingBytes() < 10) return false;
++      SlotVoter voter;
++      voter.caller_key.ReadFromStream(stream);
++      voter.target_key.ReadFromStream(stream);
++      indices.push_back(voters_.size());
++      voters_.push_back(voter);
++    }
++    slots_[slot_id] = std::move(indices);
++  }
++
++  // A DDSlotMapping may follow in the same file (read by a separate call),
++  // so we do NOT assert PendingBytes()==0 here. The caller checks after the
++  // full file is consumed.
++  return true;
++}
++
++// ===========================================================================
++// DDSlotMapping
++// ===========================================================================
++
++bool DDSlotMapping::ReadFromStream(ReadStream* /* stream */) {
++  // TODO(slice-2c): implement once disassembly of 0x100198fb0 is complete.
++  // The wire format follows DDSlotVoters in the same --dd_slot_mapping file.
++  // From Ghidra template params: make_unique<DDSlotMapping>(
++  //     unordered_map<long,long>, unordered_map<long,long>) — two maps.
++  // Direction of each map (base→patch vs patch→base) is not yet established.
++  return false;
++}
++
++// ===========================================================================
++// DDSlotResolution
++// ===========================================================================
++
++void DDSlotResolution::SetSlotOwner(long slot,
++                                    uword owner,
++                                    const FunctionKey& key) {
++  // Overwrite-on-collision: if a slot already has a winner from a previous
++  // call, this replaces it. The actual collision logic (verify-only path) is
++  // in ResolveDDSlots, which decides whether to call SetSlotOwner at all.
++  slot_to_owner_[slot] = owner;
++  owner_to_slot_[owner] = slot;
++  slot_to_key_[slot] = key;
++  if (slot > max_slot_) max_slot_ = slot;
++}
++
++bool DDSlotResolution::HasSlot(long slot) const {
++  return slot_to_owner_.count(slot) != 0;
++}
++
++uword DDSlotResolution::OwnerForSlot(long slot) const {
++  auto it = slot_to_owner_.find(slot);
++  return it != slot_to_owner_.end() ? it->second : 0;
++}
++
++FunctionKey DDSlotResolution::KeyForSlot(long slot) const {
++  auto it = slot_to_key_.find(slot);
++  return it != slot_to_key_.end() ? it->second : FunctionKey{0, 0, 0, 0, 0};
++}
++
++long DDSlotResolution::SlotForOwner(uword owner) const {
++  auto it = owner_to_slot_.find(owner);
++  return it != owner_to_slot_.end() ? it->second : -1L;
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/dd_voting.h b/runtime/vm/shorebird/dd_voting.h
+new file mode 100644
+index 00000000000..da3d5855087
+--- /dev/null
++++ b/runtime/vm/shorebird/dd_voting.h
+@@ -0,0 +1,208 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_DD_VOTING_H_
++#define RUNTIME_VM_SHOREBIRD_DD_VOTING_H_
++
++#include <cstdint>
++#include <unordered_map>
++#include <vector>
++
++#include "platform/globals.h"
++#include "vm/datastream.h"
++
++namespace dart {
++
++// FunctionKey: 32-byte identity for a Dart function or allocation stub.
++//
++// Source: DWARF from Flutter.framework.dSYM — field names, offsets, and sizes
++// are directly measured; not inferred. Serialised as exactly five unsigned
++// varints in struct-field order, matching FunctionKey::ReadFromStream.
++//
++// Namespace: plain dart::, NOT dart::shorebird:: — their symbols demangle to
++// dart::FunctionKey::... (same rule as ShorebirdLinker).
++struct FunctionKey {
++  intptr_t library_kernel_offset;      // 0x00
++  intptr_t owner_class_kernel_offset;  // 0x08
++  intptr_t kernel_offset;              // 0x10
++  uint8_t  kind;                       // 0x18   UntaggedFunction::Kind
++  // 3 bytes implicit padding here due to uint32_t 4-byte alignment
++  uint32_t signature_hash;             // 0x1c   base-31 Horner over param counts
++
++  // Kind value for a class allocation stub (ForAllocStub). DWARF const value.
++  static constexpr uint8_t kAllocStubKind = 255;
++
++  // True when all five fields are zero. Used during carry-over / rescue phase.
++  bool IsZero() const {
++    return library_kernel_offset == 0 && owner_class_kernel_offset == 0 &&
++           kernel_offset == 0 && kind == 0 && signature_hash == 0;
++  }
++
++  bool operator==(const FunctionKey& o) const {
++    return library_kernel_offset == o.library_kernel_offset &&
++           owner_class_kernel_offset == o.owner_class_kernel_offset &&
++           kernel_offset == o.kernel_offset && kind == o.kind &&
++           signature_hash == o.signature_hash;
++  }
++  bool operator!=(const FunctionKey& o) const { return !(*this == o); }
++
++  // Reads five unsigned varints from *stream in struct-field order.
++  // Pre-condition: stream has at least 5 bytes remaining (caller validates).
++  void ReadFromStream(ReadStream* stream);
++
++  // Writes five unsigned varints to *stream in struct-field order.
++  void WriteToStream(BaseWriteStream* stream) const;
++
++  // Computes the signature_hash from parameter counts, matching their
++  // FunctionKey::FromFunction disassembly:
++  //   h = num_fixed*29791 + num_optional_positional*961
++  //       + num_optional_named*31 + num_type_params
++  static uint32_t ComputeSignatureHash(uint32_t num_fixed,
++                                       uint32_t num_optional_positional,
++                                       uint32_t num_optional_named,
++                                       uint32_t num_type_params);
++};
++
++// Hash functor so FunctionKey can be used as an unordered_map key.
++struct FunctionKeyHash {
++  size_t operator()(const FunctionKey& k) const;
++};
++
++// Equality functor for unordered_map.
++struct FunctionKeyEqual {
++  bool operator()(const FunctionKey& a, const FunctionKey& b) const {
++    return a == b;
++  }
++};
++
++// SlotVoter: one (caller_key, target_key) pair for an indirect-call site.
++// From DWARF: 64 bytes; caller_key at 0x00, target_key at 0x20.
++struct SlotVoter {
++  FunctionKey caller_key;  // 0x00–0x1F
++  FunctionKey target_key;  // 0x20–0x3F
++};
++static_assert(sizeof(SlotVoter) == 64, "SlotVoter must be 64 bytes");
++
++// DDSlotVoters: one (caller_key, target_key) pair per indirect-call site per
++// slot. Produced by the closed aot-tools.dill and consumed here.
++//
++// Wire format (magic/version are raw u32 LE — the only fixed-width prefix in
++// this family; everything else is varints):
++//   u32 magic = 0xDDCA7E55
++//   u32 version = 2   (== kVersion)
++//   uvar num_slots
++//   repeat num_slots:
++//       uvar slot_id
++//       uvar num_voters
++//       repeat num_voters:   -- SlotVoter, 64 bytes
++//           FunctionKey caller_key   -- 5 unsigned varints
++//           FunctionKey target_key   -- 5 unsigned varints
++//
++// Namespace: plain dart::. Their symbols demangle to dart::DDSlotVoters::.
++class DDSlotVoters {
++ public:
++  // Magic and version. Confirmed by disassembly (LINKER_RECON §6):
++  //   mov w10,#0x7e55; movk w10,#0xddca,lsl#16   checked at 0x100198824
++  static constexpr uint32_t kMagic   = 0xDDCA7E55u;
++  static constexpr uint32_t kVersion = 2u;
++
++  // Reads a DDSlotVoters stream from *stream.  Returns true on success.
++  // On failure, leaves *this in a defined empty state.
++  bool ReadFromStream(ReadStream* stream);
++
++  // Number of distinct slot ids recorded.
++  size_t slot_count() const { return slots_.size(); }
++
++  // Voter indices for a given slot_id. Returns nullptr if slot_id is unknown.
++  const std::vector<size_t>* voters_for_slot(intptr_t slot_id) const;
++
++  // The contiguous voter array.
++  const std::vector<SlotVoter>& voters() const { return voters_; }
++
++ private:
++  // Contiguous storage; voters_[i] is the i-th recorded SlotVoter.
++  std::vector<SlotVoter> voters_;
++
++  // slot_id → indices into voters_.
++  std::unordered_map<intptr_t, std::vector<size_t>> slots_;
++};
++
++// DDSlotMapping: the resolved base→patch slot mapping.
++// Produced by the closed aot-tools.dill after running the voting algorithm.
++// We receive it from a file that may also contain DDSlotVoters before it.
++//
++// From Ghidra template params: make_unique<DDSlotMapping>(
++//     unordered_map<long,long>, unordered_map<long,long>)
++// Two maps: plausibly base_slot → patch_slot and patch_slot → base_slot.
++// Direction not established from recon.
++//
++// ReadFromStream is a STUB in this slice — the wire format has not been
++// disassembled. It sets *ok=false unconditionally. TODO(slice-2c): implement
++// once the disassembly of 0x100198fb0 is done.
++class DDSlotMapping {
++ public:
++  // Reads a DDSlotMapping from *stream. Returns true on success.
++  // STUB: always returns false in this slice.
++  bool ReadFromStream(ReadStream* stream);
++
++  size_t size() const { return map_a_.size(); }
++
++ private:
++  std::unordered_map<long, long> map_a_;  // direction TBD
++  std::unordered_map<long, long> map_b_;  // direction TBD
++};
++
++// DDSlotResolution: the output of ResolveDDSlots. Holds the per-slot winner
++// chosen by plurality vote.
++//
++// Layout from DWARF (Flutter.framework.dSYM, 128 bytes = 0x80):
++//   +0x00  unordered_map<long, uword>       slot_to_owner_   (0x28 bytes)
++//   +0x28  unordered_map<uword, long>        owner_to_slot_   (0x28 bytes)
++//   +0x50  unordered_map<long, FunctionKey>  slot_to_key_     (0x28 bytes)
++//   +0x78  long                              max_slot_ = -1   (8 bytes)
++// Total: 3 * 0x28 + 8 = 128.  Enforced by static_assert in dd_voting.cc.
++//
++// Note on unordered_map<long, FunctionKey>: FunctionKey is 32 bytes, so each
++// map node is larger than the other two maps' nodes. The map's bucket/chain
++// overhead is still 0x28 = 40 bytes on libc++ (same as the others) because
++// that is the *header* size independent of value type.
++//
++// owner in slot_to_owner_ is a raw FunctionPtr for regular functions and a raw
++// CodePtr for allocation stubs (FACT from README §algorithm). This asymmetry
++// is intentional — do not try to unify them.
++class DDSlotResolution {
++ public:
++  DDSlotResolution() : max_slot_(-1) {}
++
++  // Records slot→owner, owner→slot, slot→key.
++  // Overwrites on collision (i.e. later votes can overwrite earlier ones;
++  // the winning logic is in ResolveDDSlots, not here).
++  // Bumps max_slot_ if slot > max_slot_.
++  void SetSlotOwner(long slot, uword owner, const FunctionKey& key);
++
++  // True if this resolution has recorded a winner for slot.
++  bool HasSlot(long slot) const;
++
++  // Returns the owner (FunctionPtr or CodePtr) for slot, or 0 if not found.
++  uword OwnerForSlot(long slot) const;
++
++  // Returns the stored FunctionKey for slot. Returns IsZero() key if not found.
++  FunctionKey KeyForSlot(long slot) const;
++
++  // Returns the slot for a given owner, or -1 if not found.
++  long SlotForOwner(uword owner) const;
++
++  long max_slot() const { return max_slot_; }
++  size_t slot_count() const { return slot_to_owner_.size(); }
++
++ private:
++  std::unordered_map<long,  uword>       slot_to_owner_;  // @0x00
++  std::unordered_map<uword, long>        owner_to_slot_;  // @0x28
++  std::unordered_map<long,  FunctionKey> slot_to_key_;    // @0x50
++  long                                   max_slot_;       // @0x78
++};
++
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_DD_VOTING_H_
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+new file mode 100644
+index 00000000000..376f7ff2bb1
+--- /dev/null
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -0,0 +1,72 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/dd_voting.h"
++
++#include "vm/unit_test.h"
++
++namespace dart {
++
++// FunctionKey: 32 bytes (DWARF-confirmed).
++// A size match is weak but the only compile-time guard we have for a struct
++// with no DWARF on our side yet.
++VM_UNIT_TEST_CASE(FunctionKey_Size) {
++  static_assert(sizeof(FunctionKey) == 32,
++                "FunctionKey must be 32 bytes (DWARF-confirmed)");
++  EXPECT_EQ(sizeof(FunctionKey), static_cast<size_t>(32));
++}
++
++// DDSlotResolution: 128 bytes (DWARF-confirmed: three unordered_map<> plus long).
++// Same caveat as ShorebirdLinker's size assert: same-width substitutions pass
++// through this check. The field types are enforced by static_assert in
++// dd_voting.cc (see that file).
++VM_UNIT_TEST_CASE(DDSlotResolution_Size) {
++  static_assert(sizeof(DDSlotResolution) == 128,
++                "DDSlotResolution must be 128 bytes (DWARF-confirmed)");
++  EXPECT_EQ(sizeof(DDSlotResolution), static_cast<size_t>(128));
++}
++
++// A fresh DDSlotResolution has max_slot_ == -1 and no mappings.
++VM_UNIT_TEST_CASE(DDSlotResolution_FreshState) {
++  DDSlotResolution res;
++  EXPECT_EQ(-1L, res.max_slot());
++  EXPECT_EQ(static_cast<size_t>(0), res.slot_count());
++}
++
++// A fresh FunctionKey constructed with zero fields compares equal to another.
++VM_UNIT_TEST_CASE(FunctionKey_ZeroEquality) {
++  FunctionKey a{0, 0, 0, 0, 0};
++  FunctionKey b{0, 0, 0, 0, 0};
++  EXPECT(a == b);
++  EXPECT(!(a != b));
++}
++
++// Two keys differing in one field compare unequal.
++// Negative control target: if operator== returns true for any input, both
++// this test and the equality test above will pass — but the allocstub test
++// below will fail because IsZero/kAllocStubKind won't compose correctly.
++VM_UNIT_TEST_CASE(FunctionKey_InequalityOnKind) {
++  FunctionKey a{0, 0, 0, 0, 0};
++  // kind = kAllocStubKind (255) differs from 0.
++  FunctionKey b{0, 0, 0, FunctionKey::kAllocStubKind, 0};
++  EXPECT(a != b);
++  EXPECT(!(a == b));
++}
++
++// kAllocStubKind must equal 255 per the DWARF const value.
++VM_UNIT_TEST_CASE(FunctionKey_AllocStubKindIs255) {
++  EXPECT_EQ(255, static_cast<int>(FunctionKey::kAllocStubKind));
++}
++
++// IsZero is true only when all five fields are zero.
++VM_UNIT_TEST_CASE(FunctionKey_IsZero) {
++  FunctionKey zero{0, 0, 0, 0, 0};
++  EXPECT(zero.IsZero());
++  FunctionKey nonzero{1, 0, 0, 0, 0};
++  EXPECT(!nonzero.IsZero());
++  FunctionKey kind_nonzero{0, 0, 0, 1, 0};
++  EXPECT(!kind_nonzero.IsZero());
++}
++
++}  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 3694da77a5d..0e00d35f68d 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -303,6 +303,8 @@ vm_sources = [
+   "shorebird/link_info.h",
+   "shorebird/wrapper.cc",
+   "shorebird/wrapper.h",
++  "shorebird/dd_voting.cc",
++  "shorebird/dd_voting.h",
+   "shorebird/linker.cc",
+   "shorebird/linker.h",
+   "simulator_memory.h",
+@@ -395,6 +397,7 @@ vm_sources_tests = [
+   "sim_transition_test.cc",
+   "shorebird/wrapper_test.cc",
+   "shorebird/linker_test.cc",
++  "shorebird/dd_voting_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+   # flutter_hot_patcher B2
+-- 
+2.53.0
+

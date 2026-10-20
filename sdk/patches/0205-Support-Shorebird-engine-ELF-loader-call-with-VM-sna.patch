@@ -1,0 +1,94 @@
+From e3e317d91141fe9b54291a4726f6e416449674d8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 19 Oct 2026 17:50:33 +0800
+Subject: [PATCH 205/206] Support Shorebird engine ELF loader call with VM
+ snapshot pointers
+
+
+diff --git a/runtime/bin/elf_loader.cc b/runtime/bin/elf_loader.cc
+index 97c4d57dc27..7363ebc9c4f 100644
+--- a/runtime/bin/elf_loader.cc
++++ b/runtime/bin/elf_loader.cc
+@@ -551,6 +551,24 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
+     const uint8_t** snapshot_data,
+     const uint8_t** snapshot_instrs,
+     int mode) {
++  return Dart_LoadELF_ShorebirdWithVm(filename, file_offset, error,
++                                      /*vm_snapshot_data=*/nullptr,
++                                      /*vm_snapshot_instrs=*/nullptr,
++                                      snapshot_data, snapshot_instrs, mode);
++}
++
++// Both snapshot pairs plus the mode. This is the shape Shorebird's engine for
++// this SDK version calls (runtime/shorebird/patch_cache.cc passes the VM pair
++// it then ignores, the isolate pair, and dart::bin::kReadOnly).
++DART_EXPORT Dart_LoadedElf* Dart_LoadELF_ShorebirdWithVm(
++    const char* filename,
++    uint64_t file_offset,
++    const char** error,
++    const uint8_t** vm_snapshot_data,
++    const uint8_t** vm_snapshot_instrs,
++    const uint8_t** vm_isolate_data,
++    const uint8_t** vm_isolate_instrs,
++    int mode) {
+   std::unique_ptr<Mappable> mappable(Mappable::FromPath(filename));
+   if (mappable == nullptr) {
+     *error = "Couldn't open file.";
+@@ -563,7 +581,8 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
+       new LoadedElf(std::move(mappable), file_offset, exec_map));
+ 
+   if (!elf->Load() ||
+-      !elf->ResolveSymbols(nullptr, nullptr, snapshot_data, snapshot_instrs)) {
++      !elf->ResolveSymbols(vm_snapshot_data, vm_snapshot_instrs,
++                           vm_isolate_data, vm_isolate_instrs)) {
+     *error = elf->error();
+     return nullptr;
+   }
+diff --git a/runtime/bin/elf_loader.h b/runtime/bin/elf_loader.h
+index f5c5d5ddc41..ba5bcc1a924 100644
+--- a/runtime/bin/elf_loader.h
++++ b/runtime/bin/elf_loader.h
+@@ -67,6 +67,19 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Shorebird(
+     const uint8_t** snapshot_instrs,
+     int mode);
+ 
++/// Shorebird variant with both snapshot pairs and the mode parameter. This is
++/// what Shorebird's engine for this SDK version calls through the 8-argument
++/// Dart_LoadELF overload below.
++DART_EXPORT Dart_LoadedElf* Dart_LoadELF_ShorebirdWithVm(
++    const char* filename,
++    uint64_t file_offset,
++    const char** error,
++    const uint8_t** vm_snapshot_data,
++    const uint8_t** vm_snapshot_instrs,
++    const uint8_t** vm_isolate_data,
++    const uint8_t** vm_isolate_instrs,
++    int mode);
++
+ /// Unloads an ELF object loaded through Dart_LoadELF{_Fd, _Memory}.
+ ///
+ /// Unlike dlclose(), this does not use reference counting.
+@@ -116,6 +129,20 @@ inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
+   return Dart_LoadELF_Shorebird(filename, file_offset, error,
+                                  snapshot_data, snapshot_instrs, mode);
+ }
++
++// Shorebird's engine for this SDK version: both snapshot pairs and the mode.
++inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
++                                     uint64_t file_offset,
++                                     const char** error,
++                                     const uint8_t** vm_snapshot_data,
++                                     const uint8_t** vm_snapshot_instrs,
++                                     const uint8_t** vm_isolate_data,
++                                     const uint8_t** vm_isolate_instrs,
++                                     int mode) {
++  return Dart_LoadELF_ShorebirdWithVm(filename, file_offset, error,
++                                      vm_snapshot_data, vm_snapshot_instrs,
++                                      vm_isolate_data, vm_isolate_instrs, mode);
++}
+ #endif  // __cplusplus
+ 
+ #endif  // RUNTIME_BIN_ELF_LOADER_H_
+-- 
+2.53.0
+

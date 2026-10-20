@@ -1,0 +1,356 @@
+From 4764cff9a633c83a803738ee4c266b6a5a4f6d79 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 13:11:18 +0800
+Subject: [PATCH 053/206] feat(shorebird): ResumeOnSimulator, sharing the
+ simulator-entry sequence
+
+Nine of sixteen. 66 instructions / 264 bytes, matching theirs, 56 of 66 words
+byte-identical with the other ten differing only in a Thread displacement.
+
+All but six of those instructions are the same sequence
+TransitionDartToSimulatorIfNeeded already emits, so it is now
+GenerateEnterSimulator, parameterised on two things their two callers differ in:
+the SimulatorExecutionSource (0 for the transition stub, 1 here) and whether
+Simulator::pc_ is stored once or twice. The duplicate store is theirs -- the
+transition stub's generator writes it and RunOnSimulator writes it again -- and
+a version that stored it once would be four bytes short.
+
+The CPU->Sim body still compares 60/68 after the refactor, so it changed no
+bytes, and both tests now guard the shared helper.
+
+On the negative control, which failed to run twice before it ran. First attempt:
+the sabotage patch asserted on a string that had been reflowed. Second attempt:
+the line number came from a command substitution whose grep returned nothing, so
+python got a garbage argument and never patched, while the following "restored
+exit=0" printed exactly as it does on success. Third attempt works and prints an
+explicit PATCH_OK before building. Perturbing the shared helper's source
+argument turns both StubCode_ShorebirdResumeOnSimulatorMatchesTheirBytes and
+StubCode_ShorebirdCpuToSimBodyMatchesTheirBytes to exit 255, and reverting
+returns both to 0.
+
+Verified: 86 shorebird cases pass, both builds link, verify_reproduction.sh
+reports 24 artifacts with 0 failures.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 617f142fe62..74e2a415a4b 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -643,74 +643,33 @@ static void GenerateShorebirdWrapperPads(
+   __ Bind(body);
+ }
+ 
+-void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+-  using dart::shorebird::CPUToSimConfig;
+-  using dart::shorebird::WrapperAllocator;
+-  using dart::shorebird::WrapperLayout;
+-  const WrapperAllocator::Layout layout =
+-      WrapperAllocator::Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
+-
+-  Label body;
+-  GenerateShorebirdWrapperPads(assembler, layout, &body);
+-  const intptr_t body_start = __ CodeSize();
+-
+-  // 68 instructions, transcribed from their *emitted* stub rather than from
+-  // their generator: their gen_snapshot writes every stub into the snapshot it
+-  // produces and the ELF keeps the names, so `objdump -d hello.so` prints
+-  // `<stub TransitionDartToSimulatorIfNeeded>` in full. See
+-  // spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md sections 9 and 10, where
+-  // every displacement below is resolved to a named field of Thread or
+-  // Simulator -- nothing here is a raw number copied out of their binary.
+-  //
+-  // Their generator reaches these bytes through compiler::RunOnSimulator and
+-  // four private Assembler helpers, 5084 bytes of generator in all. We
+-  // reproduce the output, not that structure, and `cmp` against a freshly
+-  // extracted stub is what judges it.
+-  //
+-  // The eight instructions that touch Thread cannot be byte-identical: their
+-  // Shorebird block sits mid-struct at 0x8d8..0x900 while ours is appended, for
+-  // the reason in Thread::is_simulating(). Everything else can be.
+-  RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
+-                 dart::Thread::exit_through_ffi_offset());
+-
+-  // Simulator field displacements. This is upstream's layout -- registers_ at
+-  // 0, vregisters_ at 0x100, pc_ at 0x310 -- which their Simulator also has per
+-  // its DWARF, so these are derived rather than copied. They are pinned only
+-  // indirectly: StubCode_ShorebirdCpuToSimBodyMatchesTheirBytes compares the
+-  // emitted encodings, so a wrong displacement here fails that test. There is
+-  // no static_assert against the real Simulator, because this file is compiled
+-  // for the target and cannot include simulator_arm64.h.
++// Everything both simulator-entry stubs share: hand the simulator its PC, spill
++// the CPU state into its register file, flip dart_state_is_on_cpu_, swap onto
++// simulator_csp_, call Simulator::Execute through the Thread, and restore the
++// mirror image. TransitionDartToSimulatorIfNeeded passes source 0 and stores
++// the PC twice; ResumeOnSimulator passes source 1 and stores it once.
++//
++// Displacements are named fields -- see WRAPPER_STUBS.md sections 9 and 10. The
++// Simulator ones are upstream's layout, which theirs shares, so they are
++// derived rather than copied.
++static void GenerateEnterSimulator(Assembler* assembler,
++                                   intptr_t source,
++                                   bool duplicate_pc_store) {
+   constexpr intptr_t kSimReg = 8;           // registers_[r]  == r * 8
+   constexpr intptr_t kSimVRegBase = 0x100;  // vregisters_[v] == 0x100 + v * 16
+   constexpr intptr_t kSimVReg = 16;
+   constexpr intptr_t kSimPc = 0x310;        // Simulator::pc_
+-  // Their frame pointer lands 0xd0 above the simulator's C stack pointer.
+   constexpr intptr_t kSimCFrameSize = 0xd0;
+ 
+-  // The pad left its own address in TMP; the metadata mapping sits one
+-  // rx-mapping above it and holds the entry point this wrapper stands for.
+-  __ LoadImmediate(TMP2, layout.rx_mapping_size);   // mov x17, #0x8000
+-  __ add(TMP, TMP, Operand(TMP2));                  // add x16, x16, x17
+-  __ ldr(R11, Address(TMP, 0), kEightBytes);        // ldr x11, [x16]
+-
+-  // Already simulating -> tail-jump to the target and do nothing else. Running
+-  // on the CPU (flag clear) -> fall into the long path. This is the opposite
+-  // sense to the Sim->CPU body's cbz under one and the same meaning of the
+-  // flag, and that agreement is what makes the polarity trustworthy.
+-  Label enter_simulator;
+-  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
+-         kEightBytes);
+-  __ cbz(&enter_simulator, TMP2, kEightBytes);
+-  __ br(R11);
+-  __ Bind(&enter_simulator);
+-
+-  // Thread::isolate_ -> the isolate's simulator, then hand it the target as the
+-  // PC to resume at. They store it twice, once here and once inside
+-  // RunOnSimulator; the redundancy is theirs and is reproduced.
+   __ ldr(R10, Address(THR, target::Thread::isolate_offset()), kEightBytes);
+   __ ldr(R10, Address(R10, 0x20), kEightBytes);
+   __ str(R11, Address(R10, kSimPc), kEightBytes);
+-  __ str(R11, Address(R10, kSimPc), kEightBytes);
++  // Their CPU->Sim stub stores the PC twice -- once in the stub generator and
++  // once inside RunOnSimulator. ResumeOnSimulator stores it once. Reproducing
++  // the count matters: a stub short by one instruction is short by four bytes.
++  if (duplicate_pc_store) {
++    __ str(R11, Address(R10, kSimPc), kEightBytes);
++  }
+ 
+   // Spill the callee-saved state into the simulator's register file so
+   // simulated code sees what the CPU was holding.
+@@ -760,7 +719,7 @@ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+   // Simulator::Execute(simulator, source), reached through the Thread so the
+   // stub needs no relocation. Source 0 is what their generator passes.
+   __ mov(R0, R10);
+-  __ LoadImmediate(R1, 0);
++  __ LoadImmediate(R1, source);
+   __ ldr(TMP, Address(THR, dart::Thread::simulator_execute_offset()),
+          kEightBytes);
+   // The assembler tracks whether LR still holds a return address and refuses a
+@@ -805,6 +764,59 @@ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+   __ ldp(R0, R1, Address::Pair(R10, 0 * kSimReg));
+   __ ret();
+ 
++}
++
++void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
++  using dart::shorebird::CPUToSimConfig;
++  using dart::shorebird::WrapperAllocator;
++  using dart::shorebird::WrapperLayout;
++  const WrapperAllocator::Layout layout =
++      WrapperAllocator::Layout::fromTemplate<WrapperLayout<CPUToSimConfig>>();
++
++  Label body;
++  GenerateShorebirdWrapperPads(assembler, layout, &body);
++  const intptr_t body_start = __ CodeSize();
++
++  // 68 instructions, transcribed from their *emitted* stub rather than from
++  // their generator: their gen_snapshot writes every stub into the snapshot it
++  // produces and the ELF keeps the names, so `objdump -d hello.so` prints
++  // `<stub TransitionDartToSimulatorIfNeeded>` in full. See
++  // spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md sections 9 and 10, where
++  // every displacement below is resolved to a named field of Thread or
++  // Simulator -- nothing here is a raw number copied out of their binary.
++  //
++  // Their generator reaches these bytes through compiler::RunOnSimulator and
++  // four private Assembler helpers, 5084 bytes of generator in all. We
++  // reproduce the output, not that structure, and `cmp` against a freshly
++  // extracted stub is what judges it.
++  //
++  // The eight instructions that touch Thread cannot be byte-identical: their
++  // Shorebird block sits mid-struct at 0x8d8..0x900 while ours is appended, for
++  // the reason in Thread::is_simulating(). Everything else can be.
++  RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
++                 dart::Thread::exit_through_ffi_offset());
++
++  // The pad left its own address in TMP; the metadata mapping sits one
++  // rx-mapping above it and holds the entry point this wrapper stands for.
++  __ LoadImmediate(TMP2, layout.rx_mapping_size);   // mov x17, #0x8000
++  __ add(TMP, TMP, Operand(TMP2));                  // add x16, x16, x17
++  __ ldr(R11, Address(TMP, 0), kEightBytes);        // ldr x11, [x16]
++
++  // Already simulating -> tail-jump to the target and do nothing else. Running
++  // on the CPU (flag clear) -> fall into the long path. This is the opposite
++  // sense to the Sim->CPU body's cbz under one and the same meaning of the
++  // flag, and that agreement is what makes the polarity trustworthy.
++  Label enter_simulator;
++  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
++         kEightBytes);
++  __ cbz(&enter_simulator, TMP2, kEightBytes);
++  __ br(R11);
++  __ Bind(&enter_simulator);
++
++  // Thread::isolate_ -> the isolate's simulator, then hand it the target as the
++  // PC to resume at. They store it twice, once here and once inside
++  // RunOnSimulator; the redundancy is theirs and is reproduced.
++  GenerateEnterSimulator(assembler, /*source=*/0, /*duplicate_pc_store=*/true);
+   ASSERT_EQUAL(__ CodeSize() - body_start, layout.shared_body_size);
+ }
+ 
+@@ -1064,6 +1076,24 @@ void StubCodeCompiler::GenerateSimulatorCallToRuntimeStub() {
+   __ ret();
+ }
+ 
++// Shorebird. Resume an async continuation inside the simulator: take the parked
++// resume PC, clear it, and if we are not already simulating, enter. 66
++// instructions / 264 bytes, and all but six of them are the shared entry above.
++void StubCodeCompiler::GenerateResumeOnSimulatorStub() {
++  Label enter_simulator;
++  __ ldr(TMP2, Address(THR, dart::Thread::is_simulating_offset()),
++         kEightBytes);
++  __ ldr(R11, Address(THR, dart::Thread::simulator_async_resume_pc_offset()),
++         kEightBytes);
++  __ str(ZR, Address(THR, dart::Thread::simulator_async_resume_pc_offset()),
++         kEightBytes);
++  __ cbz(&enter_simulator, TMP2, kEightBytes);
++  __ br(R11);
++  __ Bind(&enter_simulator);
++
++  GenerateEnterSimulator(assembler, /*source=*/1, /*duplicate_pc_store=*/false);
++}
++
+ void StubCodeCompiler::GenerateDispatchTableNullErrorStub() {
+   __ EnterStubFrame();
+   __ SmiTag(DispatchTableNullErrorABI::kClassIdReg);
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index 998fbecaef5..69c289c955b 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -473,6 +473,110 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdSimulatorCallToRuntimeMatchesTheirBytes
+   }
+ }
+ 
++// Shorebird ResumeOnSimulator, 66 instructions / 264 bytes. All but six are the
++// shared GenerateEnterSimulator sequence, so this also guards the refactor that
++// TransitionDartToSimulatorIfNeeded now shares: if the helper drifts, both
++// tests fail. Ten words encode a Thread offset and are re-derived.
++ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdResumeOnSimulatorMatchesTheirBytes) {
++  const Code& stub = StubCode::ResumeOnSimulator();
++  EXPECT_EQ(static_cast<intptr_t>(264), static_cast<intptr_t>(stub.Size()));
++  const uint32_t* w = reinterpret_cast<const uint32_t*>(stub.EntryPoint());
++
++  static const uint32_t kExpected[66] = {
++      0u,  // [0]  derived
++      0u,  // [1]  derived
++      0u,  // [2]  derived
++      0xb4000051u,  // [3]
++      0xd61f0160u,  // [4]
++      0u,  // [5]  derived
++      0xf940114au,  // [6]
++      0xf901894bu,  // [7]
++      0xf9003d4fu,  // [8]
++      0xa909d153u,  // [9]
++      0xa90ad955u,  // [10]
++      0xa90be157u,  // [11]
++      0xa90ce959u,  // [12]
++      0xa90df15bu,  // [13]
++      0xa90ef95du,  // [14]
++      0x910003f0u,  // [15]
++      0xf9007d50u,  // [16]
++      0xad0c2548u,  // [17]
++      0xad0d2d4au,  // [18]
++      0xad0e354cu,  // [19]
++      0xad0f3d4eu,  // [20]
++      0u,  // [21]  derived
++      0xf100061fu,  // [22]
++      0x54000040u,  // [23]
++      0xd4200000u,  // [24]
++      0xd2400210u,  // [25]
++      0u,  // [26]  derived
++      0u,  // [27]  derived
++      0x9100021fu,  // [28]
++      0x910343fdu,  // [29]
++      0xa9000540u,  // [30]
++      0xa9010d42u,  // [31]
++      0xa9021544u,  // [32]
++      0xa9031d46u,  // [33]
++      0xa9042548u,  // [34]
++      0xad080540u,  // [35]
++      0xad090d42u,  // [36]
++      0xad0a1544u,  // [37]
++      0xad0b1d46u,  // [38]
++      0xaa0a03e0u,  // [39]
++      0xd2800021u,  // [40]
++      0u,  // [41]  derived
++      0xd63f0200u,  // [42]
++      0xaa0003eau,  // [43]
++      0xf9403d4fu,  // [44]
++      0xa949d153u,  // [45]
++      0xa94ad955u,  // [46]
++      0xa94be157u,  // [47]
++      0xa94ce959u,  // [48]
++      0xa94df15bu,  // [49]
++      0xa94ef95du,  // [50]
++      0xf9407d50u,  // [51]
++      0x9100021fu,  // [52]
++      0xad4c2548u,  // [53]
++      0xad4d2d4au,  // [54]
++      0xad4e354cu,  // [55]
++      0xad4f3d4eu,  // [56]
++      0u,  // [57]  derived
++      0xf100021fu,  // [58]
++      0x54000040u,  // [59]
++      0xd4200000u,  // [60]
++      0xd2400210u,  // [61]
++      0u,  // [62]  derived
++      0x3dc04140u,  // [63]
++      0xa9400540u,  // [64]
++      0xd65f03c0u,  // [65]
++  };
++
++  auto ldst_thr = [](uint32_t base, intptr_t off, uint32_t rt) {
++    return base | (static_cast<uint32_t>(off / 8) << 10) |
++           (static_cast<uint32_t>(THR) << 5) | rt;
++  };
++  constexpr uint32_t kLdr = 0xf9400000u;
++  constexpr uint32_t kStr = 0xf9000000u;
++  EXPECT_EQ(ldst_thr(kLdr, Thread::is_simulating_offset(), 17), w[0]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::simulator_async_resume_pc_offset(), 11),
++            w[1]);
++  EXPECT_EQ(ldst_thr(kStr, Thread::simulator_async_resume_pc_offset(), 31),
++            w[2]);
++  EXPECT_EQ(ldst_thr(kLdr, compiler::target::Thread::isolate_offset(), 10),
++            w[5]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::dart_state_is_on_cpu_offset(), 16), w[21]);
++  EXPECT_EQ(ldst_thr(kStr, Thread::dart_state_is_on_cpu_offset(), 16), w[26]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::simulator_csp_offset(), 16), w[27]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::simulator_execute_offset(), 16), w[41]);
++  EXPECT_EQ(ldst_thr(kLdr, Thread::dart_state_is_on_cpu_offset(), 16), w[57]);
++  EXPECT_EQ(ldst_thr(kStr, Thread::dart_state_is_on_cpu_offset(), 16), w[62]);
++
++  for (intptr_t i = 0; i < 66; i++) {
++    if (kExpected[i] == 0u) continue;
++    EXPECT_EQ(kExpected[i], w[i]);
++  }
++}
++
+ // The Sim->CPU config must report the real stub, not the empty range that stood in while
+ // no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
+ // hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index 6470182aeaf..688b20c2887 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -164,6 +164,7 @@ namespace dart {
+   V(SimulatorCallAutoScopeNative)                                              \
+   V(SimulatorCallNoScopeNative)                                                \
+   V(SimulatorCallToRuntime)                                                    \
++  V(ResumeOnSimulator)                                                         \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+-- 
+2.53.0
+

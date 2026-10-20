@@ -1,0 +1,1018 @@
+From c316526c1cbd772a77a0e920867d0a4c51baf5d1 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 26 Aug 2026 17:15:16 +0800
+Subject: [PATCH 110/206] feat(shorebird): land --dump_object_pool and
+ --dump_object_pool_link_data
+
+Both flags are registered in their analyze_snapshot -- established
+behaviourally, since `strings` cannot answer that question (--sdk_version is
+registered and has no bare-name string either). --dump_object_pool_link_data is
+a string option carrying its own path and needing no --out;
+--dump_object_pool is a bool that writes to --out.
+
+The producer is their GetObjectPoolLinkInfo (0x10024cb9c), and it has three
+parts:
+
+  * self_pp_indices / subgraph_pp_indices are the pool references the subgraph
+    walk makes, in order and WITH REPEATS. All 1380 of each on their own
+    base.so; deduplicating drops to 1250/932.
+
+  * `pairs` is not a code scan. Shorebird narrowed EntryType to two bits at
+    position 2 and put a two-bit PairPosition at 0..1 of the object pool's
+    entry_bits, and GetObjectPoolLinkInfo reports every index marked
+    kPairFirst. The layout is confirmed three ways and the values come from the
+    literal entry_bits their own code stores (0x09, 0x05/0x65, 0x06, 0x11/0x12).
+    Marked at LoadNativeEntry, at AddObject's positional
+    follow-a-native rule, at EmitInstanceCallAOT, at the kImmediate128 split,
+    and at GenerateTTSCall -- that last one inferred rather than disassembled,
+    because it is fully inlined. 92 + 6 + 287 = their 385.
+
+  * entries[].code is their copy of ObjectPool::DebugPrint with a
+    "<N len string>" case added and "(raw)" renamed "(unknown)". The cutoff is
+    measured in Utf8 bytes but the number printed is String::Length().
+
+Measured against their own dump of their own base.so: pool size 1421 both
+sides, `pairs` identical index for index, and 1323 of 1421 entry descriptions
+identical. The 98 that differ are slots the deserializer rewrites to something
+local to the analysing process.
+
+op_dump_check.sh in the research tree is the standing check. Negative controls
+(each with ninja exiting 0 in the same round): deduplicating the pp lists goes
+red at 1459/1136; not preserving the mark across the switchable-call reset
+takes `pairs` to 379; dropping GenerateTTSCall's marks takes it to 98; printing
+Utf8::Length for long strings takes the identical entries to 1320.
+
+verify_all.sh 16 ran / 0 failed, verify_reproduction.sh 28 artifacts / 0
+failures, run_vm_tests 157 passed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 1a280260e7d..599cd4a6405 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -26,17 +26,32 @@ namespace bin {
+ // `strings`). analyze_snapshot_help_check.sh diffs the two help texts, so
+ // documenting a flag they leave undocumented would register there as a
+ // divergence.
++// flutter_hot_patcher: --dump_object_pool_link_data is a STRING option and
++// --dump_object_pool is a BOOL one. Measured against their own binary, because
++// the string table cannot answer this -- task 18 established that --sdk_version
++// is registered and has no bare-name string either:
++//
++//   theirs --dump_object_pool_link_data      -> Unrecognized flags: ...
++//   theirs --dump_object_pool_link_data=P    -> Snapshot file does not exist
++//   theirs --dump_object_pool_link_data=     -> Empty value for option ...
++//   theirs --dump_object_pool                -> Snapshot file does not exist
++//   theirs --dump_object_pool=P              -> Non-empty value for option ...
++//
++// So unlike --no_pp_hash neither of these is a dead flag: both are registered,
++// and the first carries its own output path instead of using --out.
+ #define STRING_OPTIONS_LIST(V)                                                 \
+   V(out, out_path)                                                             \
+   V(compute_dd_table, compute_dd_table_path)                                   \
+-  V(dd_max_bytes, dd_max_bytes_arg)
++  V(dd_max_bytes, dd_max_bytes_arg)                                            \
++  V(dump_object_pool_link_data, dump_object_pool_link_data_path)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(help, help)                                                                \
+   V(sdk_version, sdk_version)                                                  \
+   V(shorebird, shorebird_mode)                                                 \
+   V(dump_class_table, dump_class_table)                                        \
+-  V(dump_blobs, dump_blobs)
++  V(dump_blobs, dump_blobs)                                                    \
++  V(dump_object_pool, dump_object_pool)
+ 
+ #define STRING_OPTION_DEFINITION(flag, variable)                               \
+   static const char* variable = nullptr;                                       \
+@@ -85,33 +100,28 @@ static void PrintUsage() {
+ // least declared, and this one is help text with nothing behind it.
+ "--no_pp_hash                                                                \n"
+ "  Ignore PP offsets when computing subgraph hashes.                         \n"
++"--dump_object_pool_link_data                                                \n"
++"  Dump object pool link data as a binary file                               \n"
+ "--dump_blobs                                                                \n"
+ "  Dump the four snapshot regions as a single concatenated blob.             \n"
+ "  Used by Shorebird's patch tool for avoiding Mach-O/ELF differences.       \n"
++"--dump_object_pool                                                          \n"
++"  Dump the object pool as JSON for debugging.                               \n"
+ "--dump_class_table                                                          \n"
+ "  Dump the class table as JSON for debugging.                               \n"
+-// Shorebird lists four more flags at this point, in this order:
+-// --dump_object_pool_link_data, --dump_blobs, --dump_object_pool
+-// and --disassemble. They are deliberately NOT listed here,
+-// because this binary does not implement them, and a help text advertising a
+-// flag the parser rejects is worse than one that is short.
++// Shorebird lists one more flag at this point, --disassemble. It is
++// deliberately NOT listed here, because this binary does not implement it, and
++// a help text advertising a flag the parser rejects is worse than one that is
++// short.
+ //
+ // The omission is pinned rather than left to memory:
+-// analyze_snapshot_help_check.sh takes their --help, deletes exactly those four
+-// blocks, and requires what is left to equal ours byte for byte. Every line
++// analyze_snapshot_help_check.sh takes their --help, deletes exactly that
++// block, and requires what is left to equal ours byte for byte. Every line
+ // above is therefore checked against theirs on every run, and what is missing
+ // is a number that has to shrink deliberately.
+ //
+-// --dump_object_pool_link_data and --dump_object_pool both need
+-// op_subgraph_hash, a private subsystem this tree does not have. Its
+-// reconstruction stands at 1185 of 1380 functions and the remainder needs the
+-// call graph walked, which is why it is not simply a matter of more effort --
+-// see SUBGRAPH_HASHER_RECON.md in the research tree. ObjectPoolLinkInfo's own
+-// encoder is implemented and byte-verified against their files, so what is
+-// missing there is the producer, not the format.
+-//
+-// --dump_blobs needs the four region sizes, which
+-// Dart_SnapshotAnalyzerInformation does not carry.
++// --disassemble collides with the VM's own flag of the same name; an earlier
++// attempt to register it was reverted for that reason.
+ "If omitting [<vm-flags>] the VM parsing the snapshot is created with the    \n"
+ "following default flags:                                                    \n"
+ "--enable_mirrors=false                                                      \n"
+@@ -211,7 +221,13 @@ int RunAnalyzer(int argc, char** argv) {
+   // convenience: theirs is invoked exactly that way
+   //   analyze_snapshot --compute_dd_table=base.ddtable base.so
+   // and requiring --out here would reject a command line theirs accepts.
+-  if (out_path == nullptr && compute_dd_table_path == nullptr) {
++  // --dump_object_pool_link_data joins them for the same reason: their own
++  // pipeline invokes it as
++  //   analyze_snapshot --dump_object_pool_link_data=base.op base.so
++  // with no --out at all. Measured -- that command line succeeds against their
++  // binary, and it is the one dd_pipeline.sh in the research tree drives.
++  if (out_path == nullptr && compute_dd_table_path == nullptr &&
++      dump_object_pool_link_data_path == nullptr) {
+     Syslog::PrintErr("No output path provided.\n");
+     return kErrorExitCode;
+   }
+@@ -310,9 +326,19 @@ int RunAnalyzer(int argc, char** argv) {
+     WriteFile(compute_dd_table_path, dd, dd_len);
+     free(dd);
+   }
++  // Same shape: --dump_object_pool_link_data carries its own path.
++  if (dump_object_pool_link_data_path != nullptr) {
++    char* op = nullptr;
++    intptr_t op_len = 0;
++    Dart_DumpObjectPool(info, &op, &op_len);
++    WriteFile(dump_object_pool_link_data_path, op, op_len);
++    free(op);
++  }
+   if (out_path != nullptr) {
+     if (dump_blobs) {
+       Dart_DumpBlobs(info, &out, &out_len);
++    } else if (dump_object_pool) {
++      Dart_DumpObjectPoolAsJson(info, &out, &out_len);
+     } else if (dump_class_table) {
+       Dart_DumpClassTableAsJson(info, &out, &out_len);
+     } else if (shorebird_mode) {
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index d1a4254c2fa..0f523d07291 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -53,6 +53,22 @@ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+                          char** out,
+                          intptr_t* out_len);
+ 
++// flutter_hot_patcher: Shorebird's --dump_object_pool_link_data, the binary
++// ObjectPoolLinkInfo their linker consumes as --base_op_link_data /
++// --patch_op_link_data. Their symbol is
++//   dart::snapshot_analyzer::Dart_DumpObjectPool(char**, long*)
++// -- it takes no info struct because everything it needs is on the Thread.
++void Dart_DumpObjectPool(const Dart_SnapshotAnalyzerInformation& info,
++                         char** out,
++                         intptr_t* out_len);
++
++// flutter_hot_patcher: Shorebird's --dump_object_pool, the same
++// ObjectPoolLinkInfo rendered as JSON plus one entry per pool slot. Their
++// symbol is Dart_DumpObjectPoolAsJson(char**, long*).
++void Dart_DumpObjectPoolAsJson(const Dart_SnapshotAnalyzerInformation& info,
++                               char** out,
++                               intptr_t* out_len);
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index e8b7a243c92..b1034a382e6 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -26,8 +26,10 @@
+ #include "vm/shorebird/cascade_limiter.h"
+ #include "vm/shorebird/link_info.h"
+ #include "vm/image_snapshot.h"
++#include "vm/native_symbol.h"
+ #include "vm/snapshot.h"
+ #include "vm/thread.h"
++#include "platform/unicode.h"
+ 
+ namespace dart {
+ namespace snapshot_analyzer {
+@@ -1566,9 +1568,20 @@ std::vector<std::string> ShorebirdSubgraphHashes(
+ // 1380 functions and their op_subgraph_hash takes 1380, so for the latter the
+ // truth partition is the discrete one and a partition comparison would have
+ // been vacuous; digest equality is the criterion for both.
++//
++// 🔑 The same walk also yields self_pp and subgraph_pp, and it has to: they are
++// the SAME vector the ordinal above is read off. `self_pp_indices` is every
++// pool reference the root itself makes and `subgraph_pp_indices` is every pool
++// reference the whole walk makes, both IN ORDER AND WITH REPEATS -- a repeated
++// index appears again. Measured against their own --dump_object_pool of their
++// own base.so: 1380 of 1380 for each. Deduplicating either one drops to
++// 1250/1380 and 932/1380 respectively, which is what made the repeats a
++// finding rather than an assumption.
+ struct ShorebirdClassifiedHashes {
+   std::vector<std::string> self_hash;
+   std::vector<std::string> op_subgraph_hash;
++  std::vector<std::vector<intptr_t>> self_pp;
++  std::vector<std::vector<intptr_t>> subgraph_pp;
+ };
+ 
+ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+@@ -1578,6 +1591,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+   ShorebirdClassifiedHashes out;
+   out.self_hash.reserve(n);
+   out.op_subgraph_hash.reserve(n);
++  out.self_pp.reserve(n);
++  out.subgraph_pp.reserve(n);
+ 
+   std::vector<uint8_t> self_stream, op_stream;
+   std::vector<bool> visited(n);
+@@ -1596,6 +1611,7 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+ 
+     std::map<intptr_t, intptr_t> pool_map, field_map, external;
+     intptr_t pool_refs = 0, field_refs = 0;
++    std::vector<intptr_t> self_pp, subgraph_pp;
+ 
+     push(&op_stream, kEntryCodeName,
+          Utils::StringHash(codes[root].name.c_str(),
+@@ -1634,6 +1650,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+           break;
+         case ShorebirdClassifiedStep::kPool: {
+           pool_refs++;
++          subgraph_pp.push_back(step.value);
++          if (depth0) self_pp.push_back(step.value);
+           auto it = pool_map.find(step.value);
+           if (it == pool_map.end()) {
+             it = pool_map.emplace(step.value, pool_refs - 1).first;
+@@ -1690,6 +1708,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     out.self_hash.push_back(Sha1HexOf(self_stream.data(), self_stream.size()));
+     out.op_subgraph_hash.push_back(
+         Sha1HexOf(op_stream.data(), op_stream.size()));
++    out.self_pp.push_back(std::move(self_pp));
++    out.subgraph_pp.push_back(std::move(subgraph_pp));
+   }
+   return out;
+ }
+@@ -1856,6 +1876,219 @@ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+   memcpy(*out, stream.buffer(), *out_len);
+ }
+ 
++// flutter_hot_patcher: Shorebird's GetObjectPoolLinkInfo(Thread*),
++// analyze_snapshot 0x10024cb9c. It is the producer behind BOTH
++// --dump_object_pool_link_data and --dump_object_pool; the format it fills in
++// has been decodable since ObjectPoolLinkInfo landed, and this is the half that
++// was missing.
++//
++// Three parts, in the order their function builds them:
++//
++//   1. `pairs`: their first loop (0x10024cc2c-0x10024cc40) walks the global
++//      object pool's entry_bits, masks the low two bits and keeps every index
++//      whose value is 1 -- kPairFirst. Nothing about the entry's contents is
++//      examined. See ObjectPoolBuilderEntry::PairPosition for where the mark
++//      comes from and why bits 0..1 is not a guess.
++//
++//   2. `codes`: one CodeInfo per instructions-table entry, in the same order
++//      the --shorebird functions array uses, carrying the two hashes and the
++//      two pool-reference lists the subgraph walk produces.
++//
++//   3. `num_pool_entries`: the pool's length.
++//
++// ⚠️ NOT reproduced, deliberately: their ObjectPoolBuilder also carries a
++// std::vector<PairEntry> (the only symbol it leaves is that vector's
++// __throw_length_error). Nothing in AddObject, NewFromBuilder or
++// GetObjectPoolLinkInfo touches it, and the pair marks alone account for every
++// index in `pairs` on their own fixture, so what it is for is not established
++// and it is not invented here.
++static std::unique_ptr<ObjectPoolLinkInfo> GetObjectPoolLinkInfo(
++    Thread* thread,
++    const Dart_SnapshotAnalyzerInformation& info) {
++  IsolateGroup* ig = thread->isolate_group();
++  Zone* zone = thread->zone();
++
++  const ObjectPool& pool =
++      ObjectPool::Handle(zone, ig->object_store()->global_object_pool());
++  const intptr_t num_pool_entries = pool.IsNull() ? 0 : pool.Length();
++
++  std::vector<int32_t> pairs;
++  for (intptr_t i = 0; i < num_pool_entries; i++) {
++    if (pool.PairPositionAt(i) ==
++        compiler::ObjectPoolBuilderEntry::kPairFirst) {
++      pairs.push_back(static_cast<int32_t>(i));
++    }
++  }
++
++  const uintptr_t isolate_instr_base =
++      reinterpret_cast<uintptr_t>(info.vm_isolate_instructions);
++  std::vector<CodeEntry> codes;
++  {
++    SafepointReadRwLocker ml(thread, ig->program_lock());
++    CollectAllCodes(ig, isolate_instr_base, codes);
++  }
++
++  std::vector<ShorebirdCodeFacts> facts;
++  facts.reserve(codes.size());
++  for (const auto& entry : codes) {
++    facts.push_back(ComputeShorebirdCodeFacts(entry.payload, entry.size));
++  }
++  const ShorebirdClassifiedHashes classified =
++      ShorebirdSelfAndOpHashes(codes, facts);
++
++  std::vector<CodeInfo> infos;
++  infos.reserve(codes.size());
++  for (intptr_t i = 0; i < static_cast<intptr_t>(codes.size()); i++) {
++    std::vector<uintptr_t> self_pp(classified.self_pp[i].begin(),
++                                   classified.self_pp[i].end());
++    std::vector<uintptr_t> subgraph_pp(classified.subgraph_pp[i].begin(),
++                                       classified.subgraph_pp[i].end());
++    infos.emplace_back(classified.self_hash[i], classified.op_subgraph_hash[i],
++                       std::move(self_pp), std::move(subgraph_pp));
++  }
++
++  return std::make_unique<ObjectPoolLinkInfo>(
++      std::move(infos), std::move(pairs), num_pool_entries);
++}
++
++void Dart_DumpObjectPool(const Dart_SnapshotAnalyzerInformation& info,
++                         char** out,
++                         intptr_t* out_len) {
++  Thread* thread = Thread::Current();
++  DARTSCOPE(thread);
++  const std::unique_ptr<ObjectPoolLinkInfo> link_info =
++      GetObjectPoolLinkInfo(thread, info);
++
++  MallocWriteStream stream(/*initial_size=*/64 * KB);
++  link_info->WriteToStream(&stream);
++  *out_len = stream.bytes_written();
++  *out = reinterpret_cast<char*>(malloc(*out_len));
++  memcpy(*out, stream.buffer(), *out_len);
++}
++
++// One pool slot as their --dump_object_pool renders it.
++//
++// This is upstream's ObjectPool::DebugPrint body with the two changes their
++// string table shows (analyze_snapshot 0x29aae8, a second copy of the upstream
++// block at 0x290024 with different contents):
++//
++//   * a "<%" Pd " len string> (obj)" case upstream does not have, taken when
++//     the object is a String whose Utf8 length would not fit the 256-byte
++//     buffer. The threshold is theirs: `cmp x0, #0xf9` after Utf8::Length at
++//     0x10024e178, and the String test just above it is a virtual call to
++//     vtable+0x10 -- Object::HandleTag() -- compared against 0x5d = kStringCid.
++//   * "0x%" Px " (unknown)" where upstream prints "(raw)". Both strings are in
++//     the binary; the upstream one belongs to the upstream copy of the block.
++// Their snprintf buffer is 256 bytes (`mov w1,#0x100` at 0x10024e198) and the
++// long-string cutoff is 249 (`cmp x0,#0xf9` at 0x10024e178).
++static constexpr intptr_t kPoolEntryBufferSize = 256;
++static constexpr intptr_t kPoolEntryStringCutoff = 249;
++
++static void AppendPoolEntryDescription(Zone* zone,
++                                       const ObjectPool& pool,
++                                       intptr_t i,
++                                       char* buffer,
++                                       intptr_t buffer_size) {
++  if (pool.TypeAt(i) == ObjectPool::EntryType::kTaggedObject) {
++    const Object& obj = Object::Handle(zone, pool.ObjectAt(i));
++    // ⚠️ Two different lengths, and mixing them up is invisible on short
++    // strings: the CUTOFF is measured in Utf8 bytes (0x10024e174 calls
++    // Utf8::Length before `cmp x0,#0xf9`) but the number PRINTED is the
++    // String's own length (0x10024e218-0x10024e220 loads length_ and shifts the
++    // Smi tag off instead). Using Utf8::Length for both put 2844 where their
++    // dump of the same string says 2112.
++    if (obj.IsString() &&
++        Utf8::Length(String::Cast(obj)) >= kPoolEntryStringCutoff) {
++      Utils::SNPrint(buffer, buffer_size, "<%" Pd " len string> (obj)",
++                     String::Cast(obj).Length());
++      return;
++    }
++    Utils::SNPrint(buffer, buffer_size, "%s (obj)", obj.ToCString());
++    return;
++  }
++  if (pool.TypeAt(i) == ObjectPool::EntryType::kNativeFunction) {
++    const uword pc = pool.RawValueAt(i);
++    uintptr_t start = 0;
++    const char* name = NativeSymbolResolver::LookupSymbolName(pc, &start);
++    if (name != nullptr) {
++      Utils::SNPrint(buffer, buffer_size, "%s (native function)", name);
++      NativeSymbolResolver::FreeSymbolName(name);
++      return;
++    }
++    const char* dso_name;
++    uword dso_base;
++    if (NativeSymbolResolver::LookupSharedObject(pc, &dso_base, &dso_name)) {
++      Utils::SNPrint(buffer, buffer_size, "%s+0x%" Px " (native function)",
++                     dso_name, pc - dso_base);
++      NativeSymbolResolver::FreeSymbolName(dso_name);
++      return;
++    }
++    Utils::SNPrint(buffer, buffer_size, "0x%" Px " (native function)", pc);
++    return;
++  }
++  Utils::SNPrint(buffer, buffer_size, "0x%" Px " (unknown)",
++                 pool.RawValueAt(i));
++}
++
++void Dart_DumpObjectPoolAsJson(const Dart_SnapshotAnalyzerInformation& info,
++                               char** out,
++                               intptr_t* out_len) {
++  Thread* thread = Thread::Current();
++  IsolateGroup* ig = thread->isolate_group();
++  DARTSCOPE(thread);
++  Zone* zone = thread->zone();
++
++  const std::unique_ptr<ObjectPoolLinkInfo> link_info =
++      GetObjectPoolLinkInfo(thread, info);
++
++  JSONWriter js;
++  js.OpenObject();
++  js.PrintProperty64("object_pool_size", link_info->num_pool_entries());
++
++  js.OpenArray("code_infos");
++  for (const CodeInfo& code : link_info->codes()) {
++    js.OpenObject();
++    js.PrintProperty("op_subgraph_hash", code.op_subgraph_hash_.c_str());
++    js.PrintProperty("self_hash", code.self_hash_.c_str());
++    js.OpenArray("self_pp_indices");
++    for (uintptr_t slot : code.self_pp_indices_) {
++      js.PrintValue64(static_cast<int64_t>(slot));
++    }
++    js.CloseArray();
++    js.OpenArray("subgraph_pp_indices");
++    for (uintptr_t slot : code.subgraph_pp_indices_) {
++      js.PrintValue64(static_cast<int64_t>(slot));
++    }
++    js.CloseArray();
++    js.CloseObject();
++  }
++  js.CloseArray();
++
++  js.OpenArray("pairs");
++  for (int32_t index : link_info->pair_constraints()) {
++    js.PrintValue64(index);
++  }
++  js.CloseArray();
++
++  js.OpenArray("entries");
++  const ObjectPool& pool =
++      ObjectPool::Handle(zone, ig->object_store()->global_object_pool());
++  const intptr_t length = pool.IsNull() ? 0 : pool.Length();
++  char buffer[kPoolEntryBufferSize];
++  for (intptr_t i = 0; i < length; i++) {
++    js.OpenObject();
++    js.PrintProperty64("index", i);
++    js.PrintProperty64("offset", ObjectPool::element_offset(i));
++    AppendPoolEntryDescription(zone, pool, i, buffer, kPoolEntryBufferSize);
++    js.PrintProperty("code", buffer);
++    js.CloseObject();
++  }
++  js.CloseArray();
++
++  js.CloseObject();
++  js.Steal(out, out_len);
++}
++
+ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index ac485b82998..523b326fed9 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -3458,7 +3458,16 @@ class ObjectPoolDeserializationCluster : public DeserializationCluster {
+ #if defined(DART_PRECOMPILED_RUNTIME)
+           case ObjectPool::SnapshotBehavior::
+               kResetToSwitchableCallMissEntryPoint:
+-            pool->untag()->entry_bits()[j] = immediate_bits;
++            // flutter_hot_patcher: keep the pair mark. This slot is the FIRST
++            // half of a switchable call's (stub, data) pair, and rewriting it
++            // to a bare immediate here would erase the very constraint the
++            // linker needs. Their own dump shows these six entries as
++            // kImmediate ("(unknown)") AND still listed in `pairs`.
++            pool->untag()->entry_bits()[j] =
++                immediate_bits |
++                compiler::ObjectPoolBuilderEntry::EncodePairPosition(
++                    compiler::ObjectPoolBuilderEntry::DecodePairPosition(
++                        entry_bits));
+             entry.raw_value_ =
+                 static_cast<intptr_t>(switchable_call_miss_entry_point);
+             continue;
+diff --git a/runtime/vm/compiler/assembler/assembler_base.cc b/runtime/vm/compiler/assembler/assembler_base.cc
+index bc9f9a6025c..e5b282378fd 100644
+--- a/runtime/vm/compiler/assembler/assembler_base.cc
++++ b/runtime/vm/compiler/assembler/assembler_base.cc
+@@ -673,17 +673,22 @@ void ObjectPoolBuilder::Reset() {
+ intptr_t ObjectPoolBuilder::AddObject(
+     const Object& obj,
+     ObjectPoolBuilderEntry::Patchability patchable,
+-    ObjectPoolBuilderEntry::SnapshotBehavior snapshot_behavior) {
++    ObjectPoolBuilderEntry::SnapshotBehavior snapshot_behavior,
++    ObjectPoolBuilderEntry::PairPosition pair_position) {
+   DEBUG_ASSERT(IsNotTemporaryScopedHandle(obj));
+-  return AddObject(ObjectPoolBuilderEntry(&obj, patchable, snapshot_behavior));
++  return AddObject(ObjectPoolBuilderEntry(&obj, patchable, snapshot_behavior,
++                                          pair_position));
+ }
+ 
+ intptr_t ObjectPoolBuilder::AddImmediate(
+     uword imm,
+     ObjectPoolBuilderEntry::Patchability patchable,
+-    ObjectPoolBuilderEntry::SnapshotBehavior snapshotability) {
+-  return AddObject(ObjectPoolBuilderEntry(
+-      imm, ObjectPoolBuilderEntry::kImmediate, patchable, snapshotability));
++    ObjectPoolBuilderEntry::SnapshotBehavior snapshotability,
++    ObjectPoolBuilderEntry::PairPosition pair_position) {
++  return AddObject(ObjectPoolBuilderEntry(imm,
++                                          ObjectPoolBuilderEntry::kImmediate,
++                                          patchable, snapshotability,
++                                          pair_position));
+ }
+ 
+ intptr_t ObjectPoolBuilder::AddImmediate64(uint64_t imm) {
+@@ -703,6 +708,27 @@ intptr_t ObjectPoolBuilder::AddImmediate128(simd128_value_t imm) {
+ }
+ 
+ intptr_t ObjectPoolBuilder::AddObject(ObjectPoolBuilderEntry entry) {
++  // flutter_hot_patcher: a native entry pairs with WHATEVER IS ADDED NEXT.
++  //
++  // Transcribed from their gen_snapshot at 0x1002555f4-0x100255620: read the
++  // last entry's entry_bits, `and #0xf`, and if the result is exactly 9 --
++  // kPairFirst in bits 0..1 and kNativeFunction in bits 2..3 -- clear this
++  // entry's pair bits and set them to kPairSecond.
++  //
++  // ⚠️ Note what this does NOT test: the entry being added is not examined at
++  // all, so the pairing is positional. That is how the (native function, argc
++  // tag) pair gets marked without the native call sites knowing about pairs;
++  // LoadNativeEntry marks only the first half. Writing this as "if the new
++  // entry is an immediate" would score the same on every fixture we have and
++  // would be a different rule.
++  if (object_pool_.length() > 0) {
++    const ObjectPoolBuilderEntry& last = object_pool_[object_pool_.length() - 1];
++    if (last.pair_position() == ObjectPoolBuilderEntry::kPairFirst &&
++        last.type() == ObjectPoolBuilderEntry::kNativeFunction) {
++      entry.set_pair_position(ObjectPoolBuilderEntry::kPairSecond);
++    }
++  }
++
+   DEBUG_ASSERT((entry.type() != ObjectPoolBuilderEntry::kTaggedObject) ||
+                (IsNotTemporaryScopedHandle(*entry.obj_) &&
+                 (entry.equivalence_ == nullptr ||
+@@ -746,8 +772,16 @@ intptr_t ObjectPoolBuilder::AddObject(ObjectPoolBuilderEntry entry) {
+     uword hi64 =
+         (static_cast<uword>(entry.imm128_.int_storage[2]) & 0xffffffff) |
+         (static_cast<uword>(entry.imm128_.int_storage[3]) << 32);
+-    intptr_t idx = AddImmediate(lo64);
+-    AddImmediate(hi64);
++    // flutter_hot_patcher: the two halves must stay adjacent, and their
++    // AddObject says so with the literal entry_bits 0x11 and 0x12 it builds at
++    // 0x100255684 / 0x1002556a4 -- kPairFirst / kPairSecond over a kImmediate
++    // that is kNotPatchable, which is exactly what AddImmediate defaults to.
++    intptr_t idx = AddImmediate(lo64, ObjectPoolBuilderEntry::kNotPatchable,
++                                ObjectPoolBuilderEntry::kSnapshotable,
++                                ObjectPoolBuilderEntry::kPairFirst);
++    AddImmediate(hi64, ObjectPoolBuilderEntry::kNotPatchable,
++                 ObjectPoolBuilderEntry::kSnapshotable,
++                 ObjectPoolBuilderEntry::kPairSecond);
+     object_pool_index_table_.Insert(ObjIndexPair(entry, idx));
+     return idx;
+   }
+@@ -821,8 +855,14 @@ intptr_t ObjectPoolBuilder::FindImmediate128(simd128_value_t imm) {
+ intptr_t ObjectPoolBuilder::FindNativeFunction(
+     const ExternalLabel* label,
+     ObjectPoolBuilderEntry::Patchability patchable) {
++  // flutter_hot_patcher: their Assembler::LoadNativeEntry -- which is where
++  // FindNativeFunction is inlined -- builds this entry with the literal
++  // entry_bits 0x9 (gen_snapshot 0x10024e68c), i.e. kPairFirst over
++  // kNativeFunction. AddObject then marks whatever comes next kPairSecond.
+   return FindObject(ObjectPoolBuilderEntry(
+-      label->address(), ObjectPoolBuilderEntry::kNativeFunction, patchable));
++      label->address(), ObjectPoolBuilderEntry::kNativeFunction, patchable,
++      ObjectPoolBuilderEntry::kSnapshotable,
++      ObjectPoolBuilderEntry::kPairFirst));
+ }
+ 
+ bool ObjectPoolBuilder::TryCommitToParent() {
+diff --git a/runtime/vm/compiler/assembler/object_pool_builder.h b/runtime/vm/compiler/assembler/object_pool_builder.h
+index 8363c31fab0..c27385705a0 100644
+--- a/runtime/vm/compiler/assembler/object_pool_builder.h
++++ b/runtime/vm/compiler/assembler/object_pool_builder.h
+@@ -62,7 +62,47 @@ struct ObjectPoolBuilderEntry {
+     kImmediate128,
+   };
+ 
++  // flutter_hot_patcher: Shorebird's pair marker.
++  //
++  // Several code sequences need two pool slots to stay ADJACENT -- the
++  // `ASSERT((x_index + 1) == y_index)` sites in the flow graph compiler. Their
++  // linker has to keep those two slots together when it remaps a patch's pool
++  // onto a base's, so the constraint has to survive into the snapshot. It does,
++  // as two bits per entry, and `analyze_snapshot --dump_object_pool_link_data`
++  // reports every index carrying kPairFirst.
++  //
++  // 🔑 Read out of their binaries, not invented:
++  //   * the LAYOUT below is confirmed three independent times --
++  //     `ObjectPool::NewFromBuilder` tests the type with `and #0xc; cmp #4`
++  //     (gen_snapshot 0x10015d884), `Dart_DumpObjectPoolAsJson` decodes it with
++  //     `ubfx w8,w8,#2,#2` (analyze_snapshot 0x10024e128), and
++  //     `ObjectPoolBuilder::AddObject` splits a kImmediate128 into entries whose
++  //     entry_bits are the constants 0x11 and 0x12 (gen_snapshot 0x100255684 /
++  //     0x1002556a4). Type at bits 2..3 and this field at bits 0..1 is the only
++  //     reading consistent with all three.
++  //   * the VALUES come from the same three places: 0x11/0x12 are (first,
++  //     second) of the kImmediate128 split, `LoadNativeEntry` builds an entry
++  //     with entry_bits 0x9 = (first, kNativeFunction, kPatchable)
++  //     (0x10024e68c), and `EmitInstanceCallAOT` writes 0x05/0x65 then 0x06
++  //     (0x10027e23c / 0x10027e258).
++  //
++  // ⚠️ 32-bit targets keep the upstream layout. Their eight bits are already
++  // full there (kImmediate64 pushes EntryType to four bits) and analyze_snapshot
++  // is 64-bit only -- SUPPORT_ANALYZE_SNAPSHOT requires TARGET_ARCH_IS_64_BIT --
++  // so nothing can read a 32-bit pool's pair marks anyway. What their own
++  // 32-bit build does here is not observable from anything we have.
++  enum PairPosition {
++    kNotInPair = 0,
++    kPairFirst,
++    kPairSecond,
++  };
++
++#if defined(TARGET_ARCH_IS_32_BIT)
+   using TypeBits = BitField<uint8_t, EntryType, 0, 4>;
++#else
++  using PairBits = BitField<uint8_t, PairPosition, 0, 2>;
++  using TypeBits = BitField<uint8_t, EntryType, PairBits::kNextBit, 2>;
++#endif
+   using PatchableBit = BitField<uint8_t, Patchability, TypeBits::kNextBit, 1>;
+   using SnapshotBehaviorBits =
+       BitField<uint8_t, SnapshotBehavior, PatchableBit::kNextBit, 3>;
+@@ -70,31 +110,60 @@ struct ObjectPoolBuilderEntry {
+   static inline uint8_t EncodeTraits(
+       EntryType type,
+       Patchability patchable,
+-      SnapshotBehavior snapshot_behavior = SnapshotBehavior::kSnapshotable) {
++      SnapshotBehavior snapshot_behavior = SnapshotBehavior::kSnapshotable,
++      PairPosition pair_position = kNotInPair) {
+     return TypeBits::encode(type) | PatchableBit::encode(patchable) |
+            PatchableBit::encode(patchable) |
+-           SnapshotBehaviorBits::encode(snapshot_behavior);
++           SnapshotBehaviorBits::encode(snapshot_behavior) |
++           EncodePairPosition(pair_position);
++  }
++
++  static inline uint8_t EncodePairPosition(PairPosition pair_position) {
++#if defined(TARGET_ARCH_IS_32_BIT)
++    return 0;
++#else
++    return PairBits::encode(pair_position);
++#endif
++  }
++
++  static inline PairPosition DecodePairPosition(uint8_t entry_bits) {
++#if defined(TARGET_ARCH_IS_32_BIT)
++    return kNotInPair;
++#else
++    return PairBits::decode(entry_bits);
++#endif
+   }
+ 
+   ObjectPoolBuilderEntry() : imm128_(), entry_bits_(0), equivalence_() {}
+   ObjectPoolBuilderEntry(const Object* obj,
+                          Patchability patchable,
+-                         SnapshotBehavior snapshot_behavior = kSnapshotable)
+-      : ObjectPoolBuilderEntry(obj, obj, patchable, snapshot_behavior) {}
++                         SnapshotBehavior snapshot_behavior = kSnapshotable,
++                         PairPosition pair_position = kNotInPair)
++      : ObjectPoolBuilderEntry(obj,
++                               obj,
++                               patchable,
++                               snapshot_behavior,
++                               pair_position) {}
+   ObjectPoolBuilderEntry(const Object* obj,
+                          const Object* eqv,
+                          Patchability patchable,
+-                         SnapshotBehavior snapshot_behavior = kSnapshotable)
++                         SnapshotBehavior snapshot_behavior = kSnapshotable,
++                         PairPosition pair_position = kNotInPair)
+       : obj_(obj),
+-        entry_bits_(EncodeTraits(kTaggedObject, patchable, snapshot_behavior)),
++        entry_bits_(EncodeTraits(kTaggedObject,
++                                 patchable,
++                                 snapshot_behavior,
++                                 pair_position)),
+         equivalence_(eqv) {}
+   ObjectPoolBuilderEntry(
+       uword value,
+       EntryType info,
+       Patchability patchable,
+-      SnapshotBehavior snapshot_behavior = SnapshotBehavior::kSnapshotable)
++      SnapshotBehavior snapshot_behavior = SnapshotBehavior::kSnapshotable,
++      PairPosition pair_position = kNotInPair)
+       : imm_(value),
+-        entry_bits_(EncodeTraits(info, patchable, snapshot_behavior)),
++        entry_bits_(
++            EncodeTraits(info, patchable, snapshot_behavior, pair_position)),
+         equivalence_() {}
+ #if defined(ARCH_IS_32_BIT)
+   ObjectPoolBuilderEntry(uint64_t value, EntryType info, Patchability patchable)
+@@ -113,6 +182,16 @@ struct ObjectPoolBuilderEntry {
+ 
+   Patchability patchable() const { return PatchableBit::decode(entry_bits_); }
+ 
++  PairPosition pair_position() const {
++    return DecodePairPosition(entry_bits_);
++  }
++
++  void set_pair_position(PairPosition pair_position) {
++#if !defined(TARGET_ARCH_IS_32_BIT)
++    entry_bits_ = PairBits::update(pair_position, entry_bits_);
++#endif
++  }
++
+   SnapshotBehavior snapshot_behavior() const {
+     return SnapshotBehaviorBits::decode(entry_bits_);
+   }
+@@ -225,18 +304,29 @@ class ObjectPoolBuilder : public ValueObject {
+     zone_ = zone;
+   }
+ 
++  // flutter_hot_patcher: `pair_position` is the fourth argument because that is
++  // where the information has to enter -- the mark lives in the entry's own
++  // entry_bits and their EmitInstanceCallAOT writes it as part of the constant
++  // it stores there (0x05/0x65 then 0x06). Their spelling of this parameter is
++  // NOT observable: AddObject(const Object&, ...) is inlined into every caller
++  // in their gen_snapshot, and only AddObject(ObjectPoolBuilderEntry) has a
++  // symbol. Same class of declared interface deviation as LinkOracle::Install.
+   intptr_t AddObject(
+       const Object& obj,
+       ObjectPoolBuilderEntry::Patchability patchable =
+           ObjectPoolBuilderEntry::kNotPatchable,
+       ObjectPoolBuilderEntry::SnapshotBehavior snapshot_behavior =
+-          ObjectPoolBuilderEntry::kSnapshotable);
++          ObjectPoolBuilderEntry::kSnapshotable,
++      ObjectPoolBuilderEntry::PairPosition pair_position =
++          ObjectPoolBuilderEntry::kNotInPair);
+   intptr_t AddImmediate(
+       uword imm,
+       ObjectPoolBuilderEntry::Patchability patchable =
+           ObjectPoolBuilderEntry::kNotPatchable,
+       ObjectPoolBuilderEntry::SnapshotBehavior snapshotability =
+-          ObjectPoolBuilderEntry::kSnapshotable);
++          ObjectPoolBuilderEntry::kSnapshotable,
++      ObjectPoolBuilderEntry::PairPosition pair_position =
++          ObjectPoolBuilderEntry::kNotInPair);
+   intptr_t AddImmediate64(uint64_t imm);
+   intptr_t AddImmediate128(simd128_value_t imm);
+ 
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler.cc b/runtime/vm/compiler/backend/flow_graph_compiler.cc
+index fea1f23e281..8eb5311339a 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler.cc
+@@ -2849,10 +2849,21 @@ void FlowGraphCompiler::GenerateTTSCall(const InstructionSource& source,
+   // (see runtime/vm/runtime_entry.cc:TypeCheck).  It will use pattern matching
+   // on the call site to find out at which pool index the destination name is
+   // located.
++  // flutter_hot_patcher: the adjacency the ASSERT below states is exactly what
++  // Shorebird's pair marks record, so the linker can keep the two slots
++  // together when it remaps a patch's pool. See ObjectPoolBuilderEntry's
++  // PairPosition. This site is not directly disassembled -- their
++  // GenerateTTSCall is fully inlined and has no symbol -- but it is the only
++  // producer of the (null, dst_name) shape, and on their own base.so 287 of
++  // the 385 kPairFirst entries are a null tagged object followed by a string.
+   const intptr_t sub_type_cache_index = __ object_pool_builder().AddObject(
+-      Object::null_object(), compiler::ObjectPoolBuilderEntry::kPatchable);
++      Object::null_object(), compiler::ObjectPoolBuilderEntry::kPatchable,
++      compiler::ObjectPoolBuilderEntry::kSnapshotable,
++      compiler::ObjectPoolBuilderEntry::kPairFirst);
+   const intptr_t dst_name_index = __ object_pool_builder().AddObject(
+-      dst_name, compiler::ObjectPoolBuilderEntry::kPatchable);
++      dst_name, compiler::ObjectPoolBuilderEntry::kPatchable,
++      compiler::ObjectPoolBuilderEntry::kSnapshotable,
++      compiler::ObjectPoolBuilderEntry::kPairSecond);
+   ASSERT((sub_type_cache_index + 1) == dst_name_index);
+   ASSERT(__ constant_pool_allowed());
+ 
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index 7e841ef0987..3283b718df4 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -563,10 +563,18 @@ void FlowGraphCompiler::EmitInstanceCallAOT(const ICData& ic_data,
+       FLAG_precompiled_mode ? compiler::ObjectPoolBuilderEntry::
+                                   kResetToSwitchableCallMissEntryPoint
+                             : compiler::ObjectPoolBuilderEntry::kSnapshotable;
++  // flutter_hot_patcher: transcribed from their EmitInstanceCallAOT, which
++  // stores entry_bits 0x05 or 0x65 for the stub (kPairFirst, kTaggedObject,
++  // kPatchable, with kResetToSwitchableCallMissEntryPoint selected by a csel on
++  // FLAG_precompiled_mode) at 0x10027e23c and 0x06 for the data (kPairSecond)
++  // at 0x10027e258. This is the site that fixes the VALUES of PairPosition.
+   const intptr_t stub_index = op.AddObject(
+-      initial_stub, ObjectPool::Patchability::kPatchable, snapshot_behavior);
++      initial_stub, ObjectPool::Patchability::kPatchable, snapshot_behavior,
++      compiler::ObjectPoolBuilderEntry::kPairFirst);
+   const intptr_t data_index =
+-      op.AddObject(data, ObjectPool::Patchability::kPatchable);
++      op.AddObject(data, ObjectPool::Patchability::kPatchable,
++                   compiler::ObjectPoolBuilderEntry::kSnapshotable,
++                   compiler::ObjectPoolBuilderEntry::kPairSecond);
+   ASSERT((stub_index + 1) == data_index);
+ 
+   // The AOT runtime will replace the slot in the object pool with the
+diff --git a/runtime/vm/object.cc b/runtime/vm/object.cc
+index 13db77f9c1c..a842699116c 100644
+--- a/runtime/vm/object.cc
++++ b/runtime/vm/object.cc
+@@ -16451,7 +16451,11 @@ ObjectPoolPtr ObjectPool::NewFromBuilder(
+     auto type = entry.type();
+     auto patchable = entry.patchable();
+     auto snapshot_behavior = entry.snapshot_behavior();
+-    result.SetTypeAt(i, type, patchable, snapshot_behavior);
++    // flutter_hot_patcher: the pair mark has to come across too. Theirs does
++    // this by copying the whole entry_bits byte verbatim (gen_snapshot
++    // 0x10015d86c `ldrb w9,[x9,#0x10]` / 0x10015d880 `strb w9,[x10,#0xf]`).
++    result.SetTypeAt(i, type, patchable, snapshot_behavior,
++                     entry.pair_position());
+     if (type == EntryType::kTaggedObject) {
+       result.SetObjectAt(i, *entry.obj_);
+     } else {
+@@ -16471,17 +16475,22 @@ void ObjectPool::CopyInto(compiler::ObjectPoolBuilder* builder) const {
+     auto type = TypeAt(i);
+     auto patchable = PatchableAt(i);
+     auto snapshot_behavior = SnapshotBehaviorAt(i);
++    // flutter_hot_patcher: copying a pool into a builder must not drop the
++    // pair mark -- the two slots still have to stay adjacent afterwards.
++    auto pair_position = PairPositionAt(i);
+     switch (type) {
+       case compiler::ObjectPoolBuilderEntry::kTaggedObject: {
+         compiler::ObjectPoolBuilderEntry entry(&Object::ZoneHandle(ObjectAt(i)),
+-                                               patchable, snapshot_behavior);
++                                               patchable, snapshot_behavior,
++                                               pair_position);
+         builder->AddObject(entry);
+         break;
+       }
+       case compiler::ObjectPoolBuilderEntry::kImmediate:
+       case compiler::ObjectPoolBuilderEntry::kNativeFunction: {
+         compiler::ObjectPoolBuilderEntry entry(RawValueAt(i), type, patchable,
+-                                               snapshot_behavior);
++                                               snapshot_behavior,
++                                               pair_position);
+         builder->AddObject(entry);
+         break;
+       }
+diff --git a/runtime/vm/object.h b/runtime/vm/object.h
+index 308f3679ca7..aee0b302e3d 100644
+--- a/runtime/vm/object.h
++++ b/runtime/vm/object.h
+@@ -5673,6 +5673,7 @@ class ObjectPool : public Object {
+   using EntryType = compiler::ObjectPoolBuilderEntry::EntryType;
+   using Patchability = compiler::ObjectPoolBuilderEntry::Patchability;
+   using SnapshotBehavior = compiler::ObjectPoolBuilderEntry::SnapshotBehavior;
++  using PairPosition = compiler::ObjectPoolBuilderEntry::PairPosition;
+   using TypeBits = compiler::ObjectPoolBuilderEntry::TypeBits;
+   using PatchableBit = compiler::ObjectPoolBuilderEntry::PatchableBit;
+   using SnapshotBehaviorBits =
+@@ -5729,6 +5730,16 @@ class ObjectPool : public Object {
+     return SnapshotBehaviorBits::decode(untag()->entry_bits()[index]);
+   }
+ 
++  // flutter_hot_patcher: Shorebird's pair mark, carried through serialization
++  // in the entry bits. Their GetObjectPoolLinkInfo reads exactly this and
++  // reports every index whose value is kPairFirst (analyze_snapshot
++  // 0x10024cc2c-0x10024cc40: `and w9,w9,#3; cmp w9,#1`).
++  PairPosition PairPositionAt(intptr_t index) const {
++    ASSERT((index >= 0) && (index <= Length()));
++    return compiler::ObjectPoolBuilderEntry::DecodePairPosition(
++        untag()->entry_bits()[index]);
++  }
++
+   static uint8_t EncodeBits(EntryType type,
+                             Patchability patchable,
+                             SnapshotBehavior snapshot_behavior) {
+@@ -5739,9 +5750,13 @@ class ObjectPool : public Object {
+   void SetTypeAt(intptr_t index,
+                  EntryType type,
+                  Patchability patchable,
+-                 SnapshotBehavior snapshot_behavior) const {
++                 SnapshotBehavior snapshot_behavior,
++                 PairPosition pair_position =
++                     compiler::ObjectPoolBuilderEntry::kNotInPair) const {
+     ASSERT(index >= 0 && index <= Length());
+-    const uint8_t bits = EncodeBits(type, patchable, snapshot_behavior);
++    const uint8_t bits =
++        EncodeBits(type, patchable, snapshot_behavior) |
++        compiler::ObjectPoolBuilderEntry::EncodePairPosition(pair_position);
+     StoreNonPointer(&untag()->entry_bits()[index], bits);
+   }
+ 
+diff --git a/runtime/vm/shorebird/link_info_test.cc b/runtime/vm/shorebird/link_info_test.cc
+index 1810ef4622b..ecb57d238b3 100644
+--- a/runtime/vm/shorebird/link_info_test.cc
++++ b/runtime/vm/shorebird/link_info_test.cc
+@@ -7,6 +7,7 @@
+ #include <string>
+ #include <vector>
+ 
++#include "vm/compiler/assembler/object_pool_builder.h"
+ #include "vm/datastream.h"
+ #include "vm/dart_api_impl.h"
+ #include "vm/shorebird/field_hasher.h"
+@@ -274,4 +275,88 @@ TEST_CASE(FieldHasher_QualifiedNameIsOwnerDotField) {
+   EXPECT_STREQ("alpha", FieldHasher::ScrubbedFieldName(alpha).c_str());
+ }
+ 
++#if !defined(TARGET_ARCH_IS_32_BIT)
++// The pair marks that ObjectPoolLinkInfo's `pair_constraints` are made of.
++//
++// 🔑 These assert BYTES, not a round trip. Every constant below was read out of
++// a Shorebird binary, so a layout that merely round-trips with itself would
++// still be wrong -- which is exactly how this field could have gone into the two
++// spare HIGH bits of upstream's four-bit TypeBits instead of the two low ones
++// with nothing in this tree noticing.
++//
++//   0x09  Assembler::LoadNativeEntry's entry     gen_snapshot 0x10024e68c
++//   0x05  EmitInstanceCallAOT's stub, JIT arm    gen_snapshot 0x10027e22c
++//   0x65  ... and its precompiled arm            gen_snapshot 0x10027e230
++//   0x06  EmitInstanceCallAOT's data             gen_snapshot 0x10027e204
++//   0x11  AddObject's kImmediate128 low half     gen_snapshot 0x100255684
++//   0x12  ... and its high half                  gen_snapshot 0x1002556a4
++VM_UNIT_TEST_CASE(ObjectPoolPairPosition_EntryBitsMatchTheirConstants) {
++  using Entry = compiler::ObjectPoolBuilderEntry;
++
++  EXPECT_EQ(0x09, Entry::EncodeTraits(Entry::kNativeFunction, Entry::kPatchable,
++                                      Entry::kSnapshotable, Entry::kPairFirst));
++  EXPECT_EQ(0x05, Entry::EncodeTraits(Entry::kTaggedObject, Entry::kPatchable,
++                                      Entry::kSnapshotable, Entry::kPairFirst));
++  EXPECT_EQ(0x65, Entry::EncodeTraits(
++                      Entry::kTaggedObject, Entry::kPatchable,
++                      Entry::kResetToSwitchableCallMissEntryPoint,
++                      Entry::kPairFirst));
++  EXPECT_EQ(0x06, Entry::EncodeTraits(Entry::kTaggedObject, Entry::kPatchable,
++                                      Entry::kSnapshotable,
++                                      Entry::kPairSecond));
++  EXPECT_EQ(0x11, Entry::EncodeTraits(Entry::kImmediate, Entry::kNotPatchable,
++                                      Entry::kSnapshotable,
++                                      Entry::kPairFirst));
++  EXPECT_EQ(0x12, Entry::EncodeTraits(Entry::kImmediate, Entry::kNotPatchable,
++                                      Entry::kSnapshotable,
++                                      Entry::kPairSecond));
++
++  // Their two readers of the same byte: NewFromBuilder's `and #0xc; cmp #4`
++  // for the type, GetObjectPoolLinkInfo's `and #3; cmp #1` for the mark.
++  EXPECT_EQ(0x04, 0x05 & 0x0c);
++  EXPECT_EQ(0x01, 0x05 & 0x03);
++  EXPECT_EQ(Entry::kPairFirst, Entry::DecodePairPosition(0x09));
++  EXPECT_EQ(Entry::kPairSecond, Entry::DecodePairPosition(0x12));
++  EXPECT_EQ(Entry::kNotInPair, Entry::DecodePairPosition(0x14));
++}
++
++// The mark must not disturb what was already in the byte.
++VM_UNIT_TEST_CASE(ObjectPoolPairPosition_LeavesTheOtherFieldsAlone) {
++  using Entry = compiler::ObjectPoolBuilderEntry;
++  for (int type = 0; type <= 2; type++) {
++    for (int patch = 0; patch <= 1; patch++) {
++      for (int behavior = 0; behavior <= 4; behavior++) {
++        for (int pair = 0; pair <= 2; pair++) {
++          const uint8_t bits =
++              Entry::EncodeTraits(static_cast<Entry::EntryType>(type),
++                                  static_cast<Entry::Patchability>(patch),
++                                  static_cast<Entry::SnapshotBehavior>(behavior),
++                                  static_cast<Entry::PairPosition>(pair));
++          EXPECT_EQ(type, static_cast<int>(Entry::TypeBits::decode(bits)));
++          EXPECT_EQ(patch, static_cast<int>(Entry::PatchableBit::decode(bits)));
++          EXPECT_EQ(behavior, static_cast<int>(
++                                  Entry::SnapshotBehaviorBits::decode(bits)));
++          EXPECT_EQ(pair, static_cast<int>(Entry::DecodePairPosition(bits)));
++        }
++      }
++    }
++  }
++}
++
++// set_pair_position rewrites only its own two bits, which is what AddObject's
++// `and w8,#0xfc; orr w8,#0x2` does at gen_snapshot 0x100255618.
++VM_UNIT_TEST_CASE(ObjectPoolPairPosition_SetIsInPlace) {
++  using Entry = compiler::ObjectPoolBuilderEntry;
++  Entry entry(static_cast<uword>(7), Entry::kImmediate, Entry::kNotPatchable,
++              Entry::kResetToBootstrapNative);
++  const uint8_t before = entry.entry_bits_;
++  EXPECT_EQ(Entry::kNotInPair, entry.pair_position());
++  entry.set_pair_position(Entry::kPairSecond);
++  EXPECT_EQ(Entry::kPairSecond, entry.pair_position());
++  EXPECT_EQ(before & 0xfc, entry.entry_bits_ & 0xfc);
++  EXPECT_EQ(Entry::kImmediate, entry.type());
++  EXPECT_EQ(Entry::kResetToBootstrapNative, entry.snapshot_behavior());
++}
++#endif  // !defined(TARGET_ARCH_IS_32_BIT)
++
+ }  // namespace dart
+-- 
+2.53.0
+

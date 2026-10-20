@@ -1,0 +1,291 @@
+From 26f299efa8f1acb19412bb86a54b683905992fcc Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 11:23:59 +0800
+Subject: [PATCH 084/206] feat(shorebird): print_shorebird_info reproduced,
+ both passes
+
+The object pool half closes the flag. Its link-results producer is the same
+shape as the class table's -- 0x10019bdc4 strides 0x60 = sizeof(CodeInfo) and
+reads the string at +0x18, which is op_subgraph_hash_, not self_hash_ at +0x00
+-- but what it emits is pairs of pool indices rather than pairs of records, so
+each surviving CodeInfo pair contributes the element-wise pairing of the two
+sides' index vectors, deduplicated.
+
+That last step was not readable and was settled by arithmetic instead. Grouping
+by self_hash gives 1089 pairs and by subgraph hash 1378, against their reported
+1121; the deduplicated element-wise expansion of the subgraph-keyed pairs gives
+exactly 1121. Running all three stages on it then reproduces 1113 / 292 / 16,
+which sums to 1421, the pool size.
+
+Also added: --base_op_link_data and --patch_op_link_data, whose names and
+mismatch error come from their binary's own strings, ReadObjectPoolLinkInfo,
+and real base_object_pool_ / patch_object_pool_ fields where the header had
+sixteen reserved bytes.
+
+With both passes wired, our report is identical to theirs on their own
+link-info files, all eight lines:
+
+  606 / 606 / 0 / 13     and     1121 / 1113 / 292 / 16
+
+shorebird_info_check.sh holds both, and runs two inputs rather than one: the
+fixture's base.ct and patch.ct are byte-identical, so on their own they never
+exercise the unpaired path. The second input drops 20 classes and moves the
+class table numbers to 586 / 33, where we also match.
+
+One thing is deliberately not claimed. self_pp_indices_, subgraph_pp_indices_
+and their union all yield the same 1121 on this fixture, so it cannot say which
+vector they use. self_pp_indices_ is used and the header says plainly that the
+choice is unverified.
+
+verify_all.sh: 6 ran, 0 failed, 0 skipped, 113 unit tests.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/gen_snapshot.cc b/runtime/bin/gen_snapshot.cc
+index 8c9b710e385..e85bd2a2b3c 100644
+--- a/runtime/bin/gen_snapshot.cc
++++ b/runtime/bin/gen_snapshot.cc
+@@ -123,6 +123,8 @@ static const char* const kSnapshotKindNames[] = {
+   V(patch_ct_link_data, patch_ct_link_data_filename)                           \
+   V(base_ft_link_data, base_ft_link_data_filename)                             \
+   V(base_dt_link_data, base_dt_link_data_filename)                             \
++  V(base_op_link_data, base_op_link_data_filename)                             \
++  V(patch_op_link_data, patch_op_link_data_filename)                           \
+   V(dd_slot_mapping, dd_slot_mapping_filename)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+@@ -687,6 +689,38 @@ static void InitializeShorebirdLinkData() {
+         std::move(base), std::move(patch));
+   }
+ 
++  // Same pairing rule and the same wording as the class table's, which is
++  // theirs verbatim: their binary carries
++  // "Error: --base_op_link_data must be used with --patch_op_link_data."
++  if ((base_op_link_data_filename == nullptr) !=
++      (patch_op_link_data_filename == nullptr)) {
++    Syslog::PrintErr(
++        "Error: --base_op_link_data must be used with"
++        " --patch_op_link_data.\n\n");
++    exit(kErrorExitCode);
++  }
++
++  if (base_op_link_data_filename != nullptr) {
++    bool base_ok = false;
++    bool patch_ok = false;
++    auto base =
++        dart::ReadObjectPoolLinkInfo(base_op_link_data_filename, &base_ok);
++    auto patch =
++        dart::ReadObjectPoolLinkInfo(patch_op_link_data_filename, &patch_ok);
++    if (!base_ok) {
++      Syslog::PrintErr("Error: could not read --base_op_link_data=%s\n\n",
++                       base_op_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    if (!patch_ok) {
++      Syslog::PrintErr("Error: could not read --patch_op_link_data=%s\n\n",
++                       patch_op_link_data_filename);
++      exit(kErrorExitCode);
++    }
++    dart::ShorebirdLinker::shared()->InitializeWithObjectPoolLinkInfo(
++        std::move(base), std::move(patch));
++  }
++
+   if (base_ft_link_data_filename != nullptr) {
+     bool ok = false;
+     auto base = dart::ReadFieldTableLinkInfo(base_ft_link_data_filename, &ok);
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index be676f67d94..f0f09499ff0 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -9,6 +9,7 @@
+ #include <cstring>
+ #include <memory>
+ #include <string>
++#include <set>
+ #include <unordered_map>
+ #include <utility>
+ #include <vector>
+@@ -37,7 +38,8 @@ static_assert(sizeof(ShorebirdLinker) == 0x88,
+ 
+ ShorebirdLinker::ShorebirdLinker()
+     : gap0_{},
+-      object_pool_reserved_{},
++      base_object_pool_(nullptr),
++      patch_object_pool_(nullptr),
+       gap1_{},
+       dd_slot_mapping_(nullptr),
+       dd_slot_voters_(nullptr),
+@@ -348,6 +350,75 @@ std::vector<intptr_t> ShorebirdLinker::ComputeObjectPoolMapping(
+   return mapping;
+ }
+ 
++void ShorebirdLinker::InitializeWithObjectPoolLinkInfo(
++    std::unique_ptr<ObjectPoolLinkInfo> base,
++    std::unique_ptr<ObjectPoolLinkInfo> patch) {
++  // Their assertion string, matching the class table's shape:
++  // "base_object_pool_ == nullptr && patch_object_pool_ == nullptr"
++  ASSERT(base_object_pool_ == nullptr && patch_object_pool_ == nullptr);
++  base_object_pool_ = std::move(base);
++  patch_object_pool_ = std::move(patch);
++
++  MappingCounts counts;
++  LinkObjectPools(&counts);
++}
++
++std::vector<ShorebirdLinker::PoolIndexPair>
++ShorebirdLinker::ComputeObjectPoolLinkResults(const ObjectPoolLinkInfo& base,
++                                              const ObjectPoolLinkInfo& patch) {
++  const auto key = [](const CodeInfo& info) { return info.op_subgraph_hash_; };
++  const auto base_groups = GroupBy<CodeInfo>(base.codes(), key);
++  const auto patch_groups = GroupBy<CodeInfo>(patch.codes(), key);
++
++  // Deduplicated, and ordered, because two code objects can reference the same
++  // pool slot and their count is of distinct pairs.
++  std::set<std::pair<intptr_t, intptr_t>> seen;
++  for (const auto& entry : patch_groups) {
++    if (entry.second.size() != 1) continue;
++    const auto found = base_groups.find(entry.first);
++    if (found == base_groups.end() || found->second.size() != 1) continue;
++
++    const std::vector<uintptr_t>& b = found->second[0].self_pp_indices_;
++    const std::vector<uintptr_t>& p = entry.second[0].self_pp_indices_;
++    const size_t n = b.size() < p.size() ? b.size() : p.size();
++    for (size_t i = 0; i < n; i++) {
++      seen.insert({static_cast<intptr_t>(b[i]), static_cast<intptr_t>(p[i])});
++    }
++  }
++
++  std::vector<PoolIndexPair> link_results;
++  link_results.reserve(seen.size());
++  for (const auto& pair : seen) {
++    link_results.push_back(PoolIndexPair{pair.first, pair.second});
++  }
++  return link_results;
++}
++
++std::vector<intptr_t> ShorebirdLinker::LinkObjectPools(
++    MappingCounts* counts) const {
++  ASSERT(counts != nullptr);
++  if (base_object_pool_ == nullptr || patch_object_pool_ == nullptr) {
++    return std::vector<intptr_t>();
++  }
++
++  const std::vector<PoolIndexPair> link_results =
++      ComputeObjectPoolLinkResults(*base_object_pool_, *patch_object_pool_);
++  std::vector<intptr_t> mapping = ComputeObjectPoolMapping(
++      link_results, patch_object_pool_->pair_constraints(),
++      patch_object_pool_->num_pool_entries(), counts);
++
++  if (FLAG_print_shorebird_info) {
++    OS::Print("Link Results %zu\n", static_cast<size_t>(counts->link_results));
++    OS::Print("Mappings from Link Results %zu\n",
++              static_cast<size_t>(counts->from_link_results));
++    OS::Print("Mappings from Pair Constraints %zu\n",
++              static_cast<size_t>(counts->from_pair_constraints));
++    OS::Print("Mappings from Backfill %zu\n",
++              static_cast<size_t>(counts->from_backfill));
++  }
++  return mapping;
++}
++
+ void ShorebirdLinker::InitializeWithFieldTableLinkInfo(
+     std::unique_ptr<FieldTableLinkInfo> base) {
+   // ASSERT string from their binary: "base_field_table_ == nullptr"
+@@ -540,6 +611,29 @@ std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path,
+   return ReadClassTableLinkInfo(&stream, ok);
+ }
+ 
++std::unique_ptr<ObjectPoolLinkInfo> ReadObjectPoolLinkInfo(const char* path,
++                                                           bool* ok) {
++  uint8_t* buf = nullptr;
++  intptr_t size = 0;
++  if (path == nullptr || !ReadFileIntoBuffer(path, &buf, &size)) {
++    if (ok != nullptr) *ok = false;
++    return std::make_unique<ObjectPoolLinkInfo>(
++        std::vector<CodeInfo>{}, std::vector<int32_t>{}, 0);
++  }
++  std::unique_ptr<uint8_t, decltype(&free)> guard(buf, free);
++
++  ReadStream stream(buf, size);
++  std::unique_ptr<ObjectPoolLinkInfo> parsed =
++      ObjectPoolLinkInfo::ReadFromStream(&stream);
++  if (parsed == nullptr) {
++    if (ok != nullptr) *ok = false;
++    return std::make_unique<ObjectPoolLinkInfo>(
++        std::vector<CodeInfo>{}, std::vector<int32_t>{}, 0);
++  }
++  if (ok != nullptr) *ok = true;
++  return parsed;
++}
++
+ std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream,
+                                                            bool* ok) {
+   if (ok != nullptr) *ok = true;
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index ea2a1c54128..6483f83c519 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -194,6 +194,38 @@ class ShorebirdLinker {
+   // by printing their four report lines. Returns mapping[patch_cid].
+   std::vector<intptr_t> LinkClassTables(MappingCounts* counts) const;
+ 
++  // Stores the object-pool link info (base + patch) and links them, the way
++  // InitializeWithClassTableLinkInfo does for classes.
++  void InitializeWithObjectPoolLinkInfo(
++      std::unique_ptr<ObjectPoolLinkInfo> base,
++      std::unique_ptr<ObjectPoolLinkInfo> patch);
++
++  // The object pool's link results.
++  //
++  // Decoded the same way as the class table's, from the first half of
++  // InitializeWithObjectPoolLinkInfo: both sides are grouped by CodeInfo's
++  // op_subgraph_hash_ (0x10019bdc4 strides 0x60 = sizeof(CodeInfo) and reads
++  // the string at +0x18, not self_hash_ at +0x00), a group is usable only when
++  // it holds exactly one code object, and each surviving pair contributes the
++  // element-wise pairing of the two sides' pool-index vectors, deduplicated.
++  //
++  // ⚠️ The fixture cannot say WHICH index vector: self_pp_indices_,
++  // subgraph_pp_indices_ and their union all yield the same 1121 pairs on it.
++  // self_pp_indices_ is used because it is the code's own pool references;
++  // that choice is unverified and this comment is the record of it.
++  static std::vector<PoolIndexPair> ComputeObjectPoolLinkResults(
++      const ObjectPoolLinkInfo& base,
++      const ObjectPoolLinkInfo& patch);
++
++  std::vector<intptr_t> LinkObjectPools(MappingCounts* counts) const;
++
++  const ObjectPoolLinkInfo* base_object_pool() const {
++    return base_object_pool_.get();
++  }
++  const ObjectPoolLinkInfo* patch_object_pool() const {
++    return patch_object_pool_.get();
++  }
++
+   // Accessors for tests and diagnostics. Return raw pointers — ownership stays
+   // with the linker.
+   const ClassTableLinkInfo* base_class_table() const {
+@@ -229,7 +261,8 @@ class ShorebirdLinker {
+   // +0x18 / +0x20: ObjectPoolLinkInfo — OUT OF SCOPE (fully private subsystem,
+   // no output flag to produce a fixture). The 16 bytes are reserved so FT/DT
+   // land at the correct offsets.
+-  uint8_t object_pool_reserved_[16];
++  std::unique_ptr<ObjectPoolLinkInfo> base_object_pool_;   // +0x18
++  std::unique_ptr<ObjectPoolLinkInfo> patch_object_pool_;  // +0x20
+ 
+   // +0x28: 8-byte gap. Same situation as gap0_.
+   uint8_t gap1_[8];
+@@ -325,6 +358,11 @@ std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(ReadStream* stream,
+ std::unique_ptr<ClassTableLinkInfo> ReadClassTableLinkInfo(const char* path,
+                                                            bool* ok = nullptr);
+ 
++// Reads the file produced by --print_object_pool_link_info_to, i.e. what
++// --base_op_link_data and --patch_op_link_data name.
++std::unique_ptr<ObjectPoolLinkInfo> ReadObjectPoolLinkInfo(const char* path,
++                                                           bool* ok = nullptr);
++
+ // count:u, { id:u, name:str, hash:str } * count, max_field_id:u
+ std::unique_ptr<FieldTableLinkInfo> ReadFieldTableLinkInfo(ReadStream* stream,
+                                                            bool* ok = nullptr);
+-- 
+2.53.0
+

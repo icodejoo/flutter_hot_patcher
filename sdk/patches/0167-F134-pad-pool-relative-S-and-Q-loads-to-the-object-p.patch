@@ -1,0 +1,80 @@
+From abafbbbd51ace03e294a590ef15aad8998e00674 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Sun, 27 Sep 2026 17:20:34 +0800
+Subject: [PATCH 167/206] F134: pad pool-relative S and Q loads to the object
+ pool load footprint
+
+LoadSFromOffset and LoadQFromOffset now wrap their emission in PadLoadStore
+under FLAG_precompiled_mode && base == PP, exactly as LoadDFromOffset already
+did, with kSWord / kQWord as the counter sizes (the counter measures
+PrepareLargeOffset for those, which is what these emit).
+
+Measured on the Q68 SIMD fixture (Float32List element, Float32x4, Float64x2)
+against their ios-release gen_snapshot_arm64:
+  - fl (Float32 pool constant): theirs `ldr s, [PP, #off] ; nop ; nop`,
+    88 bytes, self_pp [772, 773]; ours was one word, 80 bytes, [772].
+  - f2 / f4 (128-bit pool constants): theirs
+    `movz x17, #off ; ldr q, [PP, x17] ; nop` per constant, 116 bytes;
+    ours had no nop, 108 bytes (self_pp already equal).
+After: fl, f2, f4, i4 and main are byte-identical to theirs; the
+register-offset SIMD loads off PP are followed by a nop 4/4 as on their side
+(0/4 before). hello, prog and base_dd snapshots are byte-identical with and
+without the change; reverting it restores the 80-byte fl and the missing 773.
+
+StoreSToOffset / StoreQToOffset are left alone: nothing stores to PP, and the
+object pool editor has no float store kinds.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index 30e0a1e4152..a035ae2026c 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -1297,9 +1297,24 @@ void Assembler::Load(Register dst, const Address& addr, OperandSize sz) {
+   }
+ }
+ 
++// Shorebird. LoadSFromOffset and LoadQFromOffset are padded to the pool
++// load footprint exactly like LoadDFromOffset below: their gen_snapshot emits
++// `ldr s, [PP, #off] ; nop ; nop` for a Float32 pool constant and
++// `movz TMP2, #off ; ldr q, [PP, TMP2] ; nop` for a 128-bit one (F134, SIMD
++// fixture Q68: fl, f2, f4). Without the padding the float site is one word,
++// so the self_pp scan never sees the window the object pool editor rewrites.
++// The counter needs no case of its own for kSWord/kQWord: it measures
++// PrepareLargeOffset, which is what these emit.
+ void Assembler::LoadSFromOffset(VRegister dest, Register base, int32_t offset) {
+-  auto const type = Address::AddressType::Offset;
+-  fldrs(dest, PrepareLargeOffset(base, offset, kSWord, type));
++  const auto emit = [&]() {
++    auto const type = Address::AddressType::Offset;
++    fldrs(dest, PrepareLargeOffset(base, offset, kSWord, type));
++  };
++  if (FLAG_precompiled_mode && base == PP) {
++    PadLoadStore(emit, base, offset, kSWord, Address::Offset);
++  } else {
++    emit();
++  }
+ }
+ 
+ void Assembler::LoadDFromOffset(VRegister dest, Register base, int32_t offset) {
+@@ -1315,8 +1330,15 @@ void Assembler::LoadDFromOffset(VRegister dest, Register base, int32_t offset) {
+ }
+ 
+ void Assembler::LoadQFromOffset(VRegister dest, Register base, int32_t offset) {
+-  auto const type = Address::AddressType::Offset;
+-  fldrq(dest, PrepareLargeOffset(base, offset, kQWord, type));
++  const auto emit = [&]() {
++    auto const type = Address::AddressType::Offset;
++    fldrq(dest, PrepareLargeOffset(base, offset, kQWord, type));
++  };
++  if (FLAG_precompiled_mode && base == PP) {
++    PadLoadStore(emit, base, offset, kQWord, Address::Offset);
++  } else {
++    emit();
++  }
+ }
+ 
+ void Assembler::Store(Register src, const Address& addr, OperandSize sz) {
+-- 
+2.53.0
+

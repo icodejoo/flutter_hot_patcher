@@ -1,0 +1,211 @@
+From 094fc0de070c975e0a0ef7e0b579a3fed108b0da Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 17:19:25 +0800
+Subject: [PATCH 039/206] feat(shorebird): wire SimToCPU GetStubCodeRange, pull
+ wrapper.cc into gen_snapshot
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SimToCPUConfig::GetStubCodeRange previously reported an empty range
+(code_start = 0, code_end = 0). This commit replaces that placeholder
+with a real implementation that calls StubCode::TransitionDartToCpuIfNeeded()
+after guarding on StubCode::HasBeenInitialized(). The implementation is marked
+DART_NOINLINE to prevent the compiler from inlining it into InitSimToCpuWrapperPage
+(same TU), which would erase the inter-section call that the linker needs to keep
+every symbol in wrapper.cc alive under -Wl,-dead_strip.
+
+A new InitSimToCpuWrapperPage() function (declared in wrapper.h, defined in
+wrapper.cc) is called from StubCode::Init() after InitializationDone(). This is
+the call site that creates the live reference from stub_code.cc into wrapper.cc,
+making wrapper.cc survive the macOS linker's dead-strip pass.
+
+Symbol count in gen_snapshot before: 0 (wrapper.cc dead-stripped every session)
+Symbol count in gen_snapshot after:  2 (SimToCPUConfig::GetStubCodeRange visible)
+
+Verified by negative control: reverting GetStubCodeRange to zeros without DART_NOINLINE
+causes both the new test to fail at line 62 (expected: code_start != 0) and the
+symbol count to drop back to 0.
+
+CPUToSimConfig::GetStubCodeRange stays empty -- its 272-byte shared body has not
+been transcribed from Shorebird's binary yet. The asymmetry is deliberate and
+documented at the call site.
+
+The shared bodies for both stubs remain a single Breakpoint() placeholder. The
+allocator now hands out landing pads that would hit a breakpoint if entered; this
+is safe only because nothing calls into a pad yet. Pads must not be entered until
+the real Sim→CPU body replaces the placeholder.
+
+Suite: 58/58 (57 pre-existing + 1 new WrapperAllocator_UsesTheRealSimToCpuStub).
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 6388fd667a8..4447047751e 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "vm/shorebird/wrapper.h"
+ 
++#include "vm/stub_code.h"
++
+ namespace dart {
+ namespace shorebird {
+ 
+@@ -16,17 +18,48 @@ namespace shorebird {
+ static_assert(sizeof(WrapperAllocator) == 0x98,
+               "WrapperAllocator must match Shorebird's 0x98 layout");
+ 
+-// The real implementations resolve the generated stub's address range. The
+-// stubs do not exist until the stub-generator work, so these report an empty
+-// range, which EnsureStubPage treats as "no page yet".
++// CPU->Sim stub body (272 B) is not yet transcribed from Shorebird's binary.
++// Stays empty until that work lands; the stub generator emits a breakpoint
++// placeholder, and nothing should call into it before it is real.
+ void CPUToSimConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+   code_start = 0;
+   code_end = 0;
+ }
+ 
+-void SimToCPUConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+-  code_start = 0;
+-  code_end = 0;
++// Sim->CPU stub body (28 B) is a breakpoint placeholder for now -- the real
++// body lands in a later commit. Reporting the real range here is still correct:
++// it makes EnsureStubPage map the page and lets AllocateMetadata hand out pads,
++// and it is the live reference that prevents the linker from dead-stripping
++// wrapper.cc out of gen_snapshot. Callers must not actually *enter* a pad until
++// the real body replaces the breakpoint.
++//
++// Sim->CPU stub body (28 B) is a breakpoint placeholder for now -- the real
++// body lands in a later commit. Reporting the real range here is still correct:
++// it makes EnsureStubPage map the page and lets AllocateMetadata hand out pads,
++// and it is the live reference that prevents the linker from dead-stripping
++// wrapper.cc out of gen_snapshot. Callers must not actually *enter* a pad until
++// the real body replaces the breakpoint.
++//
++// DART_NOINLINE is deliberate: without it the compiler inlines this into
++// InitSimToCpuWrapperPage (same TU), erasing the inter-section call that the
++// linker needs to keep every symbol in wrapper.cc alive under -dead_strip.
++DART_NOINLINE void SimToCPUConfig::GetStubCodeRange(uword& code_start,
++                                                    uword& code_end) {
++  if (!StubCode::HasBeenInitialized()) {
++    // Consulted before StubCode::Init() -- politely report "no stub yet"
++    // rather than crashing on an uninitialized Code handle.
++    code_start = 0;
++    code_end = 0;
++    return;
++  }
++  const Code& stub = StubCode::TransitionDartToCpuIfNeeded();
++  if (stub.IsNull()) {
++    code_start = 0;
++    code_end = 0;
++    return;
++  }
++  code_start = stub.EntryPoint();
++  code_end = code_start + static_cast<uword>(stub.Size());
+ }
+ 
+ uword WrapperAllocator::Layout::CodeSize() const {
+@@ -187,5 +220,19 @@ void* WrapperAllocator::AllocateMetadata() {
+                                  index * layout_.metadata_size);
+ }
+ 
++void InitSimToCpuWrapperPage() {
++  // Confirm the stub is visible and record its range for later use. This is a
++  // no-op while the shared body is a breakpoint placeholder -- the real work
++  // happens once the body is transcribed and a WrapperAllocator hands out pads.
++  // The call itself is what matters architecturally: it is the only live
++  // reference from stub_code.cc into wrapper.cc, and without it -dead_strip
++  // removes the entire allocator from gen_snapshot.
++  uword start = 0;
++  uword end = 0;
++  SimToCPUConfig::GetStubCodeRange(start, end);
++  USE(start);
++  USE(end);
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/wrapper.h b/runtime/vm/shorebird/wrapper.h
+index ef3697c2196..551a4a4de82 100644
+--- a/runtime/vm/shorebird/wrapper.h
++++ b/runtime/vm/shorebird/wrapper.h
+@@ -200,6 +200,15 @@ class WrapperAllocator {
+   DISALLOW_COPY_AND_ASSIGN(WrapperAllocator);
+ };
+ 
++// Called once from StubCode::Init() after InitializationDone(). Queries the
++// Sim→CPU stub's code range to verify it is reachable and to create a live
++// reference from stub_code.cc into wrapper.cc. Without this call the linker's
++// -dead_strip pass removes wrapper.cc from gen_snapshot because nothing else
++// in the product call graph touches it. The body is a no-op while the real
++// Sim→CPU shared body is still a breakpoint placeholder; the call becomes
++// meaningful once the real body lands.
++void InitSimToCpuWrapperPage();
++
+ }  // namespace shorebird
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/shorebird/wrapper_stub_test.cc b/runtime/vm/shorebird/wrapper_stub_test.cc
+index e13db203c0d..f1d9ca83ae7 100644
+--- a/runtime/vm/shorebird/wrapper_stub_test.cc
++++ b/runtime/vm/shorebird/wrapper_stub_test.cc
+@@ -48,5 +48,29 @@ ISOLATE_UNIT_TEST_CASE(StubCode_ShorebirdWrapperPadArraysAreExact) {
+             static_cast<intptr_t>(StubCode::TransitionDartToCpuIfNeeded().Size()));
+ }
+ 
++// The Sim->CPU config must report the real stub, not the empty range that stood in while
++// no stub existed. With a real range, EnsureStubPage maps a page and AllocateMetadata can
++// hand out a pad. This is also what puts a live reference from wrapper.cc into StubCode,
++// which is what stops the linker discarding wrapper.cc entirely.
++ISOLATE_UNIT_TEST_CASE(WrapperAllocator_UsesTheRealSimToCpuStub) {
++  using Layout = WrapperAllocator::Layout;
++  const Layout l = Layout::fromTemplate<WrapperLayout<SimToCPUConfig>>();
++
++  uword code_start = 0;
++  uword code_end = 0;
++  l.get_stub_code_range(code_start, code_end);
++  EXPECT(code_start != 0);
++  EXPECT_EQ(StubCode::TransitionDartToCpuIfNeeded().EntryPoint(), code_start);
++  EXPECT_EQ(static_cast<uword>(StubCode::TransitionDartToCpuIfNeeded().Size()),
++            l.CodeSize());
++
++  WrapperAllocator allocator(l);
++  void* metadata = allocator.AllocateMetadata();
++  EXPECT(metadata != nullptr);
++  const uword wrapper = allocator.WrapperOfMetadata(metadata);
++  uword target = 0;
++  EXPECT(allocator.ContainsEntryPoint(wrapper, &target));
++}
++
+ }  // namespace shorebird
+ }  // namespace dart
+diff --git a/runtime/vm/stub_code.cc b/runtime/vm/stub_code.cc
+index e3d605229c0..191bd12d948 100644
+--- a/runtime/vm/stub_code.cc
++++ b/runtime/vm/stub_code.cc
+@@ -11,6 +11,7 @@
+ #include "vm/heap/safepoint.h"
+ #include "vm/interpreter.h"
+ #include "vm/object_store.h"
++#include "vm/shorebird/wrapper.h"
+ #include "vm/snapshot.h"
+ #include "vm/virtual_memory.h"
+ #include "vm/visitor.h"
+@@ -66,6 +67,11 @@ void StubCode::Init() {
+ 
+   InitializationDone();
+ 
++  // Initialize the Sim→CPU wrapper page now that the stubs exist. This also
++  // keeps wrapper.cc in the product binary: -dead_strip would otherwise remove
++  // it because no other live call path touches it yet.
++  shorebird::InitSimToCpuWrapperPage();
++
+ #if defined(DART_PRECOMPILER)
+   {
+     // Set Function owner for UnknownDartCode stub so it pretends to
+-- 
+2.53.0
+

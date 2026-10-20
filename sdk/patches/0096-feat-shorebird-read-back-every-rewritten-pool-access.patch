@@ -1,0 +1,119 @@
+From 8c9ae52a50d42c0f4eab4617645a5dbe017c5451 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 16:55:45 +0800
+Subject: [PATCH 096/206] feat(shorebird): read back every rewritten pool
+ access, and check it
+
+The editor's standing self-check is theirs, and it fires only when the index
+did not change: it re-assembles the access and compares bytes, which covers
+exactly the accesses that were NOT rewritten. The ones that moved were written
+by memcpy and never looked at again.
+
+That gap was invisible until a fixture existed whose mapping was not the
+identity. On it, 655 accesses move, and the only evidence they moved correctly
+was that the linker's stage counts matched theirs -- which says nothing about
+bytes. Measured: with AssembleReplacement aimed one index past the target, the
+stage counts still came out 606/0/13/1113/292/19, identical to theirs, and the
+offset distribution still moved. Both existing judges passed on a snapshot
+every one of whose rewritten accesses was wrong.
+
+So Edit now decodes what it just wrote and requires it to read back as the
+index it was aimed at. THIS CHECK IS OURS -- the recon shows a bare memcpy.
+
+The position is found by stepping back over the padding from the end of the
+footprint, the way the VM's own readers find it, and not from
+InstructionCountNoPadding. Both halves of that matter:
+
+- the counter and the emitters are known to disagree by one for two operand
+  ranges (ObjectPoolEditor_CountFollowsPrepareLargeOffset), so deriving the
+  position from the counter would turn a known benign divergence into a false
+  alarm;
+- it makes this the exact invariant that matters -- what the editor writes must
+  be what InstructionPattern reads back, which is the contract
+  SkipBackOverObjectPoolLoadPadding relies on.
+
+Negative controls, both restored:
+
+  emit new_index + 1        655 sites report, gen_snapshot summary fires
+  never skip the padding    ObjectPoolEditor_RewriteMovesTheIndex and
+                            _RewriteLeavesNeighboursAlone go red
+
+The second one is why no new unit test was added: the existing tests already
+assert Edit's return value over non-identity mappings, so they guard the
+readback on its own, not merely as a side effect of corrupt bytes. Checked
+rather than assumed.
+
+The summary line in ImageWriter no longer says "left alone". A failed readback
+is not a declined site -- it was written, and disagrees.
+
+verify_all: 9 ran, 0 failed. run_vm_tests: 143 passed.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/image_snapshot.cc b/runtime/vm/image_snapshot.cc
+index 00a7df76ec8..63cd9425aad 100644
+--- a/runtime/vm/image_snapshot.cc
++++ b/runtime/vm/image_snapshot.cc
+@@ -627,8 +627,13 @@ void ImageWriter::EditObjectPoolAccesses(bool vm) {
+   // Their self-check reports through "Expected:\n" / "Actual:\n" and does not
+   // abort; a declined site is not a corrupted one, because the editor only
+   // rewrites what it could decode and re-verify.
++  //
++  // The wording is deliberately no longer "left alone": Edit's readback of a
++  // rewritten access can fail too, and such a site was not left alone -- it was
++  // written, and what the decoder reads out of it disagrees with what was
++  // intended. Both cases print their own line above, with the address.
+   if (!ok) {
+-    OS::PrintErr("Shorebird: some object pool accesses were left alone\n");
++    OS::PrintErr("Shorebird: some object pool accesses did not verify\n");
+   }
+ #endif  // defined(TARGET_ARCH_ARM64)
+ }
+diff --git a/runtime/vm/shorebird/object_pool_editor.cc b/runtime/vm/shorebird/object_pool_editor.cc
+index 7f70526a0b4..ebcb71ca1a6 100644
+--- a/runtime/vm/shorebird/object_pool_editor.cc
++++ b/runtime/vm/shorebird/object_pool_editor.cc
+@@ -485,6 +485,40 @@ bool ObjectPoolEditor::Edit(uword start,
+     memcpy(reinterpret_cast<void*>(sequence),
+            reinterpret_cast<const void*>(assembler.CodeAddress(0)),
+            assembler.CodeSize());
++
++    // Read back what was just written. THIS CHECK IS OURS -- the recon shows a
++    // bare memcpy here, and their standing self-check above only fires when the
++    // index did not change, which is to say it covers exactly the accesses that
++    // were NOT rewritten. Without this the moved ones have no byte-level judge
++    // at all: on the fixture that first exercised them, 592 sites moved and the
++    // only evidence they moved correctly was that the linker's stage counts
++    // matched theirs, which says nothing about the bytes.
++    //
++    // The position is found the way the VM's own readers find it -- step back
++    // over the padding from the end of the footprint -- rather than from
++    // InstructionCountNoPadding. That matters twice over. The counter and the
++    // emitters are known to disagree by one for two operand ranges (see
++    // ObjectPoolEditor_CountFollowsPrepareLargeOffset), so deriving the
++    // position from the counter would turn a known benign divergence into a
++    // false alarm. And it makes this check the exact invariant that matters:
++    // what the editor writes must be what InstructionPattern reads back, which
++    // is the contract SkipBackOverObjectPoolLoadPadding depends on.
++    uword after = sequence + kFootprintBytes;
++    while (after > sequence &&
++           *reinterpret_cast<const uint32_t*>(after - Instr::kInstrSize) ==
++               kNop) {
++      after -= Instr::kInstrSize;
++    }
++    ObjectPoolOp readback = {};
++    if (after == sequence ||
++        !DetectObjectPoolOp(after - Instr::kInstrSize, readback,
++                            /*limit=*/sequence) ||
++        readback.index != new_index || readback.kind != op.kind) {
++      OS::PrintErr("Object pool access at 0x%" Px " was rewritten to index %" Pd
++                   " but reads back as index %" Pd64 " kind %d\n",
++                   pc, new_index, readback.index, readback.kind);
++      ok = false;
++    }
+   }
+   return ok;
+ }
+-- 
+2.53.0
+

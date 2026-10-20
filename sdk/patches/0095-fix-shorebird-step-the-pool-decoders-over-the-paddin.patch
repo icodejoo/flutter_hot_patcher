@@ -1,0 +1,531 @@
+From d99ff81f8e789b5e689175949cdc7734ccb8004f Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 16:27:17 +0800
+Subject: [PATCH 095/206] fix(shorebird): step the pool decoders over the
+ padding, and re-route
+
+0dfe634b44e reverted the padding because gen_kernel's own AOT snapshot
+segfaulted with it. The revert message already said where the fix belonged:
+all 2299 PP loads in their own snapshot are followed by nop,nop, including
+the ones inside call sequences, so their readback handles padding and ours
+had to as well.
+
+SkipBackOverObjectPoolLoadPadding does that, in the three decode entry
+points in instructions_arm64.cc. Every reader in that file and in
+code_patcher_arm64.cc hands the decoder a fixed backward distance from a
+call site -- CallPattern's pc - 2 * Instr::kInstrSize -- which lands past
+the padding rather than on the load. One skip at the top of each decoder
+covers all eight call sites; none of them needed touching.
+
+DecodeLoadWordImmediate needs it twice: once at the top for a bare pool
+load, and once after the orri, because the padding sits between the load
+and the orri rather than after it.
+
+The bound is Instr::kMaxObjectPoolLoadPaddingInstructions rather than an
+open loop, so a run of NOPs that is not padding cannot walk off the front
+of an instructions payload. It is restated in constants_arm64.h because
+the AOT runtime does not build the compiler-side header that holds
+kObjectPoolLoadStoreMinInstructionCount; assembler_arm64.h static_asserts
+the two against each other.
+
+With that in place the three emitters go back through PadLoadStore
+(a revert of the revert). The precompiled-mode gate stays, but its comment
+no longer claims to be load bearing for correctness: it is now only about
+not paying two words per pool access in a JIT that never renumbers a pool.
+
+Measured, not assumed:
+
+  gen_kernel AOT snapshot   13.2M -> 14.1M, and it compiles a 4.2M dill
+  NOPs in a hello.dart AOT  0 -> 4584   (theirs, same program: 4598)
+  verify_all                8 ran, 0 failed, 0 blocked  (was 1 blocked)
+  run_vm_tests              143 passed  (was 141)
+
+op_rewrite_check.sh is no longer BLOCKED: without padding the editor
+refused every site, so it had nothing to rewrite.
+
+Negative controls, both restored afterwards:
+
+  skip loop bound -> 0, run_vm_tests  both new tests exit 255
+  skip loop bound -> 0, gen_kernel    SEGV_ACCERR, no dill
+
+The second one rebuilds only the Product dartaotruntime against the
+already-padded snapshot, so it isolates the decoder from the emitter. It
+is the original regression, reproduced and then closed on one line.
+
+Arm64PadLoadStoreRemainsDecodable and its double-word twin pin this. They
+round trip against the unpadded emission rather than a table of expected
+indices, so they cannot pass by agreeing with themselves, and they call
+the real LoadWordFromPoolIndex with FLAG_precompiled_mode flipped rather
+than restating what it emits.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index 5ae1ebd881f..4f3ca2ad5c4 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -510,24 +510,50 @@ void Assembler::LoadWordFromPoolIndex(Register dst,
+                                       Register pp) {
+   ASSERT((pp != PP) || constant_pool_allowed());
+   ASSERT(dst != pp);
+-  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  const uint32_t upper20 = offset & 0xfffff000;
+-  if (Address::CanHoldOffset(offset)) {
+-    ldr(dst, Address(pp, offset));
+-  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-             Operand::Immediate) {
+-    const uint32_t lower12 = offset & 0x00000fff;
+-    ASSERT(Address::CanHoldOffset(lower12));
+-    add(dst, pp, op);
+-    ldr(dst, Address(dst, lower12));
++  // Shorebird: padded to a fixed footprint so that renumbering the pool never
++  // moves the code around it. See PadLoadStore.
++  //
++  // ⚠️ Precompiled mode only, and that gate is OURS. The padding exists so the
++  // object pool editor can renumber entries without moving code, which is only
++  // ever done to an AOT snapshot; in JIT mode it would cost two words per pool
++  // access and buy nothing. Their gen_snapshot is precompiler-only, so whether
++  // their JIT build pads is not observable from anything here.
++  //
++  // The gate is no longer load bearing for correctness. It used to be: the
++  // InstructionPattern decoders read these sequences back from a fixed backward
++  // distance, so padding crashed unoptimized code loudly, in
++  // IL_IndirectStaticCall_SerializationRoundTrip and
++  // IsolateReload_ShapeChange_Const_AddSlot. Those decoders now step over the
++  // padding -- SkipBackOverObjectPoolLoadPadding in instructions_arm64.cc --
++  // which is where their build has to handle it too: all 2299 PP loads in their
++  // own snapshot are followed by nop,nop, including the ones inside call
++  // sequences, which is precisely the fixed-distance case.
++  const auto emit = [&]() {
++        Operand op;
++        const uint32_t upper20 = offset & 0xfffff000;
++        if (Address::CanHoldOffset(offset)) {
++          ldr(dst, Address(pp, offset));
++        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++                   Operand::Immediate) {
++          const uint32_t lower12 = offset & 0x00000fff;
++          ASSERT(Address::CanHoldOffset(lower12));
++          add(dst, pp, op);
++          ldr(dst, Address(dst, lower12));
++        } else {
++          const uint16_t offset_low = Utils::Low16Bits(offset);
++          const uint16_t offset_high = Utils::High16Bits(offset);
++          movz(dst, Immediate(offset_low), 0);
++          movk(dst, Immediate(offset_high), 1);
++          ldr(dst, Address(pp, dst));
++        }
++  };
++  if (FLAG_precompiled_mode) {
++    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
++                 Address::Offset);
+   } else {
+-    const uint16_t offset_low = Utils::Low16Bits(offset);
+-    const uint16_t offset_high = Utils::High16Bits(offset);
+-    movz(dst, Immediate(offset_low), 0);
+-    movk(dst, Immediate(offset_high), 1);
+-    ldr(dst, Address(pp, dst));
++    emit();
+   }
+ }
+ 
+@@ -536,24 +562,33 @@ void Assembler::StoreWordToPoolIndex(Register src,
+                                      Register pp) {
+   ASSERT((pp != PP) || constant_pool_allowed());
+   ASSERT(src != pp);
+-  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  const uint32_t upper20 = offset & 0xfffff000;
+-  if (Address::CanHoldOffset(offset)) {
+-    str(src, Address(pp, offset));
+-  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-             Operand::Immediate) {
+-    const uint32_t lower12 = offset & 0x00000fff;
+-    ASSERT(Address::CanHoldOffset(lower12));
+-    add(TMP, pp, op);
+-    str(src, Address(TMP, lower12));
++  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
++  const auto emit = [&]() {
++        Operand op;
++        const uint32_t upper20 = offset & 0xfffff000;
++        if (Address::CanHoldOffset(offset)) {
++          str(src, Address(pp, offset));
++        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++                   Operand::Immediate) {
++          const uint32_t lower12 = offset & 0x00000fff;
++          ASSERT(Address::CanHoldOffset(lower12));
++          add(TMP, pp, op);
++          str(src, Address(TMP, lower12));
++        } else {
++          const uint16_t offset_low = Utils::Low16Bits(offset);
++          const uint16_t offset_high = Utils::High16Bits(offset);
++          movz(TMP, Immediate(offset_low), 0);
++          movk(TMP, Immediate(offset_high), 1);
++          str(src, Address(pp, TMP));
++        }
++  };
++  if (FLAG_precompiled_mode) {
++    PadLoadStore(emit, pp, static_cast<int32_t>(offset), kEightBytes,
++                 Address::Offset);
+   } else {
+-    const uint16_t offset_low = Utils::Low16Bits(offset);
+-    const uint16_t offset_high = Utils::High16Bits(offset);
+-    movz(TMP, Immediate(offset_low), 0);
+-    movk(TMP, Immediate(offset_high), 1);
+-    str(src, Address(pp, TMP));
++    emit();
+   }
+ }
+ 
+@@ -565,45 +600,56 @@ void Assembler::LoadDoubleWordFromPoolIndex(Register lower,
+   ASSERT(constant_pool_allowed());
+   ASSERT(lower != PP && upper != PP);
+ 
+-  Operand op;
+   // PP is _un_tagged on ARM64.
+   const uint32_t offset = target::ObjectPool::element_offset(index);
+-  const uint32_t upper20 = offset & 0xfffff000;
+-  const uint32_t lower12 = offset & 0x00000fff;
+-  if (Address::CanHoldOffset(offset, Address::PairOffset)) {
+-    ldp(lower, upper, Address(PP, offset, Address::PairOffset));
+-  } else if (Operand::CanHold(offset, kXRegSizeInBits, &op) ==
+-             Operand::Immediate) {
+-    add(TMP, PP, op);
+-    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+-  } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
+-                 Operand::Immediate &&
+-             Address::CanHoldOffset(lower12, Address::PairOffset)) {
+-    add(TMP, PP, op);
+-    ldp(lower, upper, Address(TMP, lower12, Address::PairOffset));
+-  } else if (Utils::IsUint(24, offset)) {
+-    const uint32_t lower12 = offset & 0xfff;
+-    const uint32_t higher12 = offset & 0xfff000;
+-
+-    Operand op_high, op_low;
+-    bool ok = Operand::CanHold(higher12, kXRegSizeInBits, &op_high) ==
+-                  Operand::Immediate &&
+-              Operand::CanHold(lower12, kXRegSizeInBits, &op_low) ==
+-                  Operand::Immediate;
+-    RELEASE_ASSERT(ok);
+-
+-    add(TMP, PP, op_high);
+-    add(TMP, TMP, op_low);
+-    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
+-  } else if (Utils::IsUint(32, offset)) {
+-    const uint16_t offset_low = Utils::Low16Bits(offset);
+-    const uint16_t offset_high = Utils::High16Bits(offset);
+-    movz(TMP, Immediate(offset_low), 0);
+-    movk(TMP, Immediate(offset_high), 1);
+-    add(TMP, TMP, Operand(PP));
+-    ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++  // Shorebird: see LoadWordFromPoolIndex, including the precompiled-mode gate.
++  // This one is always PP-relative, so the padding applies whenever the gate is
++  // open.
++  const auto emit = [&]() {
++        Operand op;
++        const uint32_t upper20 = offset & 0xfffff000;
++        const uint32_t lower12 = offset & 0x00000fff;
++        if (Address::CanHoldOffset(offset, Address::PairOffset)) {
++          ldp(lower, upper, Address(PP, offset, Address::PairOffset));
++        } else if (Operand::CanHold(offset, kXRegSizeInBits, &op) ==
++                   Operand::Immediate) {
++          add(TMP, PP, op);
++          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++        } else if (Operand::CanHold(upper20, kXRegSizeInBits, &op) ==
++                       Operand::Immediate &&
++                   Address::CanHoldOffset(lower12, Address::PairOffset)) {
++          add(TMP, PP, op);
++          ldp(lower, upper, Address(TMP, lower12, Address::PairOffset));
++        } else if (Utils::IsUint(24, offset)) {
++          const uint32_t low12 = offset & 0xfff;
++          const uint32_t higher12 = offset & 0xfff000;
++
++          Operand op_high, op_low;
++          bool ok = Operand::CanHold(higher12, kXRegSizeInBits, &op_high) ==
++                        Operand::Immediate &&
++                    Operand::CanHold(low12, kXRegSizeInBits, &op_low) ==
++                        Operand::Immediate;
++          RELEASE_ASSERT(ok);
++
++          add(TMP, PP, op_high);
++          add(TMP, TMP, op_low);
++          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++        } else if (Utils::IsUint(32, offset)) {
++          const uint16_t offset_low = Utils::Low16Bits(offset);
++          const uint16_t offset_high = Utils::High16Bits(offset);
++          movz(TMP, Immediate(offset_low), 0);
++          movk(TMP, Immediate(offset_high), 1);
++          add(TMP, TMP, Operand(PP));
++          ldp(lower, upper, Address(TMP, 0, Address::PairOffset));
++        } else {
++          UNIMPLEMENTED();
++        }
++  };
++  if (FLAG_precompiled_mode) {
++    PadLoadStore(emit, PP, static_cast<int32_t>(offset), kEightBytes,
++                 Address::PairOffset);
+   } else {
+-    UNIMPLEMENTED();
++    emit();
+   }
+ }
+ 
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.h b/runtime/vm/compiler/assembler/assembler_arm64.h
+index 4a1148e1350..c7509dad630 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.h
++++ b/runtime/vm/compiler/assembler/assembler_arm64.h
+@@ -1896,6 +1896,12 @@ class Assembler : public AssemblerBase {
+   // and the trailing bound is 13 bytes, so the footprint is three instructions.
+   static constexpr intptr_t kObjectPoolLoadStoreMinInstructionCount = 3;
+ 
++  // The reverse decoders in instructions_arm64.cc have to step back over the
++  // padding this emits, and they cannot see this header. Keep the two numbers
++  // from drifting apart.
++  static_assert(kObjectPoolLoadStoreMinInstructionCount - 1 ==
++                Instr::kMaxObjectPoolLoadPaddingInstructions);
++
+   void PadLoadStore(std::function<void()> emit,
+                     Register base,
+                     int32_t offset,
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64_test.cc b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+index c03720fa9f5..772c45dd964 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64_test.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64_test.cc
+@@ -10,6 +10,7 @@
+ #include "vm/compiler/assembler/assembler_test.h"
+ #include "vm/compiler/backend/locations.h"
+ #include "vm/cpu.h"
++#include "vm/instructions.h"
+ #include "vm/os.h"
+ #include "vm/unit_test.h"
+ #include "vm/virtual_memory.h"
+@@ -123,6 +124,118 @@ ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreOnlyPadsPoolAccesses) {
+   EXPECT_EQ(static_cast<intptr_t>(1), assembler.CodeSize() / Instr::kInstrSize);
+ }
+ 
++// Shorebird: emitting the padding and reading it back are one change, not two.
++// Every InstructionPattern reader in instructions_arm64.cc is handed a fixed
++// backward distance from a call site -- CallPattern uses
++// pc - 2 * Instr::kInstrSize -- which lands past the padding, not on the load.
++// So the decoders step back over it, and this is the other half of that.
++//
++// Routing the pool emitters through PadLoadStore without that step was a real
++// regression: gen_kernel's own AOT snapshot segfaulted on startup with
++// SEGV_ACCERR and no stack. Nothing in this file caught it -- it was found by
++// running a program at a scale hello.dart does not reach. This is the test that
++// would have.
++//
++// The assertion is a round trip against the unpadded emission rather than a
++// table of expected indices, so it cannot pass by agreeing with itself.
++ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreRemainsDecodable) {
++  // Indices picked to reach all three arms of LoadWordFromPoolIndex: a plain
++  // ldr (padded by two NOPs), an add/ldr pair (padded by one), and the
++  // movz/movk/ldr form (already at the footprint, padded by none).
++  const intptr_t kIndices[] = {0, 1, 100, 4000, 4096, 300000};
++
++  for (intptr_t index : kIndices) {
++    Register bare_reg = kNoRegister;
++    intptr_t bare_index = -1;
++    intptr_t natural = 0;
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler bare(&pool_builder);
++      bare.set_constant_pool_allowed(true);
++      bare.LoadWordFromPoolIndex(R3, index);
++      natural = bare.CodeSize() / Instr::kInstrSize;
++      dart::InstructionPattern::DecodeLoadWordFromPool(
++          reinterpret_cast<uword>(bare.CodeAddress(0)) + bare.CodeSize(),
++          &bare_reg, &bare_index);
++    }
++    EXPECT_EQ(R3, bare_reg);
++    EXPECT_EQ(index, bare_index);
++
++    // Now the same load with the gate open, which is what an AOT snapshot gets.
++    const bool saved = FLAG_precompiled_mode;
++    FLAG_precompiled_mode = true;
++    Register padded_reg = kNoRegister;
++    intptr_t padded_index = -1;
++    intptr_t footprint = 0;
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler padded(&pool_builder);
++      padded.set_constant_pool_allowed(true);
++      padded.LoadWordFromPoolIndex(R3, index);
++      footprint = padded.CodeSize() / Instr::kInstrSize;
++      // The end handed over is past the padding, exactly as a call site's fixed
++      // backward distance computes it.
++      dart::InstructionPattern::DecodeLoadWordFromPool(
++          reinterpret_cast<uword>(padded.CodeAddress(0)) + padded.CodeSize(),
++          &padded_reg, &padded_index);
++    }
++    FLAG_precompiled_mode = saved;
++
++    EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
++              footprint);
++    EXPECT_EQ(bare_reg, padded_reg);
++    EXPECT_EQ(bare_index, padded_index);
++    EXPECT(natural <=
++           compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount);
++  }
++}
++
++// The double-word form has its own decoder, reached from ICCallPattern and from
++// both switchable call patterns, and its own fixed backward distance.
++ISOLATE_UNIT_TEST_CASE(Arm64PadLoadStoreDoubleWordRemainsDecodable) {
++  const intptr_t kIndices[] = {0, 2, 100, 4000, 4096};
++
++  for (intptr_t index : kIndices) {
++    Register bare_lower = kNoRegister, bare_upper = kNoRegister;
++    intptr_t bare_index = -1;
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler bare(&pool_builder);
++      bare.set_constant_pool_allowed(true);
++      bare.LoadDoubleWordFromPoolIndex(R3, R4, index);
++      dart::InstructionPattern::DecodeLoadDoubleWordFromPool(
++          reinterpret_cast<uword>(bare.CodeAddress(0)) + bare.CodeSize(),
++          &bare_lower, &bare_upper, &bare_index);
++    }
++    EXPECT_EQ(R3, bare_lower);
++    EXPECT_EQ(R4, bare_upper);
++    EXPECT_EQ(index, bare_index);
++
++    const bool saved = FLAG_precompiled_mode;
++    FLAG_precompiled_mode = true;
++    Register padded_lower = kNoRegister, padded_upper = kNoRegister;
++    intptr_t padded_index = -1;
++    intptr_t footprint = 0;
++    {
++      compiler::ObjectPoolBuilder pool_builder;
++      compiler::Assembler padded(&pool_builder);
++      padded.set_constant_pool_allowed(true);
++      padded.LoadDoubleWordFromPoolIndex(R3, R4, index);
++      footprint = padded.CodeSize() / Instr::kInstrSize;
++      dart::InstructionPattern::DecodeLoadDoubleWordFromPool(
++          reinterpret_cast<uword>(padded.CodeAddress(0)) + padded.CodeSize(),
++          &padded_lower, &padded_upper, &padded_index);
++    }
++    FLAG_precompiled_mode = saved;
++
++    EXPECT_EQ(compiler::Assembler::kObjectPoolLoadStoreMinInstructionCount,
++              footprint);
++    EXPECT_EQ(bare_lower, padded_lower);
++    EXPECT_EQ(bare_upper, padded_upper);
++    EXPECT_EQ(bare_index, padded_index);
++  }
++}
++
+ ASSEMBLER_TEST_GENERATE(Simple, assembler) {
+   __ add(R0, ZR, Operand(ZR));
+   __ add(R0, R0, Operand(42));
+diff --git a/runtime/vm/constants_arm64.h b/runtime/vm/constants_arm64.h
+index 5e4e674a229..bc22a5bc49e 100644
+--- a/runtime/vm/constants_arm64.h
++++ b/runtime/vm/constants_arm64.h
+@@ -1357,6 +1357,17 @@ class Instr {
+ 
+   static constexpr int32_t kNopInstruction = HINT;  // hint #0 === nop.
+ 
++  // Shorebird: an object pool load is topped up with NOPs to a fixed footprint
++  // of Assembler::kObjectPoolLoadStoreMinInstructionCount words, so that
++  // renumbering a pool index can never move the code around it. At most one
++  // fewer than that many words are padding, which is what the reverse decoders
++  // in instructions_arm64.cc have to step back over.
++  //
++  // The assembler's constant lives in a compiler-side header that the AOT
++  // runtime does not build, so it is restated here; assembler_arm64.h
++  // static_asserts the two against each other.
++  static constexpr intptr_t kMaxObjectPoolLoadPaddingInstructions = 2;
++
+   // Reserved brk and hlt instruction codes.
+   static constexpr int32_t kBreakPointCode = 0xdeb0;  // For breakpoint.
+   static constexpr int32_t kSimulatorBreakCode =
+diff --git a/runtime/vm/instructions_arm64.cc b/runtime/vm/instructions_arm64.cc
+index 3eb898d9f37..16ef38bc9af 100644
+--- a/runtime/vm/instructions_arm64.cc
++++ b/runtime/vm/instructions_arm64.cc
+@@ -16,6 +16,32 @@
+ 
+ namespace dart {
+ 
++// Shorebird: object pool loads are topped up with NOPs to a fixed footprint so
++// that renumbering an index never moves the code around it (see
++// Assembler::PadLoadStore). Every reverse decode in this file is handed the
++// address one past the load sequence, so the padding sits between that address
++// and the last instruction the decode actually wants to look at.
++//
++// This is where the fix belongs rather than in the emitters: measured over
++// their own gen_snapshot output, all 2299 PP-relative loads are followed by
++// nop,nop -- including the ones inside call sequences, which is exactly the
++// case a fixed backward distance reads. So their readback steps over it too.
++//
++// The loop is bounded rather than open, so that a run of NOPs that is not
++// padding cannot walk this off the front of an instructions payload. In an
++// unpadded build it never takes a step: a pool load sequence always ends in an
++// ldr or an ldp, never in a NOP.
++static uword SkipBackOverObjectPoolLoadPadding(uword end) {
++  for (intptr_t i = 0; i < Instr::kMaxObjectPoolLoadPaddingInstructions; i++) {
++    if (Instr::At(end - Instr::kInstrSize)->InstructionBits() !=
++        Instr::kNopInstruction) {
++      break;
++    }
++    end -= Instr::kInstrSize;
++  }
++  return end;
++}
++
+ static bool IsBranchLinkScratch(Register reg) {
+   // See Assembler::BranchLink
+   return FLAG_precompiled_mode ? reg == LINK_REGISTER : reg == CODE_REG;
+@@ -106,6 +132,11 @@ uword InstructionPattern::DecodeLoadWordImmediate(uword end,
+   //    orri
+   // or
+   // 3. LoadPatchableImmediate
++  //
++  // Cases 1 and 2 embed a padded pool load; see
++  // SkipBackOverObjectPoolLoadPadding. Case 3 never ends in a NOP, so the skip
++  // is inert for it.
++  end = SkipBackOverObjectPoolLoadPadding(end);
+   uword start = end - Instr::kInstrSize;
+   Instr* instr = Instr::At(start);
+   bool odd = false;
+@@ -114,9 +145,10 @@ uword InstructionPattern::DecodeLoadWordImmediate(uword end,
+   if (instr->IsLogicalImmOp()) {
+     ASSERT(instr->Bit(29) == 1);
+     odd = true;
+-    // end points at orri so that we can pass it to DecodeLoadWordFromPool.
+-    end = start;
+-    start -= Instr::kInstrSize;
++    // end points past the pool load -- at the orri, or at whatever padding
++    // precedes it -- so that we can pass it to DecodeLoadWordFromPool.
++    end = SkipBackOverObjectPoolLoadPadding(start);
++    start = end - Instr::kInstrSize;
+     instr = Instr::At(start);
+     // Case 2 falls through to case 1.
+   }
+@@ -177,6 +209,10 @@ uword InstructionPattern::DecodeLoadWordFromPool(uword end,
+   // 3. movz dst, low_offset, 0
+   //    movk dst, hi_offset, 1 (optional)
+   //    ldr dst, [pp, dst]
++  //
++  // Any of the three may be followed by NOP padding; see
++  // SkipBackOverObjectPoolLoadPadding.
++  end = SkipBackOverObjectPoolLoadPadding(end);
+   uword start = end - Instr::kInstrSize;
+   Instr* instr = Instr::At(start);
+   intptr_t offset = 0;
+@@ -256,6 +292,9 @@ uword InstructionPattern::DecodeLoadDoubleWordFromPool(uword end,
+   //
+   // Note that the pp register is untagged!
+   //
++  // Any of the four may be followed by NOP padding; see
++  // SkipBackOverObjectPoolLoadPadding.
++  end = SkipBackOverObjectPoolLoadPadding(end);
+   uword start = end - Instr::kInstrSize;
+   Instr* ldr_instr = Instr::At(start);
+ 
+-- 
+2.53.0
+

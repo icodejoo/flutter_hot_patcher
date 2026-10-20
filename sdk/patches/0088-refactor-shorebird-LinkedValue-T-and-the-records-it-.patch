@@ -1,0 +1,478 @@
+From b85ebe6c36a3db026af3820b1896061032033b1e Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 14:16:21 +0800
+Subject: [PATCH 088/206] refactor(shorebird): LinkedValue<T>, and the records
+ it carries
+
+ClassIdPair and PoolIndexPair were two hand-rolled structs standing in
+for one template of theirs. LinkedValue<T> has no symbol -- it is a
+template and every use is inlined -- but two independent element sizes
+name it, each read out of the division libc++ compiles vector::size()
+into: 112 against sizeof(ClassInfo) == 56 on the class table side, and 16
+against sizeof(uword) on the object pool's. Both exactly double, from
+unrelated instantiations.
+
+The rename was the smaller half. The class table's link results carry
+whole ClassInfo records rather than the two cids the mapper uses: their
+stage 1 strides 0x70 and reaches the cids at +0x00 and +0x38, which is
+sizeof(ClassInfo), not sizeof(intptr_t). We were narrowing at the point
+of production and they narrow at the point of use, so our stride was 16
+where theirs is 112. Following them makes the offsets equal rather than
+merely equivalent, and it is not the dead weight it looks like -- the
+records are what the producer already has in hand.
+
+Three static_asserts now pin those sizes, so a change to ClassInfo fails
+the build instead of silently striding past their layout.
+
+The object pool's instantiation is LinkedValue<uword>, which their symbol
+table spells out. The mapper takes signed locals immediately, because
+everything downstream of it -- the mapping's -1, the taken bitmap's
+bounds check -- is signed; only resolved indices are ever stored, so
+GetBestMapping's -1 never reaches the type.
+
+Negative control: swapping the two members turns nine tests red, which is
+the check worth having here, since a base/patch mix-up in a pair of
+same-typed fields is exactly what a rename like this can introduce
+silently. Reverted. verify_all.sh is 7 ran / 0 failed / 137 passed, and
+both ninja configurations build.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 6442758cc84..cbd0e882848 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -37,6 +37,20 @@ static_assert(sizeof(ShorebirdLinker) == 0x88,
+               "ShorebirdLinker layout does not match their measured 136 bytes; "
+               "check field sizes and padding");
+ 
++// The two element sizes their vector::size() divisions gave up, pinned here so
++// that a change to ClassInfo shows up as a build failure rather than as a
++// mapper that strides past their layout. 0x38 is the stride their stage 1 uses
++// to reach the patch cid (0x10019a4f8) and 0x70 the one it uses to reach the
++// next pair (0x10019a4f4).
++static_assert(sizeof(ClassInfo) == 0x38,
++              "ClassInfo is not the 56 bytes their stage 1 strides by");
++static_assert(sizeof(LinkedValue<ClassInfo>) == 0x70,
++              "LinkedValue<ClassInfo> is not the 112 bytes their class table "
++              "link-results vector reports");
++static_assert(sizeof(LinkedValue<uword>) == 0x10,
++              "LinkedValue<uword> is not the 16 bytes their object pool "
++              "link-results vector reports");
++
+ ShorebirdLinker::ShorebirdLinker()
+     : gap0_{},
+       base_object_pool_(nullptr),
+@@ -95,20 +109,21 @@ void ShorebirdLinker::InitializeWithClassTableLinkInfo(
+ //
+ // A hash naming more than one class on either side is ambiguous and pairs
+ // nothing, which is what the two size checks are for.
+-std::vector<ShorebirdLinker::ClassIdPair>
++std::vector<ShorebirdLinker::ClassLink>
+ ShorebirdLinker::ComputeClassTableLinkResults(const ClassTableLinkInfo& base,
+                                               const ClassTableLinkInfo& patch) {
+   const auto key = [](const ClassInfo& info) { return info.hash; };
+   const auto base_groups = GroupBy<ClassInfo>(base.classes(), key);
+   const auto patch_groups = GroupBy<ClassInfo>(patch.classes(), key);
+ 
+-  std::vector<ClassIdPair> link_results;
++  std::vector<ClassLink> link_results;
+   for (const auto& entry : patch_groups) {
+     if (entry.second.size() != 1) continue;
+     const auto found = base_groups.find(entry.first);
+     if (found == base_groups.end() || found->second.size() != 1) continue;
+-    link_results.push_back(
+-        ClassIdPair{found->second[0].cid, entry.second[0].cid});
++    // The whole records, not the two cids: their 0x70 stride says the pair is
++    // two ClassInfos and stage 1 reaches the cids at +0x00 and +0x38.
++    link_results.push_back(ClassLink{found->second[0], entry.second[0]});
+   }
+   return link_results;
+ }
+@@ -120,7 +135,7 @@ std::vector<intptr_t> ShorebirdLinker::LinkClassTables(
+     return std::vector<intptr_t>();
+   }
+ 
+-  const std::vector<ClassIdPair> link_results =
++  const std::vector<ClassLink> link_results =
+       ComputeClassTableLinkResults(*base_class_table_, *patch_class_table_);
+   std::vector<intptr_t> mapping = ComputeClassTableMapping(
+       link_results, patch_class_table_->num_cids(), counts);
+@@ -164,7 +179,7 @@ std::vector<intptr_t> ShorebirdLinker::LinkClassTables(
+ // fixture, but a stage the class table mapper does not have. The object pool's
+ // mapper is a separate and larger function (0x10019bd8c, 8184 bytes).
+ std::vector<intptr_t> ShorebirdLinker::ComputeClassTableMapping(
+-    const std::vector<ClassIdPair>& link_results,
++    const std::vector<ClassLink>& link_results,
+     intptr_t num_patch_cids,
+     MappingCounts* counts) {
+   ASSERT(counts != nullptr);
+@@ -181,14 +196,18 @@ std::vector<intptr_t> ShorebirdLinker::ComputeClassTableMapping(
+   counts->from_pair_constraints = 0;
+ 
+   // Stage 1. Every pair the linker proved becomes a mapping outright.
+-  for (const ClassIdPair& pair : link_results) {
+-    ASSERT(0 <= pair.patch_cid && pair.patch_cid < num_patch_cids);
+-    ASSERT(pair.base_cid >= 0);
+-    mapping[static_cast<size_t>(pair.patch_cid)] = pair.base_cid;
+-    if (static_cast<intptr_t>(taken.size()) <= pair.base_cid) {
+-      taken.resize(static_cast<size_t>(pair.base_cid) + 1, false);
++  for (const ClassLink& pair : link_results) {
++    // Narrowed here rather than at production, which is where they narrow it:
++    // 0x10019a4f8 reads these two out of the pair it is striding over.
++    const intptr_t base_cid = pair.base.cid;
++    const intptr_t patch_cid = pair.patch.cid;
++    ASSERT(0 <= patch_cid && patch_cid < num_patch_cids);
++    ASSERT(base_cid >= 0);
++    mapping[static_cast<size_t>(patch_cid)] = base_cid;
++    if (static_cast<intptr_t>(taken.size()) <= base_cid) {
++      taken.resize(static_cast<size_t>(base_cid) + 1, false);
+     }
+-    taken[static_cast<size_t>(pair.base_cid)] = true;
++    taken[static_cast<size_t>(base_cid)] = true;
+     counts->from_link_results++;
+   }
+ 
+@@ -250,7 +269,7 @@ std::vector<intptr_t> ShorebirdLinker::ComputeClassTableMapping(
+ // and the count settles it: 292 of them had exactly one side already mapped
+ // after stage 1, which is the number their report prints.
+ std::vector<intptr_t> ShorebirdLinker::ComputeObjectPoolMapping(
+-    const std::vector<PoolIndexPair>& link_results,
++    const std::vector<PoolLink>& link_results,
+     const std::vector<int32_t>& pair_constraints,
+     intptr_t num_pool_entries,
+     MappingCounts* counts) {
+@@ -275,14 +294,19 @@ std::vector<intptr_t> ShorebirdLinker::ComputeObjectPoolMapping(
+   counts->link_results = static_cast<intptr_t>(link_results.size());
+ 
+   // Stage 1.
+-  for (const PoolIndexPair& pair : link_results) {
+-    if (pair.base_index < kFirstMappablePoolIndex ||
+-        pair.patch_index < kFirstMappablePoolIndex) {
++  for (const PoolLink& pair : link_results) {
++    // Signed locals because everything downstream -- the mapping's -1, the
++    // taken bitmap's bounds check -- is signed. The pair itself is uword to
++    // match the instantiation their symbol table names.
++    const intptr_t base_index = static_cast<intptr_t>(pair.base);
++    const intptr_t patch_index = static_cast<intptr_t>(pair.patch);
++    if (base_index < kFirstMappablePoolIndex ||
++        patch_index < kFirstMappablePoolIndex) {
+       continue;
+     }
+-    if (pair.patch_index >= num_pool_entries) continue;
+-    mapping[static_cast<size_t>(pair.patch_index)] = pair.base_index;
+-    claim(pair.base_index);
++    if (patch_index >= num_pool_entries) continue;
++    mapping[static_cast<size_t>(patch_index)] = base_index;
++    claim(base_index);
+     counts->from_link_results++;
+   }
+ 
+@@ -405,7 +429,7 @@ intptr_t ObjectPoolMappingsAggregator::GetBestMapping(uintptr_t patch_index) {
+   return kNoMapping;
+ }
+ 
+-std::vector<ShorebirdLinker::PoolIndexPair>
++std::vector<ShorebirdLinker::PoolLink>
+ ShorebirdLinker::ComputeObjectPoolLinkResults(const ObjectPoolLinkInfo& base,
+                                               const ObjectPoolLinkInfo& patch) {
+   const auto subgraph_key = [](const CodeInfo& info) {
+@@ -490,12 +514,12 @@ ShorebirdLinker::ComputeObjectPoolLinkResults(const ObjectPoolLinkInfo& base,
+     }
+   }
+ 
+-  std::vector<PoolIndexPair> link_results;
++  std::vector<PoolLink> link_results;
+   for (uintptr_t patch_index : patch_keys) {
+     const intptr_t base_index = aggregator.GetBestMapping(patch_index);
+     if (base_index == ObjectPoolMappingsAggregator::kNoMapping) continue;
+     link_results.push_back(
+-        PoolIndexPair{base_index, static_cast<intptr_t>(patch_index)});
++        PoolLink{static_cast<uword>(base_index), patch_index});
+   }
+   return link_results;
+ }
+@@ -507,7 +531,7 @@ std::vector<intptr_t> ShorebirdLinker::LinkObjectPools(
+     return std::vector<intptr_t>();
+   }
+ 
+-  const std::vector<PoolIndexPair> link_results =
++  const std::vector<PoolLink> link_results =
+       ComputeObjectPoolLinkResults(*base_object_pool_, *patch_object_pool_);
+   std::vector<intptr_t> mapping = ComputeObjectPoolMapping(
+       link_results, patch_object_pool_->pair_constraints(),
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 2cc52c9964a..7ca74887397 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -21,6 +21,35 @@ namespace dart {
+ // readers' signatures only need the declaration and the include could change.
+ class ReadStream;
+ 
++// Their `LinkedValue<T>`: one thing from the base snapshot beside the thing in
++// the patch it was matched to. Both mappers' link results are a vector of it.
++//
++// It has no symbol of its own -- it is a template, and every use is inlined --
++// but two independent element sizes give it away, each read out of the exact
++// division libc++ compiles vector::size() into:
++//
++//   class table, 0x10019a75c:   sub, asr #4, then multiply by 7's modular
++//                               inverse 0x6db6db6db6db6db7 -> element size 112,
++//                               against sizeof(ClassInfo) == 0x38 == 56
++//   object pool, 0x10019dba8:   sub, asr #4, and no multiply -> element size 16,
++//                               against sizeof(uword) == 8
++//
++// Both are exactly double, from two unrelated instantiations, which is what
++// makes "a base T and a patch T" a reading rather than a guess. The member
++// order is fixed by their stage 1: 0x10019a4f8 reads the base cid at +0x00 and
++// the patch cid at +0x38, then 0x10019a500 does mapping[patch] = base.
++//
++// The class table's instantiation carries whole ClassInfo records rather than
++// the two cids the mapper actually uses -- that 0x70 stride and the +0x38 are
++// what say so. Narrowing at the point of use instead of at the point of
++// production is theirs, and following it keeps our stride and offsets equal to
++// theirs instead of merely equivalent.
++template <typename T>
++struct LinkedValue {
++  T base;
++  T patch;
++};
++
+ // Their `dart::ObjectPoolMappingsAggregator`, which decides which base pool
+ // index each patch pool index maps to when the evidence is ambiguous.
+ //
+@@ -170,15 +199,11 @@ class ShorebirdLinker {
+   // definition for how each step was read; the counters it fills are the four
+   // their report prints.
+   //
+-  // A link result pairs a base class with a patch class. Their container is
+-  // `vector<LinkedValue<ClassInfo>>`, where LinkedValue<T> holds a base T then
+-  // a patch T -- established by the element size their own vector::size()
+-  // division reveals: 112 bytes against sizeof(ClassInfo) == 56, and 16 bytes
+-  // against sizeof(uword) on the object pool side.
+-  struct ClassIdPair {
+-    intptr_t base_cid;
+-    intptr_t patch_cid;
+-  };
++  // A link result pairs a base class with a patch class: their
++  // `vector<LinkedValue<ClassInfo>>`. The whole records travel, and stage 1
++  // narrows them to cids where it uses them -- see LinkedValue's own comment
++  // for the stride and offsets that establish that.
++  using ClassLink = LinkedValue<ClassInfo>;
+ 
+   struct MappingCounts {
+     intptr_t link_results = 0;
+@@ -191,7 +216,7 @@ class ShorebirdLinker {
+   // `num_patch_cids`. Static and free of linker state, so it can be tested
+   // directly against the numbers their own report prints.
+   static std::vector<intptr_t> ComputeClassTableMapping(
+-      const std::vector<ClassIdPair>& link_results,
++      const std::vector<ClassLink>& link_results,
+       intptr_t num_patch_cids,
+       MappingCounts* counts);
+ 
+@@ -203,13 +228,14 @@ class ShorebirdLinker {
+   // `link_results` is their vector<LinkedValue<uword>> -- a base index then a
+   // patch index, 16 bytes -- and `pair_constraints` is ObjectPoolLinkInfo's own
+   // index list, which the mapper reads at 0x10019d7c0.
+-  struct PoolIndexPair {
+-    intptr_t base_index;
+-    intptr_t patch_index;
+-  };
++  //
++  // uword rather than intptr_t because that is the instantiation their symbol
++  // table names. Only resolved indices are ever stored, so the -1 that
++  // GetBestMapping returns never reaches this type.
++  using PoolLink = LinkedValue<uword>;
+ 
+   static std::vector<intptr_t> ComputeObjectPoolMapping(
+-      const std::vector<PoolIndexPair>& link_results,
++      const std::vector<PoolLink>& link_results,
+       const std::vector<int32_t>& pair_constraints,
+       intptr_t num_pool_entries,
+       MappingCounts* counts);
+@@ -248,7 +274,7 @@ class ShorebirdLinker {
+   // when it holds exactly one class -- the patch side checked at 0x100199ad4
+   // and the base side at 0x100199dd4. A hash naming two classes on either side
+   // is ambiguous, so it pairs nothing.
+-  static std::vector<ClassIdPair> ComputeClassTableLinkResults(
++  static std::vector<ClassLink> ComputeClassTableLinkResults(
+       const ClassTableLinkInfo& base,
+       const ClassTableLinkInfo& patch);
+ 
+@@ -309,7 +335,7 @@ class ShorebirdLinker {
+   // 3. Their comparator captures the key by reference; ours takes it by value.
+   //    The double load at 0x10019f22c-0x10019f230 proves the capture mode, but
+   //    it has no observable consequence.
+-  static std::vector<PoolIndexPair> ComputeObjectPoolLinkResults(
++  static std::vector<PoolLink> ComputeObjectPoolLinkResults(
+       const ObjectPoolLinkInfo& base,
+       const ObjectPoolLinkInfo& patch);
+ 
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+index b0fb8630588..1e479076c6e 100644
+--- a/runtime/vm/shorebird/linker_test.cc
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -15,6 +15,16 @@
+ 
+ namespace dart {
+ 
++// The class table's link results carry whole ClassInfo records -- their 0x70
++// stride says so -- but every mapper test cares only about the two cids. This
++// keeps those tests reading as pairs of cids rather than burying the point
++// under empty name and hash strings.
++static ShorebirdLinker::ClassLink ClassLink(intptr_t base_cid,
++                                            intptr_t patch_cid) {
++  return ShorebirdLinker::ClassLink{ClassInfo{base_cid, "", ""},
++                                    ClassInfo{patch_cid, "", ""}};
++}
++
+ // shared() must return the same address on repeated calls.
+ VM_UNIT_TEST_CASE(ShorebirdLinker_SharedReturnsSingleton) {
+   ShorebirdLinker* a = ShorebirdLinker::shared();
+@@ -388,8 +398,8 @@ VM_UNIT_TEST_CASE(ClassTableMapping_EveryPairMapsAndTheRestBackfill) {
+   // Six patch cids, four of them paired. The pairs deliberately claim base cids
+   // out of order and with a gap, so a backfill that just counted upward from
+   // zero would collide with one of them.
+-  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {
+-      {0, 0}, {1, 1}, {4, 3}, {2, 5},
++  const std::vector<ShorebirdLinker::ClassLink> pairs = {
++      ClassLink(0, 0), ClassLink(1, 1), ClassLink(4, 3), ClassLink(2, 5),
+   };
+   ShorebirdLinker::MappingCounts counts;
+   const std::vector<intptr_t> mapping =
+@@ -436,7 +446,7 @@ VM_UNIT_TEST_CASE(ClassTableMapping_EveryPairMapsAndTheRestBackfill) {
+ // always above the last one assigned. The cursor is an optimisation and no
+ // behavioural test can see it. Renamed to what it actually pins.
+ VM_UNIT_TEST_CASE(ClassTableMapping_BackfillTakesTheLowestFreeCid) {
+-  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {{5, 0}};
++  const std::vector<ShorebirdLinker::ClassLink> pairs = {ClassLink(5, 0)};
+   ShorebirdLinker::MappingCounts counts;
+   const std::vector<intptr_t> mapping =
+       ShorebirdLinker::ComputeClassTableMapping(pairs, 3, &counts);
+@@ -453,8 +463,8 @@ VM_UNIT_TEST_CASE(ClassTableMapping_BackfillTakesTheLowestFreeCid) {
+ // and the space grows. A mapper that clamped instead would alias onto a taken
+ // cid, so this is checked rather than left to the resize call.
+ VM_UNIT_TEST_CASE(ClassTableMapping_BackfillGrowsPastTheEnd) {
+-  const std::vector<ShorebirdLinker::ClassIdPair> pairs = {
+-      {0, 0}, {1, 1}, {2, 2},
++  const std::vector<ShorebirdLinker::ClassLink> pairs = {
++      ClassLink(0, 0), ClassLink(1, 1), ClassLink(2, 2),
+   };
+   ShorebirdLinker::MappingCounts counts;
+   const std::vector<intptr_t> mapping =
+@@ -490,7 +500,7 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintDerivesTheMissingSide) {
+   // Slot 10 is paired with base 20 outright. The constraint on (10, 11) then
+   // forces slot 11 to base 21 without any link result mentioning it, and the
+   // constraint on (12, 13) works the other way: 13 is known, 12 follows.
+-  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++  const std::vector<ShorebirdLinker::PoolLink> pairs = {
+       {20, 10}, {31, 13},
+   };
+   const std::vector<int32_t> constraints = {10, 12};
+@@ -511,7 +521,7 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintDerivesTheMissingSide) {
+ // with both sides known has nothing to do. Both must be skipped without
+ // touching the counter -- otherwise the reported 292 would be 385.
+ VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintSkipsBothKnownAndBothUnknown) {
+-  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++  const std::vector<ShorebirdLinker::PoolLink> pairs = {
+       {20, 10}, {21, 11},           // both sides of the (10, 11) constraint
+   };
+   const std::vector<int32_t> constraints = {10, 12};  // (12, 13) has neither
+@@ -528,7 +538,7 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_PairConstraintSkipsBothKnownAndBothUnknown)
+ // 0x10019d72c). The pool's first eight slots are fixed, so a pair naming one
+ // is not a mapping to record.
+ VM_UNIT_TEST_CASE(ObjectPoolMapping_SkipsPairsBelowTheFixedSlots) {
+-  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++  const std::vector<ShorebirdLinker::PoolLink> pairs = {
+       {7, 10},   // base below 8
+       {20, 3},   // patch below 8
+       {21, 11},  // both fine
+@@ -552,7 +562,7 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_BackfillKeepsConstrainedPairsAdjacent) {
+   // free successor. A search for "the lowest free index" would take 8 and then
+   // have to break the pair; theirs looks for the first index whose successor is
+   // also free, which is 12.
+-  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {{9, 8}, {11, 9}};
++  const std::vector<ShorebirdLinker::PoolLink> pairs = {{9, 8}, {11, 9}};
+   const std::vector<int32_t> constraints = {10};
+   ShorebirdLinker::MappingCounts counts;
+   const std::vector<intptr_t> mapping = ShorebirdLinker::ComputeObjectPoolMapping(
+@@ -570,7 +580,7 @@ VM_UNIT_TEST_CASE(ObjectPoolMapping_BackfillKeepsConstrainedPairsAdjacent) {
+ // Nothing may be handed out twice, across all three stages at once. Every count
+ // above can be satisfied by a mapper that aliases, so this is checked directly.
+ VM_UNIT_TEST_CASE(ObjectPoolMapping_NoBaseIndexIsUsedTwice) {
+-  const std::vector<ShorebirdLinker::PoolIndexPair> pairs = {
++  const std::vector<ShorebirdLinker::PoolLink> pairs = {
+       {20, 10}, {31, 13}, {9, 8},
+   };
+   const std::vector<int32_t> constraints = {10, 12, 14};
+@@ -683,14 +693,14 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkResults_AmbiguousGroupsAreVotedOnNotDropped) {
+                                   CodeInfo("selfB", "sub", {9}, {9})},
+                                  {}, 16);
+ 
+-  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++  const std::vector<ShorebirdLinker::PoolLink> results =
+       ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
+ 
+   // Two patch indices, each resolved. The old size==1 filter yielded zero.
+   EXPECT_EQ(static_cast<intptr_t>(2),
+             static_cast<intptr_t>(results.size()));
+   for (const auto& pair : results) {
+-    EXPECT_EQ(pair.base_index, pair.patch_index);
++    EXPECT_EQ(pair.base, pair.patch);
+   }
+ }
+ 
+@@ -702,13 +712,13 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkResults_UsesSubgraphIndicesWhenBaseGroupExists)
+   const ObjectPoolLinkInfo base({CodeInfo("self", "sub", {8}, {9})}, {}, 16);
+   const ObjectPoolLinkInfo patch({CodeInfo("self", "sub", {10}, {11})}, {}, 16);
+ 
+-  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++  const std::vector<ShorebirdLinker::PoolLink> results =
+       ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
+ 
+   EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
+   // subgraph_pp_indices_: base 9 -> patch 11. self_pp_indices_ would say 8/10.
+-  EXPECT_EQ(static_cast<intptr_t>(9), results[0].base_index);
+-  EXPECT_EQ(static_cast<intptr_t>(11), results[0].patch_index);
++  EXPECT_EQ(static_cast<uword>(9), results[0].base);
++  EXPECT_EQ(static_cast<uword>(11), results[0].patch);
+ }
+ 
+ // The weight is 1.0/(base_group.size() + patch_group.size()), and this is the
+@@ -740,12 +750,12 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkResults_WeightIsNormalisedByGroupSize) {
+                                   CodeInfo("p7", "B", {}, {20})},
+                                  {}, 64);
+ 
+-  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++  const std::vector<ShorebirdLinker::PoolLink> results =
+       ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
+ 
+   EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
+-  EXPECT_EQ(static_cast<intptr_t>(20), results[0].patch_index);
+-  EXPECT_EQ(static_cast<intptr_t>(30), results[0].base_index);
++  EXPECT_EQ(static_cast<uword>(20), results[0].patch);
++  EXPECT_EQ(static_cast<uword>(30), results[0].base);
+ }
+ 
+ // A patch subgraph hash the base does not have falls back to matching by
+@@ -757,13 +767,13 @@ VM_UNIT_TEST_CASE(ObjectPoolLinkResults_SelfHashFallbackSwitchesIndexVector) {
+   const ObjectPoolLinkInfo patch(
+       {CodeInfo("shared", "patch_only_sub", {14}, {15})}, {}, 16);
+ 
+-  const std::vector<ShorebirdLinker::PoolIndexPair> results =
++  const std::vector<ShorebirdLinker::PoolLink> results =
+       ShorebirdLinker::ComputeObjectPoolLinkResults(base, patch);
+ 
+   EXPECT_EQ(static_cast<intptr_t>(1), static_cast<intptr_t>(results.size()));
+   // self_pp_indices_ on both sides, because the fallback fired.
+-  EXPECT_EQ(static_cast<intptr_t>(12), results[0].base_index);
+-  EXPECT_EQ(static_cast<intptr_t>(14), results[0].patch_index);
++  EXPECT_EQ(static_cast<uword>(12), results[0].base);
++  EXPECT_EQ(static_cast<uword>(14), results[0].patch);
+ }
+ 
+ }  // namespace dart
+-- 
+2.53.0
+

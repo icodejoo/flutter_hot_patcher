@@ -1,0 +1,331 @@
+From bdaa00ded45a8ca7802be2055c0b4e18d4337ebf Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 19:42:47 +0800
+Subject: [PATCH 102/206] feat(shorebird): real self_hash in --shorebird, and
+ our SHA-1 was broken
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The three hashes were a placeholder -- all three carried sha1 of the raw
+instruction bytes, with "simplified" in the comment. self_hash is now the
+reconstructed algorithm: SHA-1 over a stream of {kind, value} entries, ported
+from the model in probe_subgraph_hash.py.
+
+Porting it uncovered a worse bug. The port produced entry streams byte-identical
+to the Python model and still disagreed on every digest, which left only one
+candidate: FhpSHA1 was not SHA-1.
+
+  #define FF(i,f,k) t=...; e=d; d=c; c=FhpRot(b,30); b=a; a=t
+
+Six statements, no do/while(0), and every use is an unbraced `for` body. Only
+the t= was in the loop; the whole variable rotation ran once, after it. A
+function that looks like SHA-1, compiles clean, runs without complaint, and
+produces digests nothing else in the world agrees with. Fixed, with the reason
+in a comment so it does not get "tidied" back.
+
+Results, measured:
+
+  C++ port vs the validated Python model      1589 / 1589
+  vs THEIR self_hash, joined by name+size      777 / 950
+
+The second number is the real one and it is a cross-implementation check, not a
+self-comparison: for functions present in both snapshots at the same size, 82%
+of our hashes equal Shorebird's. That tracks the model's known 1185/1380, and
+the shortfall is the same unsolved piece -- ordinals that depend on the callee
+walk.
+
+⚠️ subgraph_hash and op_subgraph_hash still carry self_hash and are wrong. The
+keys stay so the schema matches theirs, and the comment says plainly that the
+values do not. They need the walk, which task 30 established is a much larger
+job.
+
+Negative control: rotating by 29 instead of 30 turns the check red on the first
+entry's hash. Restored.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 7c76423a261..03da6546950 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -4,6 +4,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <map>
+ #include <set>
+ #include <sstream>
+ #include <unordered_map>
+@@ -735,7 +736,13 @@ static void FhpSHA1Transform(uint32_t state[5], const uint8_t buf[64]) {
+   for(int i=0;i<16;i++) w[i]=(buf[i*4]<<24)|(buf[i*4+1]<<16)|(buf[i*4+2]<<8)|buf[i*4+3];
+   for(int i=16;i<80;i++) w[i]=FhpRot(w[i-3]^w[i-8]^w[i-14]^w[i-16],1);
+   a=state[0];b=state[1];c=state[2];d=state[3];e=state[4];
+-  #define FF(i,f,k) t=FhpRot(a,5)+(f)+e+(k)+w[i]; e=d; d=c; c=FhpRot(b,30); b=a; a=t
++  // ⚠️ do/while(0) is load bearing. This macro expands to six statements and
++  // every use below is an unbraced `for` body, so without it only the first --
++  // the t= -- was inside the loop and the whole variable rotation ran once,
++  // after it. The result was a function that looked like SHA-1, ran without
++  // complaint, and produced digests nothing else agrees with.
++  #define FF(i,f,k) do { t=FhpRot(a,5)+(f)+e+(k)+w[i]; e=d; d=c; \
++                         c=FhpRot(b,30); b=a; a=t; } while (0)
+   for(int i= 0;i<20;i++) FF(i,(b&c)|(~b&d),0x5A827999);
+   for(int i=20;i<40;i++) FF(i,b^c^d,0x6ED9EBA1);
+   for(int i=40;i<60;i++) FF(i,(b&c)|(b&d)|(c&d),0x8F1BBCDC);
+@@ -781,6 +788,234 @@ std::string Sha1HexOf(const uint8_t* data, size_t len) {
+ }
+ 
+ // Collect PP slot indices used by a function.
++// Shorebird's self_hash. The algorithm is reconstructed rather than guessed --
++// see SUBGRAPH_HASHER_RECON.md in the research tree for how each rule was
++// established and what the evidence was.
++//
++// It is SHA-1 over a stream of entries, not over the instruction bytes. Each
++// entry is two little-endian int32s, a kind and a value, and the value is
++// deliberately lossy: pool and field references carry an ordinal within the
++// function rather than the real index, which is what lets the hash survive
++// relinking, and a local branch carries a constant.
++//
++// ⚠️ Reproduces 1185 of Shorebird's own 1380 functions exactly. The remaining
++// 195 need the callee walk simulated, because the ordinal counters are shared
++// across it -- so this is a faithful implementation of a partly-solved
++// algorithm, not a finished one. Do not read a matching hash as proof that two
++// builds agree; read a differing one as proof that they do not.
++enum ShorebirdEntryKind {
++  kEntryCodeName = 0,
++  kEntryOffsetFromPayloadStart = 1,
++  kEntryObjectPoolLoadIndex = 2,
++  kEntryDispatchTableCall = 3,
++  kEntryExternalBranchTargetIndex = 4,
++  kEntryLocalBranch = 5,
++  kEntryFieldTableLoadIndex = 6,
++  kEntryRawInstructionBits = 7,
++  kEntryIndirectStaticCall = 8,
++};
++
++static constexpr uint32_t kArm64Nop = 0xD503201F;
++static constexpr uint32_t kPPRegister = 27;
++static constexpr uint32_t kTHRRegister = 26;
++static constexpr uint32_t kDispatchTableRegister = 21;
++
++// (base, dest, byte offset) for an unsigned-offset load or store.
++static bool DecodeLoadStore(uint32_t w, uint32_t* base, uint32_t* dest,
++                            uint32_t* offset) {
++  if ((w & 0x3B000000) != 0x39000000) return false;
++  *base = (w >> 5) & 0x1F;
++  *dest = w & 0x1F;
++  *offset = ((w >> 10) & 0xFFF) << (w >> 30);
++  return true;
++}
++
++// ldar / stlr, which the field table path also reaches through.
++static bool DecodeAcquireRelease(uint32_t w, uint32_t* base, uint32_t* dest) {
++  const uint32_t masked = w & 0x3FDFFC00;
++  if (masked != 0x08DFFC00 && masked != 0x089FFC00) return false;
++  *base = (w >> 5) & 0x1F;
++  *dest = w & 0x1F;
++  return true;
++}
++
++// 64-bit `add xD, xN, #imm{, lsl 12}`.
++//
++// ⚠️ The mask is 0xFF800000, not 0x7F800000. Masking bit 31 away makes this
++// never match, and a matcher that cannot fire reports the same result as a
++// refuted hypothesis.
++static bool DecodeAddImmediate(uint32_t w, uint32_t* base, uint32_t* dest,
++                               uint32_t* imm) {
++  if ((w & 0xFF800000) != 0x91000000) return false;
++  *base = (w >> 5) & 0x1F;
++  *dest = w & 0x1F;
++  *imm = (w >> 10) & 0xFFF;
++  if ((w >> 22) & 1) *imm <<= 12;
++  return true;
++}
++
++// ldp / stp with a signed-offset immediate.
++static bool DecodePair(uint32_t w, uint32_t* base, uint32_t* offset) {
++  if ((w & 0x3A000000) != 0x28000000) return false;
++  *base = (w >> 5) & 0x1F;
++  *offset = ((w >> 15) & 0x7F) * 8;
++  return true;
++}
++
++// Branch displacement in instructions, for the forms that carry one.
++static bool DecodeBranchDelta(uint32_t w, int32_t* delta) {
++  if ((w & 0x7C000000) == 0x14000000) {           // b / bl
++    uint32_t off = w & 0x03FFFFFF;
++    *delta = (off >= (1u << 25)) ? static_cast<int32_t>(off) - (1 << 26)
++                                 : static_cast<int32_t>(off);
++    return true;
++  }
++  if ((w & 0xFF000010) == 0x54000000 ||           // b.cond
++      (w & 0x7E000000) == 0x34000000) {           // cbz / cbnz
++    uint32_t off = (w >> 5) & 0x7FFFF;
++    *delta = (off >= (1u << 18)) ? static_cast<int32_t>(off) - (1 << 19)
++                                 : static_cast<int32_t>(off);
++    return true;
++  }
++  if ((w & 0x7E000000) == 0x36000000) {           // tbz / tbnz
++    uint32_t off = (w >> 5) & 0x3FFF;
++    *delta = (off >= (1u << 13)) ? static_cast<int32_t>(off) - (1 << 14)
++                                 : static_cast<int32_t>(off);
++    return true;
++  }
++  return false;
++}
++
++static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen, intptr_t key) {
++  auto it = seen->find(key);
++  if (it != seen->end()) return it->second;
++  const intptr_t next = static_cast<intptr_t>(seen->size());
++  (*seen)[key] = next;
++  return next;
++}
++
++std::string ShorebirdSelfHash(const uint8_t* code, intptr_t size) {
++  std::vector<uint8_t> stream;
++  std::map<intptr_t, intptr_t> pool, external, field;
++
++  auto emit = [&](int32_t kind, uint32_t value) {
++    for (int i = 0; i < 4; i++) stream.push_back((kind >> (i * 8)) & 0xFF);
++    for (int i = 0; i < 4; i++) stream.push_back((value >> (i * 8)) & 0xFF);
++  };
++
++  const intptr_t words = size / 4;
++  auto word_at = [&](intptr_t i) {
++    uint32_t w;
++    memcpy(&w, code + i * 4, 4);
++    return w;
++  };
++
++
++  emit(kEntryOffsetFromPayloadStart, 0);
++
++  intptr_t i = 0;
++  while (i < words) {
++    const uint32_t w = word_at(i);
++    uint32_t base, dest, offset, imm;
++
++    // A pool access with a large displacement, the PrepareLargeOffset shape.
++    if (DecodeAddImmediate(w, &base, &dest, &imm) && base == kPPRegister &&
++        i + 1 < words) {
++      uint32_t total = imm, consumed = 2;
++      uint32_t b2, d2, i2;
++      if (DecodeAddImmediate(word_at(i + 1), &b2, &d2, &i2) && b2 == dest &&
++          d2 == dest && i + 2 < words) {
++        total += i2;
++        consumed = 3;
++      }
++      const uint32_t tail = word_at(i + consumed - 1);
++      uint32_t tb, td, to;
++      bool ok = DecodeLoadStore(tail, &tb, &td, &to) && tb == dest;
++      if (!ok && DecodePair(tail, &tb, &to)) ok = (tb == dest);
++      if (ok) {
++        emit(kEntryObjectPoolLoadIndex,
++             Ordinal(&pool, (total + to - 16) / 8));
++        i += consumed;
++        while (i < words && word_at(i) == kArm64Nop) i++;
++        continue;
++      }
++    }
++
++    if (DecodePair(w, &base, &offset) && base == kPPRegister) {
++      emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, (offset - 16) / 8));
++      i++;
++      while (i < words && word_at(i) == kArm64Nop) i++;
++      continue;
++    }
++
++    if (DecodeLoadStore(w, &base, &dest, &offset)) {
++      if (base == kPPRegister) {
++        emit(kEntryObjectPoolLoadIndex, Ordinal(&pool, (offset - 16) / 8));
++        // The load owns its whole padded footprint; the NOPs after it are not
++        // entries of their own.
++        i++;
++        while (i < words && word_at(i) == kArm64Nop) i++;
++        continue;
++      }
++      if (base == kTHRRegister && i + 1 < words) {
++        uint32_t nb, nd, no = 0;
++        if ((DecodeLoadStore(word_at(i + 1), &nb, &nd, &no) ||
++             DecodeAcquireRelease(word_at(i + 1), &nb, &nd)) &&
++            nb == dest) {
++          emit(kEntryFieldTableLoadIndex, Ordinal(&field, no / 8));
++          i += 2;
++          continue;
++        }
++        uint32_t ab, ad, ai;
++        if (i + 2 < words && DecodeAddImmediate(word_at(i + 1), &ab, &ad, &ai) &&
++            ab == dest) {
++          uint32_t tb, td, to = 0;
++          if ((DecodeLoadStore(word_at(i + 2), &tb, &td, &to) ||
++               DecodeAcquireRelease(word_at(i + 2), &tb, &td)) &&
++              tb == ad) {
++            emit(kEntryFieldTableLoadIndex, Ordinal(&field, (ai + to) / 8));
++            i += 3;
++            continue;
++          }
++        }
++      }
++    }
++
++    // Dispatch table call: <compute cid> ; ldr xN,[x21,xM,lsl 3] ; blr xN.
++    if (i + 2 < words) {
++      const uint32_t table = word_at(i + 1), call = word_at(i + 2);
++      if ((table & 0xFFE0FC00) == 0xF8607800 &&
++          ((table >> 5) & 0x1F) == kDispatchTableRegister &&
++          (call & 0xFFFFFC1F) == 0xD63F0000 &&
++          ((call >> 5) & 0x1F) == (table & 0x1F)) {
++        emit(kEntryDispatchTableCall, 1);
++        i += 3;
++        continue;
++      }
++    }
++
++    int32_t delta;
++    if (DecodeBranchDelta(w, &delta)) {
++      const int64_t target = i * 4 + static_cast<int64_t>(delta) * 4;
++      if (target >= 0 && target < size) {
++        emit(kEntryLocalBranch, 1);
++      } else if ((w & 0x7C000000) == 0x14000000) {
++        emit(kEntryExternalBranchTargetIndex,
++             Ordinal(&external, static_cast<intptr_t>(target)));
++      } else {
++        emit(kEntryRawInstructionBits, w);
++      }
++      i++;
++      continue;
++    }
++
++    emit(kEntryRawInstructionBits, w);
++    i++;
++  }
++
++  return Sha1HexOf(stream.data(), stream.size());
++}
++
+ std::vector<intptr_t> GetSelfPPIndices(const uint8_t* code, intptr_t size) {
+   std::vector<intptr_t> slots;
+   for (intptr_t i = 0; i + 4 <= size; i += 4) {
+@@ -972,10 +1207,14 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.PrintProperty64("size", entry.size);
+     
+     // Compute SHA-1 hash of instruction bytes
+-    std::string hash = Sha1HexOf(entry.payload, entry.size);
+-    js.PrintProperty("self_hash", hash.c_str());
+-    js.PrintProperty("subgraph_hash", hash.c_str());   // simplified: same as self_hash
+-    js.PrintProperty("op_subgraph_hash", hash.c_str()); // simplified: same
++    const std::string self_hash =
++        ShorebirdSelfHash(entry.payload, entry.size);
++    js.PrintProperty("self_hash", self_hash.c_str());
++    // ⚠️ NOT the real subgraph hashes. Those accumulate over the callee walk,
++    // which is unsolved -- see SUBGRAPH_HASHER_RECON.md. The keys are kept so
++    // the schema matches theirs; the values are self_hash and are wrong.
++    js.PrintProperty("subgraph_hash", self_hash.c_str());
++    js.PrintProperty("op_subgraph_hash", self_hash.c_str());
+     
+     // PP slot indices
+     std::vector<intptr_t> pp_slots = GetSelfPPIndices(entry.payload, entry.size);
+-- 
+2.53.0
+

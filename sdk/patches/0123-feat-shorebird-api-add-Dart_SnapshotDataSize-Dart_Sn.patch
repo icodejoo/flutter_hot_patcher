@@ -1,0 +1,96 @@
+From 247512b1b734658c391361341b10fbd06a3cbaa3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 1 Sep 2026 20:33:44 +0800
+Subject: [PATCH 123/206] feat(shorebird-api): add Dart_SnapshotDataSize,
+ Dart_SnapshotInstrSize, and 6-param Dart_LoadELF
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Shorebird's open-source flutter engine (patch_cache.cc / patch_mapping.cc)
+uses three API additions that are not in upstream dart-sdk:
+
+  • Dart_SnapshotDataSize / Dart_SnapshotInstrSize — declared in
+    dart_native_api.h, implemented by reading the Snapshot / Image headers.
+
+  • 6-param Dart_LoadELF(filename, offset, error, data, instrs, mode) —
+    the Shorebird variant that drops the separate vm snapshot pair (the VM
+    isolate is folded into the isolate group in modern AOT).  Added as a
+    C++ inline overload in elf_loader.h so the existing 7-param extern "C"
+    function and all its callers are untouched.
+
+  • dart::bin::kReadOnly (= 0) — the mode constant the 6-param overload
+    expects; added to elf_loader.h inside an #ifdef __cplusplus block.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/bin/elf_loader.h b/runtime/bin/elf_loader.h
+index 5223a4d9f44..39093ed2f63 100644
+--- a/runtime/bin/elf_loader.h
++++ b/runtime/bin/elf_loader.h
+@@ -62,4 +62,30 @@ DART_EXPORT Dart_LoadedElf* Dart_LoadELF_Memory(
+ /// each time it is called, and the results must be unloaded separately.
+ DART_EXPORT void Dart_UnloadELF(Dart_LoadedElf* loaded);
+ 
++#ifdef __cplusplus
++namespace dart {
++namespace bin {
++// Shorebird: the patch ELF carries only the isolate pair (vm folded in).
++// kReadOnly mirrors bin::File::kReadOnly and is passed as the mode param to
++// the 6-parameter Dart_LoadELF variant below.
++constexpr int kReadOnly = 0;
++}  // namespace bin
++}  // namespace dart
++
++// Shorebird variant of Dart_LoadELF: drops the separate vm snapshot pair
++// (the VM isolate is folded into the isolate group in modern AOT) and adds a
++// mode parameter. The mode value is accepted but not consulted -- the mapping
++// is always read-only.
++inline Dart_LoadedElf* Dart_LoadELF(const char* filename,
++                                     uint64_t file_offset,
++                                     const char** error,
++                                     const uint8_t** snapshot_data,
++                                     const uint8_t** snapshot_instrs,
++                                     int /*mode*/) {
++  return Dart_LoadELF(filename, file_offset, error,
++                      nullptr, nullptr,
++                      snapshot_data, snapshot_instrs);
++}
++#endif  // __cplusplus
++
+ #endif  // RUNTIME_BIN_ELF_LOADER_H_
+diff --git a/runtime/include/dart_native_api.h b/runtime/include/dart_native_api.h
+index dbdaeb32ee0..90076c38a54 100644
+--- a/runtime/include/dart_native_api.h
++++ b/runtime/include/dart_native_api.h
+@@ -221,4 +221,7 @@ Dart_FinalizeAllClasses(void);
+  */
+ DART_EXPORT void* Dart_ExecuteInternalCommand(const char* command, void* arg);
+ 
++DART_EXPORT size_t Dart_SnapshotDataSize(const uint8_t* snapshot);
++DART_EXPORT size_t Dart_SnapshotInstrSize(const uint8_t* snapshot);
++
+ #endif /* INCLUDE_DART_NATIVE_API_H_ */ /* NOLINT */
+diff --git a/runtime/vm/dart_api_impl.cc b/runtime/vm/dart_api_impl.cc
+index fa3d88ad801..85e321c3c17 100644
+--- a/runtime/vm/dart_api_impl.cc
++++ b/runtime/vm/dart_api_impl.cc
+@@ -7303,3 +7303,15 @@ DART_EXPORT bool Dart_ShorebirdLoadVmcode(const char* vmcode_path) {
+ }
+ 
+ }  // namespace dart
++
++DART_EXPORT size_t Dart_SnapshotDataSize(const uint8_t* snapshot) {
++  const dart::Snapshot* s = dart::Snapshot::SetupFromAddress(snapshot);
++  if (s == nullptr || !s->IsValid()) return 0;
++  return static_cast<size_t>(s->length());
++}
++
++DART_EXPORT size_t Dart_SnapshotInstrSize(const uint8_t* snapshot) {
++  // The instructions image starts with an Image header whose first word is the
++  // total image size. This mirrors dart::Image::FieldValue(ImageSize).
++  return static_cast<size_t>(*reinterpret_cast<const uintptr_t*>(snapshot));
++}
+-- 
+2.53.0
+

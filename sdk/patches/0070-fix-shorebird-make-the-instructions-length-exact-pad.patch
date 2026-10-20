@@ -1,0 +1,81 @@
+From 08b52875f9fcb7ac845efad50dc5539e2efa1d2b Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 21:09:21 +0800
+Subject: [PATCH 070/206] fix(shorebird): make the instructions length exact,
+ padding and all
+
+Last commit shipped this as an upper bound and said so, because their padding
+word had not been established. It has now: their length computation is at
+0x73aa5c..0x73aad4, and the constant the trim loop compares against is
+0xd4200000 -- `brk #0`, what the image is filled out with.
+
+The shape also corrects what the caveat implied. Only the last entry needs
+trimming. Every other entry measures to where the next one begins, which
+already stops at real code, so the previous "over-counts by the padding each
+entry carries" was wrong twice over: it over-counted nothing, and it dropped
+the last entry entirely by measuring it as zero.
+
+    267504  before   (last entry counted as 0)
+    267892  after
+    267904  after, with the padding constant deliberately wrong
+
+The third line is the check that matters. Twelve bytes -- three `brk #0` --
+is what the trim removes, so the loop runs rather than being skipped over.
+
+83 of 83 shorebird tests; dd_runtime_check.sh, dd_pass_check.sh and
+verify_reproduction.sh clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index f5bdbcdd8fe..d9d5738af49 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -9951,20 +9951,31 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+   // target it just used. Everything reaching here is cpu until the sim side of
+   // WrapCode exists.
+   //
+-  // ⚠️ The length is an upper bound, not their number. Theirs computes it as
+-  // `end - start` after walking backwards over trailing padding instructions
+-  // (0x73aab4..0x73aad4); reproducing that needs the padding word, which has
+-  // not been established. This is the raw distance to the next entry, so it
+-  // over-counts by the padding each entry carries. The counts are exact.
++  // The length is theirs exactly (0x73aa5c..0x73aad4). Every entry but the last
++  // measures to where the next one starts. The last has no next, so it measures
++  // to end_pc_ and then walks backwards over trailing `brk #0` -- the padding
++  // the image is filled out with -- which is why only that entry needs the
++  // trim: the others already stop where real code stops.
+   const auto* const rodata = instructions_table_.rodata();
+-  const intptr_t entry = instructions_table_.rodata()->first_entry_with_code +
+-                         instructions_index_ - 1;
+-  const intptr_t raw_length =
+-      (entry + 1 < static_cast<intptr_t>(rodata->length))
+-          ? (instructions_table_.EntryPointAt(entry + 1) -
+-             instructions_table_.EntryPointAt(entry))
+-          : 0;
+-  stats_.Record(LinkOracle::RunTarget::cpu, raw_length);
++  const intptr_t entry =
++      static_cast<intptr_t>(rodata->first_entry_with_code) +
++      instructions_index_ - 1;
++  const uint32_t start = rodata->entries()[entry].pc_offset;
++  uint32_t end;
++  if (entry + 1 < static_cast<intptr_t>(rodata->length)) {
++    end = rodata->entries()[entry + 1].pc_offset;
++  } else {
++    const uword start_pc = instructions_table_.ptr()->untag()->start_pc_;
++    end = static_cast<uint32_t>(
++        instructions_table_.ptr()->untag()->end_pc_ - start_pc);
++    // 0xd4200000 is `brk #0`, the word their loop compares against.
++    while (end > start &&
++           *reinterpret_cast<const uint32_t*>(start_pc + end - 4) ==
++               0xd4200000) {
++      end -= 4;
++    }
++  }
++  stats_.Record(LinkOracle::RunTarget::cpu, end - start);
+ #else
+   ASSERT(!deferred);
+   InstructionsPtr instr = image_reader_->GetInstructionsAt(Read<uint32_t>());
+-- 
+2.53.0
+

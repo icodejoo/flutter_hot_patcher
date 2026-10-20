@@ -1,0 +1,94 @@
+From 97150fcca804b314731ea15458ad3462a438eb5a Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 19 Aug 2026 18:48:32 +0800
+Subject: [PATCH 015/206] feat(shorebird): match their flag help text;
+ print_dispatch_table_debug_info_to
+
+Two findings, both from xref-ing their arm64 slice rather than from running it.
+
+1. print_dispatch_table_debug_info_to is a DEAD FLAG in their own binary.
+   It was recorded as "silent on a base build", implying some trigger we had
+   not found. There is none: the global FLAG_print_dispatch_table_debug_info_to
+   (0x100526798) has zero code references in their gen_snapshot. Verified two
+   independent ways -- a register-tracking xref, and a high-recall scan of all
+   720 adrp sites hitting page 0x100526000 for a nearby 0x798 immediate, whose
+   only hits are `str x8, [x19, #0x798]` in Thread::InitVMConstants, an
+   unrelated Thread field. It is registered so --help prints it, and never
+   read. So it is declared here and left unread, which reproduces it exactly.
+   The "11 private flags" are really 10 implementable plus this one.
+
+2. Our six link-info flag descriptions were paraphrases, so --help did not
+   match theirs. Replaced with their verbatim text. All 8 flags we claim now
+   produce byte-identical --help --verbose lines.
+
+Flag surface after this commit -- they have 263 flags, we have 300:
+  they have / we lack:  3  (print_dd_function_identity_to,
+                            print_dd_resolution_to, print_shorebird_info)
+  we have / they lack: 40  (profiler, coverage, verify_after_gc, trace_*,
+                            reload_*, deoptimize_*, use_osr, interpreter, ...)
+
+The 3 missing are exactly the DD/linker ones already known to be blocked. All
+40 extras are stock flags gated behind !PRODUCT, which says their build is
+--mode=product where ours is --mode=release. Followed up separately, since a
+PRODUCT build changes VM data structure layout and therefore bears on the
+snapshot version hash difference.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index eec03294032..2998b17275b 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -24,30 +24,43 @@
+ 
+ namespace dart {
+ 
++// Descriptions are copied verbatim from their gen_snapshot's --help --verbose.
++// The CLI surface is part of what we are reproducing, so paraphrasing here
++// would be a diff against them for no benefit.
+ DEFINE_FLAG(charp,
+             print_class_table_link_info_to,
+             nullptr,
+-            "Write class table link info as a binary file");
++            "Print class table link information to the given file");
+ DEFINE_FLAG(charp,
+             print_class_table_link_debug_info_to,
+             nullptr,
+-            "Write class table link info as JSON, for debugging");
++            "Print class table link debug information to the given file");
+ DEFINE_FLAG(charp,
+             print_field_table_link_info_to,
+             nullptr,
+-            "Write field table link info as a binary file");
++            "Print field table link information to the given file");
+ DEFINE_FLAG(charp,
+             print_field_table_link_debug_info_to,
+             nullptr,
+-            "Write field table link info as JSON, for debugging");
++            "Print field table link debug information to the given file");
+ DEFINE_FLAG(charp,
+             print_dispatch_table_link_info_to,
+             nullptr,
+-            "Write dispatch table link info as a binary file");
++            "Print dispatch table link information to the given file");
+ DEFINE_FLAG(charp,
+             print_dispatch_table_link_debug_info_to,
+             nullptr,
+-            "Write dispatch table link info as JSON, for debugging");
++            "Print dispatch table link debug information to the given file");
++
++// Declared, never read -- and that is not an omission on our side. Their own
++// arm64 gen_snapshot never reads it either: the flag has zero code references
++// (verified two ways, see spikes/shorebird_linkinfo_oracle/scripts/xref.py),
++// which is why it stays silent on every build rather than only on a base build.
++// It exists so --help matches; there is no behaviour to reproduce.
++DEFINE_FLAG(charp,
++            print_dispatch_table_debug_info_to,
++            nullptr,
++            "Print layout of the dispatch table to a json file");
+ 
+ namespace {
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,91 @@
+From 9b63a7b52b3716fe3bc2ca32ab24893c7ebea6b2 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 29 Sep 2026 15:20:24 +0800
+Subject: [PATCH 179/206] [vm] Shorebird: update comments that said Thread's
+ Shorebird block is appended (F147)
+
+Comment-only. The Shorebird Thread fields now sit at Shorebird's offsets, and
+the extracted offsets table is regenerable here, so the notes saying 'ours is
+appended' and 'this machine cannot regenerate' the table were wrong. Why these
+fields still go through dart::Thread offsets instead of target::Thread is
+unchanged: they are not listed in runtime_offsets_list.h.
+
+diff --git a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+index fcfdcc9bcb6..596db6f7ecd 100644
+--- a/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
++++ b/runtime/vm/compiler/backend/flow_graph_compiler_arm64.cc
+@@ -667,9 +667,10 @@ void FlowGraphCompiler::EmitDispatchTableCall(
+ // falls back through TMP2, which this sequence does not use.
+ //
+ // ⚠️ Thread::indirect_static_call_table_offset() rather than their literal
+-// 0x978. Their Shorebird block sits mid-Thread and ours is appended, so 0x978
+-// would read an unrelated field here -- and the symptom would look like a
+-// corrupt table rather than a wrong offset.
++// 0x978. Ours sits at 0x978 too since F147, but only on arm64 without
++// compressed pointers; a literal would read an unrelated field anywhere else
++// -- and the symptom would look like a corrupt table rather than a wrong
++// offset.
+ void FlowGraphCompiler::EmitIndirectStaticCall(
+     intptr_t dd_slot,
+     const Function& function,
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index c436e81bf7b..c02ca01eb14 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1351,9 +1351,9 @@ void NativeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+     // (the slot is now a Smi-tagged kTaggedObject, see below).
+     //
+     // Thread's own offsets are used rather than target::Thread's because these
+-    // three fields are not in the checked-in runtime_offsets_extracted.h table
+-    // that this machine cannot regenerate (same situation as
+-    // Thread::is_simulating_, see thread.h). That is only valid while the
++    // three fields are not listed in runtime_offsets_list.h, so the extracted
++    // table has no entry for them (same situation as Thread::is_simulating_,
++    // see thread.h). That is only valid while the
+     // compiling and the running Thread layouts agree on these three fields.
+     // A compile-time comparison against a neighbouring field that *is* in the
+     // table cannot establish that (exit_through_ffi_ sits at the same offset in
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index f2c7de35f71..ab5c0c02acd 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -804,9 +804,10 @@ void StubCodeCompiler::GenerateTransitionDartToSimulatorIfNeededStub() {
+   // reproduce the output, not that structure, and `cmp` against a freshly
+   // extracted stub is what judges it.
+   //
+-  // The eight instructions that touch Thread cannot be byte-identical: their
+-  // Shorebird block sits mid-struct at 0x8d8..0x900 while ours is appended, for
+-  // the reason in Thread::is_simulating(). Everything else can be.
++  // The eight instructions that touch Thread encode Thread offsets. Since F147
++  // our Shorebird block sits where theirs does (0x8d8..0x900), so on arm64
++  // without compressed pointers those displacements equal theirs too; see
++  // Thread::is_simulating().
+   RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
+                  dart::Thread::exit_through_ffi_offset());
+ 
+@@ -851,14 +852,14 @@ void StubCodeCompiler::GenerateTransitionDartToCpuIfNeededStub() {
+   // spikes/shorebird_linkinfo_oracle/WRAPPER_STUBS.md section 7. It is not a
+   // masked thunk: it masks nothing and branches on Thread::is_simulating_.
+   //
+-  // Thread::is_simulating_ cannot be read through target::Thread, because
+-  // runtime_offsets_extracted.h is a checked-in table that this machine cannot
+-  // regenerate (see thread.h). The host offset stands in for the target offset,
+-  // which is only valid while the two layouts agree. Rather than assume that,
+-  // check it against a neighbouring Thread field that *is* in the table: if the
+-  // extracted offset and the host offset agree there, the layouts agree, and a
+-  // cross-architecture gen_snapshot fails loudly here instead of silently
+-  // emitting a wrong displacement.
++  // Thread::is_simulating_ cannot be read through target::Thread, because it is
++  // not listed in runtime_offsets_list.h, so runtime_offsets_extracted.h has no
++  // entry for it (see thread.h). The host offset stands in for the target
++  // offset, which is only valid while the two layouts agree. Rather than assume
++  // that, check it against a neighbouring Thread field that *is* in the table:
++  // if the extracted offset and the host offset agree there, the layouts agree,
++  // and a cross-architecture gen_snapshot fails loudly here instead of
++  // silently emitting a wrong displacement.
+   RELEASE_ASSERT(target::Thread::exit_through_ffi_offset() ==
+                  dart::Thread::exit_through_ffi_offset());
+ 
+-- 
+2.53.0
+

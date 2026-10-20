@@ -1,0 +1,312 @@
+From da614c520063f6aec14fd7e5422f23446e4b5f93 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 26 Aug 2026 14:43:06 +0800
+Subject: [PATCH 108/206] feat(shorebird): analyze_snapshot --shorebird
+ subgraph_hash
+
+SubgraphHasher's walk, recovered from their analyze_snapshot rather than
+guessed. Their constructor names its three Hashers as SSO literals --
+"subgraph" (this+0x28), "object_pool" (this+0x60) and "self" (this+0x98) --
+so the three JSON hashes are identified without inference, and what
+separates them is which entry kinds each vector receives.
+
+The walk: AccumulateRecursive pushes OffsetFromPayloadStart, then tests a
+vector<bool> at this+0x00 indexed by the entry's index in the instructions
+table and returns if the bit is set. So the bound is a per-root visited
+set, not a depth limit -- the `int depth` argument only gates the "self"
+hasher (every push to this+0xb0 sits behind cbnz w21) and the log indent.
+Recursion is at the call site, in instruction order.
+
+"subgraph" is the hasher that does not classify: one RawInstructionBits
+entry per word, and it keeps every word of a multi-instruction form --
+the writes at 0x100197448 and 0x1001974ec are pops, and they pop
+"object_pool" and "self" only. It also gets no CodeName; that entry is
+pushed once by the constructor into this+0x78.
+
+Reproduces the subgraph_hash of all 1380 functions in their own base.so
+as digests, and our binary agrees with an independent ELF-driven model on
+all 1589 of ours. It has to be digests: their 1380 values are all
+distinct, so a partition comparison would be vacuous here.
+
+op_subgraph_hash stays absent. Its routing is solved too, but it needs the
+classified stream of every function in the subgraph, and that classifier
+is right for 1208 of their 1380 -- so it reproduces only 842.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 5a3f3f0f535..cdb15b10b01 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -910,10 +910,25 @@ static intptr_t Ordinal(std::map<intptr_t, intptr_t>* seen,
+ // one pool access form while the hash recognised three, so it under-reported.
+ // Two scans of the same thing drift, and the drift is invisible from the
+ // output. Anything derived from these instructions belongs here.
++// One step of the "subgraph" hasher's stream. That hasher takes the instruction
++// stream verbatim -- it does not classify -- so it needs one step per word, and
++// the classifying scan below cannot produce them: it collapses multi-instruction
++// forms into a single entry.
++//
++// `is_branch_out` marks a branch whose target leaves this function. The walk
++// recurses there and the branch itself contributes nothing; every other step is
++// a RawInstructionBits entry carrying `word`.
++struct ShorebirdSubgraphStep {
++  uint32_t word;
++  bool is_branch_out;
++  intptr_t external_rel;  // byte offset from this payload's start; may be < 0
++};
++
+ struct ShorebirdCodeFacts {
+   std::string self_hash;
+   std::vector<intptr_t> pool_indices;   // first-seen order
+   std::vector<intptr_t> field_indices;  // first-seen order
++  std::vector<ShorebirdSubgraphStep> subgraph_steps;
+   // Targets of `b`/`bl` instructions that land OUTSIDE this function, as byte
+   // offsets relative to its own payload start (so they can be negative).
+   // Resolving one to a function needs the whole table, which is why the edge
+@@ -1051,6 +1066,28 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+   facts.pool_indices = std::move(pool_order);
+   facts.field_indices = std::move(field_order);
+   facts.external_targets = std::move(external_order);
++
++  // A second pass over the same instructions, which the note above warns
++  // against -- so here is why it is not the drift that note is about. The loop
++  // above advances by a variable stride, because a pool load owns its padding
++  // and a field-table access spans two or three instructions. The "subgraph"
++  // hasher collapses nothing, so it needs a step per word and cannot share that
++  // loop. What the two must agree on is which branches leave the function, and
++  // that agreement is structural: both ask DecodeBranchDelta and compare the
++  // target with [0, size).
++  facts.subgraph_steps.reserve(words);
++  for (intptr_t k = 0; k < words; k++) {
++    ShorebirdSubgraphStep step = {word_at(k), false, 0};
++    int32_t delta;
++    if (DecodeBranchDelta(step.word, &delta)) {
++      const int64_t target = k * 4 + static_cast<int64_t>(delta) * 4;
++      if (target < 0 || target >= size) {
++        step.is_branch_out = true;
++        step.external_rel = static_cast<intptr_t>(target);
++      }
++    }
++    facts.subgraph_steps.push_back(step);
++  }
+   return facts;
+ }
+ 
+@@ -1180,6 +1217,27 @@ void CollectAllCodes(
+ // 3629/3629 match is what says they need not be -- a compiler does not reach
+ // another function with `b.eq`.
+ //
++// The entry containing `offset`, or -1 if the offset falls in the padding
++// between entries. Requires `codes` sorted by offset, which CollectAllCodes
++// leaves it.
++//
++// Shared by the callee graph and the subgraph walk deliberately: they must agree
++// on what "lands inside v" means, and two copies of an upper_bound would be free
++// to disagree.
++intptr_t ShorebirdEntryContaining(const std::vector<CodeEntry>& codes,
++                                  intptr_t offset) {
++  // Upper bound on offset, then step back one: the entry that could contain the
++  // target is the last one starting at or before it.
++  auto it = std::upper_bound(codes.begin(), codes.end(), offset,
++                             [](intptr_t value, const CodeEntry& e) {
++                               return value < e.offset;
++                             });
++  if (it == codes.begin()) return -1;
++  --it;
++  if (offset >= it->offset + it->size) return -1;
++  return it->index_in_entries;
++}
++
+ // Requires `codes` to be sorted by offset, which CollectAllCodes leaves it.
+ std::vector<std::vector<intptr_t>> ShorebirdCallGraph(
+     const std::vector<CodeEntry>& codes,
+@@ -1189,23 +1247,122 @@ std::vector<std::vector<intptr_t>> ShorebirdCallGraph(
+   for (intptr_t u = 0; u < n; u++) {
+     std::set<intptr_t> edges;
+     for (intptr_t rel : facts[u].external_targets) {
+-      const intptr_t target = codes[u].offset + rel;
+-      // Upper bound on offset, then step back one: the entry that could contain
+-      // the target is the last one starting at or before it.
+-      auto it = std::upper_bound(codes.begin(), codes.end(), target,
+-                                 [](intptr_t value, const CodeEntry& e) {
+-                                   return value < e.offset;
+-                                 });
+-      if (it == codes.begin()) continue;
+-      --it;
+-      if (target >= it->offset + it->size) continue;  // padding between entries
+-      edges.insert(it->index_in_entries);
++      const intptr_t v = ShorebirdEntryContaining(codes, codes[u].offset + rel);
++      if (v >= 0) edges.insert(v);
+     }
+     callees[u].assign(edges.begin(), edges.end());
+   }
+   return callees;
+ }
+ 
++// Shorebird's subgraph_hash, one per entry.
++//
++// Recovered from their analyze_snapshot rather than guessed. SubgraphHasher
++// holds THREE Hashers, and their own constructor names them: "subgraph" at
++// this+0x28, "object_pool" at this+0x60 and "self" at this+0x98, each a
++// std::string followed by the vector<Entry> the digest is taken over. The
++// entries every Hasher receives are routed by AccumulateRecursive
++// (0x100196694), and the routing is what separates the three hashes:
++//
++//   * "self" is written only when the `int depth` argument is zero -- every
++//     push to this+0xb0 sits behind `cbnz w21`. So self_hash is the root's own
++//     entries and nothing else.
++//   * "subgraph" receives the instruction stream verbatim: one
++//     RawInstructionBits entry per word (the push at 0x100196950-0x100196960),
++//     and NOT the classified ObjectPoolLoadIndex / FieldTableLoadIndex /
++//     DispatchTableCall / ExternalBranchTargetIndex entries the other two get.
++//     Where they collapse a multi-instruction form into one entry it keeps all
++//     of the words: the truncations at 0x100197448 and 0x1001974ec pop the
++//     already-emitted entries off "object_pool" and "self" only.
++//   * "object_pool" additionally carries a CodeName entry, pushed once by the
++//     constructor at 0x100195f68 into this+0x78 -- which is why
++//     op_subgraph_hash never equals self_hash and subgraph_hash sometimes does.
++//
++// The walk itself: AccumulateRecursive pushes OffsetFromPayloadStart, then
++// tests a std::vector<bool> at this+0x00 indexed by the entry's index in the
++// instructions table and returns immediately if the bit is set (0x100196890).
++// So the bound is a per-root visited set, NOT a depth limit -- `depth` is only
++// the self_hash gate and the log indent. Recursion is at the call site, in
++// instruction order, with depth+1 (the single self-call at 0x100196928).
++//
++// Measured: this reproduces the subgraph_hash of all 1380 functions in their own
++// base.so exactly -- digests, not a partition. Note that their partition IS the
++// discrete one (1380 distinct values), so a partition comparison would have been
++// vacuous here; the criterion is digest equality.
++//
++// ⚠️ Encoding forms this covers, because the negative half of the claim needs
++// it: a call site is any branch DecodeBranchDelta recognises (b, bl, b.cond,
++// cbz/cbnz, tbz/tbnz) whose target leaves the function and lands inside another
++// entry. On their base.so all 4997 of them are b/bl and all resolve, and zero
++// conditional branches leave a function -- so the wider rule and the b/bl rule
++// coincide on that corpus and the extra generality is untested rather than
++// wrong.
++std::vector<std::string> ShorebirdSubgraphHashes(
++    const std::vector<CodeEntry>& codes,
++    const std::vector<ShorebirdCodeFacts>& facts) {
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  std::vector<std::string> out;
++  out.reserve(n);
++
++  std::vector<uint8_t> stream;
++  std::vector<bool> visited(n);
++  // (entry, next step) -- an explicit stack rather than recursion, because the
++  // callee expansion is spliced in at the call site and so the caller has to be
++  // resumed mid-body.
++  std::vector<std::pair<intptr_t, intptr_t>> stack;
++
++  auto emit = [&](int32_t kind, uint32_t value) {
++    for (int i = 0; i < 4; i++) stream.push_back((kind >> (i * 8)) & 0xFF);
++    for (int i = 0; i < 4; i++) stream.push_back((value >> (i * 8)) & 0xFF);
++  };
++
++  for (intptr_t root = 0; root < n; root++) {
++    stream.clear();
++    visited.assign(n, false);
++    stack.clear();
++
++    // OffsetFromPayloadStart carries the target's offset within the entry it
++    // lands in, and it is pushed BEFORE the visited test -- so a second arrival
++    // at an already-expanded entry still contributes this one entry.
++    emit(kEntryOffsetFromPayloadStart, 0);
++    visited[root] = true;
++    stack.push_back({root, 0});
++
++    while (!stack.empty()) {
++      const intptr_t u = stack.back().first;
++      const intptr_t k = stack.back().second;
++      const std::vector<ShorebirdSubgraphStep>& steps =
++          facts[u].subgraph_steps;
++      if (k >= static_cast<intptr_t>(steps.size())) {
++        stack.pop_back();
++        continue;
++      }
++      stack.back().second = k + 1;
++      const ShorebirdSubgraphStep& step = steps[k];
++      if (!step.is_branch_out) {
++        emit(kEntryRawInstructionBits, step.word);
++        continue;
++      }
++      const intptr_t target = codes[u].offset + step.external_rel;
++      const intptr_t v = ShorebirdEntryContaining(codes, target);
++      if (v < 0) {
++        // Not a call: it reaches the padding between entries. Their walk would
++        // index the visited bitset with -1, so this cannot be a shape their own
++        // input takes -- keeping the word is the conservative reading.
++        emit(kEntryRawInstructionBits, step.word);
++        continue;
++      }
++      emit(kEntryOffsetFromPayloadStart,
++           static_cast<uint32_t>(target - codes[v].offset));
++      if (visited[v]) continue;
++      visited[v] = true;
++      stack.push_back({v, 0});
++    }
++    out.push_back(Sha1HexOf(stream.data(), stream.size()));
++  }
++  return out;
++}
++
+ // Whether a function has an identity to key a DD table entry on: the owner is a
+ // Function, or it is an allocation stub. Type-test stubs and the owner-less
+ // stubs do not, even though many of them do have callers.
+@@ -1401,6 +1558,8 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+   }
+   const std::vector<std::vector<intptr_t>> callees =
+       ShorebirdCallGraph(codes, all_facts);
++  const std::vector<std::string> subgraph_hashes =
++      ShorebirdSubgraphHashes(codes, all_facts);
+ 
+   // functions array
+   js.OpenArray("functions");
+@@ -1414,10 +1573,22 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+ 
+     const ShorebirdCodeFacts& facts = all_facts[ci];
+     js.PrintProperty("self_hash", facts.self_hash.c_str());
+-    // subgraph_hash and op_subgraph_hash are DELIBERATELY ABSENT. They
+-    // accumulate over the callee walk, which is unsolved -- see
+-    // SUBGRAPH_HASHER_RECON.md -- and they used to be emitted carrying
+-    // self_hash, which is wrong.
++    // The walk is implemented, so subgraph_hash is back -- and it is back
++    // because it is checked against their artifact rather than because it is
++    // plausible: ShorebirdSubgraphHashes reproduces the subgraph_hash of all
++    // 1380 functions of their own base.so exactly. See the comment on that
++    // function for the disassembly it came from.
++    js.PrintProperty("subgraph_hash", subgraph_hashes[ci].c_str());
++    // op_subgraph_hash is still DELIBERATELY ABSENT, and the reason is now
++    // narrow rather than "the walk is unsolved". Its routing is known -- the
++    // "object_pool" Hasher gets a leading CodeName entry, whose value is
++    // Utils::StringHash of Code::Name(), plus the CLASSIFIED entry stream of
++    // the whole walk with the pool and field-table ordinal maps shared across
++    // it. That last part is the gap: those ordinals come from the same
++    // classifier self_hash uses, and it is right for 1208 of their 1380
++    // functions, so op_subgraph_hash reproduces only 842 of 1380. A hash that
++    // is right five times in six is worse than a missing key, because a
++    // consumer cannot tell which.
+     //
+     // Omitting beats emitting a wrong value here, and the reason is a specific
+     // consumer rather than taste. tools/linker.py matches patch functions to
+@@ -1426,14 +1597,7 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     // parameter, so pointing it at this one would have produced a quietly
+     // degraded patch with no error anywhere. A missing key raises KeyError on
+     // the first function instead.
+-    //
+-    // ⚠️ This is a deliberate divergence from their schema, which does carry
+-    // both keys. Rule 3 asks us to reproduce their interface so our output can
+-    // be checked against theirs; emitting a field whose value we know to be
+-    // wrong imitates the shape while breaking the contract, and buys a
+-    // fidelity nothing can observe at the price of a silent failure
+-    // downstream. Restore the keys when the walk is implemented, not before.
+-    
++
+     js.OpenArray("self_pp");
+     for (intptr_t slot : facts.pool_indices) js.PrintValue64(slot);
+     js.CloseArray();
+-- 
+2.53.0
+

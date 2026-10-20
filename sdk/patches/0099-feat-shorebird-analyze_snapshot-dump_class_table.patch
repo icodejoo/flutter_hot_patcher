@@ -1,0 +1,199 @@
+From 734abc41d10dd282338d3c649c87d96109dbbf10 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 25 Aug 2026 18:57:04 +0800
+Subject: [PATCH 099/206] feat(shorebird): analyze_snapshot --dump_class_table
+
+Our dump of our snapshot is byte-identical to their dump of theirs: 619 cids,
+529 classes, cmp clean.
+
+This is wiring rather than a new dump, which is why it is small.
+GetClassTableLinkInfo already walks a live isolate's class table and produces
+exactly {id, name, hash} per class, and our
+--print_class_table_link_debug_info_to already renders it in what turns out to
+be precisely Shorebird's --dump_class_table schema. The hashes were already
+known to agree, since --print_class_table_link_info_to is byte-identical to
+theirs. So the work was a buffer variant of the existing JSON writer, an API
+entry point, and the flag.
+
+Checked before writing anything, per the standing rule: link_info.cc is in
+vm_sources.gni with no DART_PRECOMPILED_RUNTIME guard, so it is already in the
+AOT runtime that analyze_snapshot is built from. Had it not been, this would
+have been a much larger change.
+
+The withheld flag count drops from five to four. The help text gains the two
+lines, verified byte for byte against theirs by
+analyze_snapshot_help_check.sh, and the comment on the remaining four now
+records what each actually needs -- including that op_subgraph_hash is not
+merely unfinished but stands at 1185 of 1380 with the rest requiring the call
+graph.
+
+Negative control: emitting cid + 1 turns class_table_dump_check.sh red with the
+differing entry quoted. Restored.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index 15ad4b1b36b..ccdf11fc609 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -25,7 +25,8 @@ namespace bin {
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+   V(help, help)                                                                \
+   V(sdk_version, sdk_version)                                                  \
+-  V(shorebird, shorebird_mode)
++  V(shorebird, shorebird_mode)                                                 \
++  V(dump_class_table, dump_class_table)
+ 
+ #define STRING_OPTION_DEFINITION(flag, variable)                               \
+   static const char* variable = nullptr;                                       \
+@@ -74,22 +75,28 @@ static void PrintUsage() {
+ // least declared, and this one is help text with nothing behind it.
+ "--no_pp_hash                                                                \n"
+ "  Ignore PP offsets when computing subgraph hashes.                         \n"
+-// Shorebird lists five more flags at this point, in this order:
+-// --dump_object_pool_link_data, --dump_blobs, --dump_object_pool,
+-// --dump_class_table and --disassemble. They are deliberately NOT listed here,
++"--dump_class_table                                                          \n"
++"  Dump the class table as JSON for debugging.                               \n"
++// Shorebird lists four more flags at this point, in this order:
++// --dump_object_pool_link_data, --dump_blobs, --dump_object_pool
++// and --disassemble. They are deliberately NOT listed here,
+ // because this binary does not implement them, and a help text advertising a
+ // flag the parser rejects is worse than one that is short.
+ //
+ // The omission is pinned rather than left to memory:
+-// analyze_snapshot_help_check.sh takes their --help, deletes exactly those five
++// analyze_snapshot_help_check.sh takes their --help, deletes exactly those four
+ // blocks, and requires what is left to equal ours byte for byte. Every line
+ // above is therefore checked against theirs on every run, and what is missing
+ // is a number that has to shrink deliberately.
+ //
+-// None of the five is small. --dump_object_pool_link_data needs
+-// op_subgraph_hash, a private subsystem this tree does not have --
+-// ObjectPoolLinkInfo::WriteToStream is already here and byte-verified against
+-// their files, so what is missing is the producer, not the format.
++// --dump_object_pool_link_data and --dump_object_pool both need
++// op_subgraph_hash, a private subsystem this tree does not have. Its
++// reconstruction stands at 1185 of 1380 functions and the remainder needs the
++// call graph walked, which is why it is not simply a matter of more effort --
++// see SUBGRAPH_HASHER_RECON.md in the research tree. ObjectPoolLinkInfo's own
++// encoder is implemented and byte-verified against their files, so what is
++// missing there is the producer, not the format.
++//
+ // --dump_blobs needs the four region sizes, which
+ // Dart_SnapshotAnalyzerInformation does not carry.
+ "If omitting [<vm-flags>] the VM parsing the snapshot is created with the    \n"
+@@ -264,7 +271,9 @@ int RunAnalyzer(int argc, char** argv) {
+   intptr_t out_len = 0;
+ 
+   Dart_EnterScope();
+-  if (shorebird_mode) {
++  if (dump_class_table) {
++    Dart_DumpClassTableAsJson(info, &out, &out_len);
++  } else if (shorebird_mode) {
+     Dart_DumpSnapshotInformationShorebirdAsJson(info, &out, &out_len);
+   } else {
+     Dart_DumpSnapshotInformationAsJson(info, &out, &out_len);
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index daf616f5d09..cc82282027c 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -30,6 +30,14 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     char** out,
+     intptr_t* out_len);
+ 
++// flutter_hot_patcher: Shorebird's --dump_class_table. The JSON is
++// {"num_cids": N, "classes": [{"id", "name", "hash"}, ...]}, which is the same
++// shape our --print_class_table_link_debug_info_to already emits, because both
++// render the same ClassTableLinkInfo.
++void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
++                               char** out,
++                               intptr_t* out_len);
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+ 
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index d6604728537..9d3358cf073 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -20,6 +20,7 @@
+ #include <vector>
+ #include "vm/object.h"
+ #include "vm/object_store.h"
++#include "vm/shorebird/link_info.h"
+ #include "vm/thread.h"
+ 
+ namespace dart {
+@@ -918,6 +919,22 @@ void CollectAllCodes(
+ // Each function entry: {name, index_in_entries, offset, size,
+ //                       self_hash, subgraph_hash, op_subgraph_hash,
+ //                       self_pp, subgraph_pp, callees, ...}
++// flutter_hot_patcher: Shorebird's --dump_class_table.
++//
++// This is wiring, not a new dump. GetClassTableLinkInfo already walks a live
++// isolate's class table and produces exactly {id, name, hash} per class, and
++// our --print_class_table_link_info_to output is byte-identical to theirs, so
++// the hashes here are already known to agree with Shorebird's.
++void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
++                               char** out,
++                               intptr_t* out_len) {
++  Thread* thread = Thread::Current();
++  DARTSCOPE(thread);
++  const std::unique_ptr<ClassTableLinkInfo> table =
++      GetClassTableLinkInfo(thread);
++  table->WriteDebugInfoToBuffer(out, out_len);
++}
++
+ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     const Dart_SnapshotAnalyzerInformation& info,
+     char** out,
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 207a8319c75..47fda4ae8b1 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -169,7 +169,8 @@ void ClassTableLinkInfo::WriteToFile(const char* path) const {
+   }
+ }
+ 
+-void ClassTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
++void ClassTableLinkInfo::WriteDebugInfoToBuffer(char** buffer,
++                                                intptr_t* length) const {
+   JSONWriter js;
+   js.OpenObject();
+   js.PrintProperty64("num_cids", num_cids_);
+@@ -183,10 +184,13 @@ void ClassTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
+   }
+   js.CloseArray();
+   js.CloseObject();
++  js.Steal(buffer, length);
++}
+ 
++void ClassTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
+   char* output = nullptr;
+   intptr_t output_length = 0;
+-  js.Steal(&output, &output_length);
++  WriteDebugInfoToBuffer(&output, &output_length);
+   CallbackFile file(path);
+   if (file.is_open()) {
+     file.Write(output, output_length);
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index bad08440793..ec4082ad31c 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -84,6 +84,12 @@ class ClassTableLinkInfo {
+   // the cross-check for the binary writer.
+   void WriteDebugInfoToFile(const char* path) const;
+ 
++  // The same JSON into a malloc'd buffer, which is the shape
++  // analyze_snapshot's --dump_class_table needs: it hands the bytes back to
++  // the embedder rather than naming a file itself. Ownership passes to the
++  // caller.
++  void WriteDebugInfoToBuffer(char** buffer, intptr_t* length) const;
++
+  private:
+   std::vector<ClassInfo> classes_;
+   intptr_t num_cids_;
+-- 
+2.53.0
+

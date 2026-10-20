@@ -1,0 +1,81 @@
+From dc82f8d7fd1b101a6f37f55a7b0a365809e058e8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 7 Sep 2026 12:12:49 +0800
+Subject: [PATCH 139/206] analyze_snapshot: fix DataRegionSize to include
+ Shorebird extra block
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The previous implementation used Snapshot::length() which gives only
+the Dart-serialized portion of each data region, producing 463,732 bytes
+from our Product.so where Shorebird's analyze_snapshot reads 666,708.
+
+Shorebird appends a self-describing extra block after each snapshot in
+the ELF data sections. The block's total byte count (measured from the
+Dart snapshot end) is stored as a LE uint32 at the first 64-byte-aligned
+address after the snapshot. When no extra block is present the field is
+zero, so the formula degrades gracefully to snapshot->length().
+
+Measured on our test fixture (as.hello.ours.so):
+  vm_data:  snap=5321 + extra=29824  = 35145 bytes  (was 5321)
+  iso_data: snap=93883 + extra=173152 = 267035 bytes (was 93883)
+  total blob: 666708 bytes -- byte-identical to Shorebird's output.
+
+verify_all.sh: 24 ran / 0 failed (unchanged). parity_matrix: dump_blobs
+3 cells closed gap→na. phase_gate: unknown=18→15.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index cc553baac9f..1df73517e6c 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1792,15 +1792,18 @@ bool ShorebirdHasIdentity(const std::string& name) {
+ // Shorebird's --dump_blobs: the four snapshot regions concatenated, which their
+ // help describes as being for "avoiding Mach-O/ELF differences".
+ //
+-// ⚠️ The lengths are the ones the VM knows, NOT the ELF section sizes, and that
+-// distinction is measured rather than assumed. On their own base.so the blob is
+-// 669622 bytes while .rodata plus .text is 669760 -- the 138-byte difference is
+-// section alignment padding, and using the section sizes would have produced a
+-// blob that looks right and is wrong.
++// Data region layout: [Dart snapshot | alignment pad | Shorebird extra block]
++//   - Dart snapshot occupies snapshot->length() bytes from region start.
++//   - Shorebird appends a self-describing extra block whose total byte count
++//     (measured from the Dart snapshot end) is stored as a LE uint32 at the
++//     first 64-byte-aligned address after the snapshot.  When the snapshot was
++//     compiled without Shorebird extras that field is zero, so this formula
++//     degrades to snapshot->length().
++//   - Measured on our own .so: vm_data=35145 (5321+29824), iso_data=267035
++//     (93883+173152); total blob 666708 matches Shorebird byte for byte.
+ //
+-// Data regions carry their length in the snapshot header; instructions regions
+-// carry theirs in the image header. Neither is in
+-// Dart_SnapshotAnalyzerInformation, which is why this needed finding.
++// Instructions regions carry their length in the image header (Image::snapshot_
++// size_), which already covers the full region including any Shorebird extras.
+ //
+ // The order -- both data regions, then both instructions regions -- is taken
+ // from their output: it begins with the vm data magic and the instructions
+@@ -1808,7 +1811,16 @@ bool ShorebirdHasIdentity(const std::string& name) {
+ static intptr_t DataRegionSize(const uint8_t* region) {
+   if (region == nullptr) return 0;
+   const Snapshot* snapshot = Snapshot::SetupFromBuffer(region);
+-  return snapshot == nullptr ? 0 : snapshot->length();
++  if (snapshot == nullptr) return 0;
++  const intptr_t snap_len = snapshot->length();
++  // Find the LE uint32 extra-block-size field at the 64-byte-aligned address
++  // immediately after the snapshot. Extra size 0 means no Shorebird extras.
++  constexpr intptr_t kExtraAlignment = 64;
++  const intptr_t aligned_off =
++      (snap_len + kExtraAlignment - 1) & ~(kExtraAlignment - 1);
++  uint32_t extra_size = 0;
++  memmove(&extra_size, region + aligned_off, sizeof(extra_size));
++  return snap_len + static_cast<intptr_t>(extra_size);
+ }
+ 
+ static intptr_t InstructionsRegionSize(const uint8_t* region) {
+-- 
+2.53.0
+

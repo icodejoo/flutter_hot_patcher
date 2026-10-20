@@ -1,0 +1,193 @@
+From 4d30ea43144ab43c24caa37885843409b4b358f8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 22:27:40 +0800
+Subject: [PATCH 152/206] analyze_snapshot: reconstruct the immediates of the
+ two undecoded dispatch heads
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+DecodeDispatchCall recognised four shapes of dispatch-table call head and
+decoded the selector out of two of them. The movz/movk head and the
+logical-immediate head both wrote kNoSelector, with a comment saying
+reconstructing the immediate was its own change with its own negative control.
+This is that change (F66).
+
+Both now materialise the value the head puts in IP1 and report
+kOriginElement + value, the same convention the add/sub #imm12 head uses.
+
+⚠️ The SHAPE TESTS ARE UNTOUCHED. Narrowing them (requiring opc==movz, or
+orr-from-xzr) to make the value decodable would change which instruction
+streams match and therefore how many words each head consumes, shifting every
+entry after it in the stream. Instead the value decoders are strict where the
+shape matchers are loose and fall back to kNoSelector: DecodeLogicalImmediateToReg
+refuses and/eor/ands and any non-xzr Rn, ApplyMoveWide refuses a leading movk,
+ApplyAddShift refuses a shifted-register operand it cannot reconstruct. "Not
+decoded" and "decoded wrong" are different answers and only one of them is safe.
+
+The addend is read SIGNED: movn and the rotated logical immediates materialise
+small negative numbers as all-ones-prefixed 64-bit patterns, and the add wraps.
+
+Measured, ProductSimARM64, via fhp-research
+spikes/shorebird_linkinfo_oracle/{parity_matrix.sh --reuse,
+evidence_shorebird_components.sh}:
+
+  REAL GAP 2268 -> 4
+
+  subgraph_selectors  distinct_missing 2126 -> 0  [GAP] -> [EQUAL]
+  self_selectors      distinct_missing  138 -> 0  [GAP] -> [EQUAL]
+
+The remaining 4 are self_pp 2 + subgraph_pp 2 -- pool index 1332 in prog
+functions fn#1580/fn#1633, a different undecoded pool-access form and not this
+card's subject.
+
+Containment survives: INV-MULTISET and INV-COUNT report 0 violations over 27576
+triples, so all 2304 newly emitted selector values land inside their multiset.
+A wrong reconstruction would emit values theirs does not hold and break exactly
+that invariant, which is why it is worth more here than the totals.
+
+F66_DECODE_DISPATCH_IMMEDIATES=0 forces both heads back to kNoSelector for NC2.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index ff5f177c194..dae94a05245 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -12,6 +12,7 @@
+ #include <vector>
+ 
+ #include "include/analyze_snapshot_api.h"
++#include "vm/analyze_snapshot_arm64_decode.h"
+ #include "vm/compiler/assembler/disassembler.h"
+ #include "vm/compiler/runtime_api.h"
+ #include "vm/flags.h"
+@@ -875,37 +876,10 @@ static bool DecodeBranchDelta(uint32_t w, int32_t* delta) {
+   return false;
+ }
+ 
+-// dart::Instr::ImmLogical, constants_arm64.h:1618. Copied rather than called
+-// because this file decodes raw words out of a snapshot payload and never
+-// builds an Instr; the algorithm is upstream's, verbatim.
+-static uint64_t DecodeImmLogical(uint32_t w) {
+-  const int reg_size = ((w >> 31) & 1) != 0 ? 64 : 32;
+-  const int n = (w >> 22) & 1;
+-  const int imm_s = (w >> 10) & 0x3F;
+-  const int imm_r = (w >> 16) & 0x3F;
+-  auto rotate_right = [](uint64_t value, int rotate, int width) -> uint64_t {
+-    rotate &= 63;
+-    if (rotate == 0) return value;
+-    const uint64_t mask = (width == 64) ? ~0ULL : ((1ULL << width) - 1);
+-    return ((value << (width - rotate)) | (value >> rotate)) & mask;
+-  };
+-  if (n == 1) {
+-    if (imm_s == 0x3F) return 0;
+-    return rotate_right((1ULL << (imm_s + 1)) - 1, imm_r, 64);
+-  }
+-  if ((imm_s >> 1) == 0x1F) return 0;
+-  for (int width = 32; width >= 2; width /= 2) {
+-    if ((imm_s & width) == 0) {
+-      const int mask = width - 1;
+-      if ((imm_s & mask) == mask) return 0;
+-      uint64_t result =
+-          rotate_right((1ULL << ((imm_s & mask) + 1)) - 1, imm_r & mask, width);
+-      for (int w2 = width; w2 < reg_size; w2 *= 2) result |= result << w2;
+-      return (reg_size == 64) ? result : (result & 0xFFFFFFFFULL);
+-    }
+-  }
+-  return 0;
+-}
++// DecodeImmLogical, ApplyMoveWide, ApplyAddShift and
++// DecodeLogicalImmediateToReg now live in vm/analyze_snapshot_arm64_decode.h
++// (included at the top of this file) so that they can be unit tested without
++// dragging in the VM. See that header for why.
+ 
+ // An object pool reference opening at words[i], as (index, instructions).
+ //
+@@ -1067,6 +1041,34 @@ static bool DecodeFieldReference(const uint32_t* words, intptr_t count,
+ // dropped both.
+ static constexpr intptr_t kNoSelector = -1;
+ 
++// NC2 for F66. Set to 0 to force the two heads this change taught to decode --
++// the movz/movk one and the logical-immediate one -- back to kNoSelector,
++// leaving everything else (including the rebuild) identical. REAL GAP must go
++// back to its pre-F66 value of 2268; if it does not, the drop was not caused by
++// this decode. Driven by
++// spikes/shorebird_linkinfo_oracle/nc2_f66_force_noselector.sh.
++#ifndef F66_DECODE_DISPATCH_IMMEDIATES
++#define F66_DECODE_DISPATCH_IMMEDIATES 1
++#endif
++
++// `add lr, x0, x17` makes the row index (origin + x17), so whatever was
++// materialised into IP1 is a selector offset from kOriginElement, exactly like
++// the #imm12 of the add/sub head below.
++//
++// ⚠️ Read SIGNED. Both `movn` and the rotated logical immediates materialise
++// small negative numbers as all-ones-prefixed 64-bit patterns -- `mov x17,
++// #-16` is the word for 0xFFFFFFFFFFFFFFF0 -- and the add then wraps, i.e.
++// subtracts. Taking that unsigned puts the selector 2^64 away from the table
++// and, being a plausible-looking large integer, would not obviously be wrong.
++static intptr_t SelectorFromAddend(uint64_t value) {
++#if !F66_DECODE_DISPATCH_IMMEDIATES
++  return kNoSelector;
++#else
++  return DispatchTable::kOriginElement +
++         static_cast<intptr_t>(static_cast<int64_t>(value));
++#endif
++}
++
+ // Instructions consumed by a dispatch-table call opening at words[i].
+ //
+ // 0x100196e64-0x100196fe4. The tail is always `ldr lr,[x21,lr,lsl 3]` ;
+@@ -1098,25 +1100,41 @@ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     j = i + 1;
+     n = 4;
++    // movz/movk into IP1 then `add lr, x0, x17`.
++    //
++    // ⚠️ The shape test is NOT narrowed to reconstruct the value. Requiring
++    // opc==movz here would change which streams match and therefore how many
++    // words get consumed, which shifts every entry after this one. Shape
++    // matching stays exactly as it was; the value decoder is separately strict
++    // and falls back to kNoSelector when it cannot know the answer.
++    uint64_t value = 0;
++    bool decoded = ApplyMoveWide(w, /*first=*/true, &value);
+     if ((words[j] & 0x1F800000) == 0x12800000) {
+       if ((words[j] & 0x1F) != kIP1Register) return false;
++      decoded = decoded && ApplyMoveWide(words[j], /*first=*/false, &value);
+       j++;
+       n = 5;
+     }
+     if (j >= count || (words[j] & 0x1F1F03FF) != 0x0B11001E) return false;
++    decoded = decoded && ApplyAddShift(words[j], &value);
+     j++;
+-    // movz/movk into IP1 then `add lr, x0, x17`. The immediate is recoverable;
+-    // reconstructing it is its own change with its own negative control, so
+-    // for now say "not decoded" rather than a value this can never be.
+-    if (selector_offset) *selector_offset = kNoSelector;
++    if (selector_offset) {
++      *selector_offset = decoded ? SelectorFromAddend(value) : kNoSelector;
++    }
+   } else if ((w & 0x1F800000) == 0x12000000) {          // logical immediate
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     if ((words[i + 1] & 0x1F1F03FF) != 0x0B11001E) return false;
+     j = i + 2;
+     n = 4;
+-    // Logical immediate into IP1. Recoverable via DecodeBitMasks; same note as
+-    // the movz head above.
+-    if (selector_offset) *selector_offset = kNoSelector;
++    // Logical immediate into IP1, then `add lr, x0, x17`. Same rule as above:
++    // the shape test is untouched, and only orr-from-xzr yields a value this
++    // can vouch for.
++    uint64_t value = 0;
++    bool decoded = DecodeLogicalImmediateToReg(w, &value) &&
++                   ApplyAddShift(words[i + 1], &value);
++    if (selector_offset) {
++      *selector_offset = decoded ? SelectorFromAddend(value) : kNoSelector;
++    }
+   } else if ((w & 0x1F0003FF) == 0x1100001E) {          // add/sub lr, x0, #imm
+     j = i + 1;
+     n = 3;
+-- 
+2.53.0
+

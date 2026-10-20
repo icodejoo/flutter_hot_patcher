@@ -1,0 +1,178 @@
+From edce6e25b779054a825bc647e3378fafdf061cea Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 24 Sep 2026 13:34:22 +0800
+Subject: [PATCH 163/206] F37 (A1): teach NativeCallPattern the Shorebird
+ thread-field dispatch shape
+
+Decode: when the two instructions before the `blr x30` are
+`asr x16,x16,#1; ldr x30,[x26,x16]`, the site is Shorebird's shape A. The
+pool load that feeds x16 ends where the `asr` begins, so start the backward
+walk at end_-3*kInstrSize instead of end_-2*kInstrSize. Without this the
+first DecodeLoadWordFromPool lands on the `asr` itself, which passes
+IsLoadStoreRegOp() and RtField() by encoding-layout coincidence and, with
+asserts compiled out, yields a garbage pool index.
+
+Contract: at a shape-A site there is no Code* trampoline slot. Which
+trampoline runs is decided by *which Thread field* the Smi-tagged offset in
+the pool slot names, so target()/set_target() translate between a Code and
+one of the three call_*_native_entry_point_ offsets added in 531c5356dda, and
+the write is SetRawValueAt, not SetObjectAt -- the slot's type tag is
+kImmediate and SetObjectAt rejects a non-Smi object there by its own assert.
+
+This is what makes re-linking work at all: LinkNativeCall does not always
+patch in CallBootstrapNative -- it picks bootstrap / no-scope / auto-scope
+from the resolved native. A no-op set_target() would silently route every
+auto-scope and no-scope native through the bootstrap wrapper. The three
+adjacent Thread fields in their binary are the mechanism that makes this
+representable.
+
+Ambiguity: this tail is byte-identical to EmitIndirectStaticCall's DD-table
+dispatch, but that construct never reaches NativeCallPattern -- its only
+constructors are CodePatcher::{Get,Patch}NativeCallAt, whose only callers are
+inside NativeEntry::LinkNativeCall.
+
+Emission is not switched on yet; this commit is decode + contract only, and
+is a no-op on the current shape-B output.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/instructions_arm64.cc b/runtime/vm/instructions_arm64.cc
+index 16ef38bc9af..f509c89c274 100644
+--- a/runtime/vm/instructions_arm64.cc
++++ b/runtime/vm/instructions_arm64.cc
+@@ -13,6 +13,7 @@
+ #include "vm/object.h"
+ #include "vm/object_store.h"
+ #include "vm/reverse_pc_lookup_cache.h"
++#include "vm/stub_code.h"
+ 
+ namespace dart {
+ 
+@@ -79,16 +80,63 @@ ICCallPattern::ICCallPattern(uword pc, const Code& code)
+   data_pool_index_ = pool_index + 1;
+ }
+ 
++// Shorebird "shape A" tail for a lazily-linked native call, as emitted by
++// NativeCallInstr::EmitNativeCode in precompiled mode:
++//
++//   ldr x16,[PP,#slot]   (+ object-pool load padding NOPs)
++//   asr x16,x16,#1       ; untag the Smi
++//   ldr x30,[x26,x16]    ; x26 = THR
++//   blr x30
++//
++// The pool slot holds SmiTag(<Thread offset of one of the three
++// call_*_native_entry_point_ fields>). There is no Code* trampoline slot at
++// such a site at all -- which trampoline runs is decided by *which Thread
++// field the offset names*, so relinking rewrites the immediate rather than
++// storing a Code object (ObjectPool::SetObjectAt would reject that anyway:
++// the slot's type tag is kImmediate).
++//
++// This tail is byte-identical to the one FlowGraphCompiler::
++// EmitIndirectStaticCall emits for the DD table, but that construct never
++// reaches this class: NativeCallPattern is only ever built by
++// CodePatcher::{Get,Patch}NativeCallAt, whose only callers are inside
++// NativeEntry::LinkNativeCall.
++static bool IsThreadFieldDispatchTail(uword end) {
++  // `ldr x30,[x26,x16]`, matched with the same mask measure_dd_emission.sh
++  // uses: bits 12..15 (extend option / shift) are not constrained.
++  const uint32_t branch_load =
++      *(reinterpret_cast<uint32_t*>(end) - 2);  // one before `blr`
++  if ((branch_load & 0xFFE00C00) != 0xF8600800) return false;
++  if (((branch_load >> 16) & 0x1F) != static_cast<uint32_t>(R16)) return false;
++  if (((branch_load >> 5) & 0x1F) != static_cast<uint32_t>(THR)) return false;
++  if ((branch_load & 0x1F) != static_cast<uint32_t>(R30)) return false;  // LR
++  // `asr x16,x16,#1`
++  return *(reinterpret_cast<uint32_t*>(end) - 3) == 0x9341fe10;
++}
++
+ NativeCallPattern::NativeCallPattern(uword pc, const Code& code)
+     : object_pool_(ObjectPool::Handle(code.GetObjectPool())),
+       end_(pc),
+       native_function_pool_index_(-1),
+-      target_code_pool_index_(-1) {
++      target_code_pool_index_(-1),
++      via_thread_field_(false) {
+   ASSERT(code.ContainsInstructionAt(pc));
+   // Last instruction: blr lr.
+   ASSERT(*(reinterpret_cast<uint32_t*>(end_) - 1) == 0xd63f03c0);
+ 
+   Register reg;
++  if (IsThreadFieldDispatchTail(end_)) {
++    via_thread_field_ = true;
++    // The Smi-tagged Thread offset's pool load ends where the `asr` begins.
++    const uword thread_offset_load_end = end_ - 3 * Instr::kInstrSize;
++    uword native_function_load_end = InstructionPattern::DecodeLoadWordFromPool(
++        thread_offset_load_end, &reg, &target_code_pool_index_);
++    ASSERT(reg == R16);
++    InstructionPattern::DecodeLoadWordFromPool(native_function_load_end, &reg,
++                                               &native_function_pool_index_);
++    ASSERT(reg == R5);
++    return;
++  }
++
+   uword native_function_load_end = InstructionPattern::DecodeLoadWordFromPool(
+       end_ - 2 * Instr::kInstrSize, &reg, &target_code_pool_index_);
+   ASSERT(IsBranchLinkScratch(reg));
+@@ -98,11 +146,41 @@ NativeCallPattern::NativeCallPattern(uword pc, const Code& code)
+ }
+ 
+ CodePtr NativeCallPattern::target() const {
++  if (via_thread_field_) {
++    const intptr_t offset = static_cast<intptr_t>(
++        object_pool_.RawValueAt(target_code_pool_index_) >> kSmiTagSize);
++    if (offset == Thread::call_bootstrap_native_entry_point_offset()) {
++      return StubCode::CallBootstrapNative().ptr();
++    }
++    if (offset == Thread::call_no_scope_native_entry_point_offset()) {
++      return StubCode::CallNoScopeNative().ptr();
++    }
++    if (offset == Thread::call_auto_scope_native_entry_point_offset()) {
++      return StubCode::CallAutoScopeNative().ptr();
++    }
++    FATAL("NativeCallPattern: Thread offset %" Pd " names no native trampoline",
++          offset);
++  }
+   return static_cast<CodePtr>(object_pool_.ObjectAt<std::memory_order_acquire>(
+       target_code_pool_index_));
+ }
+ 
+ void NativeCallPattern::set_target(const Code& target) const {
++  if (via_thread_field_) {
++    intptr_t offset;
++    if (target.ptr() == StubCode::CallBootstrapNative().ptr()) {
++      offset = Thread::call_bootstrap_native_entry_point_offset();
++    } else if (target.ptr() == StubCode::CallNoScopeNative().ptr()) {
++      offset = Thread::call_no_scope_native_entry_point_offset();
++    } else if (target.ptr() == StubCode::CallAutoScopeNative().ptr()) {
++      offset = Thread::call_auto_scope_native_entry_point_offset();
++    } else {
++      FATAL("NativeCallPattern: no Thread field caches this trampoline");
++    }
++    object_pool_.SetRawValueAt<std::memory_order_release>(
++        target_code_pool_index_, static_cast<uword>(offset) << kSmiTagSize);
++    return;
++  }
+   object_pool_.SetObjectAt<std::memory_order_release>(target_code_pool_index_,
+                                                       target);
+   // No need to flush the instruction cache, since the code is not modified.
+diff --git a/runtime/vm/instructions_arm64.h b/runtime/vm/instructions_arm64.h
+index 90bb6cd2be2..857f4cf28fa 100644
+--- a/runtime/vm/instructions_arm64.h
++++ b/runtime/vm/instructions_arm64.h
+@@ -119,7 +119,13 @@ class NativeCallPattern : public ValueObject {
+ 
+   uword end_;
+   intptr_t native_function_pool_index_;
++  // Upstream shape: index of a kTaggedObject slot holding the trampoline Code.
++  // Shorebird shape A (via_thread_field_): index of a kImmediate slot holding a
++  // Smi-tagged *Thread offset* naming one of the three
++  // call_*_native_entry_point_ fields. target()/set_target() translate between
++  // the two representations; see instructions_arm64.cc.
+   intptr_t target_code_pool_index_;
++  bool via_thread_field_;
+ 
+   DISALLOW_COPY_AND_ASSIGN(NativeCallPattern);
+ };
+-- 
+2.53.0
+

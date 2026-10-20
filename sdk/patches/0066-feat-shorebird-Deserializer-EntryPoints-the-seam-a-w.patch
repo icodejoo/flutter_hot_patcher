@@ -1,0 +1,218 @@
+From ef984048a031a64338b51f1ecbb15ff522b4bdf4 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 19:57:15 +0800
+Subject: [PATCH 066/206] feat(shorebird): Deserializer::EntryPoints, the seam
+ a wrapper goes through
+
+Upstream computes a Code's four entry points inline in ReadInstructions.
+Shorebird lifts that arithmetic into a class that applies a function to each
+address on the way out, because a simulated function has to be entered
+through a CPU->Sim wrapper rather than jumped to -- and that decision belongs
+to whoever is loading, not to the arithmetic.
+
+Their engine's dSYM gives the whole shape, so little of this is inferred:
+
+  Deserializer::EntryPoints                    48 bytes, app_snapshot.cc:702-741
+    payload_start / entry_point / unchecked_entry_point /
+    monomorphic_entry_point / monomorphic_unchecked_entry_point
+    + unchecked_offset_ and has_monomorphic_entry_point_
+  EntryPoints(uword, std::function<uword(uword)>, uint32_t)          :716
+  std::function<uword(uword)> WrapperForRunTarget(LinkOracle::RunTarget) const
+                                                                     :894
+
+and the constructor's out-of-line body at 0x733174 supplied the rest. It
+takes payload_info packed exactly as ReadInstructions reads it and does the
+`& 1` and `>> 1` itself. Reading it also settled a constant worth checking
+rather than assuming: their `add x8, x1, #0x18` is 24, which is arm64's
+kPolymorphicEntryOffsetAOT -- the 22 sitting next to it in object.h is the
+x64 line.
+
+One deliberate difference from upstream, and it is theirs: the unchecked
+entry points are only computed when unchecked_offset is non-zero, where
+upstream adds it unconditionally. Adding zero is free; calling wrap() again
+is not, since it may allocate, and two wrappers for one entry point is a
+leak at best.
+
+WrapperForRunTarget implements the cpu arm only, and its sim arm is a FATAL
+rather than a quiet identity. Nothing has read their lambda out of the binary
+yet, so writing one would be invention; and an unwrapped simulated entry
+point does not fail anywhere near the mistake.
+
+ReadInstructions now goes through it, which is the point -- this is a seam
+with a caller, not another symbol waiting for one.
+
+Verified by running, since ReadInstructions touches every Code in the
+snapshot: dd_runtime_check.sh clean at all five cases, 1622 indirect sites
+still landing correctly. Negative control: swapping the polymorphic offset
+for the monomorphic one turns all five red with exit 134. 81 of 81 shorebird
+tests, verify_reproduction.sh clean at 24 artifacts and 14 stubs.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 0d31009eeeb..b4f46a04f83 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -28,6 +28,7 @@
+ #include "vm/program_visitor.h"
+ #include "vm/raw_object_fields.h"
+ #include "vm/shorebird/link_info.h"
++#include "vm/shorebird/shorebird.h"
+ #include "vm/stub_code.h"
+ #include "vm/symbols.h"
+ #include "vm/timeline.h"
+@@ -685,6 +686,85 @@ class Deserializer : public ThreadStackResource {
+                intptr_t offset = 0);
+   ~Deserializer();
+ 
++  // Shorebird. The four entry points a Code carries, computed from one payload
++  // address with a function applied to each result.
++  //
++  // Upstream computes these inline in ReadInstructions. Shorebird lifts them
++  // into a class so that the addresses can be routed through something on the
++  // way out -- a simulated function has to be entered through a CPU->Sim
++  // wrapper rather than jumped to directly, and that decision belongs to
++  // whoever is loading, not to the arithmetic.
++  //
++  // Layout, offsets and the constructor's argument packing are theirs (engine
++  // dSYM, app_snapshot.cc:702-741, 48 bytes; the constructor at :716 is the
++  // out-of-line body at 0x733174 that every step below was read from).
++  class EntryPoints {
++   public:
++    // `payload_info` is packed exactly as ReadInstructions reads it: bit 0 is
++    // the monomorphic-entry flag and the rest is the unchecked offset. Passing
++    // it packed rather than split is theirs -- the constructor does the
++    // `& 1` and `>> 1` itself.
++    EntryPoints(uword payload_start,
++                const std::function<uword(uword)>& wrap,
++                uint32_t payload_info)
++        : payload_start(payload_start),
++          has_monomorphic_entry_point_((payload_info & 0x1) == 0x1),
++          unchecked_offset_(payload_info >> 1) {
++      const uword base =
++          payload_start + (has_monomorphic_entry_point_
++                               ? Instructions::kPolymorphicEntryOffsetAOT
++                               : 0);
++      entry_point = wrap(base);
++
++      // Note the zero checks, which upstream does not have: it adds
++      // unchecked_offset_ unconditionally because adding zero is free. Here it
++      // is not free -- wrap() may allocate, so asking for the same address
++      // twice would hand back two wrappers for one entry. Theirs branches the
++      // same way.
++      unchecked_entry_point = unchecked_offset_ != 0
++                                  ? wrap(base + unchecked_offset_)
++                                  : entry_point;
++
++      if (has_monomorphic_entry_point_) {
++        const uword mono =
++            payload_start + Instructions::kMonomorphicEntryOffsetAOT;
++        monomorphic_entry_point = wrap(mono);
++        monomorphic_unchecked_entry_point =
++            unchecked_offset_ != 0 ? wrap(mono + unchecked_offset_)
++                                   : unchecked_entry_point;
++      } else {
++        monomorphic_entry_point = entry_point;
++        monomorphic_unchecked_entry_point = unchecked_entry_point;
++      }
++    }
++
++    void StoreInto(CodePtr code) const {
++      code->untag()->entry_point_ = entry_point;
++      code->untag()->unchecked_entry_point_ = unchecked_entry_point;
++      code->untag()->monomorphic_entry_point_ = monomorphic_entry_point;
++      code->untag()->monomorphic_unchecked_entry_point_ =
++          monomorphic_unchecked_entry_point;
++    }
++
++    const uword payload_start;
++    uword entry_point;
++    uword unchecked_entry_point;
++    uword monomorphic_entry_point;
++    uword monomorphic_unchecked_entry_point;
++
++   private:
++    const bool has_monomorphic_entry_point_;
++    const uint32_t unchecked_offset_;
++  };
++
++  // The function EntryPoints applies. Identity for code that runs on the CPU,
++  // which is every case this build reaches today: routing a simulated target
++  // through a CPU->Sim wrapper needs WrapperAllocator wired to the loader, and
++  // that is not done. Returning identity is not a placeholder standing in for
++  // that -- it is what the CPU target's answer is.
++  std::function<uword(uword)> WrapperForRunTarget(
++      LinkOracle::RunTarget target) const;
++
+   // Verifies the image alignment.
+   //
+   // Returns ApiError::null() on success and an ApiError with an an appropriate
+@@ -9453,6 +9533,29 @@ DeserializationCluster* Deserializer::ReadCluster() {
+ // The shape is much smaller than ReadDispatchTable's because the entries are
+ // plain references rather than a delta encoding, and because there is no
+ // deferred variant -- the table is complete when the object graph is.
++// Shorebird. Theirs returns a std::function too -- the same
++// std::function<uword(uword)>, built at app_snapshot.cc:894 -- and the caller
++// hands it to EntryPoints, which applies it to each address it computes.
++//
++// ⚠️ Only the cpu arm is implemented. Their sim arm allocates a CPU->Sim
++// wrapper per entry point, and the machinery for that (WrapperAllocator) has
++// no loader wired to it yet; the shape of their lambda has not been read out
++// of the binary either, so writing one would be invention rather than
++// reproduction. Reaching this with sim is a hard failure rather than a quiet
++// identity, because a simulated entry point that is jumped to directly does
++// not fail where the mistake was made.
++std::function<uword(uword)> Deserializer::WrapperForRunTarget(
++    LinkOracle::RunTarget target) const {
++  switch (target) {
++    case LinkOracle::RunTarget::cpu:
++      // Code that runs on the CPU is entered at its own address.
++      return [](uword entry_point) { return entry_point; };
++    case LinkOracle::RunTarget::sim:
++      FATAL("Shorebird: no CPU->Sim wrapper is wired to the deserializer");
++  }
++  UNREACHABLE();
++}
++
+ void Deserializer::ReadIndirectStaticCallTable() {
+ #if defined(DART_PRECOMPILED_RUNTIME)
+   const intptr_t length = ReadUnsigned();
+@@ -9713,27 +9816,20 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+       instructions_table_.rodata()->first_entry_with_code +
+       instructions_index_);
+   const uint32_t payload_info = ReadUnsigned();
+-  const uint32_t unchecked_offset = payload_info >> 1;
+-  const bool has_monomorphic_entrypoint = (payload_info & 0x1) == 0x1;
+-
+-  const uword entry_offset =
+-      has_monomorphic_entrypoint ? Instructions::kPolymorphicEntryOffsetAOT : 0;
+-  const uword monomorphic_entry_offset =
+-      has_monomorphic_entrypoint ? Instructions::kMonomorphicEntryOffsetAOT : 0;
+ 
+-  const uword entry_point = payload_start + entry_offset;
+-  const uword monomorphic_entry_point =
+-      payload_start + monomorphic_entry_offset;
++  // Shorebird: the arithmetic upstream did inline lives in EntryPoints now, so
++  // that the addresses can be routed through WrapperForRunTarget on the way
++  // out. With the CPU target that function is the identity and the values are
++  // bit for bit what upstream computed.
++  const EntryPoints entry_points(
++      payload_start, WrapperForRunTarget(LinkOracle::RunTarget::cpu),
++      payload_info);
+ 
+   instructions_table_.SetCodeAt(instructions_index_++, code);
+ 
+   // There are no serialized RawInstructions objects in this mode.
+   code->untag()->instructions_ = Instructions::null();
+-  code->untag()->entry_point_ = entry_point;
+-  code->untag()->unchecked_entry_point_ = entry_point + unchecked_offset;
+-  code->untag()->monomorphic_entry_point_ = monomorphic_entry_point;
+-  code->untag()->monomorphic_unchecked_entry_point_ =
+-      monomorphic_entry_point + unchecked_offset;
++  entry_points.StoreInto(code);
+ #else
+   ASSERT(!deferred);
+   InstructionsPtr instr = image_reader_->GetInstructionsAt(Read<uint32_t>());
+-- 
+2.53.0
+

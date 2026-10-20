@@ -1,0 +1,209 @@
+From 3d62777e523c96d18550713b25e1b4a902844913 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 17:50:36 +0800
+Subject: [PATCH 012/206] feat(shorebird): dispatch table link info -- ranges
+ exact, offsets diverge
+
+Implements --print_dispatch_table_link_info_to and its _debug_info_to twin.
+Selector count matches exactly (123), and for every offset present on both
+sides the ranges and hash compare equal -- so range collection and the
+serialisation format are correct. DWARF confirms the record is
+SelectorRowInfo{offset_, hash_, ranges_}, matching this implementation.
+
+Collection lives in dispatch_table_generator.cc because SelectorRow is local to
+that translation unit -- which is also why their equivalent,
+DispatchTableGenerator::GetDispatchTableLinkInfo, is a member of that class. It
+runs after ComputeSelectorOffsets, since offsets are meaningless before then.
+
+Offsets do NOT match and this looks like a real VM change on their side rather
+than a dump-format misunderstanding: every offset they emit is a multiple of 256
+(0, 256, 512, ..., 6656, 8192, 9728) whereas ours are the compact values
+RowFitter produces (1, 2, 3, ..., 1702, 2992). Aligning selector offsets to 256
+would keep them stable between a base and a patch build, which is exactly what
+matters for matching -- so the plausible reading is that Shorebird replaced the
+packing in ComputeSelectorOffsets. Confirming that requires reversing their
+allocator, and reproducing it changes the generated snapshot itself, not just
+this diagnostic output.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/aot/dispatch_table_generator.cc b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+index 1863badc37b..0cb4325e430 100644
+--- a/runtime/vm/compiler/aot/dispatch_table_generator.cc
++++ b/runtime/vm/compiler/aot/dispatch_table_generator.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "vm/compiler/aot/dispatch_table_generator.h"
+ 
++#include "vm/shorebird/link_info.h"
++
+ #include <memory>
+ 
+ #include "vm/compiler/frontend/kernel_translation_helper.h"
+@@ -417,6 +419,25 @@ void DispatchTableGenerator::Initialize(ClassTable* table) {
+   NumberSelectors();
+   SetupSelectorRows();
+   ComputeSelectorOffsets();
++
++  // flutter_hot_patcher: their GetDispatchTableLinkInfo is a member of this
++  // class because SelectorRow is local to this translation unit. Offsets are
++  // only valid once ComputeSelectorOffsets has run.
++  if (WantsDispatchTableLinkInfo()) {
++    std::vector<SelectorRowInfo> rows;
++    for (intptr_t i = 0; i < table_rows_.length(); i++) {
++      SelectorRow* row = table_rows_[i];
++      if (!row->IsAllocated()) continue;
++      SelectorRowInfo info;
++      info.offset = row->selector()->offset;
++      const GrowableArray<Interval>& ranges = row->ranges();
++      for (intptr_t j = 0; j < ranges.length(); j++) {
++        info.ranges.emplace_back(ranges[j].begin(), ranges[j].end());
++      }
++      rows.push_back(std::move(info));
++    }
++    PrintDispatchTableLinkInfoIfRequested(Thread::Current(), std::move(rows));
++  }
+ }
+ 
+ void DispatchTableGenerator::ReadTableSelectorInfo() {
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 558d9420034..eec03294032 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -40,6 +40,14 @@ DEFINE_FLAG(charp,
+             print_field_table_link_debug_info_to,
+             nullptr,
+             "Write field table link info as JSON, for debugging");
++DEFINE_FLAG(charp,
++            print_dispatch_table_link_info_to,
++            nullptr,
++            "Write dispatch table link info as a binary file");
++DEFINE_FLAG(charp,
++            print_dispatch_table_link_debug_info_to,
++            nullptr,
++            "Write dispatch table link info as JSON, for debugging");
+ 
+ namespace {
+ 
+@@ -319,4 +327,74 @@ void PrintClassTableLinkInfoIfRequested(Thread* thread) {
+   }
+ }
+ 
++
++void DispatchTableLinkInfo::WriteToFile(const char* path) const {
++  MallocWriteStream stream(/*initial_size=*/64 * KB);
++  stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(selectors_.size()));
++  for (const SelectorRowInfo& row : selectors_) {
++    stream.WriteUnsigned<intptr_t>(row.offset);
++    WriteString(&stream, row.hash);
++    stream.WriteUnsigned<intptr_t>(static_cast<intptr_t>(row.ranges.size()));
++    for (const auto& range : row.ranges) {
++      stream.WriteUnsigned<intptr_t>(range.first);
++      stream.WriteUnsigned<intptr_t>(range.second);
++    }
++  }
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(stream.buffer(), stream.bytes_written());
++  }
++}
++
++void DispatchTableLinkInfo::WriteDebugInfoToFile(const char* path) const {
++  JSONWriter js;
++  js.OpenObject();
++  js.PrintProperty64("num_selectors", static_cast<int64_t>(selectors_.size()));
++  js.OpenArray("selectors");
++  for (const SelectorRowInfo& row : selectors_) {
++    js.OpenObject();
++    js.PrintProperty64("offset", row.offset);
++    js.PrintProperty("hash", row.hash.c_str());
++    js.OpenArray("ranges");
++    for (const auto& range : row.ranges) {
++      js.OpenArray();
++      js.PrintValue64(range.first);
++      js.PrintValue64(range.second);
++      js.CloseArray();
++    }
++    js.CloseArray();
++    js.CloseObject();
++  }
++  js.CloseArray();
++  js.CloseObject();
++
++  char* output = nullptr;
++  intptr_t output_length = 0;
++  js.Steal(&output, &output_length);
++  CallbackFile file(path);
++  if (file.is_open()) {
++    file.Write(output, output_length);
++  }
++  free(output);
++}
++
++bool WantsDispatchTableLinkInfo() {
++  return FLAG_print_dispatch_table_link_info_to != nullptr ||
++         FLAG_print_dispatch_table_link_debug_info_to != nullptr;
++}
++
++void PrintDispatchTableLinkInfoIfRequested(
++    Thread* thread,
++    std::vector<SelectorRowInfo> selectors) {
++  if (!WantsDispatchTableLinkInfo()) return;
++  auto* info =
++      new (thread->zone()) DispatchTableLinkInfo(std::move(selectors));
++  if (FLAG_print_dispatch_table_link_info_to != nullptr) {
++    info->WriteToFile(FLAG_print_dispatch_table_link_info_to);
++  }
++  if (FLAG_print_dispatch_table_link_debug_info_to != nullptr) {
++    info->WriteDebugInfoToFile(FLAG_print_dispatch_table_link_debug_info_to);
++  }
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index 9abb0c9bdbb..d1e3a18b938 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -83,6 +83,39 @@ class FieldTableLinkInfo : public ZoneObject {
+   intptr_t max_field_id_;
+ };
+ 
++// Link information describing one dispatch-table selector row.
++struct SelectorRowInfo {
++  intptr_t offset;                                   // assigned table offset
++  std::string hash;                                  // empty in every sample so far
++  std::vector<std::pair<intptr_t, intptr_t>> ranges;  // Interval begin/end, end exclusive
++};
++
++class DispatchTableLinkInfo : public ZoneObject {
++ public:
++  explicit DispatchTableLinkInfo(std::vector<SelectorRowInfo> selectors)
++      : selectors_(std::move(selectors)) {}
++
++  const std::vector<SelectorRowInfo>& selectors() const { return selectors_; }
++
++  // count, { offset, hash, nranges, (lo,hi) * nranges }. No trailing scalar,
++  // unlike the class and field tables.
++  void WriteToFile(const char* path) const;
++  void WriteDebugInfoToFile(const char* path) const;
++
++ private:
++  std::vector<SelectorRowInfo> selectors_;
++};
++
++// Honour the dispatch table flags. Called from DispatchTableGenerator, which is
++// the only place with access to the selector rows.
++void PrintDispatchTableLinkInfoIfRequested(
++    Thread* thread,
++    std::vector<SelectorRowInfo> selectors);
++
++// True when either dispatch table flag is set, so the generator can skip the
++// (non-trivial) collection work otherwise.
++bool WantsDispatchTableLinkInfo();
++
+ // Walks the class table and computes the link info for the current isolate.
+ ClassTableLinkInfo* GetClassTableLinkInfo(Thread* thread);
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,59 @@
+From 12170942bad9aa718b8a1d8a3052637950d925a8 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 15 Sep 2026 00:05:53 +0800
+Subject: [PATCH 156/206] analyze_snapshot: stop deduplicating self_pp's
+ pool_indices (theirs does not)
+
+Measured over hello+prog, the two independent fixtures, against their 9619
+self_pp element slots:
+
+  dedup ON   ours 8263 slots, 1356 missing, 462 functions not ordered-equal
+  dedup OFF  ours 9617 slots,    2 missing,   2 functions not ordered-equal
+
+diff_units.sh shorebird 41344 -> 39425. Their collector plainly does not
+deduplicate pool references, so the default flips to 0.
+
+This is not a clean reproduction: prog fn#1580 and fn#1633 each emit 14 slots
+where theirs emits 15, both short of pool index 1332. self_pp is ordered-equal
+on 4594/4596 functions, not 4596/4596, and the comment above the switch says so.
+
+Reprintable by spikes/shorebird_linkinfo_oracle/nc3_f67_pool_seen_multiset.sh
+(default-agnostic; four one-slot perturbation controls; binary sha256 restore
+proof).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index abe7627554a..493810e0bce 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1082,10 +1082,25 @@ static constexpr intptr_t kNoSelector = -1;
+ // default-agnostic: it reads whichever value is committed, measures it, flips,
+ // measures again, restores and proves the binary comes back byte for byte.
+ //
++// Measured (hello+prog, the two independent fixtures; theirs = 9619 self_pp
++// element slots):
++//   dedup ON  ours 8263 slots, 1356 missing, 462 functions not ordered-equal
++//   dedup OFF ours 9617 slots,    2 missing,   2 functions not ordered-equal
++// diff_units.sh shorebird went 41344 -> 39425 with the dedup off. Theirs plainly
++// does not deduplicate, so neither do we: the default is 0.
++//
++// ⚠️ This is NOT the clean reproduction F66 got on subgraph_selectors. Two prog
++// functions still come up one slot short -- index_in_entries 1580 and 1633,
++// ours 14 slots against their 15, both missing pool index 1332 -- so the
++// undeduped self_pp is ordered-equal on 4594 of 4596 functions and NOT on all
++// of them. The honest reading therefore stays "the values match and the order
++// matches everywhere we can see except at those two sites", not "our walk is
++// theirs". Those two functions are the whole remaining self_pp evidence debt.
++//
+ // 1 = dedup ON (the historical behaviour). 0 = emit every pool reference the
+ // classifier fires on, in walk order.
+ #ifndef F67_POOL_SEEN_DEDUP
+-#define F67_POOL_SEEN_DEDUP 1
++#define F67_POOL_SEEN_DEDUP 0
+ #endif
+ 
+ // `add lr, x0, x17` makes the row index (origin + x17), so whatever was
+-- 
+2.53.0
+

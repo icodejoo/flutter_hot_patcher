@@ -1,0 +1,148 @@
+From 0c3139c67491235f1aa8112e3331ffb514645090 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Wed, 30 Sep 2026 11:54:17 +0800
+Subject: [PATCH 184/206] [vm] Shorebird: JumpToFrame reload + deopt leaf
+ guards (F158, F159)
+
+JumpToFrame reloads the CPU state parked in the isolate's simulator
+(Thread::isolate_ -> Isolate::simulator_) and flips dart_state_is_on_cpu_;
+GenerateDeoptimizationSequence guards its two leaf calls with the existing
+is_simulating_ check. The simulator carries on at the new leaf guard
+instead of FATAL-ing. Sizes after rebuild (ProductSimIosARM64 clang_arm64,
+all three fixtures): JumpToFrame 152, Deoptimize 508,
+DeoptimizeLazyFromReturn 544, DeoptimizeLazyFromThrow 624,
+DeoptForRewind 548 -- equal to theirs; sdk_phase_checklist C1 11 -> 7.
+The JumpToFrame reload is inert until the runtime parks CPU state before
+calling C++ (F156/F157).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 35c7eb6f9af..4089a423d15 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -1911,7 +1911,16 @@ static void GenerateDeoptimizationSequence(Assembler* assembler,
+     bool is_lazy =
+         (kind == kLazyDeoptFromReturn) || (kind == kLazyDeoptFromThrow);
+     __ LoadImmediate(R1, is_lazy ? 1 : 0);
++#if defined(DART_INCLUDE_SIMULATOR)
++    // Shorebird guards both deopt leaf calls like the write barrier's: an
++    // is_simulating_ probe and a kCallLeafRuntimeOnCPUCode brk between the
++    // vm_tag store and the blr (3 words per call, 6 per deopt stub).
++    rt.Call(kDeoptimizeCopyFrameRuntimeEntry, 2,
++            dart::Thread::is_simulating_offset(),
++            Instr::kCallLeafRuntimeOnCPUCode);
++#else
+     rt.Call(kDeoptimizeCopyFrameRuntimeEntry, 2);
++#endif
+     // Result (R0) is stack-size (FP - SP) in bytes.
+   }
+ 
+@@ -1945,7 +1954,13 @@ static void GenerateDeoptimizationSequence(Assembler* assembler,
+     LeafRuntimeScope rt(assembler,
+                         /*frame_size=*/0,
+                         /*preserve_registers=*/false);
++#if defined(DART_INCLUDE_SIMULATOR)
++    rt.Call(kDeoptimizeFillFrameRuntimeEntry, 1,
++            dart::Thread::is_simulating_offset(),
++            Instr::kCallLeafRuntimeOnCPUCode);
++#else
+     rt.Call(kDeoptimizeFillFrameRuntimeEntry, 1);
++#endif
+   }
+   if (FLAG_target_thread_sanitizer) {
+     __ mov(CALLEE_SAVED_TEMP, R0);                  // Frames created
+@@ -4220,6 +4235,61 @@ void StubCodeCompiler::GenerateSubtypeNTestCacheStub(Assembler* assembler,
+       });
+ }
+ 
++#if defined(DART_INCLUDE_SIMULATOR)
++// Shorebird. JumpToFrame is entered from C++ (Exceptions::JumpToFrame) on the
++// CPU. Their runtime-call stubs park the CPU's callee-saved state in the
++// isolate simulator's register file and flip dart_state_is_on_cpu_ 1 -> 0 on
++// the way out to C++ (SIM_ENTER, F138); a normal return reloads it and flips
++// it back (SIM_RESTORE). An exception never returns through that path, so
++// their JumpToFrame performs the same reload-and-flip itself before it installs
++// the handler's pc/sp/fp.
++//
++// 21 instructions: 2 to reach Isolate::simulator_ from the Thread argument in
++// R3 (not THR, although the two are equal here), 13 to reload x15, x19-x30,
++// CSP and q8-q15 from the register file (reg n at n * 8, vreg n at
++// 0x100 + n * 16 -- the layout GenerateEnterSimulator already uses), and 6 to
++// assert dart_state_is_on_cpu_ == 0 and flip it. x26 comes back from the
++// register file as well, so the flip and everything after it use the THR that
++// was parked there. The sequence is the reload tail of GenerateEnterSimulator
++// without its leading `mov R10, R0`; it is kept separate so that stub's bytes
++// cannot move when this one changes.
++static void GenerateJumpToFrameReloadFromSimulator(Assembler* assembler) {
++  constexpr intptr_t kSimReg = 8;           // registers_[r]  == r * 8
++  constexpr intptr_t kSimVRegBase = 0x100;  // vregisters_[v] == 0x100 + v * 16
++  constexpr intptr_t kSimVReg = 16;
++
++  __ ldr(R10, Address(R3, target::Thread::isolate_offset()), kEightBytes);
++  __ ldr(R10, Address(R10, dart::Isolate::simulator_offset()), kEightBytes);
++
++  __ ldr(SPREG, Address(R10, 15 * kSimReg), kEightBytes);
++  __ ldp(R19, R20, Address::Pair(R10, 19 * kSimReg));
++  __ ldp(R21, R22, Address::Pair(R10, 21 * kSimReg));
++  __ ldp(R23, R24, Address::Pair(R10, 23 * kSimReg));
++  __ ldp(R25, R26, Address::Pair(R10, 25 * kSimReg));
++  __ ldp(R27, R28, Address::Pair(R10, 27 * kSimReg));
++  __ ldp(R29, R30, Address::Pair(R10, 29 * kSimReg));
++  __ ldr(TMP, Address(R10, 31 * kSimReg), kEightBytes);
++  __ mov(CSP, TMP);
++  __ fldp(V8, V9, Address::Pair(R10, kSimVRegBase + 8 * kSimVReg), kQWord);
++  __ fldp(V10, V11, Address::Pair(R10, kSimVRegBase + 10 * kSimVReg), kQWord);
++  __ fldp(V12, V13, Address::Pair(R10, kSimVRegBase + 12 * kSimVReg), kQWord);
++  __ fldp(V14, V15, Address::Pair(R10, kSimVRegBase + 14 * kSimVReg), kQWord);
++
++  // Entered with the Dart state parked in the simulator (flag 0); leave it on
++  // the CPU (flag 1). Entered in any other state traps.
++  Label was_parked;
++  __ ldr(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++  __ CompareImmediate(TMP, 0);
++  __ b(&was_parked, EQ);
++  __ brk(0);
++  __ Bind(&was_parked);
++  __ eori(TMP, TMP, Immediate(1));
++  __ str(TMP, Address(THR, dart::Thread::dart_state_is_on_cpu_offset()),
++         kEightBytes);
++}
++#endif  // defined(DART_INCLUDE_SIMULATOR)
++
+ // Jump to a frame on the call stack.
+ // LR: return address.
+ // R0: program_counter.
+@@ -4234,6 +4304,9 @@ void StubCodeCompiler::GenerateJumpToFrameStub() {
+   ASSERT(kStackTraceObjectReg == R1);
+   __ set_lr_state(compiler::LRState::Clobbered());
+   __ mov(THR, R3);
++#if defined(DART_INCLUDE_SIMULATOR)
++  GenerateJumpToFrameReloadFromSimulator(assembler);
++#endif
+   if (FLAG_target_thread_sanitizer) {
+     Label again, done;
+     __ mov(SP, CSP);
+diff --git a/runtime/vm/simulator_arm64.cc b/runtime/vm/simulator_arm64.cc
+index 7b4763cd10c..f50baa547d2 100644
+--- a/runtime/vm/simulator_arm64.cc
++++ b/runtime/vm/simulator_arm64.cc
+@@ -2000,6 +2000,14 @@ bool Simulator::DecodeSimulatorToNativeTransition(Instr* instr) {
+     return false;
+   }
+   const char* name = NameOfSimToCpuHypercall(imm);
++  // The leaf-runtime guard (ldr is_simulating_; cbz; brk) sits between the
++  // vm_tag store and a `blr x16`. Here the Thread's leaf entry points are
++  // RuntimeEntry::GetEntryPoint() redirections, so the simulated blr already
++  // reaches the runtime natively: carry on at the next instruction, which is
++  // what the unguarded sequence did.
++  if (imm == Instr::kCallLeafRuntimeOnCPUCode) {
++    return true;
++  }
+   if (imm != Instr::kRunDartOnCPUCode) {
+     FATAL("Simulator->CPU hypercall %s (brk #0x%x) is not implemented", name,
+           imm);
+-- 
+2.53.0
+

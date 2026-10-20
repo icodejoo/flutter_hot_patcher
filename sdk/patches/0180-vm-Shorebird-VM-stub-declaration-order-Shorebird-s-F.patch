@@ -1,0 +1,82 @@
+From d4923373846e8799c6c071d315130b0850986bd3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 29 Sep 2026 15:21:11 +0800
+Subject: [PATCH 180/206] [vm] Shorebird: VM stub declaration order =
+ Shorebird's (F148)
+
+The VM snapshot lays VM stubs out in reverse VM_STUB_CODE_LIST order
+(Serializer::PushRoots pushes them LIFO). Reversing the layout of their 187
+stubs, read from their analyze_snapshot --disassemble of all three fixtures
+(identical order on all three), gives their declaration order. Two differences
+from ours:
+  - GetCStackPointer comes before JumpToFrame (F21 placed it after, reading
+    their layout order as declaration order);
+  - their 14 simulator stubs are the last entries before UnknownDartCode, in
+    their order, instead of sitting between FfiCallbackTrampoline and
+    InitStaticField.
+After this, the expanded list equals theirs entry for entry (188/188).
+stub_code_list.h is not in tools/make_version.py's VM_SNAPSHOT_FILES, so the
+snapshot version does not change. Applied from
+stub_code_list_reorder_20260928.patch.
+
+diff --git a/runtime/vm/stub_code_list.h b/runtime/vm/stub_code_list.h
+index f54da13c4f1..c881cb005cf 100644
+--- a/runtime/vm/stub_code_list.h
++++ b/runtime/vm/stub_code_list.h
+@@ -29,8 +29,8 @@ namespace dart {
+ // List of stubs created in the VM isolate, these stubs are shared by different
+ // isolates running in this dart process.
+ #define VM_STUB_CODE_LIST(V)                                                   \
+-  V(JumpToFrame)                                                               \
+   V(GetCStackPointer)                                                          \
++  V(JumpToFrame)                                                               \
+   V(RunExceptionHandler)                                                       \
+   V(RunExceptionHandlerUnbox)                                                  \
+   V(DeoptForRewind)                                                            \
+@@ -157,20 +157,6 @@ namespace dart {
+   V(CallNativeThroughSafepoint)                                                \
+   V(FfiCallTrampoline)                                                         \
+   V(FfiCallbackTrampoline)                                                     \
+-  V(TransitionDartToSimulatorIfNeeded)                                         \
+-  V(TransitionDartToCpuIfNeeded)                                               \
+-  V(ResumeOnCPU)                                                               \
+-  V(CallSimulatorFromFfiTrampoline)                                            \
+-  V(SimulatorCallBootstrapNative)                                              \
+-  V(SimulatorCallAutoScopeNative)                                              \
+-  V(SimulatorCallNoScopeNative)                                                \
+-  V(SimulatorCallToRuntime)                                                    \
+-  V(ResumeOnSimulator)                                                         \
+-  V(SimulatorCallNativeThroughSafepoint)                                       \
+-  V(CallClangCodeWithSimulatorArgs)                                            \
+-  V(SimulatorEnterSafepoint)                                                   \
+-  V(SimulatorExitSafepoint)                                                    \
+-  V(RunDartOnCPU)                                                              \
+   V(InitStaticField)                                                           \
+   V(InitLateStaticField)                                                       \
+   V(InitLateFinalStaticField)                                                  \
+@@ -208,6 +194,22 @@ namespace dart {
+   V(CheckIsolateFieldAccess)                                                   \
+   V(CheckedStoreIntoShared)                                                    \
+   V(EnsureDeeplyImmutable)                                                     \
++  /* Shorebird's stubs, in Shorebird's declaration order: the VM image lays */ \
++  /* stubs out in reverse declaration order, and theirs put these 14 first. */ \
++  V(CallClangCodeWithSimulatorArgs)                                            \
++  V(CallSimulatorFromFfiTrampoline)                                            \
++  V(SimulatorCallToRuntime)                                                    \
++  V(SimulatorCallNoScopeNative)                                                \
++  V(SimulatorCallAutoScopeNative)                                              \
++  V(SimulatorCallBootstrapNative)                                              \
++  V(SimulatorCallNativeThroughSafepoint)                                       \
++  V(TransitionDartToCpuIfNeeded)                                               \
++  V(TransitionDartToSimulatorIfNeeded)                                         \
++  V(RunDartOnCPU)                                                              \
++  V(ResumeOnCPU)                                                               \
++  V(ResumeOnSimulator)                                                         \
++  V(SimulatorEnterSafepoint)                                                   \
++  V(SimulatorExitSafepoint)                                                    \
+   V(UnknownDartCode)
+ 
+ }  // namespace dart
+-- 
+2.53.0
+

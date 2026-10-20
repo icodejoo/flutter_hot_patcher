@@ -1,0 +1,117 @@
+From 10bc4f54b6d8e8d13a076bff4534a7e424ea0d60 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Mon, 24 Aug 2026 10:43:30 +0800
+Subject: [PATCH 047/206] feat(shorebird): dd_function_identity is
+ byte-identical -- the order was a hash map
+
+The dump's row set already matched on all six fixtures; the emission order did
+not, and the note in the header called the mechanism unexplained. It is the
+iteration order of a libc++ std::unordered_map keyed by the code index, filled
+in ascending index order.
+
+Two properties of that container produce the observed shape. Inserting into an
+empty bucket pushes the node to the front of the single intrusive list, so keys
+that never collide come back out descending -- that is the run of 1187 rows from
+1379 down to 29. __do_rehash then leaves the list alone except for nodes whose
+new bucket is already taken, so keys that collided at some intermediate width
+stay clustered next to their bucket-mate forever. The bucket count walks
+2, 5, 11, 23, 47, 97, 197, 397, 797, 1597 (smallest prime >= 2x previous), and
+every short run in their tail is a collision at one of those widths: 47..48
+collided at width 47, 97..103 at width 97, 197..204 at 197, 397..409 at 397,
+797..825 at 797. The "constant difference of 797" recorded earlier was that last
+group seen without its cause.
+
+So the collection parks rows in an unordered_map instead of a vector and writes
+them in iteration order. reserve() is deliberately not called: a different
+bucket-count history is a different file.
+
+Verified: all seven fixtures (hello, base, b_shift, c_body, d_sig, e_minimal,
+f_heavy) now compare byte-identical to their gen_snapshot's own .ddid, up from
+row-multiset-equal. cmp distinguishes two different fixtures, so the comparison
+is not vacuous. run_vm_tests shorebird cases all pass.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/link_info.cc b/runtime/vm/shorebird/link_info.cc
+index 85efc50f44f..e1d5f80caf1 100644
+--- a/runtime/vm/shorebird/link_info.cc
++++ b/runtime/vm/shorebird/link_info.cc
+@@ -8,6 +8,7 @@
+ #include <map>
+ #include <memory>
+ #include <string>
++#include <unordered_map>
+ #include <utility>
+ 
+ #include "platform/utils.h"
+@@ -484,8 +485,11 @@ void PrintDDFunctionIdentityIfRequested(Thread* thread,
+   auto& function = Function::Handle(zone);
+   auto& cls = Class::Handle(zone);
+ 
+-  std::vector<DDFunctionIdentityRow> rows;
+-  rows.reserve(codes.length());
++  // Rows are parked in an unordered_map keyed by the code index and written out
++  // in that map's iteration order, which is what puts the file in their order
++  // rather than in index order. Do NOT reserve(): the bucket-count history is
++  // the order. See the note on DDFunctionIdentity for the evidence.
++  std::unordered_map<intptr_t, FunctionKey> by_index;
+ 
+   for (intptr_t i = 0; i < codes.length(); i++) {
+     code = codes[i];
+@@ -498,13 +502,19 @@ void PrintDDFunctionIdentityIfRequested(Thread* thread,
+     owner = code.owner();
+     if (code.IsAllocationStubCode()) {
+       cls ^= owner.ptr();
+-      rows.push_back({i, FunctionKey::ForAllocStub(cls)});
++      by_index.emplace(i, FunctionKey::ForAllocStub(cls));
+     } else if (owner.IsFunction()) {
+       function ^= owner.ptr();
+-      rows.push_back({i, FunctionKey::FromFunction(function)});
++      by_index.emplace(i, FunctionKey::FromFunction(function));
+     }
+   }
+ 
++  std::vector<DDFunctionIdentityRow> rows;
++  rows.reserve(by_index.size());
++  for (const auto& entry : by_index) {
++    rows.push_back({entry.first, entry.second});
++  }
++
+   DDFunctionIdentity info(std::move(rows));
+   info.WriteToFile(FLAG_print_dd_function_identity_to);
+ }
+diff --git a/runtime/vm/shorebird/link_info.h b/runtime/vm/shorebird/link_info.h
+index fa6d663678a..d0d368ac2e9 100644
+--- a/runtime/vm/shorebird/link_info.h
++++ b/runtime/vm/shorebird/link_info.h
+@@ -167,11 +167,22 @@ struct DDFunctionIdentityRow {
+ //   Code::IsStubCode()            -> no row  ([unknown stub])         (4)
+ //   otherwise (owner is Function) -> row, kind = Function::kind()     (1179)
+ //
+-// KNOWN GAP: the emission ORDER is not reproduced. Theirs is a descending run of
+-// 1187 rows (index 1379 -> 29) followed by 79 rows scattered over ~52 short
+-// runs; the mechanism behind that is unexplained. We emit in ascending index
+-// order, so the file is NOT byte-identical to theirs. The row SET is what is
+-// verified. Do not read a passing set comparison as byte-level agreement.
++// The emission ORDER is not index order: it is the iteration order of a
++// libc++ std::unordered_map<intptr_t, ...> that the rows were inserted into
++// with ascending index. Two properties of that container produce the shape:
++// inserting into an empty bucket pushes the node onto the front of the single
++// intrusive list (so untouched keys come out descending), and __do_rehash
++// leaves the list alone except for nodes whose new bucket is already occupied
++// (so colliding keys stay clustered). The bucket count walks 2, 5, 11, 23, 47,
++// 97, 197, 397, 797, 1597 -- smallest prime >= 2x the previous -- and every
++// short run in their tail is a collision that happened at one of those widths:
++// keys 47..48 collided when the width was 47, 97..103 when it was 97, and so
++// on down to 797..825.
++//
++// So the collection here parks rows in an unordered_map rather than a vector,
++// and the file is byte-identical to theirs on all six fixtures. Two rules
++// follow: insert in ascending index order, and never reserve() -- a different
++// bucket-count history is a different file.
+ class DDFunctionIdentity {
+  public:
+   explicit DDFunctionIdentity(std::vector<DDFunctionIdentityRow> rows)
+-- 
+2.53.0
+

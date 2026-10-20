@@ -1,0 +1,860 @@
+From 252c31c45f6f5e5a84dbd9b439a11cd2947d42cd Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 1 Oct 2026 19:01:28 +0800
+Subject: [PATCH 195/206] analyze_snapshot: add the four DD options theirs
+ registers
+
+--compute_dd_slot_mapping, --dd_table_data, --dd_caller_links and
+--dd_function_identity, with roles read out of their main rather than
+inferred from the names:
+
+  * --dd_caller_links is an OUTPUT next to --compute_dd_table (their
+    Dart_ComputeDDTable's second output pair) and an INPUT, required,
+    next to --compute_dd_slot_mapping.
+  * --dd_table_data is the table input, required for the slot mapping.
+  * --dd_function_identity is the optional third input: the file
+    gen_snapshot --print_dd_function_identity_to writes. Without it
+    every FunctionKey is zero and the mapping is the bare 9-byte header.
+  * --compute_dd_slot_mapping emits a DDSlotVoters stream (magic, two
+    FunctionKey::WriteToStream per row, vector<SlotVoter>), which
+    gen_snapshot --dd_slot_mapping accepts by its magic sniff.
+
+Both "is required with --compute_dd_slot_mapping" errors are theirs
+verbatim, in their order, after VM init.
+
+Caller links: {caller self_hash, table position, callee position}, where
+the callee list is per external branch in instruction order with
+duplicates (FunctionAnalysisData+0x70), not the sorted JSON callees.
+
+Two fixes to the table path the links exposed (table bytes unchanged):
+  * BuildEntries now feeds the sort from an unordered_set of the cut
+    nodes, as theirs does; this decides equal-hash positions.
+  * The kind filter moved from inside CascadeLimiter::Run to after it:
+    their Run cuts stubs too and filters while walking the cut set.
+
+Oracle, ours-on-ours vs theirs-on-theirs, hello/base_dd/prog: ddt, ddcl
+and ddsm byte-identical (cmp -l 0), with and without an identity file
+(ddsm 25263 / 25263 / 91685 bytes); ddt+ddcl also identical at nine
+budgets 1..100000 on hello and prog. A perturbed caller-links input
+moves both outputs identically. Inputs that do not parse are refused
+(rc 255, nothing written) where theirs crashes (rc 138).
+
+Not reproduced, stated in code: --dd_table_data's effect on the --out
+dumps (a warning is printed), and its role as Dart_ComputeDDTable's
+input (no effect measured on two probes).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+diff --git a/runtime/bin/analyze_snapshot.cc b/runtime/bin/analyze_snapshot.cc
+index e343675a351..762fe403bfe 100644
+--- a/runtime/bin/analyze_snapshot.cc
++++ b/runtime/bin/analyze_snapshot.cc
+@@ -39,10 +39,31 @@ namespace bin {
+ //
+ // So unlike --no_pp_hash neither of these is a dead flag: both are registered,
+ // and the first carries its own output path instead of using --out.
++//
++// The four DD options after dd_max_bytes are registered by theirs too (one
++// `Empty value for option <name>` string each) and are equally absent from
++// their --help. Roles, read out of their main (0x1000042ac-0x1000046e0) rather
++// than inferred from the names:
++//
++//   compute_dd_slot_mapping  output path; the DDSlotVoters stream.
++//   dd_table_data            input: a table as --compute_dd_table writes it.
++//                            Required with --compute_dd_slot_mapping; optional
++//                            and read silently with --compute_dd_table.
++//   dd_caller_links          OUTPUT with --compute_dd_table (written only when
++//                            given), INPUT with --compute_dd_slot_mapping, where
++//                            it is required.
++//   dd_function_identity     input, optional, read silently: the file
++//                            gen_snapshot --print_dd_function_identity_to
++//                            writes. Without it every FunctionKey is zero and
++//                            the slot mapping carries no voters.
+ #define STRING_OPTIONS_LIST(V)                                                 \
+   V(out, out_path)                                                             \
+   V(compute_dd_table, compute_dd_table_path)                                   \
+   V(dd_max_bytes, dd_max_bytes_arg)                                            \
++  V(compute_dd_slot_mapping, compute_dd_slot_mapping_path)                     \
++  V(dd_table_data, dd_table_data_path)                                         \
++  V(dd_caller_links, dd_caller_links_path)                                     \
++  V(dd_function_identity, dd_function_identity_path)                           \
+   V(dump_object_pool_link_data, dump_object_pool_link_data_path)
+ 
+ #define BOOL_OPTIONS_LIST(V)                                                   \
+@@ -203,6 +224,13 @@ PRINTF_ATTRIBUTE(1, 2) static void PrintErrAndExit(const char* format, ...) {
+   exit(kErrorExitCode);
+ }
+ 
++// PrintErrAndExit for a message that has already been printed.
++static void ExitAfterError() {
++  Dart_ExitScope();
++  Dart_ShutdownIsolate();
++  exit(kErrorExitCode);
++}
++
+ static File* OpenFile(const char* filename) {
+   File* file = File::Open(nullptr, filename, File::kWriteTruncate);
+   if (file == nullptr) {
+@@ -221,6 +249,42 @@ static void WriteFile(const char* filename,
+   }
+ }
+ 
++// Their ReadFileFully(path, label, char** out, long* len, bool report), at
++// 0x100002a08. `label` names the input in the one message it prints,
++// "Error: Unable to read %s: %s\n" with the label first and the path second
++// (0x100002a9c `stp x22, x23, [sp]`), and only when `report` is set: the DD
++// function identity, and the DD table when it rides along with
++// --compute_dd_table, are read with it clear. On failure *out is null and *len
++// is 0, which is what their callers then pass on.
++static bool ReadFileFully(const char* path,
++                          const char* label,
++                          char** out,
++                          intptr_t* len,
++                          bool report) {
++  *out = nullptr;
++  *len = 0;
++  File* file = File::Open(nullptr, path, File::kRead);
++  if (file == nullptr) {
++    if (report) Syslog::PrintErr("Error: Unable to read %s: %s\n", label, path);
++    return false;
++  }
++  RefCntReleaseScope<File> rs(file);
++  const int64_t size = file->Length();
++  if (size < 0) {
++    if (report) Syslog::PrintErr("Error: Unable to read %s: %s\n", label, path);
++    return false;
++  }
++  char* buffer = reinterpret_cast<char*>(malloc(size > 0 ? size : 1));
++  if (buffer == nullptr || (size > 0 && !file->ReadFully(buffer, size))) {
++    free(buffer);
++    if (report) Syslog::PrintErr("Error: Unable to read %s: %s\n", label, path);
++    return false;
++  }
++  *out = buffer;
++  *len = static_cast<intptr_t>(size);
++  return true;
++}
++
+ int RunAnalyzer(int argc, char** argv) {
+   // Constant mirrors gen_snapshot binary, subject to change.
+   const int EXTRA_VM_ARGUMENTS = 7;
+@@ -240,7 +304,10 @@ int RunAnalyzer(int argc, char** argv) {
+   //   analyze_snapshot --dump_object_pool_link_data=base.op base.so
+   // with no --out at all. Measured -- that command line succeeds against their
+   // binary, and it is the one dd_pipeline.sh in the research tree drives.
++  // --compute_dd_slot_mapping is the fourth flag their check accepts
++  // (0x100003154-0x100003180).
+   if (out_path == nullptr && compute_dd_table_path == nullptr &&
++      compute_dd_slot_mapping_path == nullptr &&
+       dump_object_pool_link_data_path == nullptr) {
+     Syslog::PrintErr("No output path provided.\n");
+     return kErrorExitCode;
+@@ -336,12 +403,94 @@ int RunAnalyzer(int argc, char** argv) {
+   Dart_EnterScope();
+   // --compute_dd_table has its own destination, so it is not part of the
+   // either/or below: theirs accepts it alongside --out and the other dumps.
++  // ⚠️ Correction, 2026-10-01 (measured): "accepts" is all it does. Their main is one
++  // else-if chain -- compute_dd_table, then compute_dd_slot_mapping, then
++  // dump_object_pool_link_data, then the --out dumps -- so
++  //   theirs --compute_dd_table=T --out=J hello.so  -> rc 0, J NOT written.
++  // Ours still runs the later outputs after the table; that pre-existing
++  // divergence is left as it was. The slot mapping below does follow theirs.
++  bool slot_mapping_ran = false;
+   if (compute_dd_table_path != nullptr) {
++    // Theirs reads --dd_table_data here with errors suppressed and passes it
++    // on as Dart_ComputeDDTable's input; see the note at the definition for
++    // why ours does not consume it.
+     char* dd = nullptr;
+     intptr_t dd_len = 0;
+-    Dart_ComputeDDTable(info, dd_max_bytes, &dd, &dd_len);
++    char* links = nullptr;
++    intptr_t links_len = 0;
++    Dart_ComputeDDTable(info, dd_max_bytes, &dd, &dd_len, &links, &links_len);
+     WriteFile(compute_dd_table_path, dd, dd_len);
+     free(dd);
++    // Written only when asked for; computed either way, as theirs does.
++    if (dd_caller_links_path != nullptr) {
++      WriteFile(dd_caller_links_path, links, links_len);
++    }
++    free(links);
++  } else if (compute_dd_slot_mapping_path != nullptr) {
++    // Their else-if chain puts this after --compute_dd_table and before every
++    // other output (0x1000042ac), so given both, only the table is computed.
++    // The two requirement checks run in this order, after the VM is up, and
++    // their text is theirs verbatim.
++    if (dd_table_data_path == nullptr) {
++      PrintErrAndExit(
++          "Error: --dd_table_data is required with --compute_dd_slot_mapping.\n");
++    }
++    if (dd_caller_links_path == nullptr) {
++      PrintErrAndExit(
++          "Error: --dd_caller_links is required with "
++          "--compute_dd_slot_mapping.\n");
++    }
++    char* table = nullptr;
++    intptr_t table_len = 0;
++    char* links = nullptr;
++    intptr_t links_len = 0;
++    char* identity = nullptr;
++    intptr_t identity_len = 0;
++    if (!ReadFileFully(dd_table_data_path, "DD table", &table, &table_len,
++                       /*report=*/true)) {
++      ExitAfterError();
++    }
++    if (!ReadFileFully(dd_caller_links_path, "DD caller links", &links,
++                       &links_len, /*report=*/true)) {
++      free(table);
++      ExitAfterError();
++    }
++    if (dd_function_identity_path != nullptr) {
++      ReadFileFully(dd_function_identity_path, "DD function identity",
++                    &identity, &identity_len, /*report=*/false);
++    }
++    char* mapping = nullptr;
++    intptr_t mapping_len = 0;
++    const bool ok = Dart_ComputeDDSlotMapping(
++        info, table, table_len, links, links_len, identity, identity_len,
++        &mapping, &mapping_len);
++    free(table);
++    free(links);
++    free(identity);
++    if (!ok) {
++      // Nothing is written: a refused input must not leave a plausible-looking
++      // output behind.
++      PrintErrAndExit("Error: --compute_dd_slot_mapping: input rejected\n");
++    }
++    WriteFile(compute_dd_slot_mapping_path, mapping, mapping_len);
++    free(mapping);
++    slot_mapping_ran = true;
++  }
++  if (dd_table_data_path != nullptr && compute_dd_table_path == nullptr &&
++      !slot_mapping_ran && out_path != nullptr) {
++    // ⚠️ Known gap, said out loud rather than silently ignored: theirs also
++    // reads --dd_table_data for the --out dumps (0x100004630) and its
++    // --shorebird JSON changes with it (hello: 698828 -> 704596 bytes). That
++    // consumer is not reproduced, so the output below is the one WITHOUT it.
++    Syslog::PrintErr(
++        "Warning: --dd_table_data is not applied to --out outputs by this "
++        "analyze_snapshot.\n");
++  }
++  if (slot_mapping_ran) {
++    Dart_ExitScope();
++    Dart_ShutdownIsolate();
++    delete app_snapshot;
++    return 0;
+   }
+   // Same shape: --dump_object_pool_link_data carries its own path.
+   if (dump_object_pool_link_data_path != nullptr) {
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index 40acdeac685..347cc306ccb 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -60,10 +60,37 @@ void Dart_DumpBlobs(const Dart_SnapshotAnalyzerInformation& info,
+ // --dd_max_bytes, whose default their own error message names as 10000. The one
+ // place this deviates from their exported signature is spelled out at the
+ // definition in analyze_snapshot_api_impl.cc.
++//
++// The second output pair is the DD caller links: one row per call from any
++// function into a DD table entry, which their --dd_caller_links writes when it
++// is given alongside --compute_dd_table. Their own binary computes it on every
++// --compute_dd_table run and frees it unwritten when the flag is absent.
+ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+                          int64_t max_bytes,
+                          char** out,
+-                         intptr_t* out_len);
++                         intptr_t* out_len,
++                         char** caller_links_out,
++                         intptr_t* caller_links_len);
++
++// flutter_hot_patcher: Shorebird's --compute_dd_slot_mapping. Their symbol is
++//   Dart_ComputeDDSlotMapping(char const*, long, char const*, long,
++//                             char const*, long, char**, long*)
++// and the three inputs are, in that order, the DD table (--dd_table_data), the
++// DD caller links (--dd_caller_links) and the DD function identity
++// (--dd_function_identity, may be null). The output is a DDSlotVoters stream,
++// the format gen_snapshot --dd_slot_mapping sniffs for.
++//
++// Returns false, leaving *out null, when an input does not parse. Theirs has
++// no such path -- its readers run unguarded -- see the definition.
++bool Dart_ComputeDDSlotMapping(const Dart_SnapshotAnalyzerInformation& info,
++                               const char* dd_table,
++                               intptr_t dd_table_len,
++                               const char* caller_links,
++                               intptr_t caller_links_len,
++                               const char* function_identity,
++                               intptr_t function_identity_len,
++                               char** out,
++                               intptr_t* out_len);
+ 
+ // flutter_hot_patcher: Shorebird's --dump_object_pool_link_data, the binary
+ // ObjectPoolLinkInfo their linker consumes as --base_op_link_data /
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 186504658e8..6ad78d2a049 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1767,6 +1767,45 @@ std::vector<std::vector<intptr_t>> ShorebirdCallGraph(
+   return callees;
+ }
+ 
++// The per-entry callee list the DD caller links and the DD slot mapping index
++// into -- NOT the sorted, deduplicated set above, which is what the --shorebird
++// JSON prints.
++//
++// Their AnalyzeFunctions (0x1002505a8) fills FunctionAnalysisData+0x70 from the
++// edge list SubgraphHasher records at +0x1d8: AccumulateRecursive pushes
++// {IndexOf(branch pc), IndexOf(target)} at 0x100196900 for every branch that
++// leaves the entry and lands inside one (both IndexOf calls must be != -1), at
++// every depth of the walk, then recurses. AnalyzeFunctions keeps the edges whose
++// source is the root (0x100250ee8: `cmp x8, x26`) and push_backs their targets
++// in recording order (0x100250f00). A source equals the root only for the
++// root's own instructions -- the per-root visited set admits it once -- so this
++// is one element per external branch of the entry, in instruction order,
++// duplicates kept.
++//
++// A DDCallerLink's third field is a position in THIS list, and the slot mapping
++// reads callees[caller][position] back out of it, so the list has to be the
++// same one or every vote lands on the wrong target.
++//
++// The branches come from `classified`'s kCall steps, the same ones the self
++// hash numbers as ExternalBranchTargetIndex -- so the skip window after a pool
++// load (F135) and the conditional forms (F143) apply here exactly as they do
++// there.
++std::vector<std::vector<intptr_t>> ShorebirdOrderedCallees(
++    const std::vector<CodeEntry>& codes,
++    const std::vector<ShorebirdCodeFacts>& facts) {
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  std::vector<std::vector<intptr_t>> callees(n);
++  for (intptr_t u = 0; u < n; u++) {
++    for (const ShorebirdClassifiedStep& step : facts[u].classified) {
++      if (step.tag != ShorebirdClassifiedStep::kCall) continue;
++      const intptr_t v =
++          ShorebirdEntryContaining(codes, codes[u].offset + step.value);
++      if (v >= 0) callees[u].push_back(v);
++    }
++  }
++  return callees;
++}
++
+ // Shorebird's subgraph_hash, one per entry.
+ //
+ // Recovered from their analyze_snapshot rather than guessed. SubgraphHasher
+@@ -2213,10 +2252,20 @@ void Dart_DumpClassTableAsJson(const Dart_SnapshotAnalyzerInformation& info,
+ // for the other four parameters this follows the shape of the neighbouring
+ // entry points in this file. Same class of known deviation as LinkOracle's
+ // Install() and the DDFunctionIdentity class name.
++//
++// The output pairs are now both attributed: the first is the table, the second
++// the DD caller links, which main writes to --dd_caller_links (0x1000043b8) and
++// otherwise frees. The input (char const*, long) is --dd_table_data
++// (0x100004340, read with errors suppressed). It is not taken here: theirs
++// hands it to AnalyzeFunctions, and on two probes -- hello's own table and
++// prog's table passed to hello -- both outputs came out byte-identical to the
++// run without it, so whatever it changes is not visible in these two files.
+ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+                          int64_t max_bytes,
+                          char** out,
+-                         intptr_t* out_len) {
++                         intptr_t* out_len,
++                         char** caller_links_out,
++                         intptr_t* caller_links_len) {
+   Thread* thread = Thread::Current();
+   IsolateGroup* ig = thread->isolate_group();
+   DARTSCOPE(thread);
+@@ -2242,9 +2291,9 @@ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+   const ShorebirdClassifiedHashes classified =
+       ShorebirdSelfAndOpHashes(codes, facts);
+   for (intptr_t i = 0; i < n; i++) {
+-    // An empty hash is how CascadeLimiter::Run is told a node is ineligible;
+-    // see the note in cascade_limiter.h. The other half of eligibility ("has a
+-    // caller") it derives from the graph itself.
++    // An empty hash is how BuildEntries is told a node is ineligible; see the
++    // note in cascade_limiter.h. Run itself gets every node's hash: theirs cuts
++    // without looking at the kind and filters afterwards (0x10024f49c).
+     if (ShorebirdHasIdentity(codes[i].name)) {
+       hashes[i] = classified.self_hash[i];
+     }
+@@ -2258,16 +2307,346 @@ void Dart_ComputeDDTable(const Dart_SnapshotAnalyzerInformation& info,
+     adjacency[u].insert(callees[u].begin(), callees[u].end());
+   }
+ 
++  // ⚠️ The eligibility filter runs AFTER the greedy, not inside it. Their Run
++  // loop (0x10024ec4c-0x10024f070) asks only "has callers" and "cost > budget"
++  // before cutting into the set; the "[Optimized] or allocation stub" filter
++  // is applied while walking the cut set into entries (0x10024f49c: owner cid
++  // is Function or Class). So a type-test stub or an owner-less stub CAN be
++  // cut, stops the caller closures of everything behind it, and occupies a
++  // node in the cut set -- which reorders that set. Measured: filtering inside
++  // Run gave the same table bytes but 59 prog caller links with the wrong slot
++  // (equal-hash positions 92/93, 180/181, 249-251, 277-281); filtering after
++  // makes ddt and ddcl byte-identical to theirs at nine budgets (1 .. 100000)
++  // on hello and prog.
+   const std::vector<int64_t> selected =
+-      CascadeLimiter::Run(adjacency, sizes, hashes, n, max_bytes);
++      CascadeLimiter::Run(adjacency, sizes, classified.self_hash, n, max_bytes);
++  std::vector<int64_t> origin;
+   const std::vector<CascadeLimiterEntry> entries =
+-      CascadeLimiter::BuildEntries(selected, sizes, hashes);
++      CascadeLimiter::BuildEntries(selected, sizes, hashes, &origin);
+ 
+   MallocWriteStream stream(/*initial_size=*/64 * KB);
+   CascadeLimiter::WriteEntries(&stream, entries);
+   *out_len = stream.bytes_written();
+   *out = reinterpret_cast<char*>(malloc(*out_len));
+   memcpy(*out, stream.buffer(), *out_len);
++
++  // The DD caller links, 0x10024fac8-0x1002502c4 in theirs.
++  //
++  // First a node -> table position map, filled from the SORTED entry array
++  // (0x10024fe5c stores the loop counter, i.e. the position, as the value; a
++  // repeated node keeps the last position). Then every entry u, in index order,
++  // and every position k of its ordered callee list: when callees[u][k] is a
++  // table node, one link {self_hash[u], position, k}. The hash is the caller's
++  // self_hash for every entry, not only the eligible ones -- FunctionAnalysisData
++  // +0x00 is filled for all of them -- so a stub calling into the table gets a
++  // link too.
++  //
++  // Wire format, from the writer at 0x1002500b0:
++  //     count:u, { caller_hash:str, dd_index:u, callee_position:u } * count
++  // The unordered_map<long, vector<long>> they build alongside (0x100250074) is
++  // not written; it is the dd_index -> links index the slot mapping rebuilds.
++  std::unordered_map<intptr_t, intptr_t> position_of;
++  for (size_t i = 0; i < origin.size(); i++) {
++    position_of[static_cast<intptr_t>(origin[i])] = static_cast<intptr_t>(i);
++  }
++  const std::vector<std::vector<intptr_t>> ordered =
++      ShorebirdOrderedCallees(codes, facts);
++  intptr_t link_count = 0;
++  for (intptr_t u = 0; u < n; u++) {
++    for (intptr_t target : ordered[u]) {
++      if (position_of.count(target) != 0) link_count++;
++    }
++  }
++  MallocWriteStream links(/*initial_size=*/64 * KB);
++  links.WriteUnsigned<intptr_t>(link_count);
++  for (intptr_t u = 0; u < n; u++) {
++    for (size_t k = 0; k < ordered[u].size(); k++) {
++      auto it = position_of.find(ordered[u][k]);
++      if (it == position_of.end()) continue;
++      WriteString(&links, classified.self_hash[u]);
++      links.WriteUnsigned<intptr_t>(it->second);
++      links.WriteUnsigned<intptr_t>(static_cast<intptr_t>(k));
++    }
++  }
++  *caller_links_len = links.bytes_written();
++  *caller_links_out = reinterpret_cast<char*>(malloc(*caller_links_len));
++  memcpy(*caller_links_out, links.buffer(), *caller_links_len);
++}
++
++namespace {
++
++// A bounds-checked reader for the varint streams the DD inputs use. Dart's
++// ReadStream checks its bounds with ASSERT, which Release and Product compile
++// out, so a truncated input would read past the buffer -- the failure mode the
++// research tree already recorded for their own parser (a 4-byte file driving a
++// terabyte reserve). This one refuses instead.
++//
++// Encoding is Dart's datastream: data bytes are 0..127 little-endian groups of
++// seven bits, and the final byte is >= 128, carrying (b - 128) for unsigned
++// values and (b - 192) for signed ones (kEndUnsignedByteMarker /
++// kEndByteMarker).
++class DDInputReader {
++ public:
++  DDInputReader(const char* data, intptr_t len)
++      : cur_(reinterpret_cast<const uint8_t*>(data)),
++        end_(reinterpret_cast<const uint8_t*>(data) + (data ? len : 0)) {}
++
++  intptr_t pending() const { return end_ - cur_; }
++
++  bool Unsigned(int64_t* value) { return Varint(128, value); }
++
++  // A DD string: length, then one SIGNED varint per character.
++  bool String(std::string* s) {
++    int64_t len;
++    if (!Unsigned(&len) || len < 0 || len > pending()) return false;
++    s->clear();
++    s->reserve(static_cast<size_t>(len));
++    for (int64_t i = 0; i < len; i++) {
++      int64_t c;
++      if (!Varint(192, &c)) return false;
++      s->push_back(static_cast<char>(c));
++    }
++    return true;
++  }
++
++  // `count` rows, each at least `min_row_bytes` long, must fit in what is
++  // left. Checked before anything is allocated for them.
++  bool Plausible(int64_t count, intptr_t min_row_bytes) const {
++    return count >= 0 && count <= pending() / min_row_bytes;
++  }
++
++ private:
++  bool Varint(int end_marker, int64_t* value) {
++    uint64_t r = 0;
++    for (int shift = 0; shift < 64; shift += 7) {
++      if (cur_ >= end_) return false;
++      const uint8_t b = *cur_++;
++      if (b > 127) {
++        *value = static_cast<int64_t>(
++            r | (static_cast<uint64_t>(static_cast<int64_t>(b) - end_marker)
++                 << shift));
++        return true;
++      }
++      r |= static_cast<uint64_t>(b) << shift;
++    }
++    return false;
++  }
++
++  const uint8_t* cur_;
++  const uint8_t* end_;
++};
++
++struct DDCallerLinkRow {
++  std::string caller_hash;
++  int64_t dd_index;
++  int64_t callee_position;
++};
++
++}  // namespace
++
++// Shorebird's --compute_dd_slot_mapping, 0x10025351c in theirs.
++//
++// ⚠️ The output is a DDSlotVoters stream, NOT a DDSlotMapping. Three pieces of
++// their code say so independently: the header is the DDSlotVoters magic and
++// version (0x10025502c stores 0xDDCA7E55, then kVersion -- a DDSlotMapping has
++// no header at all); each row's payload is written by two FunctionKey::
++// WriteToStream calls, 0x20 bytes apart (0x1002551d4 / 0x1002551e0), which is a
++// SlotVoter's caller_key and target_key; and the only vector-of-row type the
++// function instantiates is std::vector<dart::SlotVoter> (its
++// __throw_length_error at 0x100255534). gen_snapshot --dd_slot_mapping takes
++// either, by sniffing those four bytes.
++//
++// What it does, in their order:
++//
++//  1. Parse the table (DDTableLinkInfo::ReadFromStream). Only one number of it
++//     is used here: DDTableLinkInfo+0x68, which its constructor sets to
++//     max(entry.index) + 1 (0x1001947e0). Slots are 0 .. that - 1.
++//  2. Parse the caller links inline and index them by dd_index (0x100253988).
++//  3. AnalyzeFunctions(thread, nullptr) -- the parsed table is NOT passed
++//     (0x1002539c4 `mov x2, #0x0`) -- for every entry's self_hash and ordered
++//     callee list.
++//  4. If an identity buffer is present, parse it into index -> FunctionKey
++//     (a repeated index overwrites, 0x100253f5c) and expand it to one key per
++//     entry, zero where absent. With no identity every key is zero, every voter
++//     is dropped by step 6, and the output is the bare nine-byte header -- which
++//     is exactly what their binary emits when --dd_function_identity is omitted.
++//  5. Index entries by self_hash (unordered_map<string, vector<long>>, ascending
++//     entry index within a hash).
++//  6. For each slot in ascending order, for each link with that dd_index in
++//     link order, for each entry carrying the link's caller hash: target =
++//     callees[caller][link.callee_position]. Skip unless caller, position and
++//     target are all in range and neither key is all-zero (0x100254930-
++//     0x1002549f0). Each survivor is a SlotVoter{key(caller), key(target)}.
++//  7. A slot with at least one voter goes into an unordered_map keyed by slot,
++//     inserted in ascending slot order, and the stream is written in that map's
++//     iteration order. DDSlotVoters::AddVoter builds the same container the same
++//     way (operator[] on first voter, no reserve), so its WriteToStream emits the
++//     same order.
++//
++// ⚠️ DEVIATION, deliberate: theirs parses all three inputs with no bounds checks
++// (step 1 dereferences the parse result unconditionally). This returns false on
++// a truncated or malformed input instead of reading past it. Trailing bytes are
++// tolerated, as nothing in their reader can be seen to reject them.
++bool Dart_ComputeDDSlotMapping(const Dart_SnapshotAnalyzerInformation& info,
++                               const char* dd_table,
++                               intptr_t dd_table_len,
++                               const char* caller_links,
++                               intptr_t caller_links_len,
++                               const char* function_identity,
++                               intptr_t function_identity_len,
++                               char** out,
++                               intptr_t* out_len) {
++  *out = nullptr;
++  *out_len = 0;
++
++  // 1. The table: count, { hash:str, index:u, size:u } * count.
++  int64_t slot_count = 0;
++  {
++    DDInputReader r(dd_table, dd_table_len);
++    int64_t count;
++    if (!r.Unsigned(&count) || !r.Plausible(count, 3)) {
++      OS::PrintErr("Error: DD table: bad entry count\n");
++      return false;
++    }
++    std::string hash;
++    for (int64_t i = 0; i < count; i++) {
++      int64_t index, size;
++      if (!r.String(&hash) || !r.Unsigned(&index) || !r.Unsigned(&size)) {
++        OS::PrintErr("Error: DD table: truncated at entry %" Pd64 " of %" Pd64
++                     "\n",
++                     i, count);
++        return false;
++      }
++      if (index >= slot_count) slot_count = index + 1;
++    }
++  }
++
++  // 2. The caller links, and the dd_index -> link rows index.
++  std::vector<DDCallerLinkRow> links;
++  std::unordered_map<int64_t, std::vector<size_t>> links_for_slot;
++  {
++    DDInputReader r(caller_links, caller_links_len);
++    int64_t count;
++    if (!r.Unsigned(&count) || !r.Plausible(count, 3)) {
++      OS::PrintErr("Error: DD caller links: bad link count\n");
++      return false;
++    }
++    links.reserve(static_cast<size_t>(count));
++    for (int64_t i = 0; i < count; i++) {
++      DDCallerLinkRow row;
++      if (!r.String(&row.caller_hash) || !r.Unsigned(&row.dd_index) ||
++          !r.Unsigned(&row.callee_position)) {
++        OS::PrintErr("Error: DD caller links: truncated at link %" Pd64
++                     " of %" Pd64 "\n",
++                     i, count);
++        return false;
++      }
++      links_for_slot[row.dd_index].push_back(links.size());
++      links.push_back(std::move(row));
++    }
++  }
++
++  // 4 (parsed before 3 so a malformed file is refused before the analysis).
++  const bool have_identity =
++      function_identity != nullptr && function_identity_len >= 1;
++  std::unordered_map<int64_t, FunctionKey> identity;
++  if (have_identity) {
++    DDInputReader r(function_identity, function_identity_len);
++    int64_t count;
++    if (!r.Unsigned(&count) || !r.Plausible(count, 6)) {
++      OS::PrintErr("Error: DD function identity: bad row count\n");
++      return false;
++    }
++    for (int64_t i = 0; i < count; i++) {
++      int64_t index, lib, owner, offset, kind, sig;
++      if (!r.Unsigned(&index) || !r.Unsigned(&lib) || !r.Unsigned(&owner) ||
++          !r.Unsigned(&offset) || !r.Unsigned(&kind) || !r.Unsigned(&sig)) {
++        OS::PrintErr("Error: DD function identity: truncated at row %" Pd64
++                     " of %" Pd64 "\n",
++                     i, count);
++        return false;
++      }
++      FunctionKey key;
++      key.library_kernel_offset = static_cast<intptr_t>(lib);
++      key.owner_class_kernel_offset = static_cast<intptr_t>(owner);
++      key.kernel_offset = static_cast<intptr_t>(offset);
++      key.kind = static_cast<uint8_t>(kind);
++      key.signature_hash = static_cast<uint32_t>(sig);
++      identity[index] = key;
++    }
++  }
++
++  // 3. The analysis: self_hash and the ordered callee list per entry.
++  Thread* thread = Thread::Current();
++  IsolateGroup* ig = thread->isolate_group();
++  DARTSCOPE(thread);
++  const uintptr_t isolate_instr_base =
++      reinterpret_cast<uintptr_t>(info.vm_isolate_instructions);
++  std::vector<CodeEntry> codes;
++  {
++    SafepointReadRwLocker ml(thread, ig->program_lock());
++    CollectAllCodes(ig, isolate_instr_base, codes);
++  }
++  const intptr_t n = static_cast<intptr_t>(codes.size());
++  std::vector<ShorebirdCodeFacts> facts;
++  facts.reserve(n);
++  for (intptr_t i = 0; i < n; i++) {
++    facts.push_back(ComputeShorebirdCodeFacts(codes[i].payload, codes[i].size));
++  }
++  const ShorebirdClassifiedHashes classified =
++      ShorebirdSelfAndOpHashes(codes, facts);
++  const std::vector<std::vector<intptr_t>> callees =
++      ShorebirdOrderedCallees(codes, facts);
++
++  const FunctionKey kZeroKey = {0, 0, 0, 0, 0};
++  std::vector<FunctionKey> keys(n, kZeroKey);
++  for (intptr_t i = 0; i < n; i++) {
++    auto it = identity.find(i);
++    if (it != identity.end()) keys[i] = it->second;
++  }
++  auto is_zero = [](const FunctionKey& k) {
++    return k.library_kernel_offset == 0 && k.owner_class_kernel_offset == 0 &&
++           k.kernel_offset == 0 && k.kind == 0 && k.signature_hash == 0;
++  };
++
++  // 5.
++  std::unordered_map<std::string, std::vector<intptr_t>> entries_with_hash;
++  for (intptr_t i = 0; i < n; i++) {
++    if (classified.self_hash[i].empty()) continue;
++    entries_with_hash[classified.self_hash[i]].push_back(i);
++  }
++
++  // 6 and 7.
++  DDSlotVoters voters;
++  for (int64_t slot = 0; slot < slot_count; slot++) {
++    auto rows = links_for_slot.find(slot);
++    if (rows == links_for_slot.end()) continue;
++    for (size_t row_index : rows->second) {
++      const DDCallerLinkRow& link = links[row_index];
++      auto callers = entries_with_hash.find(link.caller_hash);
++      if (callers == entries_with_hash.end()) continue;
++      for (intptr_t caller : callers->second) {
++        if (caller < 0 || caller >= n) continue;
++        const int64_t pos = link.callee_position;
++        if (pos < 0 ||
++            pos >= static_cast<int64_t>(callees[caller].size())) {
++          continue;
++        }
++        const intptr_t target = callees[caller][pos];
++        if (target < 0 || target >= n) continue;
++        if (is_zero(keys[caller]) || is_zero(keys[target])) continue;
++        voters.AddVoter(static_cast<intptr_t>(slot), keys[caller],
++                        keys[target]);
++      }
++    }
++  }
++
++  MallocWriteStream stream(/*initial_size=*/1 * KB);
++  voters.WriteToStream(&stream);
++  *out_len = stream.bytes_written();
++  *out = reinterpret_cast<char*>(malloc(*out_len));
++  memcpy(*out, stream.buffer(), *out_len);
++  return true;
+ }
+ 
+ // flutter_hot_patcher: Shorebird's GetObjectPoolLinkInfo(Thread*),
+diff --git a/runtime/vm/shorebird/cascade_limiter.cc b/runtime/vm/shorebird/cascade_limiter.cc
+index e9d9011b3e6..f8adc895b0a 100644
+--- a/runtime/vm/shorebird/cascade_limiter.cc
++++ b/runtime/vm/shorebird/cascade_limiter.cc
+@@ -129,11 +129,35 @@ std::vector<int64_t> CascadeLimiter::Run(
+ std::vector<CascadeLimiterEntry> CascadeLimiter::BuildEntries(
+     const std::vector<int64_t>& selected,
+     const std::vector<int64_t>& sizes,
+-    const std::vector<std::string>& hashes) {
++    const std::vector<std::string>& hashes,
++    std::vector<int64_t>* origin) {
++  // The sort's INPUT order is not `selected`'s order. Their cut set is a
++  // std::unordered_set<long> (the emplace at 0x10024f068, one per node as the
++  // visit order cuts it), and the entry vector is filled by walking that set's
++  // node list (0x10024f0d0-0x10024f104: key at node+0x10, then hashes[key] and
++  // sizes[key]). So the entries reach the sort in the set's iteration order.
++  // That decides which of two equal-hash nodes lands at which position --
++  // measured: building them in `selected` order instead swaps the positions of
++  // five equal-hash pairs on prog (205 caller links name the wrong slot), while
++  // the table bytes stay identical either way. Insert in `selected` order and
++  // never reserve(): the bucket-count history is the order.
++  //
++  // `selected` must therefore be EVERY cut node, eligible or not, since the
++  // ineligible ones occupy the same set; see the caller in
++  // analyze_snapshot_api_impl.cc.
++  std::unordered_set<int64_t> cut;
++  for (int64_t v : selected) cut.insert(v);
++
+   std::vector<CascadeLimiterEntry> entries;
+-  entries.reserve(selected.size());
+-  for (int64_t v : selected) {
+-    entries.push_back(CascadeLimiterEntry{0, hashes[v], sizes[v]});
++  entries.reserve(cut.size());
++  // `index` carries the node through the sort, as their +0x00 field does: the
++  // caller-link writer at 0x10024facc reads it back out of the sorted array.
++  // The comparator never looks at it. An empty hash is the eligibility filter
++  // their walk applies here (see the header); the node stays in `cut`, so it
++  // still shapes the iteration order.
++  for (int64_t v : cut) {
++    if (hashes[v].empty()) continue;
++    entries.push_back(CascadeLimiterEntry{v, hashes[v], sizes[v]});
+   }
+   // Their comparator is a plain memcmp over the entry's std::string field --
+   // std::string::compare inlined, with the short-string branch -- and nothing
+@@ -151,7 +175,12 @@ std::vector<CascadeLimiterEntry> CascadeLimiter::BuildEntries(
+             [](const CascadeLimiterEntry& a, const CascadeLimiterEntry& b) {
+               return a.hash < b.hash;
+             });
++  if (origin != nullptr) {
++    origin->clear();
++    origin->reserve(entries.size());
++  }
+   for (size_t i = 0; i < entries.size(); i++) {
++    if (origin != nullptr) origin->push_back(entries[i].index);
+     entries[i].index = static_cast<int64_t>(i);
+   }
+   return entries;
+diff --git a/runtime/vm/shorebird/cascade_limiter.h b/runtime/vm/shorebird/cascade_limiter.h
+index e748c88df56..777ca014cbb 100644
+--- a/runtime/vm/shorebird/cascade_limiter.h
++++ b/runtime/vm/shorebird/cascade_limiter.h
+@@ -35,13 +35,15 @@ namespace dart {
+ // against their own artifact at seventeen budgets by `dd_table_model.py`.
+ //
+ // ⚠️ ONE INTERFACE DETAIL IS OURS, NOT THEIRS. Their signature carries no
+-// eligibility argument, and where they apply the kind predicate ("[Optimized]
+-// or allocation stub") is not established. We encode it in `hashes`: a node
+-// whose hash is EMPTY is ineligible. That is the least invented encoding
+-// available -- the hash is literally what an entry consists of, so a node
+-// without one cannot be an entry -- but it is a choice, and it is flagged here
+-// rather than passed off as recovered. The other half of eligibility, "has at
+-// least one caller", is derivable from `callees` and is derived.
++// eligibility argument. Where they apply the kind predicate ("[Optimized] or
++// allocation stub") IS now established (2026-10-01): after Run, while walking
++// the cut set into entries (0x10024f49c) -- Run cuts stubs too. So Run is
++// handed every node's real hash, and the predicate is encoded in the `hashes`
++// passed to BuildEntries: a node whose hash is EMPTY there is dropped from the
++// table but still counts as cut. Run's own empty-hash test is kept for callers
++// that want the old in-greedy filter; with every hash non-empty it never fires.
++// The other half of eligibility, "has at least one caller", is derivable from
++// `callees` and is derived.
+ struct CascadeLimiterEntry {
+   // Layout read off the swap code in their `__sort3` (sizeof == 0x28):
+   //   long /* +0x00 */ ; std::string /* +0x08 */ ; long /* +0x20 */ ;
+@@ -117,10 +119,18 @@ class CascadeLimiter {
+   // Emission: ascending by hash, `index` dense 0..n-1 afterwards. Written with
+   // Dart's own WriteStream as
+   //     DDTable := count:u, { hash:str, index:u, size:u } * count
++  //
++  // `origin`, when given, receives the node index each emitted entry came
++  // from: origin[i] is the node behind entries[i]. The DD caller links key on
++  // exactly that pairing (their link writer maps node -> position in this
++  // sorted array), and it is the one thing the dense `index` throws away.
++  // Ties in `hash` make it observable: hello carries two entries with the same
++  // hash, so which node lands at which position is the sort's trajectory.
+   static std::vector<CascadeLimiterEntry> BuildEntries(
+       const std::vector<int64_t>& selected,
+       const std::vector<int64_t>& sizes,
+-      const std::vector<std::string>& hashes);
++      const std::vector<std::string>& hashes,
++      std::vector<int64_t>* origin = nullptr);
+ 
+   static void WriteEntries(BaseWriteStream* stream,
+                            const std::vector<CascadeLimiterEntry>& entries);
+diff --git a/runtime/vm/shorebird/cascade_limiter_test.cc b/runtime/vm/shorebird/cascade_limiter_test.cc
+index ccdb5b9bd5b..ad7481ebe5e 100644
+--- a/runtime/vm/shorebird/cascade_limiter_test.cc
++++ b/runtime/vm/shorebird/cascade_limiter_test.cc
+@@ -163,6 +163,24 @@ UNIT_TEST_CASE(CascadeLimiter_EntriesAscendByHashAndIndexIsDense) {
+   }
+ }
+ 
++// An empty hash drops the node from the table (the eligibility filter their
++// cut-set walk applies), and `origin` names the node behind each emitted entry.
++UNIT_TEST_CASE(CascadeLimiter_EntriesDropEmptyHashesAndReportOrigin) {
++  const std::vector<int64_t> sizes = {12, 16, 20};
++  const std::vector<std::string> hashes = {"cc", "", "bb"};
++  std::vector<int64_t> origin;
++  const auto entries =
++      CascadeLimiter::BuildEntries({0, 1, 2}, sizes, hashes, &origin);
++  EXPECT_EQ(2u, entries.size());
++  EXPECT_STREQ("bb", entries[0].hash.c_str());
++  EXPECT_STREQ("cc", entries[1].hash.c_str());
++  EXPECT_EQ(2u, origin.size());
++  EXPECT_EQ(2, origin[0]);
++  EXPECT_EQ(0, origin[1]);
++  EXPECT_EQ(0, entries[0].index);
++  EXPECT_EQ(1, entries[1].index);
++}
++
+ UNIT_TEST_CASE(CascadeLimiter_WriteEntriesEncodesTheContainerExactly) {
+   // DDTable := count:u, { hash:str, index:u, size:u } * count, written with
+   // Dart's WriteStream: unsigned varints terminate at >= 0x80, characters are
+-- 
+2.53.0
+

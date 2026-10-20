@@ -1,0 +1,200 @@
+From 7bdc43af6525a79a82530bdea00c02981cfc9ced Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 24 Aug 2026 20:37:22 +0800
+Subject: [PATCH 068/206] feat(shorebird): name the Deserializer's Shorebird
+ fields, and let the  wrappers actually run
+
+Their dSYM names the whole block, so the two fields WRAP_FUNCTION_RECON.md
+had to leave blank are no longer a mystery:
+
+  0xc0  instructions_type_                   InstructionsType { vm=0, app=1 }
+  0xc4  shorebird_instructions_only_         bool
+  0xc8  shorebird_base_instructions_table_   const InstructionsTable&
+  0xd0  shorebird_base_instructions_buffer_  const uint8_t*
+  0xd8  stats_  { cpu_instructions_length_, sim_instructions_length_,
+                  cpu_entry_point_count_, sim_entry_point_count_ }
+
+which also reads WrapFunction's FATAL at app_snapshot.cc:991: it fires when
+the base instructions table is null while a LinkOracle is installed -- a patch
+loaded with nothing to link it against.
+
+instructions_type_ is the outermost gate, and it is now ours too, threaded
+through the three FullSnapshotReader entry points. ReadVMSnapshot passes vm;
+the other two pass app.
+
+The second gate -- only wrap when a patch is present -- is gone, because the
+reason for it is gone. It was there because nothing had ever executed a
+wrapper, so wrapping every entry point on the strength of a disassembly was
+not a trade worth making. Two experiments settled it:
+
+  * wrap every application entry point: all 1400-odd of them in the fixture,
+    program still produces the right output
+  * then store the target four bytes off: every case segfaults
+
+The second is the one that matters. Without it the first is indistinguishable
+from the wrapper being quietly bypassed. Together they say our Sim->CPU stub
+body is entered thousands of times per run and routes through the metadata
+correctly -- the first time anything in the wrapper subsystem has been shown
+to execute rather than merely match their bytes.
+
+Also the second stale comment in wrapper.cc, same shape as the first: it said
+the Sim->CPU shared body was a breakpoint placeholder. It is seven transcribed
+instructions pinned to 28 bytes, and the `brk` in it is kRunDartOnCPUCode --
+part of the mechanism, not a stand-in.
+
+83 of 83 shorebird tests; dd_runtime_check.sh, dd_pass_check.sh and
+verify_reproduction.sh all clean.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/app_snapshot.cc b/runtime/vm/app_snapshot.cc
+index 3a27c011a4a..cfb287e60e4 100644
+--- a/runtime/vm/app_snapshot.cc
++++ b/runtime/vm/app_snapshot.cc
+@@ -677,6 +677,18 @@ class Serializer : public ThreadStackResource {
+ 
+ class Deserializer : public ThreadStackResource {
+  public:
++  // Shorebird. Which instructions image is being read: the VM isolate's, or
++  // the application's. A patch only ever replaces application code, so this is
++  // the outermost gate on wrapping -- their WrapFunction and WrapCode both
++  // check it first and take a plain identity function pointer when it is `vm`.
++  //
++  // Theirs, by name and value (engine dSYM: Deserializer+0xc0, 4 bytes,
++  // enumerators vm = 0 and app = 1).
++  enum class InstructionsType : uint32_t {
++    vm = 0,
++    app = 1,
++  };
++
+   Deserializer(Thread* thread,
+                Snapshot::Kind kind,
+                const uint8_t* buffer,
+@@ -684,6 +696,7 @@ class Deserializer : public ThreadStackResource {
+                const uint8_t* data_buffer,
+                const uint8_t* instructions_buffer,
+                bool is_non_root_unit,
++               InstructionsType instructions_type,
+                intptr_t offset = 0);
+   ~Deserializer();
+ 
+@@ -965,6 +978,8 @@ class Deserializer : public ThreadStackResource {
+   DeserializationCluster** clusters_;
+   const bool is_non_root_unit_;
+   InstructionsTable& instructions_table_;
++  // Shorebird, theirs at Deserializer+0xc0 by name.
++  const InstructionsType instructions_type_;
+ };
+ 
+ DART_FORCE_INLINE
+@@ -9251,6 +9266,7 @@ Deserializer::Deserializer(Thread* thread,
+                            const uint8_t* data_buffer,
+                            const uint8_t* instructions_buffer,
+                            bool is_non_root_unit,
++                           InstructionsType instructions_type,
+                            intptr_t offset)
+     : ThreadStackResource(thread),
+       heap_(thread->isolate_group()->heap()),
+@@ -9264,7 +9280,8 @@ Deserializer::Deserializer(Thread* thread,
+       next_ref_index_(kFirstReference),
+       clusters_(nullptr),
+       is_non_root_unit_(is_non_root_unit),
+-      instructions_table_(InstructionsTable::Handle(thread->zone())) {
++      instructions_table_(InstructionsTable::Handle(thread->zone())),
++      instructions_type_(instructions_type) {
+   if (Snapshot::IncludesCode(kind)) {
+     ASSERT(instructions_buffer != nullptr);
+     ASSERT(data_buffer != nullptr);
+@@ -9845,19 +9862,27 @@ void Deserializer::ReadInstructions(CodePtr code, bool deferred) {
+   // Shorebird: the arithmetic upstream did inline lives in EntryPoints now, so
+   // that the addresses can be routed through a wrapper on the way out.
+   //
+-  // Nothing is wrapped unless a patch is loaded. Wrapping costs a landing pad
+-  // per entry point and only buys anything when native and simulated code have
+-  // to call each other, which cannot happen without a patch. Theirs gates this
+-  // too -- WrapFunction takes a plain function pointer instead of either lambda
+-  // when the field at Deserializer+0xc0 is not 1 -- but what that field is has
+-  // not been established, so the gate here is the condition we can name rather
+-  // than a guess at theirs.
++  // Application code is wrapped, VM code is not, and a patch being present does
++  // not enter into it. Theirs gates on exactly this: WrapFunction and WrapCode
++  // both check instructions_type_ first and take an identity function pointer
++  // -- a bare `ret` at 0x733170 -- when it is not `app`. Only application code
++  // is ever replaced by a patch, which is what exempts the VM isolate.
++  //
++  // This was gated on a LinkOracle being installed until the wrapper had been
++  // shown to work, since wrapping unconditionally costs a landing pad per entry
++  // point. It does work: dropping the gate wraps all 1400-odd entry points in
++  // the fixture and the program still produces the right answer, and corrupting
++  // the stored target by four bytes segfaults every case -- so the wrappers are
++  // being entered and are routing through the metadata, not quietly bypassed.
++  //
++  // ⚠️ That evidence is one small program on one platform. A real app has far
++  // more entry points and correspondingly more wrapper pages.
++  const bool wrap = instructions_type_ == InstructionsType::app;
+   const EntryPoints entry_points(
+       payload_start,
+-      LinkOracle::shared() != nullptr
+-          ? WrapperForRunTarget(LinkOracle::RunTarget::cpu)
+-          : std::function<uword(uword)>(
+-                [](uword entry_point) { return entry_point; }),
++      wrap ? WrapperForRunTarget(LinkOracle::RunTarget::cpu)
++           : std::function<uword(uword)>(
++                 [](uword entry_point) { return entry_point; }),
+       payload_info);
+ 
+   instructions_table_.SetCodeAt(instructions_index_++, code);
+@@ -10370,7 +10395,7 @@ ApiErrorPtr FullSnapshotReader::ReadVMSnapshot() {
+ 
+   Deserializer deserializer(thread_, kind_, buffer_, size_, data_image_,
+                             instructions_image_, /*is_non_root_unit=*/false,
+-                            offset);
++                            Deserializer::InstructionsType::vm, offset);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+@@ -10417,7 +10442,7 @@ ApiErrorPtr FullSnapshotReader::ReadProgramSnapshot() {
+ 
+   Deserializer deserializer(thread_, kind_, buffer_, size_, data_image_,
+                             instructions_image_, /*is_non_root_unit=*/false,
+-                            offset);
++                            Deserializer::InstructionsType::app, offset);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+@@ -10465,7 +10490,8 @@ ApiErrorPtr FullSnapshotReader::ReadUnitSnapshot(const LoadingUnit& unit) {
+ 
+   Deserializer deserializer(
+       thread_, kind_, buffer_, size_, data_image_, instructions_image_,
+-      /*is_non_root_unit=*/unit.id() != LoadingUnit::kRootId, offset);
++      /*is_non_root_unit=*/unit.id() != LoadingUnit::kRootId,
++      Deserializer::InstructionsType::app, offset);
+   ApiErrorPtr api_error = deserializer.VerifyImageAlignment();
+   if (api_error != ApiError::null()) {
+     return api_error;
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index 262f407fe1b..4b0ce3578af 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -45,10 +45,14 @@ void CPUToSimConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+   code_end = code_start + static_cast<uword>(stub.Size());
+ }
+ 
+-// Sim->CPU. The shared body is still a breakpoint placeholder, but reporting the
+-// real range is correct regardless: it is what makes EnsureStubPage map a page
+-// and lets AllocateMetadata hand out pads. Nothing may *enter* a pad until the
+-// real body replaces the breakpoint.
++// Sim->CPU. This said the shared body was still a breakpoint placeholder. It is
++// not: GenerateTransitionDartToCpuIfNeededStub emits all seven instructions,
++// pinned to 28 bytes by an ASSERT_EQUAL against shared_body_size. The `brk` in
++// it is part of the transcription -- kRunDartOnCPUCode, the code the simulator
++// traps on to hand control back to the CPU -- not a stand-in for missing work.
++//
++// Second stale comment of its kind found in this file; the other one had
++// CPUToSimConfig reporting an empty stub range long after the body landed.
+ void SimToCPUConfig::GetStubCodeRange(uword& code_start, uword& code_end) {
+   if (!StubCode::HasBeenInitialized()) {
+     // Consulted before StubCode::Init() -- politely report "no stub yet"
+-- 
+2.53.0
+

@@ -1,0 +1,312 @@
+From 2247b44334c5d2bb0648159b4fbd32bd3d6bfa02 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 27 Aug 2026 14:26:27 +0800
+Subject: [PATCH 114/206] test(dd): cover plurality, verify-only, and rescue
+ branches in ResolveDDSlots
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds ResetDDSlotsForTest() to ShorebirdLinker (test-only helper that clears
+dd_slot_voters_/dd_slot_mapping_ and optionally resolution_) plus three new
+ISOLATE_UNIT_TEST_CASEs:
+
+  ResolveDDSlots_PluralityVote_TwoVotersSameTarget
+    Two distinct callers both voting for the same target on slot 0 exercise
+    the count > best branch.  Negative control: expecting caller0 instead of
+    target → exit 255.
+
+  ResolveDDSlots_VerifyOnlyPath_OwnerPreservedOnSecondPass
+    First pass resolves slot 0 to target; second pass presents swapped
+    caller/target (so it would flip to caller), but had_previous=true &&
+    winner!=0 → verify-only path carries the first decision.  Negative
+    control: expecting caller → exit 255.
+
+  ResolveDDSlots_RescuePath_PreviousOwnerSurvivesEmptyVote
+    First pass resolves slot 0; second pass has bogus keys (absent from key
+    map) so winner stays 0, had_previous=true → rescue branch copies the
+    first owner.  Negative control: expecting slot absent → exit 255.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/dd_voting_test.cc b/runtime/vm/shorebird/dd_voting_test.cc
+index 23b5b0836ab..32928c8d41c 100644
+--- a/runtime/vm/shorebird/dd_voting_test.cc
++++ b/runtime/vm/shorebird/dd_voting_test.cc
+@@ -933,4 +933,219 @@ ISOLATE_UNIT_TEST_CASE(FunctionKey_ForAllocStub_ZeroesOffsetAndSignature) {
+   EXPECT_EQ(cls.kernel_offset(), key.owner_class_kernel_offset);
+ }
+ 
++// ===========================================================================
++// Branch coverage: three paths in ResolveDDSlots not exercised by the
++// existing WinnerIsTheTargetNotTheCaller test.
++//
++//   (1) Plurality vote with count > 1: multiple voters for one slot point at
++//       the same target.  The `if (count > best)` branch in the plurality loop
++//       must fire.
++//
++//   (2) Verify-only path: had_previous && winner != 0.  The first pass
++//       resolves the slot; the second pass agrees on the same target and takes
++//       the "carry the old decision" branch.
++//
++//   (3) Rescue path: had_previous && winner == 0.  The first pass resolves the
++//       slot; the second pass has voters whose keys are absent from the key map,
++//       so winner stays 0, and the slot is rescued from the previous resolution.
++//
++// Each test calls ResetDDSlotsForTest() before touching the singleton so that
++// InitializeWithDDSlotVoters does not hit the "dd_slot_voters_ == nullptr"
++// ASSERT from a previous test's leftover state.
++// ResetDDSlotRewrites() is called for symmetry with IL-pass bookkeeping.
++// ===========================================================================
++
++// (1) Plurality vote: two voters for slot 0, both pointing at the same target.
++//
++// Design: two distinct callers, one shared target.  BuildKeyMap finds real
++// functions from the object class; all three are in the loaded libraries.
++// After both voters score, votes[target] == 2 > best == 1, so `count > best`
++// fires and winner is set to target.
++//
++// Negative control: change the assertion from target.ptr() to caller0.ptr()
++// and the test fails (the caller is not the winner).
++ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_PluralityVote_TwoVotersSameTarget) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  linker->ResetDDSlotsForTest();
++  ShorebirdLinker::ResetDDSlotRewrites();
++
++  // Grab three distinct functions from the object class's method array.
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const Array& functions = Array::Handle(cls.current_functions());
++  EXPECT(functions.Length() >= 3);
++  if (functions.Length() < 3) return;
++
++  Function& caller0 = Function::Handle();
++  Function& caller1 = Function::Handle();
++  Function& target  = Function::Handle();
++  caller0 ^= functions.At(0);
++  caller1 ^= functions.At(1);
++  target  ^= functions.At(2);
++  EXPECT(caller0.ptr() != caller1.ptr());
++  EXPECT(caller0.ptr() != target.ptr());
++  EXPECT(caller1.ptr() != target.ptr());
++
++  auto voters = std::make_unique<DDSlotVoters>();
++  // Both callers vote for the same target on slot 0.
++  voters->AddVoter(0, FunctionKey::FromFunction(caller0),
++                   FunctionKey::FromFunction(target));
++  voters->AddVoter(0, FunctionKey::FromFunction(caller1),
++                   FunctionKey::FromFunction(target));
++
++  linker->InitializeWithDDSlotVoters(std::move(voters));
++  linker->ResolveDDSlots(thread, thread->zone());
++
++  const DDSlotResolution* resolution = linker->resolution();
++  EXPECT(resolution != nullptr);
++  EXPECT(resolution->HasSlot(0));
++
++  // Winner is target, not either caller.  Negative control: swap to caller0
++  // and the test turns red.
++  EXPECT_EQ(static_cast<uword>(target.ptr()), resolution->OwnerForSlot(0));
++  EXPECT(resolution->OwnerForSlot(0) != static_cast<uword>(caller0.ptr()));
++  EXPECT(resolution->OwnerForSlot(0) != static_cast<uword>(caller1.ptr()));
++}
++
++// (2) Verify-only path: had_previous && winner != 0.
++//
++// First ResolveDDSlots resolves slot 0 to `target`.  Then the voters slot is
++// reset while preserving the resolution.  A second pass with the same voter
++// (same caller→target key pair) finds a winner and has a previous decision,
++// taking the "carry the old owner" branch (preserved++, carried++).
++//
++// Negative control: if the verify-only branch were absent and fresh->SetSlot-
++// Owner always stored the NEW winner, the result would still be `target` — the
++// test checks the preserved branch via the preserved counter path indirectly.
++// The more discriminating check is that the old_owner is carried: after the
++// second pass the owner must still equal the target set by the first pass even
++// if we swap caller/target on the second pass's voters.  That is the design
++// used here: second-pass voters have caller=target, target=caller (swapped),
++// so if the verify-only branch does not carry the old decision the owner would
++// flip to what was formerly the caller.
++ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_VerifyOnlyPath_OwnerPreservedOnSecondPass) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  linker->ResetDDSlotsForTest();
++  ShorebirdLinker::ResetDDSlotRewrites();
++
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const Array& functions = Array::Handle(cls.current_functions());
++  EXPECT(functions.Length() >= 2);
++  if (functions.Length() < 2) return;
++
++  Function& caller = Function::Handle();
++  Function& target  = Function::Handle();
++  caller ^= functions.At(0);
++  target  ^= functions.At(1);
++  EXPECT(caller.ptr() != target.ptr());
++
++  // --- Pass 1: resolve slot 0 to target ---------------------------------
++  {
++    auto voters = std::make_unique<DDSlotVoters>();
++    voters->AddVoter(0, FunctionKey::FromFunction(caller),
++                     FunctionKey::FromFunction(target));
++    linker->InitializeWithDDSlotVoters(std::move(voters));
++    linker->ResolveDDSlots(thread, thread->zone());
++
++    const DDSlotResolution* res = linker->resolution();
++    EXPECT(res != nullptr);
++    EXPECT(res->HasSlot(0));
++    EXPECT_EQ(static_cast<uword>(target.ptr()), res->OwnerForSlot(0));
++  }
++
++  // Keep resolution_ alive so the second pass sees had_previous == true.
++  linker->ResetDDSlotsForTest(/*keep_resolution=*/true);
++
++  // --- Pass 2: swap caller and target in the voter -----------------------
++  // The second pass finds a winner (the former caller, now in target position),
++  // but had_previous == true, so the verify-only branch carries the OLD owner.
++  {
++    auto voters = std::make_unique<DDSlotVoters>();
++    // Deliberately swapped: what used to be caller is now the "target" key.
++    voters->AddVoter(0, FunctionKey::FromFunction(target),
++                     FunctionKey::FromFunction(caller));
++    linker->InitializeWithDDSlotVoters(std::move(voters));
++    linker->ResolveDDSlots(thread, thread->zone());
++  }
++
++  const DDSlotResolution* res2 = linker->resolution();
++  EXPECT(res2 != nullptr);
++  EXPECT(res2->HasSlot(0));
++
++  // Verify-only path carries the FIRST pass's decision (original target),
++  // not the second pass's new winner (the original caller).
++  // Negative control: remove the verify-only branch so fresh->SetSlotOwner
++  // always stores the new winner → owner becomes caller.ptr() → test red.
++  EXPECT_EQ(static_cast<uword>(target.ptr()), res2->OwnerForSlot(0));
++  EXPECT(res2->OwnerForSlot(0) != static_cast<uword>(caller.ptr()));
++}
++
++// (3) Rescue path: had_previous && winner == 0.
++//
++// First pass resolves slot 0 to `target`.  Second pass has voters with bogus
++// keys (not in the key map) so every ScoreVoter call returns 0 and winner
++// stays 0.  The rescue branch fires: slot 0 is carried from the previous
++// resolution, so owner is still `target`.
++//
++// Negative control: remove the rescue branch so dropped++ runs instead →
++// slot 0 is absent from fresh → HasSlot(0) is false → test red.
++ISOLATE_UNIT_TEST_CASE(ResolveDDSlots_RescuePath_PreviousOwnerSurvivesEmptyVote) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  linker->ResetDDSlotsForTest();
++  ShorebirdLinker::ResetDDSlotRewrites();
++
++  const Class& cls =
++      Class::Handle(thread->isolate_group()->object_store()->object_class());
++  const Array& functions = Array::Handle(cls.current_functions());
++  EXPECT(functions.Length() >= 2);
++  if (functions.Length() < 2) return;
++
++  Function& caller = Function::Handle();
++  Function& target  = Function::Handle();
++  caller ^= functions.At(0);
++  target  ^= functions.At(1);
++  EXPECT(caller.ptr() != target.ptr());
++
++  // --- Pass 1: resolve slot 0 to target ---------------------------------
++  {
++    auto voters = std::make_unique<DDSlotVoters>();
++    voters->AddVoter(0, FunctionKey::FromFunction(caller),
++                     FunctionKey::FromFunction(target));
++    linker->InitializeWithDDSlotVoters(std::move(voters));
++    linker->ResolveDDSlots(thread, thread->zone());
++
++    const DDSlotResolution* res = linker->resolution();
++    EXPECT(res != nullptr);
++    EXPECT(res->HasSlot(0));
++    EXPECT_EQ(static_cast<uword>(target.ptr()), res->OwnerForSlot(0));
++  }
++
++  // Keep the first resolution alive.
++  linker->ResetDDSlotsForTest(/*keep_resolution=*/true);
++
++  // --- Pass 2: voters with fabricated keys absent from the key map -------
++  // library_kernel_offset = 0xDEADBEEF is never a real library offset, so
++  // BuildKeyMap will not find it.  ScoreVoter returns 0 for both the caller
++  // and target miss, leaving winner == 0 throughout the loop.
++  {
++    const FunctionKey bogus_caller{0xDEADBEEFL, 1, 1, 0, 1u};
++    const FunctionKey bogus_target{0xDEADBEEFL, 2, 2, 0, 2u};
++
++    auto voters = std::make_unique<DDSlotVoters>();
++    voters->AddVoter(0, bogus_caller, bogus_target);
++    linker->InitializeWithDDSlotVoters(std::move(voters));
++    linker->ResolveDDSlots(thread, thread->zone());
++  }
++
++  const DDSlotResolution* res2 = linker->resolution();
++  EXPECT(res2 != nullptr);
++
++  // Rescue branch: slot 0 must still be present with the original target.
++  // Negative control: remove the rescue branch (only drop++) → HasSlot(0)
++  // returns false → test red.
++  EXPECT(res2->HasSlot(0));
++  EXPECT_EQ(static_cast<uword>(target.ptr()), res2->OwnerForSlot(0));
++}
++
+ }  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+index 7eea7cc5e97..7f252e89fe3 100644
+--- a/runtime/vm/shorebird/linker.cc
++++ b/runtime/vm/shorebird/linker.cc
+@@ -54,6 +54,23 @@ void ShorebirdLinker::ResetDDSlotRewrites() {
+   g_dd_rewritten_slots.clear();
+ }
+ 
++void ShorebirdLinker::ResetDDSlotsForTest(bool keep_resolution) {
++  // Resets voter and mapping unique_ptrs back to null so that a subsequent
++  // InitializeWithDDSlotVoters call does not hit the ASSERT.  The resolution_
++  // pointer is also cleared by default; pass keep_resolution=true to preserve
++  // it so the next ResolveDDSlots sees it as a previous resolution (the
++  // mechanism needed to reach the verify-only and rescue paths in tests).
++  //
++  // Does NOT reset g_dd_rewritten_slots; that belongs to the IL pass lifecycle
++  // and has its own ResetDDSlotRewrites().
++  dd_slot_voters_.reset();
++  dd_slot_mapping_.reset();
++  if (!keep_resolution) {
++    delete resolution_;
++    resolution_ = nullptr;
++  }
++}
++
+ // The two element sizes their vector::size() divisions gave up, pinned here so
+ // that a change to ClassInfo shows up as a build failure rather than as a
+ // mapper that strides past their layout. 0x38 is the stride their stage 1 uses
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+index 63ba5a38e1b..7e57827d032 100644
+--- a/runtime/vm/shorebird/linker.h
++++ b/runtime/vm/shorebird/linker.h
+@@ -212,6 +212,21 @@ class ShorebirdLinker {
+   static bool DDSlotWasRewritten(long slot);
+   static void ResetDDSlotRewrites();
+ 
++  // Resets DD slot state on the singleton so that a subsequent test can call
++  // InitializeWithDDSlotVoters again.  TEST-ONLY: gen_snapshot never needs
++  // this.  run_vm_tests runs every case in a single process, so tests that
++  // call InitializeWithDDSlotVoters must call this before the next test can
++  // do so.
++  //
++  // When keep_resolution is false (the default), resolution_ is also deleted
++  // and nulled, restoring fully-fresh state.  When keep_resolution is true,
++  // the existing resolution_ is preserved so that the next ResolveDDSlots call
++  // sees it as a previous resolution — the mechanism needed to exercise the
++  // verify-only and rescue paths in tests.
++  //
++  // Does NOT reset g_dd_rewritten_slots; use ResetDDSlotRewrites() for that.
++  void ResetDDSlotsForTest(bool keep_resolution = false);
++
+   // Shorebird's class table mapper, decoded from
+   // InitializeWithClassTableLinkInfo at 0x10019a448..0x10019a608. See the
+   // definition for how each step was read; the counters it fills are the four
+-- 
+2.53.0
+

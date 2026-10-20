@@ -1,0 +1,69 @@
+From 4c0ad14a294c250265a6abcabb8555746261e8af Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 1 Sep 2026 18:28:52 +0800
+Subject: [PATCH 122/206] fix(wrapper): guard mach_vm.h with
+ DART_TARGET_OS_MACOS_IOS exclusion
+
+When cross-compiling for iOS target from macOS host, both
+DART_HOST_OS_MACOS and DART_TARGET_OS_MACOS are defined, but
+the iPhoneOS SDK blocks <mach/mach_vm.h> with #error. The
+mach_vm_region API is a macOS-only kernel call not available
+on iOS devices, so guard it with !DART_TARGET_OS_MACOS_IOS.
+
+This ensures can_remap = false (the memcpy path) for iOS builds,
+which is correct: iOS device wrappers never remap stub pages.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/wrapper.cc b/runtime/vm/shorebird/wrapper.cc
+index d15ecc63655..8db3ce096ef 100644
+--- a/runtime/vm/shorebird/wrapper.cc
++++ b/runtime/vm/shorebird/wrapper.cc
+@@ -6,7 +6,7 @@
+ 
+ #include <string.h>
+ 
+-#if defined(DART_HOST_OS_MACOS)
++#if defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_MACOS_IOS)
+ #include <mach/mach.h>
+ #include <mach/mach_vm.h>
+ #endif
+@@ -204,7 +204,7 @@ void WrapperAllocator::EnsureStubPage() {
+ // the *generated* stub's page is not executable, but it says nothing about a
+ // stub range that points into the host binary's own __TEXT, which is what
+ // wrapper_test.cc's TestStubCodeRange does.
+-#if defined(DART_HOST_OS_MACOS)
++#if defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_MACOS_IOS)
+ static bool IsExecutableMapping(uword address) {
+   mach_vm_address_t region = static_cast<mach_vm_address_t>(address);
+   mach_vm_size_t region_size = 0;
+@@ -220,7 +220,7 @@ static bool IsExecutableMapping(uword address) {
+   if (region > static_cast<mach_vm_address_t>(address)) return false;
+   return (info.protection & VM_PROT_EXECUTE) != 0;
+ }
+-#endif  // defined(DART_HOST_OS_MACOS)
++#endif  // defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_MACOS_IOS)
+ 
+ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+   EnsureStubPage();
+@@ -272,7 +272,7 @@ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+   // something equivalent for the CPU->Sim direction, where host code must be
+   // able to branch to the wrapper. We have no evidence of what, so this does not
+   // invent one; it makes the page hold the right bytes and leaves that open.
+-#if defined(DART_HOST_OS_MACOS)
++#if defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_MACOS_IOS)
+   const bool can_remap = IsExecutableMapping(stub_page_->start());
+ #else
+   const bool can_remap = false;
+@@ -288,7 +288,7 @@ VirtualMemory* WrapperAllocator::AllocateWrapperPage() {
+     return page;
+   }
+ 
+-#if defined(DART_HOST_OS_MACOS)
++#if defined(DART_TARGET_OS_MACOS) && !defined(DART_TARGET_OS_MACOS_IOS)
+   if (!stub_page_->DuplicateRX(page)) {
+     delete page;
+     return nullptr;
+-- 
+2.53.0
+

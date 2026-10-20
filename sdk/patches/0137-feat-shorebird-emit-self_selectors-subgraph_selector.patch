@@ -1,0 +1,147 @@
+From ba6a494b32072bee9eb32afd22e9bbd37682a644 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Fri, 4 Sep 2026 20:07:08 +0800
+Subject: [PATCH 137/206] feat(shorebird): emit
+ self_selectors/subgraph_selectors in --shorebird per-function JSON (F3)
+
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index dc4134ee47e..4da00d7d257 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -25,6 +25,7 @@
+ #include "vm/datastream.h"
+ #include "vm/object.h"
+ #include "vm/object_store.h"
++#include "vm/dispatch_table.h"
+ #include "vm/shorebird/cascade_limiter.h"
+ #include "vm/shorebird/link_info.h"
+ #include "vm/image_snapshot.h"
+@@ -1072,7 +1073,8 @@ static bool DecodeFieldReference(const uint32_t* words, intptr_t count,
+ // Keying off the ldr/blr pair alone -- what the previous rule did -- is right
+ // for the three-instruction heads and one word short on the others.
+ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+-                               intptr_t i, int32_t* used) {
++                               intptr_t i, int32_t* used,
++                               intptr_t* selector_offset = nullptr) {
+   const uint32_t w = words[i];
+   intptr_t j;
+   int32_t n;
+@@ -1080,6 +1082,7 @@ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+     if ((w & 0x201F001F) != 0x2000001E) return false;
+     j = i + 1;
+     n = 3;
++    if (selector_offset) *selector_offset = 0;
+   } else if ((w & 0x1F800000) == 0x12800000) {          // move wide immediate
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     j = i + 1;
+@@ -1091,14 +1094,23 @@ static bool DecodeDispatchCall(const uint32_t* words, intptr_t count,
+     }
+     if (j >= count || (words[j] & 0x1F1F03FF) != 0x0B11001E) return false;
+     j++;
++    if (selector_offset) *selector_offset = 0;
+   } else if ((w & 0x1F800000) == 0x12000000) {          // logical immediate
+     if ((w & 0x1F) != kIP1Register || i + 1 >= count) return false;
+     if ((words[i + 1] & 0x1F1F03FF) != 0x0B11001E) return false;
+     j = i + 2;
+     n = 4;
++    if (selector_offset) *selector_offset = 0;
+   } else if ((w & 0x1F0003FF) == 0x1100001E) {          // add/sub lr, x0, #imm
+     j = i + 1;
+     n = 3;
++    if (selector_offset) {
++      bool is_sub = (w & 0x40000000) != 0;
++      intptr_t shift = (w >> 22) & 0x3;
++      intptr_t imm12 = (w >> 10) & 0xFFF;
++      intptr_t imm = (shift == 1) ? (imm12 << 12) : imm12;
++      *selector_offset = DispatchTable::kOriginElement + (is_sub ? -imm : imm);
++    }
+   } else {
+     return false;
+   }
+@@ -1212,8 +1224,9 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       continue;
+     }
+ 
+-    if (DecodeDispatchCall(w_at, words, i, &used)) {
+-      facts.classified.push_back({ShorebirdClassifiedStep::kDispatch, used, 0});
++    intptr_t sel_offset = 0;
++    if (DecodeDispatchCall(w_at, words, i, &used, &sel_offset)) {
++      facts.classified.push_back({ShorebirdClassifiedStep::kDispatch, used, sel_offset});
+       i += used;
+       continue;
+     }
+@@ -1585,6 +1598,8 @@ struct ShorebirdClassifiedHashes {
+   std::vector<std::vector<intptr_t>> self_pp;
+   std::vector<std::vector<intptr_t>> subgraph_pp;
+   std::vector<std::vector<intptr_t>> subgraph_field_table;
++  std::vector<std::vector<intptr_t>> self_selectors;
++  std::vector<std::vector<intptr_t>> subgraph_selectors;
+ };
+ 
+ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+@@ -1597,6 +1612,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+   out.self_pp.reserve(n);
+   out.subgraph_pp.reserve(n);
+   out.subgraph_field_table.reserve(n);
++  out.self_selectors.reserve(n);
++  out.subgraph_selectors.reserve(n);
+ 
+   std::vector<uint8_t> self_stream, op_stream;
+   std::vector<bool> visited(n);
+@@ -1618,6 +1635,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     std::vector<intptr_t> self_pp, subgraph_pp;
+     std::vector<intptr_t> subgraph_field;
+     std::set<intptr_t> field_subgraph_seen;
++    std::vector<intptr_t> self_selectors, subgraph_selectors;
++    std::set<intptr_t> selector_subgraph_seen;
+ 
+     push(&op_stream, kEntryCodeName,
+          Utils::StringHash(codes[root].name.c_str(),
+@@ -1653,6 +1672,14 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+         case ShorebirdClassifiedStep::kDispatch:
+           kind = kEntryDispatchTableCall;
+           value = 1;
++          if (step.value != 0) {
++            if (selector_subgraph_seen.insert(step.value).second) {
++              subgraph_selectors.push_back(step.value);
++            }
++            if (depth0) {
++              self_selectors.push_back(step.value);
++            }
++          }
+           break;
+         case ShorebirdClassifiedStep::kPool: {
+           pool_refs++;
+@@ -1720,6 +1747,8 @@ ShorebirdClassifiedHashes ShorebirdSelfAndOpHashes(
+     out.self_pp.push_back(std::move(self_pp));
+     out.subgraph_pp.push_back(std::move(subgraph_pp));
+     out.subgraph_field_table.push_back(std::move(subgraph_field));
++    out.self_selectors.push_back(std::move(self_selectors));
++    out.subgraph_selectors.push_back(std::move(subgraph_selectors));
+   }
+   return out;
+ }
+@@ -2265,13 +2294,12 @@ void Dart_DumpSnapshotInformationShorebirdAsJson(
+     js.OpenArray("callees");
+     for (intptr_t callee : callees[ci]) js.PrintValue64(callee);
+     js.CloseArray();
+-    // self_selectors and subgraph_selectors are
+-    // DELIBERATELY ABSENT: they are not computed anywhere in this file.
+-    //
+-    // subgraph_pp is now emitted (see above); it was previously absent because
+-    // an earlier version emitted self_pp as a stand-in (wrong -- the subgraph
+-    // list must include what callees touch). The correct data has always been
+-    // in classified.subgraph_pp[ci]; the block above simply reads it.
++    js.OpenArray("self_selectors");
++    for (intptr_t sel : classified.self_selectors[ci]) js.PrintValue64(sel);
++    js.CloseArray();
++    js.OpenArray("subgraph_selectors");
++    for (intptr_t sel : classified.subgraph_selectors[ci]) js.PrintValue64(sel);
++    js.CloseArray();
+     js.CloseObject();
+   }
+   js.CloseArray();
+-- 
+2.53.0
+

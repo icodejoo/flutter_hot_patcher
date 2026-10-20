@@ -1,0 +1,74 @@
+From b5fa6a934974ce7aadd934f218c1a0361a1f1460 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Mon, 14 Sep 2026 23:12:19 +0800
+Subject: [PATCH 154/206] analyze_snapshot: stop deduplicating
+ subgraph_selectors (theirs does not)
+
+NC3 answered the one question the F66 falsification pass left open. With the
+dedup off, our subgraph_selectors is not merely contained in theirs, it IS
+theirs: multiset-equal and ordered-equal on every function of every fixture --
+1380/1380 hello, 1380/1380 base_dd, 3216/3216 prog -- with 0 missing and 0
+extra slots, landing exactly on their 3561 / 3561 / 28701 element-slot counts.
+
+So the dedup was never modelling their collector; it was manufacturing the
+containment that the harness then reported as evidence. Removing it turns a
+one-sided subset relation into a measured identity, and it adds 22392 element
+slots to our side (ours_elements 225644 -> 248036 against their 262333).
+
+The old behaviour stays reachable as the negative control:
+F66_SUBGRAPH_SELECTOR_DEDUP=1 restores it, and
+spikes/shorebird_linkinfo_oracle/nc3_f66_dedup_multiset.sh is default-agnostic
+and measures both states either way.
+
+Measured after the flip (ProductSimARM64, matrix regenerated):
+  REAL GAP 4 (unchanged -- the dedup made ours a subset by construction, so
+    these slots were never counted as missing in the first place)
+  diff_units.sh shorebird UNITS 67391 -> 41344
+  matrix 59 cells, 0 unrun, 3 blocked; na=35 structural=0 unknown=24 gap=0
+  phase_gate.sh rc=0, ratchet unmoved
+
+Element-slots and UNITS are different dimensions; neither converts into the
+other, and both are reported rather than one being derived from the other.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 6b2d410b74c..ade8d8dcf22 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1051,17 +1051,22 @@ static constexpr intptr_t kNoSelector = -1;
+ #define F66_DECODE_DISPATCH_IMMEDIATES 1
+ #endif
+ 
+-// NC3 for F66. Our subgraph_selectors list is deduplicated per function; theirs
+-// is not obviously so (theirs holds 32262 element slots to our 9870). As long
+-// as this dedup is on, "ours is a sub-multiset of theirs" on this field is a
+-// property of the dedup, not evidence that the decoded selector VALUES are
+-// right at non-depth-0 sites -- the ordered-equality evidence for the values
+-// covers self_selectors (depth 0) only. Set to 0 to emit every dispatch
+-// selector occurrence in subgraph order and ask whether our undeduped list
+-// reproduces theirs as a MULTISET. Driven by
+-// spikes/shorebird_linkinfo_oracle/nc3_f66_dedup_multiset.sh.
++// F66/NC3. subgraph_selectors used to be deduplicated per function with a
++// std::set, which made our list a subset of theirs by construction (9870
++// element slots against their 32262) and therefore made every containment
++// statement about this field a property of the dedup rather than of the
++// decode. NC3 measured the undeduped list: it reproduces theirs exactly --
++// multiset-equal AND ordered-equal on 1380/1380 (hello), 1380/1380 (base_dd)
++// and 3216/3216 (prog) functions, 0 missing and 0 extra slots, hitting their
++// 3561 / 3561 / 28701 denominators on the nose. Theirs does not dedup, so
++// neither do we: the default is now 0.
++//
++// Set to 1 to restore the old dedup. That state is the negative control for
++// the above and stays reachable from
++// spikes/shorebird_linkinfo_oracle/nc3_f66_dedup_multiset.sh, which is
++// default-agnostic and measures both.
+ #ifndef F66_SUBGRAPH_SELECTOR_DEDUP
+-#define F66_SUBGRAPH_SELECTOR_DEDUP 1
++#define F66_SUBGRAPH_SELECTOR_DEDUP 0
+ #endif
+ 
+ // `add lr, x0, x17` makes the row index (origin + x17), so whatever was
+-- 
+2.53.0
+

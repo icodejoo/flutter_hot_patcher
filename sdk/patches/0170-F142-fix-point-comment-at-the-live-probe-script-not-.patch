@@ -1,0 +1,36 @@
+From feeedcdc09ce1490d657e2a331a299ed1a0035b3 Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Sun, 27 Sep 2026 19:18:42 +0800
+Subject: [PATCH 170/206] F142 fix: point comment at the live probe script, not
+ the retired mac one
+
+Independent falsification of F142 (PARTIAL) found the F135 comment still
+named reports_20260925/Q68_window_patch_probe.py as its measurement
+source, but that script is hardcoded to the mac analyzer and no longer
+runs against the current iOS out_pm artifacts. Point the comment at
+f135_window_patch_probe.py instead, which F142 landed and retargeted.
+
+Verified: incremental rebuild (3 ninja steps), reran
+f135_window_patch_probe.py -- rows=44 SAME=39 DIFF=5 unexpected=0,
+rc=0, unchanged from before this comment fix.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/analyze_snapshot_api_impl.cc b/runtime/vm/analyze_snapshot_api_impl.cc
+index 8120927b1e1..2a474035626 100644
+--- a/runtime/vm/analyze_snapshot_api_impl.cc
++++ b/runtime/vm/analyze_snapshot_api_impl.cc
+@@ -1492,7 +1492,9 @@ ShorebirdCodeFacts ComputeShorebirdCodeFacts(const uint8_t* code,
+       // F135 (2026-09-27). The skip window after a pool load. Measured against
+       // THEIR analyze_snapshot by patching words into hello fn#13 (pool load at
+       // word 4, window = words 5-6; spikes/shorebird_linkinfo_oracle/
+-      // reports_20260925/Q68_window_patch_probe.py):
++      // reports_20260925/f135_window_patch_probe.py -- F142 landed this script
++      // and retargeted it at the iOS out_pm artifacts; the older
++      // Q68_window_patch_probe.py is mac-only history, not a runnable probe):
+       //  * pool loads, field loads, mov, blr inside the window are swallowed on
+       //    both sides -- the fixed 3-n budget itself matches theirs (this is
+       //    also why the F68 self_pp slots are a codegen-layout effect, not an
+-- 
+2.53.0
+

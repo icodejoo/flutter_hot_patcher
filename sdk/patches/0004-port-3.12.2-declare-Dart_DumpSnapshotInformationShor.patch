@@ -1,0 +1,38 @@
+From 2ab55eb281938bc7abc2fec8a16c090dc354d3f0 Mon Sep 17 00:00:00 2001
+From: cruz <jelon@tbu.net>
+Date: Wed, 19 Aug 2026 16:34:18 +0800
+Subject: [PATCH 004/206] port(3.12.2): declare
+ Dart_DumpSnapshotInformationShorebirdAsJson (B2)
+
+Upstream never touched this header between 3.7 and 3.12.2, so this is a clean
+pick. Declaration only; the implementation lands with
+analyze_snapshot_api_impl.cc.
+
+Deliberately NOT ported from the 3.7 branch, per CLAUDE.md rule 1 (Route-A is
+out of scope -- Shorebird does not do KBC dynamic modules):
+  - dispatch_table.h SetEntryForCid          (Gate 1 V2 virtual-call spike)
+  - dispatch_table_generator.cc selector skip (dyn-module TFA retention)
+Carrying those over would move retired debt onto the new branch.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/include/analyze_snapshot_api.h b/runtime/include/analyze_snapshot_api.h
+index 38b58e0b340..daf616f5d09 100644
+--- a/runtime/include/analyze_snapshot_api.h
++++ b/runtime/include/analyze_snapshot_api.h
+@@ -24,6 +24,12 @@ void Dart_DumpSnapshotInformationAsJson(
+     char** buffer,
+     intptr_t* buffer_length);
+ 
++// flutter_hot_patcher B2: Shorebird-compatible output.
++void Dart_DumpSnapshotInformationShorebirdAsJson(
++    const Dart_SnapshotAnalyzerInformation& info,
++    char** out,
++    intptr_t* out_len);
++
+ }  // namespace snapshot_analyzer
+ }  // namespace dart
+ 
+-- 
+2.53.0
+

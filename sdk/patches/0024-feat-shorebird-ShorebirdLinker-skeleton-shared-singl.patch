@@ -1,0 +1,300 @@
+From cb6f735d965cfea29c7de9efcb38fc10c89b7b5b Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Thu, 20 Aug 2026 11:51:03 +0800
+Subject: [PATCH 024/206] =?UTF-8?q?feat(shorebird):=20ShorebirdLinker=20sk?=
+ =?UTF-8?q?eleton=20=E2=80=94=20shared()=20singleton?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Function-local static singleton, 136 bytes (0x88), matching malloc(1, 0x88)
+in their shared() at 0x100199878. Field layout follows their disassembly:
+CT pair at +0x00/+0x08, gaps at +0x10/+0x28 (unknown type), OP reserved at
++0x18/+0x20, FT at +0x30, DT at +0x38, DD/resolution reserved through +0x57,
+inferred unordered_map reserved at +0x58, load_factor 1.0f at +0x78,
+flag byte at +0x80. No Initialize* yet -- that is Task 2.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+
+diff --git a/runtime/vm/shorebird/linker.cc b/runtime/vm/shorebird/linker.cc
+new file mode 100644
+index 00000000000..399f46e106b
+--- /dev/null
++++ b/runtime/vm/shorebird/linker.cc
+@@ -0,0 +1,69 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/linker.h"
++
++#include <memory>
++
++#include "platform/assert.h"
++#include "platform/globals.h"
++
++namespace dart {
++namespace shorebird {
++
++// Their binary allocates 0x88 = 136 bytes in shared() via malloc(1, 0x88).
++// A size match is weak evidence (same-width substitutions pass), but it is
++// still the strongest compile-time check available given the absence of DWARF.
++static_assert(sizeof(ShorebirdLinker) == 0x88,
++              "ShorebirdLinker layout does not match their measured 136 bytes; "
++              "check field sizes and padding");
++
++ShorebirdLinker::ShorebirdLinker()
++    : gap0_{},
++      object_pool_reserved_{},
++      gap1_{},
++      dd_slot_reserved_{},
++      resolution_reserved_{},
++      unordered_map_reserved_{},
++      load_factor_(1.0f),
++      pad_{},
++      initialized_flag_(0),
++      pad2_{} {}
++
++ShorebirdLinker* ShorebirdLinker::shared() {
++  // Function-local static: __cxa_guard_acquire/release pattern, matching their
++  // disassembly of shared() at 0x100199878. The guard variable in their binary
++  // lives at 0x1005214b8, the pointer at 0x1005214b0.
++  static ShorebirdLinker* instance = new ShorebirdLinker();
++  return instance;
++}
++
++void ShorebirdLinker::InitializeWithClassTableLinkInfo(
++    std::unique_ptr<ClassTableLinkInfo> base,
++    std::unique_ptr<ClassTableLinkInfo> patch) {
++  // ASSERT string from their binary: "base_class_table_ == nullptr &&
++  // patch_class_table_ == nullptr"
++  ASSERT(base_class_table_ == nullptr && patch_class_table_ == nullptr);
++  base_class_table_ = std::move(base);
++  patch_class_table_ = std::move(patch);
++  // Set the flag byte (strb w8,[x0,#0x80] at 0x10019995c in their binary).
++  initialized_flag_ = 1;
++}
++
++void ShorebirdLinker::InitializeWithFieldTableLinkInfo(
++    std::unique_ptr<FieldTableLinkInfo> base) {
++  // ASSERT string from their binary: "base_field_table_ == nullptr"
++  ASSERT(base_field_table_ == nullptr);
++  base_field_table_ = std::move(base);
++}
++
++void ShorebirdLinker::InitializeWithDispatchTableLinkInfo(
++    std::unique_ptr<DispatchTableLinkInfo> base) {
++  // ASSERT string from their binary: "base_dispatch_table_ == nullptr"
++  ASSERT(base_dispatch_table_ == nullptr);
++  base_dispatch_table_ = std::move(base);
++}
++
++}  // namespace shorebird
++}  // namespace dart
+diff --git a/runtime/vm/shorebird/linker.h b/runtime/vm/shorebird/linker.h
+new file mode 100644
+index 00000000000..8b71ac1cd96
+--- /dev/null
++++ b/runtime/vm/shorebird/linker.h
+@@ -0,0 +1,141 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#ifndef RUNTIME_VM_SHOREBIRD_LINKER_H_
++#define RUNTIME_VM_SHOREBIRD_LINKER_H_
++
++#include <memory>
++
++#include "platform/globals.h"
++#include "vm/shorebird/link_info.h"
++
++namespace dart {
++namespace shorebird {
++
++// ShorebirdLinker is the central aggregation point for all link-info
++// structures produced by a base snapshot and consumed by a patch link.
++// It is a function-local static singleton (not a global) — `shared()` uses
++// __cxa_guard_acquire/release, as confirmed by disassembly.
++//
++// Field layout (measured from their gen_snapshot.arm64 disassembly; see
++// LINKER_RECON.md §3):
++//
++//   +0x00  unique_ptr<ClassTableLinkInfo>    base_class_table_
++//   +0x08  unique_ptr<ClassTableLinkInfo>    patch_class_table_
++//   +0x10  (8-byte gap — not accessed by any measured function)
++//   +0x18  unique_ptr<ObjectPoolLinkInfo>    base_object_pool_  [OUT OF SCOPE]
++//   +0x20  unique_ptr<ObjectPoolLinkInfo>    patch_object_pool_ [OUT OF SCOPE]
++//   +0x28  (8-byte gap — not accessed by any measured function)
++//   +0x30  unique_ptr<FieldTableLinkInfo>    base_field_table_
++//   +0x38  unique_ptr<DispatchTableLinkInfo> base_dispatch_table_
++//   +0x40  unique_ptr<DDSlotMapping>         dd_slot_mapping_   [OUT OF SCOPE]
++//   +0x48  unique_ptr<DDSlotVoters>          dd_slot_voters_    [OUT OF SCOPE]
++//   +0x50  DDSlotResolution*                 resolution_        [OUT OF SCOPE]
++//   +0x58  (32 bytes — inferred: a libc++ unordered_map; NOT VERIFIED)
++//   +0x78  float                             (initial value 1.0f, inferred:
++//                                             hash-table load factor)
++//   +0x80  uint8_t                           flag byte (set to 1 in
++//                                             InitWithClassTableLinkInfo)
++//   +0x81  padding to 0x88
++//
++// sizeof(ShorebirdLinker) = 0x88 = 136 bytes (from malloc(1, 0x88) in shared()).
++// The static_assert below enforces this. A size match is weak evidence — same-
++// width substitutions sail through it — but it is still better than nothing.
++//
++// IMPORTANT: The gap fields at +0x10 and +0x28 are placeholders with the
++// correct *width* but unknown *type*. The inferred unordered_map at +0x58 is
++// marked as inferred and NOT verified from disassembly. Use uint8_t arrays as
++// padding until the types are recovered.
++class ShorebirdLinker {
++ public:
++  // Returns the process-wide singleton, creating it on first call.
++  static ShorebirdLinker* shared();
++
++  // Stores the class-table link info (base + patch). Asserts both slots are
++  // null before storing. Called from _main, before DoCompileAll.
++  void InitializeWithClassTableLinkInfo(
++      std::unique_ptr<ClassTableLinkInfo> base,
++      std::unique_ptr<ClassTableLinkInfo> patch);
++
++  // Stores field-table link info (base only). Asserts slot is null.
++  void InitializeWithFieldTableLinkInfo(
++      std::unique_ptr<FieldTableLinkInfo> base);
++
++  // Stores dispatch-table link info (base only). Asserts slot is null.
++  void InitializeWithDispatchTableLinkInfo(
++      std::unique_ptr<DispatchTableLinkInfo> base);
++
++  // Accessors for tests and diagnostics. Return raw pointers — ownership stays
++  // with the linker.
++  const ClassTableLinkInfo* base_class_table() const {
++    return base_class_table_.get();
++  }
++  const ClassTableLinkInfo* patch_class_table() const {
++    return patch_class_table_.get();
++  }
++  const FieldTableLinkInfo* base_field_table() const {
++    return base_field_table_.get();
++  }
++  const DispatchTableLinkInfo* base_dispatch_table() const {
++    return base_dispatch_table_.get();
++  }
++
++ private:
++  // Private constructor — use shared().
++  ShorebirdLinker();
++
++  // +0x00 / +0x08
++  std::unique_ptr<ClassTableLinkInfo> base_class_table_;
++  std::unique_ptr<ClassTableLinkInfo> patch_class_table_;
++
++  // +0x10: 8-byte gap. Type unknown; not accessed by any measured function.
++  // Placeholder preserves the field layout so subsequent offsets are correct.
++  uint8_t gap0_[8];
++
++  // +0x18 / +0x20: ObjectPoolLinkInfo — OUT OF SCOPE (fully private subsystem,
++  // no output flag to produce a fixture). The 16 bytes are reserved so FT/DT
++  // land at the correct offsets.
++  uint8_t object_pool_reserved_[16];
++
++  // +0x28: 8-byte gap. Same situation as gap0_.
++  uint8_t gap1_[8];
++
++  // +0x30 / +0x38
++  std::unique_ptr<FieldTableLinkInfo> base_field_table_;
++  std::unique_ptr<DispatchTableLinkInfo> base_dispatch_table_;
++
++  // +0x40 / +0x48: DDSlotMapping / DDSlotVoters — OUT OF SCOPE.
++  // Reserved so DDSlotResolution* lands at +0x50.
++  uint8_t dd_slot_reserved_[16];
++
++  // +0x50: DDSlotResolution* — OUT OF SCOPE.
++  uint8_t resolution_reserved_[8];
++
++  // +0x58..+0x77 (32 bytes): INFERRED — looks like a libc++ unordered_map
++  // (default max_load_factor = 1.0f matches the float stored at +0x78 in
++  // shared()). This inference is NOT verified from disassembly. Reserved as
++  // opaque bytes.
++  uint8_t unordered_map_reserved_[32];
++
++  // +0x78: float, initial value 1.0f (stored by shared() at init).
++  // Inferred to be a hash-table load factor. Not verified further.
++  float load_factor_;
++
++  // +0x7C: padding between float and uint8_t flag
++  uint8_t pad_[4];
++
++  // +0x80: flag byte. Set to 1 early in InitializeWithClassTableLinkInfo
++  // (strb at 0x10019995c in their binary).
++  uint8_t initialized_flag_;
++
++  // +0x81..+0x87: implicit padding to reach sizeof = 0x88.
++  uint8_t pad2_[7];
++
++  DISALLOW_COPY_AND_ASSIGN(ShorebirdLinker);
++};
++
++}  // namespace shorebird
++}  // namespace dart
++
++#endif  // RUNTIME_VM_SHOREBIRD_LINKER_H_
+diff --git a/runtime/vm/shorebird/linker_test.cc b/runtime/vm/shorebird/linker_test.cc
+new file mode 100644
+index 00000000000..e1401a3cf83
+--- /dev/null
++++ b/runtime/vm/shorebird/linker_test.cc
+@@ -0,0 +1,30 @@
++// Copyright (c) 2026, the Dart project authors.  Please see the AUTHORS file
++// for details. All rights reserved. Use of this source code is governed by a
++// BSD-style license that can be found in the LICENSE file.
++
++#include "vm/shorebird/linker.h"
++
++#include "vm/unit_test.h"
++
++namespace dart {
++namespace shorebird {
++
++// shared() must return the same address on repeated calls.
++VM_UNIT_TEST_CASE(ShorebirdLinker_SharedReturnsSingleton) {
++  ShorebirdLinker* a = ShorebirdLinker::shared();
++  ShorebirdLinker* b = ShorebirdLinker::shared();
++  EXPECT(a != nullptr);
++  EXPECT_EQ(a, b);
++}
++
++// A fresh singleton has no link info stored yet.
++VM_UNIT_TEST_CASE(ShorebirdLinker_FreshHasNullSlots) {
++  ShorebirdLinker* linker = ShorebirdLinker::shared();
++  EXPECT(linker->base_class_table() == nullptr);
++  EXPECT(linker->patch_class_table() == nullptr);
++  EXPECT(linker->base_field_table() == nullptr);
++  EXPECT(linker->base_dispatch_table() == nullptr);
++}
++
++}  // namespace shorebird
++}  // namespace dart
+diff --git a/runtime/vm/vm_sources.gni b/runtime/vm/vm_sources.gni
+index 6bf75acdf7a..3694da77a5d 100644
+--- a/runtime/vm/vm_sources.gni
++++ b/runtime/vm/vm_sources.gni
+@@ -303,6 +303,8 @@ vm_sources = [
+   "shorebird/link_info.h",
+   "shorebird/wrapper.cc",
+   "shorebird/wrapper.h",
++  "shorebird/linker.cc",
++  "shorebird/linker.h",
+   "simulator_memory.h",
+   "simulator_riscv.cc",
+   "simulator_riscv.h",
+@@ -392,6 +394,7 @@ vm_sources_tests = [
+   "allocation_test.cc",
+   "sim_transition_test.cc",
+   "shorebird/wrapper_test.cc",
++  "shorebird/linker_test.cc",
+   "shorebird_cpu_to_sim_test.cc",
+   "shorebird_sim_to_cpu_test.cc",
+   # flutter_hot_patcher B2
+-- 
+2.53.0
+

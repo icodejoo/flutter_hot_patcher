@@ -1,0 +1,167 @@
+From ef246d954960ca13ad8739022d303b9c0c781cec Mon Sep 17 00:00:00 2001
+From: cruz <cruz@tbu.net>
+Date: Tue, 8 Sep 2026 03:55:22 +0800
+Subject: [PATCH 144/206] sim guard (F28): emit ldr/cbz/brk before leaf-runtime
+ and FFI calls in simulator builds
+
+Three guards, all gated on DART_INCLUDE_SIMULATOR:
+
+1. LeafRuntimeScope::Call() 4-arg overload (assembler_arm64.cc +
+   assembler_base.h): emits an LDR/CBZ/BRK triplet between the vm_tag
+   store and the BLR, using caller-supplied thread offset and BRK code.
+   Callers that do not need the guard continue to use the existing 2-arg
+   overload unchanged.
+
+2. EnsureIsNewOrRemembered() (stub_code_compiler_arm64.cc): switches to
+   the 4-arg overload with Thread::is_simulating_offset() and
+   kCallLeafRuntimeOnCPUCode.  The offset is read via dart::Thread
+   directly (not target::Thread) because runtime_offsets_extracted.h is a
+   checked-in table that does not include the field; il.h is included
+   before SHOULD_NOT_INCLUDE_RUNTIME so the direct accessor is available.
+
+3. FfiCallInstr and LeafRuntimeCallInstr guards (il_arm64.cc): emit an
+   LDR/CBZ/BRK (kCallFFIOnCPUCode) inline before the BLR, matching
+   Shorebird's FFI-on-CPU interception pattern.
+
+Measurement (same theirs.so, ProductSimARM64 build):
+  Guard ON : UNEXPLAINED=182, size-differs=88  (+1:87, +18:1)
+  Guard OFF: UNEXPLAINED=195, size-differs=100 (+1:87, +3:12, +18:1)
+  The +3:12 pattern (12 allocation stubs with 3 extra Shorebird words)
+  disappears exactly when the guard is ON, confirming the emission.
+  BRK #0xb12a in ours.so: 27 (guard ON) vs 0 (guard OFF).
+
+verify_all.sh: 24/24 passed.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+diff --git a/runtime/vm/compiler/assembler/assembler_arm64.cc b/runtime/vm/compiler/assembler/assembler_arm64.cc
+index e4bb7bf8a8c..e3e249026ec 100644
+--- a/runtime/vm/compiler/assembler/assembler_arm64.cc
++++ b/runtime/vm/compiler/assembler/assembler_arm64.cc
+@@ -2091,6 +2091,37 @@ void LeafRuntimeScope::Call(const RuntimeEntry& entry,
+   __ SetupCSPFromThread(THR);
+ }
+ 
++void LeafRuntimeScope::Call(const RuntimeEntry& entry,
++                            intptr_t argument_count,
++                            intptr_t sim_guard_thread_offset,
++                            intptr_t sim_guard_brk_code) {
++  ASSERT(argument_count == entry.argument_count());
++  __ mov(CSP, SP);
++  __ ldr(TMP, compiler::Address(THR, entry.OffsetFromThread()));
++  __ str(TMP, compiler::Address(THR, target::Thread::vm_tag_offset()));
++#if defined(DART_INCLUDE_SIMULATOR)
++  // Sim guard: if running in simulator mode, break to the real CPU before
++  // executing the leaf runtime. TMP (X16) holds the entry point; TMP2 (X17)
++  // is used for the is_simulating probe so we do not clobber TMP.
++  {
++    compiler::Label not_simulating;
++    __ ldr(TMP2, compiler::Address(THR, sim_guard_thread_offset),
++           compiler::kEightBytes);
++    __ cbz(&not_simulating, TMP2, compiler::kEightBytes);
++    __ brk(sim_guard_brk_code);
++    __ Bind(&not_simulating);
++  }
++#else
++  (void)sim_guard_thread_offset;
++  (void)sim_guard_brk_code;
++#endif
++  __ Comment("Leaf runtime call: %s", entry.name());
++  __ blr(TMP);
++  __ LoadImmediate(TMP, VMTag::kDartTagId);
++  __ str(TMP, compiler::Address(THR, target::Thread::vm_tag_offset()));
++  __ SetupCSPFromThread(THR);
++}
++
+ LeafRuntimeScope::~LeafRuntimeScope() {
+   if (preserve_registers_) {
+     // SP might have been modified to reserve space for arguments
+diff --git a/runtime/vm/compiler/assembler/assembler_base.h b/runtime/vm/compiler/assembler/assembler_base.h
+index 2f50bc064f8..08868c60ba1 100644
+--- a/runtime/vm/compiler/assembler/assembler_base.h
++++ b/runtime/vm/compiler/assembler/assembler_base.h
+@@ -1401,6 +1401,17 @@ class LeafRuntimeScope : public ValueObject {
+   // tag.
+   void Call(const RuntimeEntry& entry, intptr_t argument_count);
+ 
++  // Like Call(), but emits a simulator guard (ldr/cbz/brk) between the vm_tag
++  // store and the blr. Only emits the guard when DART_INCLUDE_SIMULATOR is
++  // defined. [sim_guard_thread_offset] is the byte offset of
++  // Thread::is_simulating_ from the Thread base. [sim_guard_brk_code] is the
++  // BRK immediate (e.g. Instr::kCallLeafRuntimeOnCPUCode). The caller must
++  // supply the offset because assembler_arm64.cc cannot include thread.h.
++  void Call(const RuntimeEntry& entry,
++            intptr_t argument_count,
++            intptr_t sim_guard_thread_offset,
++            intptr_t sim_guard_brk_code);
++
+  private:
+   Assembler* const assembler_;
+   const bool preserve_registers_;
+diff --git a/runtime/vm/compiler/backend/il_arm64.cc b/runtime/vm/compiler/backend/il_arm64.cc
+index ba50347edaf..583e0706cc1 100644
+--- a/runtime/vm/compiler/backend/il_arm64.cc
++++ b/runtime/vm/compiler/backend/il_arm64.cc
+@@ -1437,6 +1437,17 @@ void FfiCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+       __ Emit(Instr::kSimulatorFfiRedirectInstruction);
+       ASSERT(branch == R9);
+     }
++#endif
++#if defined(DART_INCLUDE_SIMULATOR)
++    {
++      compiler::Label not_simulating;
++      __ ldr(temp1,
++             compiler::Address(THR, dart::Thread::is_simulating_offset()),
++             compiler::kEightBytes);
++      __ cbz(&not_simulating, temp1, compiler::kEightBytes);
++      __ brk(Instr::kCallFFIOnCPUCode);
++      __ Bind(&not_simulating);
++    }
+ #endif
+     __ blr(branch);
+ 
+@@ -1728,6 +1739,17 @@ void LeafRuntimeCallInstr::EmitNativeCode(FlowGraphCompiler* compiler) {
+   const Register target_address = locs()->in(TargetAddressIndex()).reg();
+   __ str(target_address,
+          compiler::Address(THR, compiler::target::Thread::vm_tag_offset()));
++#if defined(DART_INCLUDE_SIMULATOR)
++  {
++    compiler::Label not_simulating;
++    __ ldr(temp0,
++           compiler::Address(THR, dart::Thread::is_simulating_offset()),
++           compiler::kEightBytes);
++    __ cbz(&not_simulating, temp0, compiler::kEightBytes);
++    __ brk(Instr::kCallFFIOnCPUCode);
++    __ Bind(&not_simulating);
++  }
++#endif
+   __ CallCFunction(target_address);
+   __ LoadImmediate(temp0, VMTag::kDartTagId);
+   __ str(temp0,
+diff --git a/runtime/vm/compiler/stub_code_compiler_arm64.cc b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+index 3fda8fab338..5700902dd74 100644
+--- a/runtime/vm/compiler/stub_code_compiler_arm64.cc
++++ b/runtime/vm/compiler/stub_code_compiler_arm64.cc
+@@ -55,8 +55,19 @@ void StubCodeCompiler::EnsureIsNewOrRemembered() {
+                         /*preserve_registers=*/false);
+     // R0 already loaded.
+     __ mov(R1, THR);
++#if defined(DART_INCLUDE_SIMULATOR)
++    // Thread::is_simulating_ cannot be read through target::Thread, because
++    // runtime_offsets_extracted.h is a checked-in table that does not include
++    // this field. Use dart::Thread::is_simulating_offset() directly (accessible
++    // here because il.h was included before SHOULD_NOT_INCLUDE_RUNTIME).
++    rt.Call(kEnsureRememberedAndMarkingDeferredRuntimeEntry,
++            /*argument_count=*/2,
++            dart::Thread::is_simulating_offset(),
++            Instr::kCallLeafRuntimeOnCPUCode);
++#else
+     rt.Call(kEnsureRememberedAndMarkingDeferredRuntimeEntry,
+             /*argument_count=*/2);
++#endif
+   }
+ 
+   __ Bind(&done);
+-- 
+2.53.0
+
