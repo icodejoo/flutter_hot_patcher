@@ -1,0 +1,109 @@
+{
+  "passed": true,
+  "checks": {
+    "RC7/hello": true,
+    "RC7/prog": true,
+    "RC7/base_dd": true,
+    "RC9/hello": true,
+    "RC9/prog": true,
+    "RC9/empty": true,
+    "RC10/dispatch_targets": true,
+    "RC10/link_metadata": true,
+    "RC10/ours_code_unchanged": true,
+    "RC10/ref_code_unchanged": true,
+    "RC10/encoding_delta_localized": true
+  },
+  "details": {
+    "RC7/hello": {
+      "map_bytes": 141376,
+      "function_names": 1380,
+      "map_sha256": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1"
+    },
+    "RC7/prog": {
+      "map_bytes": 212898,
+      "function_names": 3216,
+      "map_sha256": "60bc0e616370e49665567a2114de90d49fcf00edbb79684119cedb60f184765d"
+    },
+    "RC7/base_dd": {
+      "map_bytes": 141376,
+      "function_names": 1380,
+      "map_sha256": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1"
+    },
+    "RC9/hello": {
+      "table_report": "DD table: 8 slots, 7 retained, 2 rewritten, 1 unrewritten-null filled with sentinel, 0 rewritten-null missing",
+      "elf_bytes": 889040,
+      "tsv_sha256": "0e562919d9f6f0fc9e0eb15ba24afbd763850cea08f7642f5e78f3b9842fa26e"
+    },
+    "RC9/prog": {
+      "table_report": "DD table: 7 slots, 5 retained, 1 rewritten, 2 unrewritten-null filled with sentinel, 0 rewritten-null missing",
+      "elf_bytes": 1928496,
+      "tsv_sha256": "5037c222f428a2ef49abdf8f9ee35bb5f22a9d61d39780eb57416bfa119fd8e6"
+    },
+    "RC10/dispatch_targets": {
+      "entries": 10347,
+      "semantic_sha256": "5074c89e6cdef8d0afdfc575fd7a5906738a8c4c2071ea259baddf2a695c85b1"
+    },
+    "RC10/encoding_delta_localized": {
+      "ours": 512,
+      "ref": 448
+    }
+  },
+  "negative_controls": {
+    "mutated_dispatch_target": true,
+    "mutated_obfuscation_map": true,
+    "mutated_dd_table": true
+  },
+  "sha256": {
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/base_dd/save_obfuscation_map/map.json": "72c237cf75d91bfd6c1c8299bb6ed0948b090eb048fd98ef0ccaaaced7a68f92",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/hello/save_obfuscation_map/map.json": "72c237cf75d91bfd6c1c8299bb6ed0948b090eb048fd98ef0ccaaaced7a68f92",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/prog/save_obfuscation_map/map.json": "3220eb1887392a674dcb45973ceece07aaefd80ea580bf74382b9f5550f25309",
+    "scratchpad/g1_rc10_20261016/ours.fields.json": "63b80947eeb1c3330648c8d72acfb864e02510f69fee1d1ec681c8b6e333cfe2",
+    "scratchpad/g1_rc10_20261016/ours_ft.dt": "3359bb68321d992e097bc0dd52c5e7e045dc51e440c450417daeea114a1ca7ce",
+    "scratchpad/g1_rc10_20261016/ours_ft.profile.json": "c425a41cd4206990ff65ebea316a798619fc9ae5adcaaf515fb832221d024a26",
+    "scratchpad/g1_rc10_20261016/ours_nolink.dt": "3359bb68321d992e097bc0dd52c5e7e045dc51e440c450417daeea114a1ca7ce",
+    "scratchpad/g1_rc10_20261016/ours_nolink.profile.json": "47fdd01dbeafdf937ef4fe88254baa5d3e03121ca6920c5342d288d171bcd3d9",
+    "scratchpad/g1_rc10_20261016/ours_nolink_verbose.so": "4f20766fd160b838caf8d979eb8f2b49a252a6a745293ef94dd8156c2410deb7",
+    "scratchpad/g1_rc10_20261016/ours_verbose.so": "fbe54cfcc27dde77ccef5b6e98c0ff57308d066963cb79c27593e239e6493e99",
+    "scratchpad/g1_rc10_20261016/ref.fields.json": "001e7c6d7481230a589b88e5eaa621102c9710a65077134f7be3115dd42022b3",
+    "scratchpad/g1_rc10_20261016/ref_ft.dt": "3359bb68321d992e097bc0dd52c5e7e045dc51e440c450417daeea114a1ca7ce",
+    "scratchpad/g1_rc10_20261016/ref_ft.profile.json": "166feaa83d499eae45c4095ffee1a09dc12d945a8c3f9b259f7b6514597882be",
+    "scratchpad/g1_rc10_20261016/ref_nolink.dt": "3359bb68321d992e097bc0dd52c5e7e045dc51e440c450417daeea114a1ca7ce",
+    "scratchpad/g1_rc10_20261016/ref_nolink.profile.json": "647c5d755f468f78878d9cfcf90eed4d546d024db658e99a1dc45f30fd8b2f99",
+    "scratchpad/g1_rc10_20261016/ref_nolink_verbose.so": "470f442b3837e3d507364073dc1eb429935ad464920ba3da2fad3bac7bde613f",
+    "scratchpad/g1_rc10_20261016/ref_verbose.so": "5b3ee421fe7644c1b45a15b519573cacc406be61120f81ab34529efc526d6929",
+    "scratchpad/g1_rc7_20261016/base_dd_ours.map.json": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1",
+    "scratchpad/g1_rc7_20261016/base_dd_ours.shorebird.json": "be80d75776a8cd4924e0e152dee7b3c1cfea44fcd8f85532d225c83434d1caf3",
+    "scratchpad/g1_rc7_20261016/base_dd_ours.so": "88d06f859f8eaa1d39faae166d01a0315df4fafd00ced047baab834d7e1c8d49",
+    "scratchpad/g1_rc7_20261016/base_dd_ref.map.json": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1",
+    "scratchpad/g1_rc7_20261016/base_dd_ref.shorebird.json": "01e3feebed459a0c0705e0b33c97f176d7003952fc2e8b614e7154439d7937f7",
+    "scratchpad/g1_rc7_20261016/base_dd_ref.so": "e549329ff0905b447dfcc3a7b4356bb12b39ac30a2b5e4fbca2ed388222762ec",
+    "scratchpad/g1_rc7_20261016/hello_ours.map.json": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1",
+    "scratchpad/g1_rc7_20261016/hello_ours.shorebird.json": "be80d75776a8cd4924e0e152dee7b3c1cfea44fcd8f85532d225c83434d1caf3",
+    "scratchpad/g1_rc7_20261016/hello_ours.so": "0b97c816e0eff844cfb0ed0d1fdab69bec7bdc1144b0863a0f07f725c7345d63",
+    "scratchpad/g1_rc7_20261016/hello_ref.map.json": "b926707d939e657a402ec7be818a3321f8ebd3a748e98636fc01e8573f0913e1",
+    "scratchpad/g1_rc7_20261016/hello_ref.shorebird.json": "01e3feebed459a0c0705e0b33c97f176d7003952fc2e8b614e7154439d7937f7",
+    "scratchpad/g1_rc7_20261016/hello_ref.so": "f013d8acebe918f80e8b59c5cbaa4b0f648a5fef3fe87640335008e10f4e6896",
+    "scratchpad/g1_rc7_20261016/prog_ours.map.json": "60bc0e616370e49665567a2114de90d49fcf00edbb79684119cedb60f184765d",
+    "scratchpad/g1_rc7_20261016/prog_ours.shorebird.json": "2a740997d6228f40bd7d22c7ab53aa546ca5b4fbebadb177cd5f2d9b07c84f6a",
+    "scratchpad/g1_rc7_20261016/prog_ours.so": "143fc69e60e142a8c85aea7caf75fa02b656e64acafd3fa8536a2f979bb377e4",
+    "scratchpad/g1_rc7_20261016/prog_ref.map.json": "60bc0e616370e49665567a2114de90d49fcf00edbb79684119cedb60f184765d",
+    "scratchpad/g1_rc7_20261016/prog_ref.shorebird.json": "8d23d352db5c2907f4a6284f12427d1ee1542e81eb630cc925771afc9ebd0407",
+    "scratchpad/g1_rc7_20261016/prog_ref.so": "f108ef6b1ab99a1d7aeff2bdf96dc35e810d092b2d7fcc2b68169274031cb88c",
+    "scratchpad/g1_rc9_20261016/empty_final_ours.log": "daa411b1430a4afcffe6cc121d80401568cc36ed608e4012a026075eff5c3843",
+    "scratchpad/g1_rc9_20261016/empty_final_ours.so": "b1a32ed79dc44cda95f3ae68d7f988370b1606b7396483495c15e6e4b22ecbe4",
+    "scratchpad/g1_rc9_20261016/empty_ref.log": "c097541d093e733012bb73ba0752964f596a0aa1620312c6b3beb3edd6a9f845",
+    "scratchpad/g1_rc9_20261016/empty_ref.so": "b0125e32d33821a88b9141366d2c1236dc025cb94aace2ab7db3dfbf3547323f",
+    "scratchpad/g1_rc9_20261016/hello_ours_v2.log": "ce8de4706efc9af3ac1a144aba658f83d726dc4f3628c68a06fa62b79568b406",
+    "scratchpad/g1_rc9_20261016/hello_ours_v2.so": "e80842a9d58dee10234870f61a8d768f46167fb6a5145b74155629c812f92a8f",
+    "scratchpad/g1_rc9_20261016/hello_ours_v2.tsv": "0e562919d9f6f0fc9e0eb15ba24afbd763850cea08f7642f5e78f3b9842fa26e",
+    "scratchpad/g1_rc9_20261016/hello_ref_v2.log": "88aeced63706253a02fab8c7f12e92ce5589d83e223213bf56d1f82e08d467b0",
+    "scratchpad/g1_rc9_20261016/hello_ref_v2.so": "68dec186adb5a317b7f41ddf470e3704174f2e7f7e1f5e7088364b682527829b",
+    "scratchpad/g1_rc9_20261016/hello_ref_v2.tsv": "0e562919d9f6f0fc9e0eb15ba24afbd763850cea08f7642f5e78f3b9842fa26e",
+    "scratchpad/g1_rc9_20261016/prog_ours_v2.log": "51b4592e15551490bb9c113e4b3be62a7228e41f79269388c424d1a2a6c5f747",
+    "scratchpad/g1_rc9_20261016/prog_ours_v2.so": "79bbe739da97135c8c86a9850630c1bde25b3da37f46820ccf75791ca27a2b48",
+    "scratchpad/g1_rc9_20261016/prog_ours_v2.tsv": "5037c222f428a2ef49abdf8f9ee35bb5f22a9d61d39780eb57416bfa119fd8e6",
+    "scratchpad/g1_rc9_20261016/prog_ref_v2.log": "72c94a81690c9ef6b62f40798138cecd93abdec2b8d6e78ea87f5b6dc96eac87",
+    "scratchpad/g1_rc9_20261016/prog_ref_v2.so": "64fd91807811f2a4e958b18c8f2d84c6ed53855bd7d1664b872ebb1da61fce39",
+    "scratchpad/g1_rc9_20261016/prog_ref_v2.tsv": "5037c222f428a2ef49abdf8f9ee35bb5f22a9d61d39780eb57416bfa119fd8e6"
+  }
+}

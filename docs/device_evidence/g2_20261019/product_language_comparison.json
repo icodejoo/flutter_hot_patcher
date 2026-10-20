@@ -1,0 +1,155 @@
+{
+  "scope": "one paired upstream suite/configuration; not the whole G2 gate",
+  "status": "COMPARABLE",
+  "exit_code": 0,
+  "configuration": [
+    "product",
+    "simarm64",
+    "dartkp",
+    "dart_precompiled"
+  ],
+  "suites": [
+    "corelib",
+    "language"
+  ],
+  "waived_build_args": [
+    "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+  ],
+  "ours_rows": 6901,
+  "stock_rows": 6901,
+  "ours_results_sha256": "ab3dbdb150f70c28b4c2ff0f113bd044045e412755bd23aee561cf7f6d1a00c4",
+  "stock_results_sha256": "f2813de7cb70a92d0d6dbd514f5a2d8f7c9f8612f3e29e6cf0eef5f4ea4bf00d",
+  "ours_worse": [],
+  "ours_better": [],
+  "shared_failures": [
+    {
+      "name": "corelib/date_time7_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "corelib/string_case_test/01",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "corelib/unicode_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/cascaded_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/context_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/null_aware_cascaded_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/null_aware_plain_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/plain_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/promotion_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/block/this_not_enclosing_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/cascaded_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/context_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/null_aware_cascaded_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/null_aware_plain_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/plain_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/promotion_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/anonymous_methods/expression/this_not_enclosing_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/async/return_throw_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/deferred/redirecting_factory_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/least_upper_bound/least_upper_bound_greatest_closure_2_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/mixin_declaration/mixin_declaration_superinvocation_application_test/08",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/string/interpolation_and_buffer_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/type_object/futureor_tostring_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/variance/variance_in_subtyping_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    },
+    {
+      "name": "language/variance/variance_inout_subtyping_test",
+      "ours_failures": 1,
+      "stock_failures": 1
+    }
+  ],
+  "unresolved": [],
+  "ours_only": [],
+  "ours_only_failures": [],
+  "stock_only": []
+}

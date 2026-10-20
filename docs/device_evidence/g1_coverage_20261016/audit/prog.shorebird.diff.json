@@ -1,0 +1,1022 @@
+[
+  {
+    "path": "$.functions[1525].op_subgraph_hash",
+    "ours": "d02f3594c0cc04fc710d6e1d5d59ca6653ebcb3f",
+    "theirs": "8393e6c2dc8e9601e181d018d09a6ef5ea0190b7"
+  },
+  {
+    "path": "$.functions[1525].subgraph_hash",
+    "ours": "ec9b29f4fe0d08eb5d3200e7533ee9e7349b8071",
+    "theirs": "daf05731381c1a3a41f15e52baead1e160b55df4"
+  },
+  {
+    "path": "$.functions[1528].op_subgraph_hash",
+    "ours": "c88edf8b3e45b7e26b27b85bc83d7a3662509e77",
+    "theirs": "ccda13abf44b2f4d043ef74b41ec90f171954a10"
+  },
+  {
+    "path": "$.functions[1528].subgraph_hash",
+    "ours": "6360936680be39b0adc9ea77a29401cc2c830be2",
+    "theirs": "51528a4051cfbfe15a5f6374f8d2362cb2afcb8e"
+  },
+  {
+    "path": "$.functions[3028].op_subgraph_hash",
+    "ours": "93bdf16d0e51ff09f735555d8a5c8026e0fae394",
+    "theirs": "bfa11516c40f4aeee04b9a73d753ba557194fbfe"
+  },
+  {
+    "path": "$.functions[3028].self_hash",
+    "ours": "5399016ea1276941f0b5242dfc8e4a292793b936",
+    "theirs": "cb2627123d172bea357b2a86f79c4dd5293b4702"
+  },
+  {
+    "path": "$.functions[3028].size",
+    "ours": 196,
+    "theirs": 192
+  },
+  {
+    "path": "$.functions[3028].subgraph_hash",
+    "ours": "2cf2a96f324ac803072f8a63118c457462b40628",
+    "theirs": "d0eb9ede3347105b68c7a4c65cfb32873fa74a2a"
+  },
+  {
+    "path": "$.functions[3029].offset",
+    "ours": 703520,
+    "theirs": 703516
+  },
+  {
+    "path": "$.functions[3030].offset",
+    "ours": 703524,
+    "theirs": 703520
+  },
+  {
+    "path": "$.functions[3031].offset",
+    "ours": 703592,
+    "theirs": 703588
+  },
+  {
+    "path": "$.functions[3032].offset",
+    "ours": 703668,
+    "theirs": 703664
+  },
+  {
+    "path": "$.functions[3033].offset",
+    "ours": 703672,
+    "theirs": 703668
+  },
+  {
+    "path": "$.functions[3034].offset",
+    "ours": 703696,
+    "theirs": 703692
+  },
+  {
+    "path": "$.functions[3035].offset",
+    "ours": 703708,
+    "theirs": 703704
+  },
+  {
+    "path": "$.functions[3036].offset",
+    "ours": 703908,
+    "theirs": 703904
+  },
+  {
+    "path": "$.functions[3037].offset",
+    "ours": 703960,
+    "theirs": 703956
+  },
+  {
+    "path": "$.functions[3038].offset",
+    "ours": 704100,
+    "theirs": 704096
+  },
+  {
+    "path": "$.functions[3039].offset",
+    "ours": 704196,
+    "theirs": 704192
+  },
+  {
+    "path": "$.functions[3040].offset",
+    "ours": 704248,
+    "theirs": 704244
+  },
+  {
+    "path": "$.functions[3041].offset",
+    "ours": 704348,
+    "theirs": 704344
+  },
+  {
+    "path": "$.functions[3042].offset",
+    "ours": 704404,
+    "theirs": 704400
+  },
+  {
+    "path": "$.functions[3043].offset",
+    "ours": 704456,
+    "theirs": 704452
+  },
+  {
+    "path": "$.functions[3044].offset",
+    "ours": 704516,
+    "theirs": 704512
+  },
+  {
+    "path": "$.functions[3045].offset",
+    "ours": 704560,
+    "theirs": 704556
+  },
+  {
+    "path": "$.functions[3046].offset",
+    "ours": 704596,
+    "theirs": 704592
+  },
+  {
+    "path": "$.functions[3047].offset",
+    "ours": 705692,
+    "theirs": 705688
+  },
+  {
+    "path": "$.functions[3048].offset",
+    "ours": 706332,
+    "theirs": 706328
+  },
+  {
+    "path": "$.functions[3049].offset",
+    "ours": 706584,
+    "theirs": 706580
+  },
+  {
+    "path": "$.functions[3050].offset",
+    "ours": 706644,
+    "theirs": 706640
+  },
+  {
+    "path": "$.functions[3051].offset",
+    "ours": 706660,
+    "theirs": 706656
+  },
+  {
+    "path": "$.functions[3052].offset",
+    "ours": 706864,
+    "theirs": 706860
+  },
+  {
+    "path": "$.functions[3053].offset",
+    "ours": 707076,
+    "theirs": 707072
+  },
+  {
+    "path": "$.functions[3054].offset",
+    "ours": 707276,
+    "theirs": 707272
+  },
+  {
+    "path": "$.functions[3055].offset",
+    "ours": 707484,
+    "theirs": 707480
+  },
+  {
+    "path": "$.functions[3056].offset",
+    "ours": 707748,
+    "theirs": 707744
+  },
+  {
+    "path": "$.functions[3057].offset",
+    "ours": 707844,
+    "theirs": 707840
+  },
+  {
+    "path": "$.functions[3058].offset",
+    "ours": 707916,
+    "theirs": 707912
+  },
+  {
+    "path": "$.functions[3059].offset",
+    "ours": 707980,
+    "theirs": 707976
+  },
+  {
+    "path": "$.functions[3060].offset",
+    "ours": 708280,
+    "theirs": 708276
+  },
+  {
+    "path": "$.functions[3061].offset",
+    "ours": 708524,
+    "theirs": 708520
+  },
+  {
+    "path": "$.functions[3062].offset",
+    "ours": 708760,
+    "theirs": 708756
+  },
+  {
+    "path": "$.functions[3063].offset",
+    "ours": 709000,
+    "theirs": 708996
+  },
+  {
+    "path": "$.functions[3064].offset",
+    "ours": 709232,
+    "theirs": 709228
+  },
+  {
+    "path": "$.functions[3065].offset",
+    "ours": 709424,
+    "theirs": 709420
+  },
+  {
+    "path": "$.functions[3066].offset",
+    "ours": 709616,
+    "theirs": 709612
+  },
+  {
+    "path": "$.functions[3067].offset",
+    "ours": 709808,
+    "theirs": 709804
+  },
+  {
+    "path": "$.functions[3068].offset",
+    "ours": 710000,
+    "theirs": 709996
+  },
+  {
+    "path": "$.functions[3069].offset",
+    "ours": 710192,
+    "theirs": 710188
+  },
+  {
+    "path": "$.functions[3070].offset",
+    "ours": 710384,
+    "theirs": 710380
+  },
+  {
+    "path": "$.functions[3071].offset",
+    "ours": 710576,
+    "theirs": 710572
+  },
+  {
+    "path": "$.functions[3072].offset",
+    "ours": 710768,
+    "theirs": 710764
+  },
+  {
+    "path": "$.functions[3073].offset",
+    "ours": 710960,
+    "theirs": 710956
+  },
+  {
+    "path": "$.functions[3074].offset",
+    "ours": 711156,
+    "theirs": 711152
+  },
+  {
+    "path": "$.functions[3075].offset",
+    "ours": 711352,
+    "theirs": 711348
+  },
+  {
+    "path": "$.functions[3076].offset",
+    "ours": 711544,
+    "theirs": 711540
+  },
+  {
+    "path": "$.functions[3077].offset",
+    "ours": 711736,
+    "theirs": 711732
+  },
+  {
+    "path": "$.functions[3078].offset",
+    "ours": 711928,
+    "theirs": 711924
+  },
+  {
+    "path": "$.functions[3079].offset",
+    "ours": 712016,
+    "theirs": 712012
+  },
+  {
+    "path": "$.functions[3080].offset",
+    "ours": 712104,
+    "theirs": 712100
+  },
+  {
+    "path": "$.functions[3081].offset",
+    "ours": 712192,
+    "theirs": 712188
+  },
+  {
+    "path": "$.functions[3082].offset",
+    "ours": 712280,
+    "theirs": 712276
+  },
+  {
+    "path": "$.functions[3083].offset",
+    "ours": 712368,
+    "theirs": 712364
+  },
+  {
+    "path": "$.functions[3084].offset",
+    "ours": 712640,
+    "theirs": 712636
+  },
+  {
+    "path": "$.functions[3085].offset",
+    "ours": 712768,
+    "theirs": 712764
+  },
+  {
+    "path": "$.functions[3086].offset",
+    "ours": 713024,
+    "theirs": 713020
+  },
+  {
+    "path": "$.functions[3087].offset",
+    "ours": 713208,
+    "theirs": 713204
+  },
+  {
+    "path": "$.functions[3088].offset",
+    "ours": 713520,
+    "theirs": 713516
+  },
+  {
+    "path": "$.functions[3089].offset",
+    "ours": 713600,
+    "theirs": 713596
+  },
+  {
+    "path": "$.functions[3090].offset",
+    "ours": 713744,
+    "theirs": 713740
+  },
+  {
+    "path": "$.functions[3091].offset",
+    "ours": 713824,
+    "theirs": 713820
+  },
+  {
+    "path": "$.functions[3092].offset",
+    "ours": 713968,
+    "theirs": 713964
+  },
+  {
+    "path": "$.functions[3093].offset",
+    "ours": 714100,
+    "theirs": 714096
+  },
+  {
+    "path": "$.functions[3094].offset",
+    "ours": 714296,
+    "theirs": 714292
+  },
+  {
+    "path": "$.functions[3095].offset",
+    "ours": 714372,
+    "theirs": 714368
+  },
+  {
+    "path": "$.functions[3096].offset",
+    "ours": 714512,
+    "theirs": 714508
+  },
+  {
+    "path": "$.functions[3097].offset",
+    "ours": 714588,
+    "theirs": 714584
+  },
+  {
+    "path": "$.functions[3098].offset",
+    "ours": 714728,
+    "theirs": 714724
+  },
+  {
+    "path": "$.functions[3099].offset",
+    "ours": 714804,
+    "theirs": 714800
+  },
+  {
+    "path": "$.functions[3100].offset",
+    "ours": 714944,
+    "theirs": 714940
+  },
+  {
+    "path": "$.functions[3101].offset",
+    "ours": 715024,
+    "theirs": 715020
+  },
+  {
+    "path": "$.functions[3102].offset",
+    "ours": 715168,
+    "theirs": 715164
+  },
+  {
+    "path": "$.functions[3103].offset",
+    "ours": 715204,
+    "theirs": 715200
+  },
+  {
+    "path": "$.functions[3104].offset",
+    "ours": 715216,
+    "theirs": 715212
+  },
+  {
+    "path": "$.functions[3105].offset",
+    "ours": 715584,
+    "theirs": 715580
+  },
+  {
+    "path": "$.functions[3106].offset",
+    "ours": 715712,
+    "theirs": 715708
+  },
+  {
+    "path": "$.functions[3107].offset",
+    "ours": 715916,
+    "theirs": 715912
+  },
+  {
+    "path": "$.functions[3108].offset",
+    "ours": 715968,
+    "theirs": 715964
+  },
+  {
+    "path": "$.functions[3109].offset",
+    "ours": 716020,
+    "theirs": 716016
+  },
+  {
+    "path": "$.functions[3110].offset",
+    "ours": 716032,
+    "theirs": 716028
+  },
+  {
+    "path": "$.functions[3111].offset",
+    "ours": 716088,
+    "theirs": 716084
+  },
+  {
+    "path": "$.functions[3112].offset",
+    "ours": 716188,
+    "theirs": 716184
+  },
+  {
+    "path": "$.functions[3113].offset",
+    "ours": 716476,
+    "theirs": 716472
+  },
+  {
+    "path": "$.functions[3114].offset",
+    "ours": 716584,
+    "theirs": 716580
+  },
+  {
+    "path": "$.functions[3114].op_subgraph_hash",
+    "ours": "7c88c0ac6281d4c1bbc110e226e8ceac32c3a80f",
+    "theirs": "3f6c2ef64408f77348f11defab2ad049d8134e3e"
+  },
+  {
+    "path": "$.functions[3114].subgraph_hash",
+    "ours": "357c5e8554ecac50755564abb92d27775ace1df7",
+    "theirs": "40dcbb692b529dd36b73ce57d61fe0a92aca8dfc"
+  },
+  {
+    "path": "$.functions[3115].offset",
+    "ours": 716660,
+    "theirs": 716656
+  },
+  {
+    "path": "$.functions[3116].offset",
+    "ours": 716752,
+    "theirs": 716748
+  },
+  {
+    "path": "$.functions[3117].offset",
+    "ours": 717056,
+    "theirs": 717052
+  },
+  {
+    "path": "$.functions[3118].offset",
+    "ours": 717108,
+    "theirs": 717104
+  },
+  {
+    "path": "$.functions[3119].offset",
+    "ours": 717340,
+    "theirs": 717336
+  },
+  {
+    "path": "$.functions[3120].offset",
+    "ours": 717492,
+    "theirs": 717488
+  },
+  {
+    "path": "$.functions[3121].offset",
+    "ours": 717544,
+    "theirs": 717540
+  },
+  {
+    "path": "$.functions[3122].offset",
+    "ours": 717696,
+    "theirs": 717692
+  },
+  {
+    "path": "$.functions[3123].offset",
+    "ours": 717748,
+    "theirs": 717744
+  },
+  {
+    "path": "$.functions[3124].offset",
+    "ours": 717804,
+    "theirs": 717800
+  },
+  {
+    "path": "$.functions[3125].offset",
+    "ours": 717856,
+    "theirs": 717852
+  },
+  {
+    "path": "$.functions[3126].offset",
+    "ours": 717912,
+    "theirs": 717908
+  },
+  {
+    "path": "$.functions[3127].offset",
+    "ours": 717924,
+    "theirs": 717920
+  },
+  {
+    "path": "$.functions[3128].offset",
+    "ours": 718024,
+    "theirs": 718020
+  },
+  {
+    "path": "$.functions[3129].offset",
+    "ours": 718160,
+    "theirs": 718156
+  },
+  {
+    "path": "$.functions[3130].offset",
+    "ours": 718400,
+    "theirs": 718396
+  },
+  {
+    "path": "$.functions[3131].offset",
+    "ours": 718996,
+    "theirs": 718992
+  },
+  {
+    "path": "$.functions[3132].offset",
+    "ours": 719276,
+    "theirs": 719272
+  },
+  {
+    "path": "$.functions[3133].offset",
+    "ours": 719492,
+    "theirs": 719488
+  },
+  {
+    "path": "$.functions[3133].op_subgraph_hash",
+    "ours": "b5a085c8519d164ea77162502fc99a0f8d7d1cd2",
+    "theirs": "e97a0de4eb803de849252f079fa2d5287fb3a934"
+  },
+  {
+    "path": "$.functions[3133].subgraph_hash",
+    "ours": "b41d7f1f1823ae85a9870b298ad24b2fefa1e63a",
+    "theirs": "55aced0a0d28b6b166e7507eacfbd1182096eb46"
+  },
+  {
+    "path": "$.functions[3134].offset",
+    "ours": 719572,
+    "theirs": 719568
+  },
+  {
+    "path": "$.functions[3135].offset",
+    "ours": 719680,
+    "theirs": 719676
+  },
+  {
+    "path": "$.functions[3136].offset",
+    "ours": 719780,
+    "theirs": 719776
+  },
+  {
+    "path": "$.functions[3137].offset",
+    "ours": 719964,
+    "theirs": 719960
+  },
+  {
+    "path": "$.functions[3138].offset",
+    "ours": 720520,
+    "theirs": 720516
+  },
+  {
+    "path": "$.functions[3139].offset",
+    "ours": 720680,
+    "theirs": 720676
+  },
+  {
+    "path": "$.functions[3140].offset",
+    "ours": 720784,
+    "theirs": 720780
+  },
+  {
+    "path": "$.functions[3141].offset",
+    "ours": 720916,
+    "theirs": 720912
+  },
+  {
+    "path": "$.functions[3142].offset",
+    "ours": 721236,
+    "theirs": 721232
+  },
+  {
+    "path": "$.functions[3143].offset",
+    "ours": 721316,
+    "theirs": 721312
+  },
+  {
+    "path": "$.functions[3144].offset",
+    "ours": 721416,
+    "theirs": 721412
+  },
+  {
+    "path": "$.functions[3145].offset",
+    "ours": 721692,
+    "theirs": 721688
+  },
+  {
+    "path": "$.functions[3146].offset",
+    "ours": 721712,
+    "theirs": 721708
+  },
+  {
+    "path": "$.functions[3147].offset",
+    "ours": 722064,
+    "theirs": 722060
+  },
+  {
+    "path": "$.functions[3148].offset",
+    "ours": 722324,
+    "theirs": 722320
+  },
+  {
+    "path": "$.functions[3149].offset",
+    "ours": 722500,
+    "theirs": 722496
+  },
+  {
+    "path": "$.functions[3150].offset",
+    "ours": 722592,
+    "theirs": 722588
+  },
+  {
+    "path": "$.functions[3151].offset",
+    "ours": 722640,
+    "theirs": 722636
+  },
+  {
+    "path": "$.functions[3152].offset",
+    "ours": 722720,
+    "theirs": 722716
+  },
+  {
+    "path": "$.functions[3153].offset",
+    "ours": 722824,
+    "theirs": 722820
+  },
+  {
+    "path": "$.functions[3154].offset",
+    "ours": 722880,
+    "theirs": 722876
+  },
+  {
+    "path": "$.functions[3155].offset",
+    "ours": 723252,
+    "theirs": 723248
+  },
+  {
+    "path": "$.functions[3156].offset",
+    "ours": 723308,
+    "theirs": 723304
+  },
+  {
+    "path": "$.functions[3157].offset",
+    "ours": 723540,
+    "theirs": 723536
+  },
+  {
+    "path": "$.functions[3158].offset",
+    "ours": 723596,
+    "theirs": 723592
+  },
+  {
+    "path": "$.functions[3159].offset",
+    "ours": 723744,
+    "theirs": 723740
+  },
+  {
+    "path": "$.functions[3160].offset",
+    "ours": 723920,
+    "theirs": 723916
+  },
+  {
+    "path": "$.functions[3161].offset",
+    "ours": 723988,
+    "theirs": 723984
+  },
+  {
+    "path": "$.functions[3162].offset",
+    "ours": 724004,
+    "theirs": 724000
+  },
+  {
+    "path": "$.functions[3163].offset",
+    "ours": 724120,
+    "theirs": 724116
+  },
+  {
+    "path": "$.functions[3164].offset",
+    "ours": 724132,
+    "theirs": 724128
+  },
+  {
+    "path": "$.functions[3165].offset",
+    "ours": 724348,
+    "theirs": 724344
+  },
+  {
+    "path": "$.functions[3166].offset",
+    "ours": 724448,
+    "theirs": 724444
+  },
+  {
+    "path": "$.functions[3167].offset",
+    "ours": 724492,
+    "theirs": 724488
+  },
+  {
+    "path": "$.functions[3168].offset",
+    "ours": 724544,
+    "theirs": 724540
+  },
+  {
+    "path": "$.functions[3169].offset",
+    "ours": 724708,
+    "theirs": 724704
+  },
+  {
+    "path": "$.functions[3170].offset",
+    "ours": 724772,
+    "theirs": 724768
+  },
+  {
+    "path": "$.functions[3171].offset",
+    "ours": 724808,
+    "theirs": 724804
+  },
+  {
+    "path": "$.functions[3172].offset",
+    "ours": 724860,
+    "theirs": 724856
+  },
+  {
+    "path": "$.functions[3173].offset",
+    "ours": 725160,
+    "theirs": 725156
+  },
+  {
+    "path": "$.functions[3174].offset",
+    "ours": 725212,
+    "theirs": 725208
+  },
+  {
+    "path": "$.functions[3175].offset",
+    "ours": 725248,
+    "theirs": 725244
+  },
+  {
+    "path": "$.functions[3176].offset",
+    "ours": 725284,
+    "theirs": 725280
+  },
+  {
+    "path": "$.functions[3177].offset",
+    "ours": 725320,
+    "theirs": 725316
+  },
+  {
+    "path": "$.functions[3178].offset",
+    "ours": 725372,
+    "theirs": 725368
+  },
+  {
+    "path": "$.functions[3179].offset",
+    "ours": 725408,
+    "theirs": 725404
+  },
+  {
+    "path": "$.functions[3180].offset",
+    "ours": 725444,
+    "theirs": 725440
+  },
+  {
+    "path": "$.functions[3181].offset",
+    "ours": 725564,
+    "theirs": 725560
+  },
+  {
+    "path": "$.functions[3182].offset",
+    "ours": 725748,
+    "theirs": 725744
+  },
+  {
+    "path": "$.functions[3183].offset",
+    "ours": 726208,
+    "theirs": 726204
+  },
+  {
+    "path": "$.functions[3184].offset",
+    "ours": 726268,
+    "theirs": 726264
+  },
+  {
+    "path": "$.functions[3185].offset",
+    "ours": 726432,
+    "theirs": 726428
+  },
+  {
+    "path": "$.functions[3186].offset",
+    "ours": 726484,
+    "theirs": 726480
+  },
+  {
+    "path": "$.functions[3187].offset",
+    "ours": 726528,
+    "theirs": 726524
+  },
+  {
+    "path": "$.functions[3188].offset",
+    "ours": 726560,
+    "theirs": 726556
+  },
+  {
+    "path": "$.functions[3189].offset",
+    "ours": 726596,
+    "theirs": 726592
+  },
+  {
+    "path": "$.functions[3190].offset",
+    "ours": 726628,
+    "theirs": 726624
+  },
+  {
+    "path": "$.functions[3191].offset",
+    "ours": 726660,
+    "theirs": 726656
+  },
+  {
+    "path": "$.functions[3192].offset",
+    "ours": 726692,
+    "theirs": 726688
+  },
+  {
+    "path": "$.functions[3193].offset",
+    "ours": 726724,
+    "theirs": 726720
+  },
+  {
+    "path": "$.functions[3194].offset",
+    "ours": 726772,
+    "theirs": 726768
+  },
+  {
+    "path": "$.functions[3195].offset",
+    "ours": 727600,
+    "theirs": 727596
+  },
+  {
+    "path": "$.functions[3196].offset",
+    "ours": 728308,
+    "theirs": 728304
+  },
+  {
+    "path": "$.functions[3197].offset",
+    "ours": 729080,
+    "theirs": 729076
+  },
+  {
+    "path": "$.functions[3198].offset",
+    "ours": 729136,
+    "theirs": 729132
+  },
+  {
+    "path": "$.functions[3199].offset",
+    "ours": 729192,
+    "theirs": 729188
+  },
+  {
+    "path": "$.functions[3200].offset",
+    "ours": 729212,
+    "theirs": 729208
+  },
+  {
+    "path": "$.functions[3201].offset",
+    "ours": 729372,
+    "theirs": 729368
+  },
+  {
+    "path": "$.functions[3202].offset",
+    "ours": 729544,
+    "theirs": 729540
+  },
+  {
+    "path": "$.functions[3203].offset",
+    "ours": 729952,
+    "theirs": 729948
+  },
+  {
+    "path": "$.functions[3204].offset",
+    "ours": 730004,
+    "theirs": 730000
+  },
+  {
+    "path": "$.functions[3205].offset",
+    "ours": 730308,
+    "theirs": 730304
+  },
+  {
+    "path": "$.functions[3206].offset",
+    "ours": 730844,
+    "theirs": 730840
+  },
+  {
+    "path": "$.functions[3207].offset",
+    "ours": 730856,
+    "theirs": 730852
+  },
+  {
+    "path": "$.functions[3208].offset",
+    "ours": 730908,
+    "theirs": 730904
+  },
+  {
+    "path": "$.functions[3209].offset",
+    "ours": 731268,
+    "theirs": 731264
+  },
+  {
+    "path": "$.functions[3210].offset",
+    "ours": 731392,
+    "theirs": 731388
+  },
+  {
+    "path": "$.functions[3211].offset",
+    "ours": 731460,
+    "theirs": 731456
+  },
+  {
+    "path": "$.functions[3212].offset",
+    "ours": 731620,
+    "theirs": 731616
+  },
+  {
+    "path": "$.functions[3213].offset",
+    "ours": 731708,
+    "theirs": 731704
+  },
+  {
+    "path": "$.functions[3214].offset",
+    "ours": 731796,
+    "theirs": 731792
+  },
+  {
+    "path": "$.functions[3215].offset",
+    "ours": 731884,
+    "theirs": 731880
+  },
+  {
+    "path": "$.snapshot_data.adjusted_vm_instructions_hash",
+    "ours": "3002391416",
+    "theirs": "110702048"
+  },
+  {
+    "path": "$.snapshot_data.dart_version",
+    "ours": "3.12.2 (stable) (Fri Oct 2 18:05:57 2026 +0800) on \"macos_simarm64\"",
+    "theirs": "3.12.2 (stable) (Thu Jun 11 21:57:33 2026 -0700) on \"macos_simarm64\""
+  },
+  {
+    "path": "$.snapshot_data.snapshot_version",
+    "ours": "9c903bac4c5775bbe606ac2d373a1db1",
+    "theirs": "839937ddd3133a1c0758aeeefce5448c"
+  },
+  {
+    "path": "$.snapshot_data.vm_data_hash",
+    "ours": "1569898827",
+    "theirs": "812259089"
+  },
+  {
+    "path": "$.snapshot_data.vm_data_length",
+    "ours": "35328",
+    "theirs": "35264"
+  }
+]

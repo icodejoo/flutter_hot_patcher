@@ -1,0 +1,39 @@
+{
+  "runs_sha256": "fb2387555ffc7af1a1fd200378c7b112b82594427531f2a913cc9dc39d8ae77b",
+  "artifacts_unchanged": true,
+  "artifacts": {
+    "ours": {
+      "run_vm_tests": "7f10de05c89357ad1a2bf6bc3ad1ea76042fb7776115292e488be6d9bf48ab87",
+      "kernel_service.dill": "d8521984df6935f27a02b4a595c1b0b2c446bc0b35d6d3e2f11d3da0cd5fd573"
+    },
+    "stock": {
+      "run_vm_tests": "1319fc298df5bf8afac5cf4adab99b8a876881318b57c27b250c2d3d2607670b",
+      "kernel_service.dill": "d8521984df6935f27a02b4a595c1b0b2c446bc0b35d6d3e2f11d3da0cd5fd573"
+    }
+  },
+  "table": {
+    "idle/ours": {
+      "pass": 30
+    },
+    "idle/stock": {
+      "pass": 25,
+      "crash_profiler_fp": 5
+    },
+    "loaded/ours": {
+      "pass": 93,
+      "crash_profiler_fp": 7
+    },
+    "loaded/stock": {
+      "pass": 88,
+      "crash_profiler_fp": 12
+    }
+  },
+  "crashes": {
+    "ours": 7,
+    "stock": 17
+  },
+  "other_failures": 0,
+  "stock_shows_same_crash": true,
+  "ours_not_worse": true,
+  "verdict": "SHARED_UPSTREAM_FLAKE"
+}

@@ -1,0 +1,65 @@
+{
+  "gen_snapshot": "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/gen_snapshot",
+  "gen_snapshot_sha256": "794dc986aae7b347833c17d9fb41577d83c0d91cd685fa1fc0e40130a87976bf",
+  "fixtures": {
+    "hello": {
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/gen_snapshot",
+        "--snapshot_kind=app-aot-elf",
+        "--elf=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g1_recheck/hello.so",
+        "--print_shorebird_info",
+        "/Users/Cruz/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/out_verify/hello.dill"
+      ],
+      "input_sha256": "98da9f6b98eef1ecfdf4bd0c021300c13613f571a618e9051c746c8871edb1e7",
+      "previous_sha256": "4d9708b22c7a7c746f6c82154bb997227931f4d17bd5ca23651ed5062f0f2470",
+      "current_sha256": "4d9708b22c7a7c746f6c82154bb997227931f4d17bd5ca23651ed5062f0f2470",
+      "previous_symbols": 1428,
+      "current_symbols": 1428,
+      "missing": [],
+      "added": [],
+      "changed": []
+    },
+    "prog": {
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/gen_snapshot",
+        "--snapshot_kind=app-aot-elf",
+        "--elf=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g1_recheck/prog.so",
+        "--print_shorebird_info",
+        "/Users/Cruz/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/out_disas/prog.dill"
+      ],
+      "input_sha256": "0754aed6048429ddf0e310b22702637645c0473c3381e57105b8140d4963c29a",
+      "previous_sha256": "ce82f8b27be87ed18bb1312048b95235e19f197b0e6a77063c3e1b8b403a984d",
+      "current_sha256": "ce82f8b27be87ed18bb1312048b95235e19f197b0e6a77063c3e1b8b403a984d",
+      "previous_symbols": 2958,
+      "current_symbols": 2958,
+      "missing": [],
+      "added": [],
+      "changed": []
+    },
+    "base_dd": {
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/gen_snapshot",
+        "--snapshot_kind=app-aot-elf",
+        "--elf=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g1_recheck/base_dd.so",
+        "--print_shorebird_info",
+        "/Users/Cruz/Documents/fhp-research/spikes/shorebird_linkinfo_oracle/out_dd/base.dill"
+      ],
+      "input_sha256": "98da9f6b98eef1ecfdf4bd0c021300c13613f571a618e9051c746c8871edb1e7",
+      "previous_sha256": "90615fda2efd5cca6c81c3538e03fef95c6f0bd9a820e054b7d52c55e4e04a3e",
+      "current_sha256": "90615fda2efd5cca6c81c3538e03fef95c6f0bd9a820e054b7d52c55e4e04a3e",
+      "previous_symbols": 1428,
+      "current_symbols": 1428,
+      "missing": [],
+      "added": [],
+      "changed": []
+    }
+  },
+  "negative_control": {
+    "file": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g1_recheck/hello_negative.so",
+    "byte_offset": 311296,
+    "changed_symbols": [
+      "_kDartVmSnapshotInstructions"
+    ],
+    "detected": true
+  }
+}

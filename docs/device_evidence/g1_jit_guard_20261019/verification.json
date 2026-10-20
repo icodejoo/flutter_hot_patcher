@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "focused_tests": 8,
+  "jit_snapshot_sha256": "d6bcb8bb6012c118da50a80feb4972a5129fa237b4f189fd0524c38f382e6580",
+  "aot_text_sha256": "ea5d761ddfd4e8a46d3a0be2b94cd9f69efc88134fd59f38ac1f756b259aa2bd",
+  "aot_rodata_changed_bytes": 64,
+  "aot_rodata_changed_fields": "two 32-byte snapshot version hashes",
+  "analyzer_json_changed_fields": [
+    "snapshot_version",
+    "vm_data_hash"
+  ]
+}

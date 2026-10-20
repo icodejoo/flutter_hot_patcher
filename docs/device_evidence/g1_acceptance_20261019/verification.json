@@ -1,0 +1,58 @@
+{
+  "status": "PASS_WITH_EXPLAINED_DIFFERENCES",
+  "registered_options": 92,
+  "fixture_option_runs": 276,
+  "classified_original_differences": 122,
+  "sdk_head": "8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0",
+  "sdk_patch_sha256": "0088c7f7b7904539729549e962518188a44be70ad4480d8df022de9e6d6a0a48",
+  "coverage_sha256": "d4fc0428dc95c98a9680746be6c4308b5a589d6a77d94d2fed23b90d3c6ef6df",
+  "classification_sha256": "711b470034fc02f7451888effabc286349a83d71bc22b57dcfb644acbce605cd",
+  "read_only_checks": {
+    "g1_rc8_20261016": {
+      "rc": 0,
+      "script_sha256": "220e0a60ed45dd4e53619d98f7a8b1db0ad91c93401f1af78fce4ac7a7df490f",
+      "result_sha256": "480681eb83a335efdd29e8be96ed14e90ac431daaf58d1bbd5ca8c4099e3c66f"
+    },
+    "g1_followup_20261016": {
+      "rc": 0,
+      "script_sha256": "64e275b5f98cc82e4718f50f0029bbb359b3947f8f3562bdfd9606926207b1ba",
+      "result_sha256": "d223ad19755e023ffd1be3d7069d60b77a03e65eef3030bca02e9c0bcbecaef6"
+    },
+    "g1_rc11_20261016": {
+      "rc": 0,
+      "script_sha256": "e91c9421cab1f602bfdcc0b8f8e3851bbb823b27d5ace7badb8d4f2d8bbdfed8",
+      "result_sha256": "c5b08a65dd36a68dc8ebeeae159d40888624a18dce4dff109b777b1b440fda6e"
+    },
+    "g1_aot_derived_20261019": {
+      "rc": 0,
+      "script_sha256": "6c63c7fa06279eb98238d6cf1f2affb4ba024113d80211150a65feed122ede07",
+      "result_sha256": "714096083b6274e32592f72c6f0c60371255f67f572543cf1c558eb045501ac5"
+    },
+    "g1_aot_payload_20261019": {
+      "rc": 0,
+      "script_sha256": "e0bf6a9f6ddc7b14575eaac36054d362474e0ea12d9d8aa8563f102eae58671a",
+      "result_sha256": "9ec35a853b5ada9295eafd766addfb26b2829b0447590b8fd761702ab692ae5b"
+    },
+    "g1_rc10_alignment_20261019": {
+      "rc": 0,
+      "script_sha256": "93bb7a65e27288935f3b72725adde04c00701421fb311884b36423f039d06c08",
+      "result_sha256": "af30a78bee37dda73d44d0b472a3c9eb92c40af15f85f2d41a36331fa7bedec4"
+    },
+    "g1_rc9_membership_20261019": {
+      "rc": 0,
+      "script_sha256": "a17fc655ccc74300626f4e760101a7660980cd7d37041708714884f7e6afae2c",
+      "result_sha256": "0b475bbca7bf29e6ff149642b3b85bd8c0b187e88a73744c4d3b3ccbdaaddef1"
+    },
+    "g1_rc10_payload_20261019": {
+      "rc": 0,
+      "script_sha256": "b0ad61376fff477eeacfd426fcd8e44f7fdf6cbdc7c0b0cd263dc4ace4e18d19",
+      "result_sha256": "426b2209efa3d950b8f702446670464f3bbc4114eb25bd8269e004a5b9720cc8"
+    },
+    "g1_jit_layout_swap_20261019": {
+      "rc": 0,
+      "script_sha256": "f35fc95362c81fdfb4b06611e2945b2d9d0a6a85fd2cc93c2bbb98789c1cdb2a",
+      "result_sha256": "ee0059d6e53f87a7c6b3aa2d02d28cd1449c9a87a0871970cc930c7422697da9"
+    }
+  },
+  "loop_pause_preserved": true
+}

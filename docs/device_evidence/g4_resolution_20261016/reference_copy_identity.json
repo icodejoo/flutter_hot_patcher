@@ -1,0 +1,6 @@
+{
+  "source": "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+  "copy": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/private_reference/g4_dd_reference_bound_20261016",
+  "sha256": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a",
+  "reason": "Preserve per-process crash diagnostics after macOS Log limit exceeded; identical binary bytes."
+}

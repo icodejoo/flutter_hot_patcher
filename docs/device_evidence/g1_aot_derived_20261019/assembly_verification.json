@@ -1,0 +1,242 @@
+{
+  "source": "archived 2026-10-16 matrix; app.S compiled with local clang into temporary Mach-O objects",
+  "fixtures": {
+    "hello": {
+      "ours": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35280,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 267296,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79920,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 287344,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      },
+      "theirs": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35216,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 267232,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79904,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 287328,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      }
+    },
+    "prog": {
+      "ours": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35280,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 586080,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79920,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 732320,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      },
+      "theirs": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35216,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 586016,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79904,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 732320,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      }
+    },
+    "base_dd": {
+      "ours": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35280,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 267296,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79920,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 287344,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      },
+      "theirs": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "length": 35216,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "length": 267232,
+          "section": "__const",
+          "header_relocation_bytes": 0,
+          "difference_range": []
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "length": 79904,
+          "section": "__text",
+          "header_relocation_bytes": 13,
+          "difference_range": [
+            80,
+            103
+          ]
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "length": 287328,
+          "section": "__text",
+          "header_relocation_bytes": 14,
+          "difference_range": [
+            80,
+            103
+          ]
+        }
+      }
+    }
+  },
+  "input_sha256": {
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/hello/assembly/app.S": "cd4fb91b18698c2a18282f9fabb6c0c2027b5626fed56501f80004610198de32",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.hello.ours.so": "c6ff1700a91d55a4a122e00553b06e71ddec9a99fb24f49c37b1ad2071b94ffc",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/hello/assembly/app.S": "1dd3349c2f73c8cda636ab946e580e1f85e54abc9fb6b50bbdda26ca3bd6f351",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.hello.theirs.so": "f045133c862b9f52c4bb89f6ad4a1c0e6cd2423680e58ad3b9b4d805f69ed2bb",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/prog/assembly/app.S": "403020728192a0c95d7442408746ff334aea127b46b25bd162d7a82434212528",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.prog.ours.so": "aa6c3cd8ae5afe991b24039c9d2223b5cb51d0cf4e7fb0054280dfe481deb52f",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/prog/assembly/app.S": "8030873fc3e9e85426cb5753e1573d97ba2ab45a13885380e73487cf336f4366",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.prog.theirs.so": "674a7a480d0f7fe187d592eac8a357e62ecde0d23aecb2bae093278486a39a54",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/base_dd/assembly/app.S": "cd4fb91b18698c2a18282f9fabb6c0c2027b5626fed56501f80004610198de32",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.base_dd.ours.so": "b3d4986f81cc6903883c8030ad1eb77ed56d207ad12d71cbea5a831b9f079292",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/base_dd/assembly/app.S": "1dd3349c2f73c8cda636ab946e580e1f85e54abc9fb6b50bbdda26ca3bd6f351",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.base_dd.theirs.so": "c7ba2690fa394cc5028f4e5cec91b72436f17fdf14e21e3c55d9143a80fbb63c"
+  },
+  "negative_control_outside_relocation_detected": true
+}

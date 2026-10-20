@@ -1,0 +1,207 @@
+{
+  "binaries_ok": true,
+  "fixtures": {
+    "hello": {
+      "ok": true,
+      "provenance_ok": true,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        }
+      },
+      "pool_link_byte_identical": true,
+      "blob_only_version_hash_changed": true,
+      "blob_changed_bytes": 62,
+      "json": {
+        "shorebird": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        },
+        "dd_table_data": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        }
+      },
+      "disassemble_objects_identical": true,
+      "assembly_version_quad_lines_only": true,
+      "assembly_changed_line_numbers": [
+        11176,
+        11177,
+        11178,
+        11179,
+        11180,
+        60144,
+        60145,
+        60146,
+        60147,
+        60148
+      ],
+      "elf_sha256": "84257b2fbeed3c6dec9ee7ae9397e00ebb72666e545882a93bb72907650fb40c",
+      "archived_elf_sha256": "c6ff1700a91d55a4a122e00553b06e71ddec9a99fb24f49c37b1ad2071b94ffc"
+    },
+    "prog": {
+      "ok": true,
+      "provenance_ok": true,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        }
+      },
+      "pool_link_byte_identical": true,
+      "blob_only_version_hash_changed": true,
+      "blob_changed_bytes": 62,
+      "json": {
+        "shorebird": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        },
+        "dd_table_data": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        }
+      },
+      "disassemble_objects_identical": true,
+      "assembly_version_quad_lines_only": true,
+      "assembly_changed_line_numbers": [
+        11176,
+        11177,
+        11178,
+        11179,
+        11180,
+        127279,
+        127280,
+        127281,
+        127282,
+        127283
+      ],
+      "elf_sha256": "0f7d7046dbfeeef7f74913e336cced3394ed8e7a63e175f5c9c55d34f83e6e53",
+      "archived_elf_sha256": "aa6c3cd8ae5afe991b24039c9d2223b5cb51d0cf4e7fb0054280dfe481deb52f"
+    },
+    "base_dd": {
+      "ok": true,
+      "provenance_ok": true,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "changed_bytes": 31,
+          "change_range": [
+            20,
+            51
+          ]
+        },
+        "_kDartVmSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        },
+        "_kDartIsolateSnapshotInstructions": {
+          "ok": true,
+          "changed_bytes": 0,
+          "change_range": []
+        }
+      },
+      "pool_link_byte_identical": true,
+      "blob_only_version_hash_changed": true,
+      "blob_changed_bytes": 62,
+      "json": {
+        "shorebird": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        },
+        "dd_table_data": {
+          "ok": true,
+          "metadata_changed": [
+            "snapshot_version",
+            "vm_data_hash"
+          ]
+        }
+      },
+      "disassemble_objects_identical": true,
+      "assembly_version_quad_lines_only": true,
+      "assembly_changed_line_numbers": [
+        11176,
+        11177,
+        11178,
+        11179,
+        11180,
+        60144,
+        60145,
+        60146,
+        60147,
+        60148
+      ],
+      "elf_sha256": "84257b2fbeed3c6dec9ee7ae9397e00ebb72666e545882a93bb72907650fb40c",
+      "archived_elf_sha256": "b3d4986f81cc6903883c8030ad1eb77ed56d207ad12d71cbea5a831b9f079292"
+    }
+  },
+  "negative_control_provenance_mutation_detected": true
+}

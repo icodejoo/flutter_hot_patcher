@@ -1,0 +1,1187 @@
+[
+  {
+    "path": "$.functions[809].op_subgraph_hash",
+    "ours": "0032dd7cfdc255c7b5927e0aa3bfe1dfa667753b",
+    "theirs": "6837cb2025286a3657a7cd3b7863a930f8d1b86a"
+  },
+  {
+    "path": "$.functions[809].subgraph_hash",
+    "ours": "0e15a315b8d78f21166a6822f71ed8b3035b2547",
+    "theirs": "154ca5484fa0028f95d2a94ed9ab20f3bf89599b"
+  },
+  {
+    "path": "$.functions[813].op_subgraph_hash",
+    "ours": "c88edf8b3e45b7e26b27b85bc83d7a3662509e77",
+    "theirs": "ccda13abf44b2f4d043ef74b41ec90f171954a10"
+  },
+  {
+    "path": "$.functions[813].subgraph_hash",
+    "ours": "6360936680be39b0adc9ea77a29401cc2c830be2",
+    "theirs": "51528a4051cfbfe15a5f6374f8d2362cb2afcb8e"
+  },
+  {
+    "path": "$.functions[1159].op_subgraph_hash",
+    "ours": "93bdf16d0e51ff09f735555d8a5c8026e0fae394",
+    "theirs": "bfa11516c40f4aeee04b9a73d753ba557194fbfe"
+  },
+  {
+    "path": "$.functions[1159].self_hash",
+    "ours": "5399016ea1276941f0b5242dfc8e4a292793b936",
+    "theirs": "cb2627123d172bea357b2a86f79c4dd5293b4702"
+  },
+  {
+    "path": "$.functions[1159].size",
+    "ours": 196,
+    "theirs": 192
+  },
+  {
+    "path": "$.functions[1159].subgraph_hash",
+    "ours": "2cf2a96f324ac803072f8a63118c457462b40628",
+    "theirs": "d0eb9ede3347105b68c7a4c65cfb32873fa74a2a"
+  },
+  {
+    "path": "$.functions[1160].offset",
+    "ours": 245396,
+    "theirs": 245392
+  },
+  {
+    "path": "$.functions[1161].offset",
+    "ours": 245400,
+    "theirs": 245396
+  },
+  {
+    "path": "$.functions[1162].offset",
+    "ours": 245468,
+    "theirs": 245464
+  },
+  {
+    "path": "$.functions[1163].offset",
+    "ours": 245544,
+    "theirs": 245540
+  },
+  {
+    "path": "$.functions[1164].offset",
+    "ours": 245548,
+    "theirs": 245544
+  },
+  {
+    "path": "$.functions[1165].offset",
+    "ours": 245572,
+    "theirs": 245568
+  },
+  {
+    "path": "$.functions[1166].offset",
+    "ours": 245584,
+    "theirs": 245580
+  },
+  {
+    "path": "$.functions[1167].offset",
+    "ours": 245784,
+    "theirs": 245780
+  },
+  {
+    "path": "$.functions[1168].offset",
+    "ours": 245836,
+    "theirs": 245832
+  },
+  {
+    "path": "$.functions[1169].offset",
+    "ours": 245976,
+    "theirs": 245972
+  },
+  {
+    "path": "$.functions[1170].offset",
+    "ours": 246072,
+    "theirs": 246068
+  },
+  {
+    "path": "$.functions[1171].offset",
+    "ours": 246124,
+    "theirs": 246120
+  },
+  {
+    "path": "$.functions[1172].offset",
+    "ours": 246224,
+    "theirs": 246220
+  },
+  {
+    "path": "$.functions[1173].offset",
+    "ours": 246280,
+    "theirs": 246276
+  },
+  {
+    "path": "$.functions[1174].offset",
+    "ours": 246332,
+    "theirs": 246328
+  },
+  {
+    "path": "$.functions[1175].offset",
+    "ours": 246392,
+    "theirs": 246388
+  },
+  {
+    "path": "$.functions[1176].offset",
+    "ours": 246436,
+    "theirs": 246432
+  },
+  {
+    "path": "$.functions[1177].offset",
+    "ours": 246472,
+    "theirs": 246468
+  },
+  {
+    "path": "$.functions[1178].offset",
+    "ours": 247568,
+    "theirs": 247564
+  },
+  {
+    "path": "$.functions[1179].offset",
+    "ours": 248208,
+    "theirs": 248204
+  },
+  {
+    "path": "$.functions[1180].offset",
+    "ours": 248460,
+    "theirs": 248456
+  },
+  {
+    "path": "$.functions[1181].offset",
+    "ours": 248520,
+    "theirs": 248516
+  },
+  {
+    "path": "$.functions[1182].offset",
+    "ours": 248536,
+    "theirs": 248532
+  },
+  {
+    "path": "$.functions[1183].offset",
+    "ours": 248740,
+    "theirs": 248736
+  },
+  {
+    "path": "$.functions[1184].offset",
+    "ours": 248952,
+    "theirs": 248948
+  },
+  {
+    "path": "$.functions[1185].offset",
+    "ours": 249152,
+    "theirs": 249148
+  },
+  {
+    "path": "$.functions[1186].offset",
+    "ours": 249360,
+    "theirs": 249356
+  },
+  {
+    "path": "$.functions[1187].offset",
+    "ours": 249624,
+    "theirs": 249620
+  },
+  {
+    "path": "$.functions[1188].offset",
+    "ours": 249720,
+    "theirs": 249716
+  },
+  {
+    "path": "$.functions[1189].offset",
+    "ours": 249792,
+    "theirs": 249788
+  },
+  {
+    "path": "$.functions[1190].offset",
+    "ours": 249856,
+    "theirs": 249852
+  },
+  {
+    "path": "$.functions[1191].offset",
+    "ours": 250156,
+    "theirs": 250152
+  },
+  {
+    "path": "$.functions[1192].offset",
+    "ours": 250400,
+    "theirs": 250396
+  },
+  {
+    "path": "$.functions[1193].offset",
+    "ours": 250636,
+    "theirs": 250632
+  },
+  {
+    "path": "$.functions[1194].offset",
+    "ours": 250876,
+    "theirs": 250872
+  },
+  {
+    "path": "$.functions[1195].offset",
+    "ours": 251108,
+    "theirs": 251104
+  },
+  {
+    "path": "$.functions[1196].offset",
+    "ours": 251300,
+    "theirs": 251296
+  },
+  {
+    "path": "$.functions[1197].offset",
+    "ours": 251492,
+    "theirs": 251488
+  },
+  {
+    "path": "$.functions[1198].offset",
+    "ours": 251684,
+    "theirs": 251680
+  },
+  {
+    "path": "$.functions[1199].offset",
+    "ours": 251876,
+    "theirs": 251872
+  },
+  {
+    "path": "$.functions[1200].offset",
+    "ours": 252068,
+    "theirs": 252064
+  },
+  {
+    "path": "$.functions[1201].offset",
+    "ours": 252260,
+    "theirs": 252256
+  },
+  {
+    "path": "$.functions[1202].offset",
+    "ours": 252452,
+    "theirs": 252448
+  },
+  {
+    "path": "$.functions[1203].offset",
+    "ours": 252644,
+    "theirs": 252640
+  },
+  {
+    "path": "$.functions[1204].offset",
+    "ours": 252836,
+    "theirs": 252832
+  },
+  {
+    "path": "$.functions[1205].offset",
+    "ours": 253032,
+    "theirs": 253028
+  },
+  {
+    "path": "$.functions[1206].offset",
+    "ours": 253228,
+    "theirs": 253224
+  },
+  {
+    "path": "$.functions[1207].offset",
+    "ours": 253420,
+    "theirs": 253416
+  },
+  {
+    "path": "$.functions[1208].offset",
+    "ours": 253612,
+    "theirs": 253608
+  },
+  {
+    "path": "$.functions[1209].offset",
+    "ours": 253804,
+    "theirs": 253800
+  },
+  {
+    "path": "$.functions[1210].offset",
+    "ours": 253892,
+    "theirs": 253888
+  },
+  {
+    "path": "$.functions[1211].offset",
+    "ours": 253980,
+    "theirs": 253976
+  },
+  {
+    "path": "$.functions[1212].offset",
+    "ours": 254068,
+    "theirs": 254064
+  },
+  {
+    "path": "$.functions[1213].offset",
+    "ours": 254156,
+    "theirs": 254152
+  },
+  {
+    "path": "$.functions[1214].offset",
+    "ours": 254244,
+    "theirs": 254240
+  },
+  {
+    "path": "$.functions[1215].offset",
+    "ours": 254516,
+    "theirs": 254512
+  },
+  {
+    "path": "$.functions[1216].offset",
+    "ours": 254644,
+    "theirs": 254640
+  },
+  {
+    "path": "$.functions[1217].offset",
+    "ours": 254900,
+    "theirs": 254896
+  },
+  {
+    "path": "$.functions[1218].offset",
+    "ours": 255084,
+    "theirs": 255080
+  },
+  {
+    "path": "$.functions[1219].offset",
+    "ours": 255396,
+    "theirs": 255392
+  },
+  {
+    "path": "$.functions[1220].offset",
+    "ours": 255476,
+    "theirs": 255472
+  },
+  {
+    "path": "$.functions[1221].offset",
+    "ours": 255620,
+    "theirs": 255616
+  },
+  {
+    "path": "$.functions[1222].offset",
+    "ours": 255700,
+    "theirs": 255696
+  },
+  {
+    "path": "$.functions[1223].offset",
+    "ours": 255844,
+    "theirs": 255840
+  },
+  {
+    "path": "$.functions[1224].offset",
+    "ours": 255976,
+    "theirs": 255972
+  },
+  {
+    "path": "$.functions[1225].offset",
+    "ours": 256172,
+    "theirs": 256168
+  },
+  {
+    "path": "$.functions[1226].offset",
+    "ours": 256248,
+    "theirs": 256244
+  },
+  {
+    "path": "$.functions[1227].offset",
+    "ours": 256388,
+    "theirs": 256384
+  },
+  {
+    "path": "$.functions[1228].offset",
+    "ours": 256464,
+    "theirs": 256460
+  },
+  {
+    "path": "$.functions[1229].offset",
+    "ours": 256604,
+    "theirs": 256600
+  },
+  {
+    "path": "$.functions[1230].offset",
+    "ours": 256680,
+    "theirs": 256676
+  },
+  {
+    "path": "$.functions[1231].offset",
+    "ours": 256820,
+    "theirs": 256816
+  },
+  {
+    "path": "$.functions[1232].offset",
+    "ours": 256900,
+    "theirs": 256896
+  },
+  {
+    "path": "$.functions[1233].offset",
+    "ours": 257044,
+    "theirs": 257040
+  },
+  {
+    "path": "$.functions[1234].offset",
+    "ours": 257080,
+    "theirs": 257076
+  },
+  {
+    "path": "$.functions[1235].offset",
+    "ours": 257092,
+    "theirs": 257088
+  },
+  {
+    "path": "$.functions[1236].offset",
+    "ours": 257460,
+    "theirs": 257456
+  },
+  {
+    "path": "$.functions[1237].offset",
+    "ours": 257576,
+    "theirs": 257572
+  },
+  {
+    "path": "$.functions[1238].offset",
+    "ours": 257764,
+    "theirs": 257760
+  },
+  {
+    "path": "$.functions[1239].offset",
+    "ours": 257816,
+    "theirs": 257812
+  },
+  {
+    "path": "$.functions[1240].offset",
+    "ours": 257868,
+    "theirs": 257864
+  },
+  {
+    "path": "$.functions[1241].offset",
+    "ours": 257880,
+    "theirs": 257876
+  },
+  {
+    "path": "$.functions[1242].offset",
+    "ours": 257936,
+    "theirs": 257932
+  },
+  {
+    "path": "$.functions[1243].offset",
+    "ours": 258036,
+    "theirs": 258032
+  },
+  {
+    "path": "$.functions[1244].offset",
+    "ours": 258284,
+    "theirs": 258280
+  },
+  {
+    "path": "$.functions[1245].offset",
+    "ours": 258392,
+    "theirs": 258388
+  },
+  {
+    "path": "$.functions[1245].op_subgraph_hash",
+    "ours": "7c88c0ac6281d4c1bbc110e226e8ceac32c3a80f",
+    "theirs": "3f6c2ef64408f77348f11defab2ad049d8134e3e"
+  },
+  {
+    "path": "$.functions[1245].subgraph_hash",
+    "ours": "357c5e8554ecac50755564abb92d27775ace1df7",
+    "theirs": "40dcbb692b529dd36b73ce57d61fe0a92aca8dfc"
+  },
+  {
+    "path": "$.functions[1246].offset",
+    "ours": 258468,
+    "theirs": 258464
+  },
+  {
+    "path": "$.functions[1247].offset",
+    "ours": 258560,
+    "theirs": 258556
+  },
+  {
+    "path": "$.functions[1248].offset",
+    "ours": 258856,
+    "theirs": 258852
+  },
+  {
+    "path": "$.functions[1249].offset",
+    "ours": 258868,
+    "theirs": 258864
+  },
+  {
+    "path": "$.functions[1250].offset",
+    "ours": 258920,
+    "theirs": 258916
+  },
+  {
+    "path": "$.functions[1251].offset",
+    "ours": 258976,
+    "theirs": 258972
+  },
+  {
+    "path": "$.functions[1252].offset",
+    "ours": 259028,
+    "theirs": 259024
+  },
+  {
+    "path": "$.functions[1253].offset",
+    "ours": 259084,
+    "theirs": 259080
+  },
+  {
+    "path": "$.functions[1254].offset",
+    "ours": 259096,
+    "theirs": 259092
+  },
+  {
+    "path": "$.functions[1255].offset",
+    "ours": 259196,
+    "theirs": 259192
+  },
+  {
+    "path": "$.functions[1256].offset",
+    "ours": 259332,
+    "theirs": 259328
+  },
+  {
+    "path": "$.functions[1257].offset",
+    "ours": 259572,
+    "theirs": 259568
+  },
+  {
+    "path": "$.functions[1258].offset",
+    "ours": 260168,
+    "theirs": 260164
+  },
+  {
+    "path": "$.functions[1259].offset",
+    "ours": 260448,
+    "theirs": 260444
+  },
+  {
+    "path": "$.functions[1260].offset",
+    "ours": 260664,
+    "theirs": 260660
+  },
+  {
+    "path": "$.functions[1260].op_subgraph_hash",
+    "ours": "b5a085c8519d164ea77162502fc99a0f8d7d1cd2",
+    "theirs": "e97a0de4eb803de849252f079fa2d5287fb3a934"
+  },
+  {
+    "path": "$.functions[1260].subgraph_hash",
+    "ours": "b41d7f1f1823ae85a9870b298ad24b2fefa1e63a",
+    "theirs": "55aced0a0d28b6b166e7507eacfbd1182096eb46"
+  },
+  {
+    "path": "$.functions[1261].offset",
+    "ours": 260744,
+    "theirs": 260740
+  },
+  {
+    "path": "$.functions[1262].offset",
+    "ours": 260852,
+    "theirs": 260848
+  },
+  {
+    "path": "$.functions[1263].offset",
+    "ours": 260952,
+    "theirs": 260948
+  },
+  {
+    "path": "$.functions[1264].offset",
+    "ours": 261136,
+    "theirs": 261132
+  },
+  {
+    "path": "$.functions[1265].offset",
+    "ours": 261692,
+    "theirs": 261688
+  },
+  {
+    "path": "$.functions[1266].offset",
+    "ours": 261852,
+    "theirs": 261848
+  },
+  {
+    "path": "$.functions[1267].offset",
+    "ours": 261956,
+    "theirs": 261952
+  },
+  {
+    "path": "$.functions[1268].offset",
+    "ours": 262088,
+    "theirs": 262084
+  },
+  {
+    "path": "$.functions[1269].offset",
+    "ours": 262392,
+    "theirs": 262388
+  },
+  {
+    "path": "$.functions[1270].offset",
+    "ours": 262472,
+    "theirs": 262468
+  },
+  {
+    "path": "$.functions[1271].offset",
+    "ours": 262572,
+    "theirs": 262568
+  },
+  {
+    "path": "$.functions[1272].offset",
+    "ours": 262848,
+    "theirs": 262844
+  },
+  {
+    "path": "$.functions[1273].offset",
+    "ours": 262868,
+    "theirs": 262864
+  },
+  {
+    "path": "$.functions[1274].offset",
+    "ours": 263216,
+    "theirs": 263212
+  },
+  {
+    "path": "$.functions[1275].offset",
+    "ours": 266624,
+    "theirs": 266620
+  },
+  {
+    "path": "$.functions[1276].offset",
+    "ours": 267428,
+    "theirs": 267424
+  },
+  {
+    "path": "$.functions[1277].offset",
+    "ours": 267524,
+    "theirs": 267520
+  },
+  {
+    "path": "$.functions[1278].offset",
+    "ours": 267620,
+    "theirs": 267616
+  },
+  {
+    "path": "$.functions[1279].offset",
+    "ours": 267756,
+    "theirs": 267752
+  },
+  {
+    "path": "$.functions[1280].offset",
+    "ours": 267848,
+    "theirs": 267844
+  },
+  {
+    "path": "$.functions[1281].offset",
+    "ours": 267860,
+    "theirs": 267856
+  },
+  {
+    "path": "$.functions[1282].offset",
+    "ours": 267980,
+    "theirs": 267976
+  },
+  {
+    "path": "$.functions[1283].offset",
+    "ours": 268364,
+    "theirs": 268360
+  },
+  {
+    "path": "$.functions[1284].offset",
+    "ours": 268376,
+    "theirs": 268372
+  },
+  {
+    "path": "$.functions[1285].offset",
+    "ours": 269868,
+    "theirs": 269864
+  },
+  {
+    "path": "$.functions[1286].offset",
+    "ours": 269880,
+    "theirs": 269876
+  },
+  {
+    "path": "$.functions[1287].offset",
+    "ours": 271704,
+    "theirs": 271700
+  },
+  {
+    "path": "$.functions[1288].offset",
+    "ours": 272056,
+    "theirs": 272052
+  },
+  {
+    "path": "$.functions[1289].offset",
+    "ours": 273612,
+    "theirs": 273608
+  },
+  {
+    "path": "$.functions[1290].offset",
+    "ours": 273708,
+    "theirs": 273704
+  },
+  {
+    "path": "$.functions[1291].offset",
+    "ours": 273924,
+    "theirs": 273920
+  },
+  {
+    "path": "$.functions[1292].offset",
+    "ours": 274184,
+    "theirs": 274180
+  },
+  {
+    "path": "$.functions[1293].offset",
+    "ours": 274360,
+    "theirs": 274356
+  },
+  {
+    "path": "$.functions[1294].offset",
+    "ours": 274448,
+    "theirs": 274444
+  },
+  {
+    "path": "$.functions[1295].offset",
+    "ours": 274496,
+    "theirs": 274492
+  },
+  {
+    "path": "$.functions[1296].offset",
+    "ours": 274576,
+    "theirs": 274572
+  },
+  {
+    "path": "$.functions[1297].offset",
+    "ours": 274680,
+    "theirs": 274676
+  },
+  {
+    "path": "$.functions[1298].offset",
+    "ours": 275036,
+    "theirs": 275032
+  },
+  {
+    "path": "$.functions[1299].offset",
+    "ours": 275484,
+    "theirs": 275480
+  },
+  {
+    "path": "$.functions[1300].offset",
+    "ours": 275528,
+    "theirs": 275524
+  },
+  {
+    "path": "$.functions[1301].offset",
+    "ours": 275876,
+    "theirs": 275872
+  },
+  {
+    "path": "$.functions[1302].offset",
+    "ours": 275888,
+    "theirs": 275884
+  },
+  {
+    "path": "$.functions[1303].offset",
+    "ours": 276060,
+    "theirs": 276056
+  },
+  {
+    "path": "$.functions[1304].offset",
+    "ours": 276116,
+    "theirs": 276112
+  },
+  {
+    "path": "$.functions[1305].offset",
+    "ours": 276484,
+    "theirs": 276480
+  },
+  {
+    "path": "$.functions[1306].offset",
+    "ours": 276540,
+    "theirs": 276536
+  },
+  {
+    "path": "$.functions[1307].offset",
+    "ours": 276772,
+    "theirs": 276768
+  },
+  {
+    "path": "$.functions[1308].offset",
+    "ours": 276828,
+    "theirs": 276824
+  },
+  {
+    "path": "$.functions[1309].offset",
+    "ours": 276976,
+    "theirs": 276972
+  },
+  {
+    "path": "$.functions[1310].offset",
+    "ours": 277152,
+    "theirs": 277148
+  },
+  {
+    "path": "$.functions[1311].offset",
+    "ours": 277220,
+    "theirs": 277216
+  },
+  {
+    "path": "$.functions[1312].offset",
+    "ours": 277236,
+    "theirs": 277232
+  },
+  {
+    "path": "$.functions[1313].offset",
+    "ours": 277360,
+    "theirs": 277356
+  },
+  {
+    "path": "$.functions[1314].offset",
+    "ours": 277372,
+    "theirs": 277368
+  },
+  {
+    "path": "$.functions[1315].offset",
+    "ours": 277864,
+    "theirs": 277860
+  },
+  {
+    "path": "$.functions[1316].offset",
+    "ours": 277976,
+    "theirs": 277972
+  },
+  {
+    "path": "$.functions[1317].offset",
+    "ours": 278096,
+    "theirs": 278092
+  },
+  {
+    "path": "$.functions[1318].offset",
+    "ours": 278236,
+    "theirs": 278232
+  },
+  {
+    "path": "$.functions[1319].offset",
+    "ours": 278364,
+    "theirs": 278360
+  },
+  {
+    "path": "$.functions[1320].offset",
+    "ours": 278452,
+    "theirs": 278448
+  },
+  {
+    "path": "$.functions[1321].offset",
+    "ours": 278464,
+    "theirs": 278460
+  },
+  {
+    "path": "$.functions[1322].offset",
+    "ours": 278476,
+    "theirs": 278472
+  },
+  {
+    "path": "$.functions[1323].offset",
+    "ours": 278520,
+    "theirs": 278516
+  },
+  {
+    "path": "$.functions[1324].offset",
+    "ours": 278572,
+    "theirs": 278568
+  },
+  {
+    "path": "$.functions[1325].offset",
+    "ours": 278736,
+    "theirs": 278732
+  },
+  {
+    "path": "$.functions[1326].offset",
+    "ours": 278800,
+    "theirs": 278796
+  },
+  {
+    "path": "$.functions[1327].offset",
+    "ours": 278836,
+    "theirs": 278832
+  },
+  {
+    "path": "$.functions[1328].offset",
+    "ours": 278888,
+    "theirs": 278884
+  },
+  {
+    "path": "$.functions[1329].offset",
+    "ours": 279188,
+    "theirs": 279184
+  },
+  {
+    "path": "$.functions[1330].offset",
+    "ours": 279240,
+    "theirs": 279236
+  },
+  {
+    "path": "$.functions[1331].offset",
+    "ours": 279276,
+    "theirs": 279272
+  },
+  {
+    "path": "$.functions[1332].offset",
+    "ours": 279312,
+    "theirs": 279308
+  },
+  {
+    "path": "$.functions[1333].offset",
+    "ours": 279348,
+    "theirs": 279344
+  },
+  {
+    "path": "$.functions[1334].offset",
+    "ours": 279400,
+    "theirs": 279396
+  },
+  {
+    "path": "$.functions[1335].offset",
+    "ours": 279436,
+    "theirs": 279432
+  },
+  {
+    "path": "$.functions[1336].offset",
+    "ours": 279472,
+    "theirs": 279468
+  },
+  {
+    "path": "$.functions[1337].offset",
+    "ours": 279592,
+    "theirs": 279588
+  },
+  {
+    "path": "$.functions[1338].offset",
+    "ours": 279776,
+    "theirs": 279772
+  },
+  {
+    "path": "$.functions[1339].offset",
+    "ours": 280236,
+    "theirs": 280232
+  },
+  {
+    "path": "$.functions[1340].offset",
+    "ours": 280296,
+    "theirs": 280292
+  },
+  {
+    "path": "$.functions[1341].offset",
+    "ours": 280468,
+    "theirs": 280464
+  },
+  {
+    "path": "$.functions[1342].offset",
+    "ours": 280844,
+    "theirs": 280840
+  },
+  {
+    "path": "$.functions[1343].offset",
+    "ours": 280972,
+    "theirs": 280968
+  },
+  {
+    "path": "$.functions[1344].offset",
+    "ours": 281188,
+    "theirs": 281184
+  },
+  {
+    "path": "$.functions[1345].offset",
+    "ours": 281352,
+    "theirs": 281348
+  },
+  {
+    "path": "$.functions[1346].offset",
+    "ours": 281404,
+    "theirs": 281400
+  },
+  {
+    "path": "$.functions[1347].offset",
+    "ours": 281416,
+    "theirs": 281412
+  },
+  {
+    "path": "$.functions[1348].offset",
+    "ours": 281468,
+    "theirs": 281464
+  },
+  {
+    "path": "$.functions[1349].offset",
+    "ours": 281512,
+    "theirs": 281508
+  },
+  {
+    "path": "$.functions[1350].offset",
+    "ours": 281548,
+    "theirs": 281544
+  },
+  {
+    "path": "$.functions[1351].offset",
+    "ours": 281580,
+    "theirs": 281576
+  },
+  {
+    "path": "$.functions[1352].offset",
+    "ours": 281612,
+    "theirs": 281608
+  },
+  {
+    "path": "$.functions[1353].offset",
+    "ours": 281644,
+    "theirs": 281640
+  },
+  {
+    "path": "$.functions[1354].offset",
+    "ours": 281676,
+    "theirs": 281672
+  },
+  {
+    "path": "$.functions[1355].offset",
+    "ours": 281724,
+    "theirs": 281720
+  },
+  {
+    "path": "$.functions[1356].offset",
+    "ours": 282552,
+    "theirs": 282548
+  },
+  {
+    "path": "$.functions[1357].offset",
+    "ours": 283260,
+    "theirs": 283256
+  },
+  {
+    "path": "$.functions[1358].offset",
+    "ours": 284032,
+    "theirs": 284028
+  },
+  {
+    "path": "$.functions[1359].offset",
+    "ours": 284088,
+    "theirs": 284084
+  },
+  {
+    "path": "$.functions[1360].offset",
+    "ours": 284144,
+    "theirs": 284140
+  },
+  {
+    "path": "$.functions[1361].offset",
+    "ours": 284200,
+    "theirs": 284196
+  },
+  {
+    "path": "$.functions[1362].offset",
+    "ours": 284220,
+    "theirs": 284216
+  },
+  {
+    "path": "$.functions[1363].offset",
+    "ours": 284228,
+    "theirs": 284224
+  },
+  {
+    "path": "$.functions[1364].offset",
+    "ours": 284236,
+    "theirs": 284232
+  },
+  {
+    "path": "$.functions[1365].offset",
+    "ours": 284396,
+    "theirs": 284392
+  },
+  {
+    "path": "$.functions[1366].offset",
+    "ours": 284568,
+    "theirs": 284564
+  },
+  {
+    "path": "$.functions[1367].offset",
+    "ours": 284976,
+    "theirs": 284972
+  },
+  {
+    "path": "$.functions[1368].offset",
+    "ours": 285028,
+    "theirs": 285024
+  },
+  {
+    "path": "$.functions[1369].offset",
+    "ours": 285332,
+    "theirs": 285328
+  },
+  {
+    "path": "$.functions[1370].offset",
+    "ours": 285864,
+    "theirs": 285860
+  },
+  {
+    "path": "$.functions[1371].offset",
+    "ours": 285876,
+    "theirs": 285872
+  },
+  {
+    "path": "$.functions[1372].offset",
+    "ours": 285928,
+    "theirs": 285924
+  },
+  {
+    "path": "$.functions[1373].offset",
+    "ours": 286288,
+    "theirs": 286284
+  },
+  {
+    "path": "$.functions[1374].offset",
+    "ours": 286412,
+    "theirs": 286408
+  },
+  {
+    "path": "$.functions[1375].offset",
+    "ours": 286480,
+    "theirs": 286476
+  },
+  {
+    "path": "$.functions[1376].offset",
+    "ours": 286640,
+    "theirs": 286636
+  },
+  {
+    "path": "$.functions[1377].offset",
+    "ours": 286724,
+    "theirs": 286720
+  },
+  {
+    "path": "$.functions[1378].offset",
+    "ours": 286808,
+    "theirs": 286804
+  },
+  {
+    "path": "$.functions[1379].offset",
+    "ours": 286896,
+    "theirs": 286892
+  },
+  {
+    "path": "$.snapshot_data.adjusted_vm_instructions_hash",
+    "ours": "3002391416",
+    "theirs": "110702048"
+  },
+  {
+    "path": "$.snapshot_data.dart_version",
+    "ours": "3.12.2 (stable) (Fri Oct 2 18:05:57 2026 +0800) on \"macos_simarm64\"",
+    "theirs": "3.12.2 (stable) (Thu Jun 11 21:57:33 2026 -0700) on \"macos_simarm64\""
+  },
+  {
+    "path": "$.snapshot_data.snapshot_version",
+    "ours": "9c903bac4c5775bbe606ac2d373a1db1",
+    "theirs": "839937ddd3133a1c0758aeeefce5448c"
+  },
+  {
+    "path": "$.snapshot_data.vm_data_hash",
+    "ours": "1569898827",
+    "theirs": "812259089"
+  },
+  {
+    "path": "$.snapshot_data.vm_data_length",
+    "ours": "35328",
+    "theirs": "35264"
+  }
+]

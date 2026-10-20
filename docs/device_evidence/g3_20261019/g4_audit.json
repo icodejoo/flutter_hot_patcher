@@ -1,0 +1,177 @@
+{
+  "checks": {
+    "ours_valid_baseline": true,
+    "theirs_valid_baseline": true,
+    "ours_valid_framework_identity": true,
+    "ours_valid_inputs": true,
+    "valid_both_patch": true,
+    "ours_bad_elf_type_baseline": true,
+    "theirs_bad_elf_type_baseline": true,
+    "ours_bad_elf_type_framework_identity": true,
+    "ours_bad_elf_type_inputs": true,
+    "bad_elf_type_final_same": true,
+    "bad_elf_type_both_exit": true,
+    "ours_bad_version_baseline": true,
+    "theirs_bad_version_baseline": true,
+    "ours_bad_version_framework_identity": true,
+    "ours_bad_version_inputs": true,
+    "bad_version_same": true,
+    "ours_wrong_base_baseline": true,
+    "theirs_wrong_base_baseline": true,
+    "ours_wrong_base_framework_identity": true,
+    "ours_wrong_base_inputs": true,
+    "wrong_base_same": true,
+    "ours_bad_signature_baseline": true,
+    "theirs_bad_signature_baseline": true,
+    "ours_bad_signature_framework_identity": true,
+    "ours_bad_signature_inputs": true,
+    "bad_signature_same": true,
+    "ours_half_file_baseline": true,
+    "theirs_half_file_baseline": true,
+    "ours_half_file_framework_identity": true,
+    "ours_half_file_inputs": true,
+    "half_file_same": true
+  },
+  "negative_controls": {
+    "ours_bad_version_fallback": true,
+    "ours_valid_no_patch": true,
+    "ours_half_file_crash": true,
+    "ours_bad_elf_no_crash": true,
+    "ours_wrong_base_installed": true
+  },
+  "rows": {
+    "valid": {
+      "ours": {
+        "boot_marker": [
+          "PATCH_V2"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "PATCH_V2"
+        ],
+        "final_exited": false,
+        "final_kind": "Installed"
+      },
+      "theirs": {
+        "boot_marker": [
+          "PATCH_V2"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "PATCH_V2"
+        ],
+        "final_exited": false,
+        "final_kind": "Installed"
+      }
+    },
+    "bad_elf_type": {
+      "ours": {
+        "boot_marker": [],
+        "boot_exited": true,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      },
+      "theirs": {
+        "boot_marker": [],
+        "boot_exited": true,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      }
+    },
+    "bad_version": {
+      "ours": {
+        "boot_marker": [],
+        "boot_exited": false,
+        "final_marker": [],
+        "final_exited": false,
+        "final_kind": "Installed"
+      },
+      "theirs": {
+        "boot_marker": [],
+        "boot_exited": false,
+        "final_marker": [],
+        "final_exited": false,
+        "final_kind": "Installed"
+      }
+    },
+    "wrong_base": {
+      "ours": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      },
+      "theirs": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      }
+    },
+    "bad_signature": {
+      "ours": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      },
+      "theirs": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      }
+    },
+    "half_file": {
+      "ours": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      },
+      "theirs": {
+        "boot_marker": [
+          "BASE_V1"
+        ],
+        "boot_exited": false,
+        "final_marker": [
+          "BASE_V1"
+        ],
+        "final_exited": false,
+        "final_kind": "Bad"
+      }
+    }
+  },
+  "passed": true
+}

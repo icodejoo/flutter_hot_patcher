@@ -1,0 +1,456 @@
+{
+  "status": "DIVERGENCES",
+  "scope": "host DD slot-mapping input parser",
+  "runs": [
+    {
+      "side": "ours",
+      "case": "valid",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/valid_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/valid_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/valid_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 0,
+      "signal": null,
+      "disposition": "accepted",
+      "stderr": "",
+      "files_sha256": {
+        "mapping": "e14ae7067b33a96258e3fe5671ca3f8cce7d14ce638f5f4128363fd76eb05479",
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_count",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_count_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_count_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_count_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: truncated at entry 67 of 127\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "db49efa919250ebd3d6a4cbb07d65af94cf1284cf5f938301e9c0e5cabae8cda",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "bb0763e0e729dc557b0c4e20ec4989ce097092f4225ee46704594d6b7b59398f",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_empty",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: bad entry count\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "cd11f40ff26a04e09bafab4474e201f6297a254823c6219d548c9c4f81ab092d",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_empty",
+      "attempt": 1,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_1/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_1/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_1/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: bad entry count\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "cd11f40ff26a04e09bafab4474e201f6297a254823c6219d548c9c4f81ab092d",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_empty",
+      "attempt": 2,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_2/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_2/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_empty_2/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: bad entry count\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "cd11f40ff26a04e09bafab4474e201f6297a254823c6219d548c9c4f81ab092d",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_trunc1",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc1_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc1_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc1_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: bad entry count\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "cd11f40ff26a04e09bafab4474e201f6297a254823c6219d548c9c4f81ab092d",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "table_trunc2000",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc2000_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc2000_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/table_trunc2000_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD table: truncated at entry 33 of 67\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "9c3dc6fbdc5d2be6eceb82a520294523f7221c92e52a502f3b36d757e15c0576",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "d786aa599c93cca608499ef68f1f09e66c7ad05d54663f795de1061047d0fbb7",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "ours",
+      "case": "links_flip20000",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/links_flip20000_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/links_flip20000_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/ours/links_flip20000_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so"
+      ],
+      "returncode": 255,
+      "signal": null,
+      "disposition": "rejected",
+      "stderr": "Error: DD caller links: truncated at link 349 of 930\nError: --compute_dd_slot_mapping: input rejected\n",
+      "files_sha256": {
+        "stderr.log": "236c0f2f67430bc7c5536baa297c4c3f60330fcd35aaf5ca588ab8effdf0a65a",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+        "links": "5b83cb48a567cc41d4948bdf7d06f821940573d52f716de19e9f832db3436fbf"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429"
+    },
+    {
+      "side": "theirs",
+      "case": "valid",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/valid_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/valid_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/valid_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": 0,
+      "signal": null,
+      "disposition": "accepted",
+      "stderr": "",
+      "files_sha256": {
+        "mapping": "e14ae7067b33a96258e3fe5671ca3f8cce7d14ce638f5f4128363fd76eb05479",
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_count",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_count_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_count_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_count_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -10,
+      "signal": "SIGBUS",
+      "disposition": "crashed",
+      "stderr": "",
+      "files_sha256": {
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "bb0763e0e729dc557b0c4e20ec4989ce097092f4225ee46704594d6b7b59398f",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_empty",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -6,
+      "signal": "SIGABRT",
+      "disposition": "crashed",
+      "stderr": "length_error was thrown in -fno-exceptions mode with message \"vector\"",
+      "files_sha256": {
+        "stderr.log": "a5d515aea17342e9d8bb2e4609c845583ace4c4eff80bf7a1fbb4d9fa9452d9a",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_empty",
+      "attempt": 1,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_1/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_1/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_1/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -6,
+      "signal": "SIGABRT",
+      "disposition": "crashed",
+      "stderr": "length_error was thrown in -fno-exceptions mode with message \"vector\"",
+      "files_sha256": {
+        "stderr.log": "a5d515aea17342e9d8bb2e4609c845583ace4c4eff80bf7a1fbb4d9fa9452d9a",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_empty",
+      "attempt": 2,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_2/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_2/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_empty_2/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -6,
+      "signal": "SIGABRT",
+      "disposition": "crashed",
+      "stderr": "bad_alloc was thrown in -fno-exceptions mode",
+      "files_sha256": {
+        "stderr.log": "3f17b01dab9a428ecb1d4b2dae8982fc7f047aecf445ff1238ac561b80fc7934",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_trunc1",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc1_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc1_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc1_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -10,
+      "signal": "SIGBUS",
+      "disposition": "crashed",
+      "stderr": "",
+      "files_sha256": {
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "table_trunc2000",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc2000_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc2000_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/table_trunc2000_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -10,
+      "signal": "SIGBUS",
+      "disposition": "crashed",
+      "stderr": "",
+      "files_sha256": {
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "d786aa599c93cca608499ef68f1f09e66c7ad05d54663f795de1061047d0fbb7",
+        "links": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    },
+    {
+      "side": "theirs",
+      "case": "links_flip20000",
+      "attempt": 0,
+      "command": [
+        "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+        "--compute_dd_slot_mapping=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/links_flip20000_0/mapping",
+        "--dd_table_data=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/links_flip20000_0/table",
+        "--dd_caller_links=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/agy_g4_review_20261016/fresh_run/theirs/links_flip20000_0/links",
+        "--dd_function_identity=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.ddsm_in.ddid",
+        "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so"
+      ],
+      "returncode": -10,
+      "signal": "SIGBUS",
+      "disposition": "crashed",
+      "stderr": "",
+      "files_sha256": {
+        "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "table": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+        "links": "5b83cb48a567cc41d4948bdf7d06f821940573d52f716de19e9f832db3436fbf"
+      },
+      "identity_sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+      "snapshot_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7"
+    }
+  ],
+  "binaries_sha256": {
+    "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot": "1175947a6c33efc7a4eb57f64713e830ebb04d6ab8677435108f99937d01c775",
+    "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a"
+  },
+  "differences": [
+    {
+      "case": "table_count",
+      "attempt": 0,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "table_empty",
+      "attempt": 0,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "table_empty",
+      "attempt": 1,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "table_empty",
+      "attempt": 2,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "table_trunc1",
+      "attempt": 0,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "table_trunc2000",
+      "attempt": 0,
+      "ours": "rejected",
+      "theirs": "crashed"
+    },
+    {
+      "case": "links_flip20000",
+      "attempt": 0,
+      "ours": "rejected",
+      "theirs": "crashed"
+    }
+  ]
+}

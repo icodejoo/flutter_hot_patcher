@@ -1,0 +1,17 @@
+Timestamp               Ty Process[PID:TID]
+2026-10-16 16:51:23.051 Df ReportCrash[875:137758] Formulating fatal 309 report for corpse[21255] analyze_snapshot_arm64
+2026-10-16 16:51:23.058 Df ReportCrash[875:137758] (OSAnalytics) client log create type 309 result success: /Users/Cruz/Library/Logs/DiagnosticReports/analyze_snapshot_arm64-2026-10-16-165123.ips
+2026-10-16 16:51:23.058 Df ReportCrash[875:137758] no MetricKit for process analyze_snapshot_arm64 type 309 bundleId (null)
+2026-10-16 16:51:23.061 Df ReportCrash[875:137758] recordCrashEvent; isBeta 0, log: '/Users/Cruz/Library/Logs/DiagnosticReports/analyze_snapshot_arm64-2026-10-16-165123.ips'
+2026-10-16 16:51:48.159 Df ReportCrash[875:13e855] Formulating fatal 309 report for corpse[21263] analyze_snapshot_arm64
+2026-10-16 16:51:48.161 Df ReportCrash[875:13e855] (OSAnalytics) client log create type 309 result FAILED: Log limit exceeded
+2026-10-16 16:51:48.162 Df ReportCrash[875:13e855] no MetricKit for process analyze_snapshot_arm64 type 309 bundleId (null)
+2026-10-16 16:55:21.430 Df ReportCrash[875:13e90c] Formulating fatal 309 report for corpse[21399] analyze_snapshot_arm64
+2026-10-16 16:55:21.433 Df ReportCrash[875:13e90c] (OSAnalytics) client log create type 309 result FAILED: Log limit exceeded
+2026-10-16 16:55:21.433 Df ReportCrash[875:13e90c] no MetricKit for process analyze_snapshot_arm64 type 309 bundleId (null)
+2026-10-16 16:55:46.440 Df ReportCrash[875:13f431] Formulating fatal 309 report for corpse[21412] analyze_snapshot_arm64
+2026-10-16 16:55:46.444 Df ReportCrash[875:13f431] (OSAnalytics) client log create type 309 result FAILED: Log limit exceeded
+2026-10-16 16:55:46.444 Df ReportCrash[875:13f431] no MetricKit for process analyze_snapshot_arm64 type 309 bundleId (null)
+2026-10-16 16:56:11.965 Df ReportCrash[875:13f6b7] Formulating fatal 309 report for corpse[21448] analyze_snapshot_arm64
+2026-10-16 16:56:11.967 Df ReportCrash[875:13f6b7] (OSAnalytics) client log create type 309 result FAILED: Log limit exceeded
+2026-10-16 16:56:11.967 Df ReportCrash[875:13f6b7] no MetricKit for process analyze_snapshot_arm64 type 309 bundleId (null)

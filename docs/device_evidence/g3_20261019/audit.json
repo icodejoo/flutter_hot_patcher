@@ -1,0 +1,34 @@
+{
+  "status": "PASS",
+  "checks_passed": 96,
+  "checks_total": 96,
+  "failed_checks": [],
+  "link_percentages": {
+    "wonderous": {
+      "ref": 23.264286167704256,
+      "ours": 100.0
+    },
+    "localsend": {
+      "ref": 32.11435124856161,
+      "ours": 100.0
+    },
+    "bingoplus": {
+      "ref": 15.18133980871021,
+      "ours": 100.0
+    }
+  },
+  "negative_controls": {
+    "wrong_boot_marker": [
+      "wonderous:ref:markers"
+    ],
+    "bad_patch_state": [
+      "localsend:ours:installed"
+    ],
+    "short_observation": [
+      "bingoplus:ref:symmetric_windows"
+    ],
+    "wrong_device": [
+      "bingoplus:ours:device"
+    ]
+  }
+}

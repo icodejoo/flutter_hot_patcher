@@ -1,0 +1,637 @@
+{
+  "verdict": "G4-03 device evidence complete; two scoped reference defects",
+  "checks": [
+    {
+      "name": "ours_valid_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_valid_v6_positive",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_elf_type_v6_clean_fallback",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_version_v6_clean_fallback",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_wrong_base_v6_clean_fallback",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_bad_signature_v6_clean_fallback",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_baseline",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_recorded",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_app_identity",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_control_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "ours_half_file_v6_clean_fallback",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_valid_v2_positive",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_elf_type_v2_reference_recovery",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_version_v5_reference_no_marker",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_wrong_base_v2_reference_fallback",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_bad_signature_v2_reference_fallback",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_baseline",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_recorded",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_framework_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_app_identity",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_delta_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_control_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_vmcode_hash",
+      "passed": true
+    },
+    {
+      "name": "theirs_half_file_v2_reference_fallback",
+      "passed": true
+    },
+    {
+      "name": "ours_version_single_ascii_hex_digit",
+      "passed": true
+    },
+    {
+      "name": "theirs_version_single_ascii_hex_digit",
+      "passed": true
+    },
+    {
+      "name": "device_cleanup",
+      "passed": true
+    }
+  ],
+  "check_count": 99,
+  "rows": [
+    {
+      "side": "ours",
+      "case": "valid",
+      "revision": "v6",
+      "download_status": "status=1",
+      "boot_marker": [
+        "PATCH_V2"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Installed",
+      "boot_observation_seconds": 1.12,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "5273b460be1e0ba0994a02681b218bd26aefa9f4b88c1b9e31984b1ddb8eaa58",
+      "delta_sha256": "800cfa1aeace57164c1edcde64654c2b4438a34a805a56acd1af1ea5cf8c7c8c",
+      "base_blob_sha256": "76b629916ada4def8f844fb129ef4510c5e78f6be4a010ad8721784408521e25",
+      "control_sha256": "fcf4362ad0bc73e9893e5e8525b30876d117c9b99dde568b9f5c1178ba38913c"
+    },
+    {
+      "side": "ours",
+      "case": "bad_elf_type",
+      "revision": "v6",
+      "download_status": "status=1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 0.91,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "f54ffb46d516f09399270a7d7f6f04bce3af55017daad09fb97c8d5ae381401f",
+      "delta_sha256": "d8f32aa56070562edd9b555a03091b786f637f6286aa55b0d499a9b95a952a6a",
+      "base_blob_sha256": "76b629916ada4def8f844fb129ef4510c5e78f6be4a010ad8721784408521e25",
+      "control_sha256": "cf957eb1f90602a8f3fc6f82d65936d3b442c36f28e7fd60ef5e6063117e4d13"
+    },
+    {
+      "side": "ours",
+      "case": "bad_version",
+      "revision": "v6",
+      "download_status": "status=1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.12,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "fffead40bf847b73e76f1e76c97989100b9753e613dd069fe3934ef51f6ebfa3",
+      "delta_sha256": "c5c627b9e8506c55c56d3fb87c9c2ccf85e499192cec7621e265d3e15e93e372",
+      "base_blob_sha256": "76b629916ada4def8f844fb129ef4510c5e78f6be4a010ad8721784408521e25",
+      "control_sha256": "08b541d836273af1fa00bd791e10597d9ef678288788dc2971a0dd457da1eda7"
+    },
+    {
+      "side": "ours",
+      "case": "wrong_base",
+      "revision": "v6",
+      "download_status": "status=-1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.12,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "5273b460be1e0ba0994a02681b218bd26aefa9f4b88c1b9e31984b1ddb8eaa58",
+      "delta_sha256": "72ad860313ed400214b9be0787b72f9993807f39d8f30ce93e15fd96650b643d",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "fcf4362ad0bc73e9893e5e8525b30876d117c9b99dde568b9f5c1178ba38913c"
+    },
+    {
+      "side": "ours",
+      "case": "bad_signature",
+      "revision": "v6",
+      "download_status": "status=1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 0.92,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "5273b460be1e0ba0994a02681b218bd26aefa9f4b88c1b9e31984b1ddb8eaa58",
+      "delta_sha256": "800cfa1aeace57164c1edcde64654c2b4438a34a805a56acd1af1ea5cf8c7c8c",
+      "base_blob_sha256": "76b629916ada4def8f844fb129ef4510c5e78f6be4a010ad8721784408521e25",
+      "control_sha256": "42a2b62f850a7345ea9da2d26bc04a1af45807d62575f614a8e051cf2947911c"
+    },
+    {
+      "side": "ours",
+      "case": "half_file",
+      "revision": "v6",
+      "download_status": "status=-1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.12,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "5273b460be1e0ba0994a02681b218bd26aefa9f4b88c1b9e31984b1ddb8eaa58",
+      "delta_sha256": "f4e8892d184672be8fe80f4451565259b6133e478a9b8da9cb9120a31d74503a",
+      "base_blob_sha256": "76b629916ada4def8f844fb129ef4510c5e78f6be4a010ad8721784408521e25",
+      "control_sha256": "fcf4362ad0bc73e9893e5e8525b30876d117c9b99dde568b9f5c1178ba38913c"
+    },
+    {
+      "side": "theirs",
+      "case": "valid",
+      "revision": "v2",
+      "download_status": "status=1",
+      "boot_marker": [
+        "PATCH_V2"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Installed",
+      "boot_observation_seconds": 0.92,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "f518cd13c8e2084bc154c0454955fc9e867701fd422725398bb056a6e65bc9aa",
+      "delta_sha256": "387f8e7c7abfdaf5285dee8efa584816e677cc16c6ec53ddc675e69dbce5fd46",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "6c78ecfee4aba75e7c7000a146ad082a39e86bdac7f66b58d056887102d062b5"
+    },
+    {
+      "side": "theirs",
+      "case": "bad_elf_type",
+      "revision": "v2",
+      "download_status": "status=1",
+      "boot_marker": [],
+      "boot_exited": true,
+      "boot_patch_state": "Installed",
+      "boot_observation_seconds": 1.13,
+      "recovery_marker": [
+        "BASE_V1"
+      ],
+      "recovery_patch_state": "Bad",
+      "payload_sha256": "47da0048c8df393309e10f0b068a53a4592194a1f43a8d01988b2088a4f28fdd",
+      "delta_sha256": "666081f39f33a9357bf47eb9b533a84bc46605e18d71bbd7351747917bf503ee",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "c9aab05415bd8ac28801fce0f33a757e08e1847b75437aa445d4e04f5d761eed"
+    },
+    {
+      "side": "theirs",
+      "case": "bad_version",
+      "revision": "v5",
+      "download_status": "status=1",
+      "boot_marker": [],
+      "boot_exited": false,
+      "boot_patch_state": "Installed",
+      "boot_observation_seconds": 15.62,
+      "recovery_marker": [],
+      "recovery_patch_state": "Installed",
+      "payload_sha256": "a5c6246be6521aa9f58e975733a51a7c50657d659151ae48603e1dda09febcb0",
+      "delta_sha256": "8a358655fc6651cb0d98c5abae201b966fd0d7a7cc61cf5418da56de1c9b8695",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "533388d0cea5b3a5de97663a66fb64ba1e93db047c14894421bcffe36f1cad9c"
+    },
+    {
+      "side": "theirs",
+      "case": "wrong_base",
+      "revision": "v2",
+      "download_status": "status=-1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.54,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "f518cd13c8e2084bc154c0454955fc9e867701fd422725398bb056a6e65bc9aa",
+      "delta_sha256": "8439e8213e65b9b36224f2fdc78f1b34aabb3d1c758eb08106699373b16d2e49",
+      "base_blob_sha256": "6d3811cee90aa46306839e7e91ab51be0484151f8f9e4bc26fe3e63cc5d3f7c7",
+      "control_sha256": "6c78ecfee4aba75e7c7000a146ad082a39e86bdac7f66b58d056887102d062b5"
+    },
+    {
+      "side": "theirs",
+      "case": "bad_signature",
+      "revision": "v2",
+      "download_status": "status=1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.33,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "f518cd13c8e2084bc154c0454955fc9e867701fd422725398bb056a6e65bc9aa",
+      "delta_sha256": "387f8e7c7abfdaf5285dee8efa584816e677cc16c6ec53ddc675e69dbce5fd46",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "7464567985ffbeccd2d329c2e89c4050befd55342a21968948d3c8daaf45aeaf"
+    },
+    {
+      "side": "theirs",
+      "case": "half_file",
+      "revision": "v2",
+      "download_status": "status=-1",
+      "boot_marker": [
+        "BASE_V1"
+      ],
+      "boot_exited": false,
+      "boot_patch_state": "Bad",
+      "boot_observation_seconds": 1.12,
+      "recovery_marker": null,
+      "recovery_patch_state": null,
+      "payload_sha256": "f518cd13c8e2084bc154c0454955fc9e867701fd422725398bb056a6e65bc9aa",
+      "delta_sha256": "76124c6fc8a0155fc82e7507a8caa4e9ba7ec5d67613c7cc3f719ca644e9103d",
+      "base_blob_sha256": "1f98e4d471bbbc133c65b07bf334e0d280becfdc8cd0e467e446219a8cf1f8f1",
+      "control_sha256": "6c78ecfee4aba75e7c7000a146ad082a39e86bdac7f66b58d056887102d062b5"
+    }
+  ],
+  "binary_identity": {
+    "framework_sha256": {
+      "ours": "56e50274b766ae71c082d6cc7d84ae59c1fe3b5d659b3f21423844ac201677bd",
+      "theirs": "e69e4d54abee4123845b7f640cfd9ebc18f8d3f195c9e1487bd276394f00822b"
+    },
+    "app_macho_sha256": {
+      "ours": "b05ad6bd1eddef41c4a5a6fbad3f75cb5f3bafc68d24b8ca1af84f5293a9ca60",
+      "theirs": "849f1c6e2a147a561ef0e612113cd4a609f669dcafc7e9692d6c258c442ff41e"
+    }
+  },
+  "cleanup": {
+    "g4_remaining": [],
+    "original_b5_present": true
+  },
+  "limitations": [
+    "Reference bad ELF crashes on its first patched boot, then recovers.",
+    "Reference valid-ASCII bad version produced no app marker within two 15-second observations; no indefinite-hang claim.",
+    "The ours build uses dart_force_simulator=true; native-mode G3 remains separate."
+  ]
+}

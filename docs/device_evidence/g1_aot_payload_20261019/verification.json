@@ -1,0 +1,200 @@
+{
+  "source": "2026-10-16 archived AOT fixtures",
+  "fixtures": {
+    "hello": {
+      "ok": true,
+      "vm_stubs_after_resume": 158,
+      "isolate_functions_shifted_plus_four": 220,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            5379,
+            5329
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            61,
+            47
+          ],
+          "image_lengths": [
+            29840,
+            29840
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 1524,
+            "ours_cached_hash": 1055330615,
+            "ours_recomputed_hash": 1055330615,
+            "theirs_cached_hash": 931939354,
+            "theirs_recomputed_hash": 931939354
+          },
+          "offset_words_plus_four": 158
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            94119,
+            94069
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            25,
+            11
+          ],
+          "image_lengths": [
+            173152,
+            173152
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 32119,
+            "ours_cached_hash": 783684057,
+            "ours_recomputed_hash": 783684057,
+            "theirs_cached_hash": 757944205,
+            "theirs_recomputed_hash": 757944205
+          },
+          "offset_words_plus_four": 220
+        }
+      }
+    },
+    "prog": {
+      "ok": true,
+      "vm_stubs_after_resume": 158,
+      "isolate_functions_shifted_plus_four": 187,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            5379,
+            5329
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            61,
+            47
+          ],
+          "image_lengths": [
+            29840,
+            29840
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 1524,
+            "ours_cached_hash": 1055330615,
+            "ours_recomputed_hash": 1055330615,
+            "theirs_cached_hash": 931939354,
+            "theirs_recomputed_hash": 931939354
+          },
+          "offset_words_plus_four": 158
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            198161,
+            198111
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            47,
+            33
+          ],
+          "image_lengths": [
+            387872,
+            387872
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 82253,
+            "ours_cached_hash": 710753327,
+            "ours_recomputed_hash": 710753327,
+            "theirs_cached_hash": 253802827,
+            "theirs_recomputed_hash": 253802827
+          },
+          "offset_words_plus_four": 187
+        }
+      }
+    },
+    "base_dd": {
+      "ok": true,
+      "vm_stubs_after_resume": 158,
+      "isolate_functions_shifted_plus_four": 220,
+      "regions": {
+        "_kDartVmSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            5379,
+            5329
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            61,
+            47
+          ],
+          "image_lengths": [
+            29840,
+            29840
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 1524,
+            "ours_cached_hash": 1055330615,
+            "ours_recomputed_hash": 1055330615,
+            "theirs_cached_hash": 931939354,
+            "theirs_recomputed_hash": 931939354
+          },
+          "offset_words_plus_four": 158
+        },
+        "_kDartIsolateSnapshotData": {
+          "ok": true,
+          "snapshot_lengths": [
+            94119,
+            94069
+          ],
+          "features_token_offset": 194,
+          "snapshot_equal_after_length_hash_token_normalization": true,
+          "alignment_padding": [
+            25,
+            11
+          ],
+          "image_lengths": [
+            173152,
+            173152
+          ],
+          "first_one_byte_string": {
+            "header_word_offset": 64,
+            "length": 32119,
+            "ours_cached_hash": 783684057,
+            "ours_recomputed_hash": 783684057,
+            "theirs_cached_hash": 757944205,
+            "theirs_recomputed_hash": 757944205
+          },
+          "offset_words_plus_four": 220
+        }
+      }
+    }
+  },
+  "negative_controls": {
+    "snapshot_mutation_detected": true,
+    "image_word_mutation_detected": true
+  },
+  "input_sha256": {
+    "scratchpad/g1_g4_20261016/matrix_final/gs.hello.ours.so": "c6ff1700a91d55a4a122e00553b06e71ddec9a99fb24f49c37b1ad2071b94ffc",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.hello.theirs.so": "f045133c862b9f52c4bb89f6ad4a1c0e6cd2423680e58ad3b9b4d805f69ed2bb",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.shorebird": "f3c4191734f2c3c86755c88f733541fd0131daf475a246a2f4f72575bf6b1516",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.shorebird": "e184496d46bde55ebcd2df3fbfa86074312681453ecea489cfe9837674e81079",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.prog.ours.so": "aa6c3cd8ae5afe991b24039c9d2223b5cb51d0cf4e7fb0054280dfe481deb52f",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.prog.theirs.so": "674a7a480d0f7fe187d592eac8a357e62ecde0d23aecb2bae093278486a39a54",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.shorebird": "17af7eb3a9aa4d4e1130e9e5351e0f1a4d7adf836e7b3a3cc1de1558fb897581",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.shorebird": "ace69e29ea6f1e49213c12b88682dd23d11ffec1ddcbd39760cf48b035a5233e",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.base_dd.ours.so": "b3d4986f81cc6903883c8030ad1eb77ed56d207ad12d71cbea5a831b9f079292",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.base_dd.theirs.so": "c7ba2690fa394cc5028f4e5cec91b72436f17fdf14e21e3c55d9143a80fbb63c",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.shorebird": "f3c4191734f2c3c86755c88f733541fd0131daf475a246a2f4f72575bf6b1516",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.shorebird": "e184496d46bde55ebcd2df3fbfa86074312681453ecea489cfe9837674e81079"
+  }
+}

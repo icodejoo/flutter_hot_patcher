@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "checks": 55,
+  "snapshot_version_hash": "7301500031a0cdb91e55cae18c10f2df",
+  "base_offsets": "2312,2320,2328",
+  "shifted_offsets": "2320,2328,2336",
+  "own_loads": 2,
+  "cross_loads_rejected": 2
+}

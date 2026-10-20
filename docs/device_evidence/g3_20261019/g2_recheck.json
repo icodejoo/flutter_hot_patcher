@@ -1,0 +1,100 @@
+{
+  "status": "PASS",
+  "pairs": {
+    "debug_cc": {
+      "status": "COMPARABLE",
+      "ours_rows": 3319,
+      "stock_rows": 3119,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 10,
+      "ours_only": 200,
+      "ours_only_failures": [],
+      "stock_only": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_results_sha256": "4c715f5669204e8e73e286cca271b65a36e5b400b356f74d0318c502755a02ab",
+      "stock_results_sha256": "d97ca463286fcc4f0fc4d7ce8fbee6a50c363312b6f80cb69f887c366c42f632",
+      "ours_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g2_recheck/debug_cc_ours_v3_idle",
+      "stock_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/debug_cc_stock_v3"
+    },
+    "product_cc": {
+      "status": "COMPARABLE",
+      "ours_rows": 3006,
+      "stock_rows": 2806,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 194,
+      "ours_only": 200,
+      "ours_only_failures": [],
+      "stock_only": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_results_sha256": "8bd713a094b6bdaaed8e58de3b524616a66da13e448f3fa418733ea11d2d514c",
+      "stock_results_sha256": "d78ca95e3f4cf77f5f38bd3191fc172912c610845b4b3ca9a8ebdd9c91f72f3a",
+      "ours_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g2_recheck/product_cc_ours",
+      "stock_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/product_cc_stock"
+    },
+    "debug_language": {
+      "status": "COMPARABLE",
+      "ours_rows": 6921,
+      "stock_rows": 6921,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 25,
+      "ours_only": 0,
+      "ours_only_failures": [],
+      "stock_only": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_results_sha256": "fcd816604ea751661553e77f94caa4218434f60530874b70a54596ec74a16fa6",
+      "stock_results_sha256": "5fc491fb820cd2769ed51aa60818c0ea798c298436b1f9faaf0e1cc2e12674f7",
+      "ours_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g2_recheck/debug_language_ours",
+      "stock_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/debug_language_stock_v2"
+    },
+    "product_language": {
+      "status": "COMPARABLE",
+      "ours_rows": 6901,
+      "stock_rows": 6901,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 25,
+      "ours_only": 0,
+      "ours_only_failures": [],
+      "stock_only": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_results_sha256": "02ea0f3edcc715e71697d00a843c4dcbba38a12f31387e3fb78290a99e3b5122",
+      "stock_results_sha256": "f2813de7cb70a92d0d6dbd514f5a2d8f7c9f8612f3e29e6cf0eef5f4ea4bf00d",
+      "ours_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g2_recheck/product_language_ours_v2",
+      "stock_directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/product_language_stock"
+    }
+  },
+  "initial_debug_cc": {
+    "status": "REGRESSION",
+    "ours_worse": [
+      {
+        "name": "vm/cc/Profiler_EnterExitIsolate",
+        "ours_failures": 1,
+        "stock_failures": 0
+      }
+    ],
+    "ours_results_sha256": "a6aae6d5bd384a4f074352d4247b5b1e2024c6fac1722ac78a77bcded54b5220"
+  },
+  "interrupted_product_language": {
+    "directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g3_20261019/g2_recheck/product_language_ours",
+    "manifest_status": "RUNNING",
+    "results_bytes": 0,
+    "run_log_sha256": "331a99aaf199ab22e10db0a3a64587656142b94171ba6bffd821fd748f66c4d1"
+  },
+  "negative_control": {
+    "alteration": "results_sha256 set to 64 zeroes in copied manifest",
+    "returncode": 2,
+    "refused_for_hash_mismatch": true
+  },
+  "comparator_sha256": "7741bc502a239b4958563f1917d89605d366fdf2a4bf7f5a47c579fd1c1b54f7"
+}

@@ -1,0 +1,71 @@
+{
+  "checks": {
+    "all_640_renumbered_loads_preserve_value": true,
+    "pool_reordered_like_reference": true,
+    "nonidentity_report_matches_reference": true,
+    "identity_mapping_preserves_pool": true,
+    "identity_report_matches_reference": true
+  },
+  "renumbered_loads": 640,
+  "preserved_loads": 640,
+  "changed_pool_positions": 630,
+  "oracle_differences": [
+    [
+      650,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      655,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      657,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      659,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      676,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      1117,
+      "0x1051984f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ]
+  ],
+  "identity_different_positions": [
+    650,
+    655,
+    657,
+    659,
+    676,
+    1117
+  ],
+  "negative_controls": {
+    "changed_linked_pool_value": true,
+    "changed_oracle_comparison": true,
+    "changed_identity_pool": true
+  },
+  "sha256": {
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/nolink_pool.json": "483405fba25d460eea32035fcbaace6deef190cc9026de92f77824579bb6756f",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/op_pool.json": "8fc4a1781b019f7fefeed740bda79411b79efe38ea858b41fdaae9ff2b6fcf7e",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/patch_nolink_pool.json": "bc438090c1655c841db0778710e3a919ff16433ca2ff6377d847aa972fdce306",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/patch_op_pool.json": "4ae08b882edd7b3fbdadd7473a8a9fc535e1dcf51039c9b5297250df9de37fac",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/nolink.so": "711ee5a5549dddd608c0ea806fc6456a14e9c8629bb348fa56dc043d66273aea",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/op.so": "8c3c42ac4b3bf12453a5054f86090087eaa2ad251ef49896bd74e78d782a2756",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/patch_nolink.so": "bdf2313108877533da43b095d4f9fc5ad5a750c0432fdeecc618b6224a246f32",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/patch_op.so": "a64a80d51ded472739e87b390604cb01e7c2c256908765a494b35854666ec604",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/op.log": "cdf745049a48e6017ee04f42f1591d269efe6b861ddb4181fc0e0648a9bc493b",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_pinned_20261019/rc8/patch_op.log": "b9ab76fb58aa18750beb4222b211c9f77671b9c11ec348b7a42eefe3b4b2cd06",
+    "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_rootcause_20261016/pool/theirs_op.json": "bc71d6f79930ab55657b4de6de3bc7d716ee8ba6283d7b87e3ba61690b9fad23"
+  },
+  "passed": true
+}

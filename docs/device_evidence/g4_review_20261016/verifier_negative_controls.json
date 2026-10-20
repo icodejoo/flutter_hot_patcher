@@ -1,0 +1,37 @@
+{
+ "swap_links_flip_ips_to_161125": {
+  "rc": 1,
+  "failed": [
+   "links_flip20000: agy JSON equals analyze_snapshot_arm64-2026-10-16-161125.ips (pid, exception, frames)",
+   "links_flip20000 SIGBUS frame 0 is Dart_ComputeDDSlotMapping+732, no ReadFromStream frame on its stack",
+   "links_flip20000: pc - image base equals frame 0 imageOffset; far equals x21"
+  ]
+ },
+ "flip_offset_20001": {
+  "rc": 1,
+  "failed": [
+   "fresh_run inputs equal the deterministic mutations of the matrix inputs",
+   "public-format parser reproduces all five distinct ours diagnostics",
+   "public-format parse of the mutated links desyncs from link 340 and reaches end of file at link 349 (= ours diagnostic)"
+  ]
+ },
+ "wrong_sdk_diff_sha": {
+  "rc": 1,
+  "failed": [
+   "SDK working-tree patch sha256 unchanged (raw git diff bytes)"
+  ]
+ },
+ "wrong_ddcl_sha": {
+  "rc": 1,
+  "failed": [
+   "input ddcl both sides identical, 54060 B, sha256 as recorded"
+  ]
+ },
+ "empty_cases_point_at_sigbus_report": {
+  "rc": 1,
+  "failed": [
+   "table_empty_0: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.0004.ips (pid, exception, frames)",
+   "empty inputs: SIGABRT via vector<DDEntry>::reserve from ReadFromStream+164"
+  ]
+ }
+}

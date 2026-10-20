@@ -1,0 +1,305 @@
+{
+  "source": "2026-10-16 archived matrix; no new binary run",
+  "fixtures": {
+    "hello": {
+      "dd_table_data": {
+        "ok": true,
+        "table_entries": 67,
+        "cross_side_differences": 237,
+        "same_differences_as_shorebird": true
+      },
+      "dump_blobs": {
+        "ok": true,
+        "region_lengths": {
+          "ours": [
+            35219,
+            267271,
+            79920,
+            287344
+          ],
+          "theirs": [
+            35169,
+            267221,
+            79904,
+            287328
+          ]
+        }
+      },
+      "dump_object_pool_link_data": {
+        "ok": true,
+        "code_rows": 1380,
+        "field_change_counts": {
+          "self_hash": 1,
+          "op_subgraph_hash": 5,
+          "self_pp": 0,
+          "subgraph_pp": 0
+        },
+        "pair_constraints": 385,
+        "pool_size": 1421
+      },
+      "disassemble_inventory": {
+        "ok": true,
+        "offsets_plus_four": 378,
+        "size_differences": [
+          {
+            "name": "Map._fromKeyValues",
+            "ours": 448,
+            "theirs": 436
+          },
+          {
+            "name": "_iso_stub_ResumeStub",
+            "ours": 196,
+            "theirs": 192
+          },
+          {
+            "name": "GetCStackPointer",
+            "ours": 20,
+            "theirs": 8
+          },
+          {
+            "name": "Resume",
+            "ours": 196,
+            "theirs": 192
+          }
+        ],
+        "image_end_padding": {
+          "GetCStackPointer": {
+            "ours": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 20,
+              "trailing_bytes": "000020d4000020d4000020d4"
+            },
+            "theirs": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 8,
+              "trailing_bytes": ""
+            }
+          },
+          "Map._fromKeyValues": {
+            "ours": {
+              "symbol_size": 436,
+              "code_size_to_image_end": 448,
+              "trailing_bytes": "000020d4000020d4000020d4"
+            },
+            "theirs": {
+              "symbol_size": 436,
+              "code_size_to_image_end": 436,
+              "trailing_bytes": ""
+            }
+          }
+        },
+        "other_object_differences": 0,
+        "snapshot_data_is_process_addresses": true
+      }
+    },
+    "prog": {
+      "dd_table_data": {
+        "ok": true,
+        "table_entries": 357,
+        "cross_side_differences": 204,
+        "same_differences_as_shorebird": true
+      },
+      "dump_blobs": {
+        "ok": true,
+        "region_lengths": {
+          "ours": [
+            35219,
+            586033,
+            79920,
+            732320
+          ],
+          "theirs": [
+            35169,
+            585983,
+            79904,
+            732320
+          ]
+        }
+      },
+      "dump_object_pool_link_data": {
+        "ok": true,
+        "code_rows": 3216,
+        "field_change_counts": {
+          "self_hash": 1,
+          "op_subgraph_hash": 5,
+          "self_pp": 0,
+          "subgraph_pp": 0
+        },
+        "pair_constraints": 889,
+        "pool_size": 3849
+      },
+      "disassemble_inventory": {
+        "ok": true,
+        "offsets_plus_four": 345,
+        "size_differences": [
+          {
+            "name": "_iso_stub_ResumeStub",
+            "ours": 196,
+            "theirs": 192
+          },
+          {
+            "name": "GetCStackPointer",
+            "ours": 20,
+            "theirs": 8
+          },
+          {
+            "name": "Resume",
+            "ours": 196,
+            "theirs": 192
+          }
+        ],
+        "image_end_padding": {
+          "GetCStackPointer": {
+            "ours": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 20,
+              "trailing_bytes": "000020d4000020d4000020d4"
+            },
+            "theirs": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 8,
+              "trailing_bytes": ""
+            }
+          }
+        },
+        "other_object_differences": 0,
+        "snapshot_data_is_process_addresses": true
+      }
+    },
+    "base_dd": {
+      "dd_table_data": {
+        "ok": true,
+        "table_entries": 67,
+        "cross_side_differences": 237,
+        "same_differences_as_shorebird": true
+      },
+      "dump_blobs": {
+        "ok": true,
+        "region_lengths": {
+          "ours": [
+            35219,
+            267271,
+            79920,
+            287344
+          ],
+          "theirs": [
+            35169,
+            267221,
+            79904,
+            287328
+          ]
+        }
+      },
+      "dump_object_pool_link_data": {
+        "ok": true,
+        "code_rows": 1380,
+        "field_change_counts": {
+          "self_hash": 1,
+          "op_subgraph_hash": 5,
+          "self_pp": 0,
+          "subgraph_pp": 0
+        },
+        "pair_constraints": 385,
+        "pool_size": 1421
+      },
+      "disassemble_inventory": {
+        "ok": true,
+        "offsets_plus_four": 378,
+        "size_differences": [
+          {
+            "name": "Map._fromKeyValues",
+            "ours": 448,
+            "theirs": 436
+          },
+          {
+            "name": "_iso_stub_ResumeStub",
+            "ours": 196,
+            "theirs": 192
+          },
+          {
+            "name": "GetCStackPointer",
+            "ours": 20,
+            "theirs": 8
+          },
+          {
+            "name": "Resume",
+            "ours": 196,
+            "theirs": 192
+          }
+        ],
+        "image_end_padding": {
+          "GetCStackPointer": {
+            "ours": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 20,
+              "trailing_bytes": "000020d4000020d4000020d4"
+            },
+            "theirs": {
+              "symbol_size": 8,
+              "code_size_to_image_end": 8,
+              "trailing_bytes": ""
+            }
+          },
+          "Map._fromKeyValues": {
+            "ours": {
+              "symbol_size": 436,
+              "code_size_to_image_end": 448,
+              "trailing_bytes": "000020d4000020d4000020d4"
+            },
+            "theirs": {
+              "symbol_size": 436,
+              "code_size_to_image_end": 436,
+              "trailing_bytes": ""
+            }
+          }
+        },
+        "other_object_differences": 0,
+        "snapshot_data_is_process_addresses": true
+      }
+    }
+  },
+  "input_sha256": {
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/hello/dd_table_data/out.json": "491ee67b6b2d2837f668a6c6a958a9e5b7e0d71e062d877c70602f71486a6fd7",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.shorebird": "f3c4191734f2c3c86755c88f733541fd0131daf475a246a2f4f72575bf6b1516",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.disassemble": "b2079e6cab718cfa16629e1569594c47105c7b8222e00e7a3794b3f9a745b94a",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.dump_blobs": "8936da99f273cb8a57a9f5ededd356ea520a4de8b0dcc9b6a9ca8f0168e67581",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.dump_object_pool_link_data": "30bcff32f0c49df24b004a73bc7b12f275d86bd8d8560dc61810b4aeff0a1028",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.ours.so": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/hello/dd_table_data/out.json": "ced4401489adb35f2207e56e1d0a65b72f58bc93b9db97a6835e65aaaa7ef6ec",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.shorebird": "e184496d46bde55ebcd2df3fbfa86074312681453ecea489cfe9837674e81079",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.disassemble": "c62928e7e9870bd982f948a41588ca1af65f50816a02ab6ed7bacb5d36b31760",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.dump_blobs": "4af5f07d22ef874b4ab572f754e2375aa32e58c30c931c8ef9052e8bdd5f538d",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.dump_object_pool_link_data": "a7cf3a5d588109f286d8fc4ca06fd825a295b472b95a143d3166c3ea0a2ab3e1",
+    "scratchpad/g1_g4_20261016/matrix_final/as.hello.theirs.so": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/prog/dd_table_data/out.json": "eadfe8b8b31719450ae952c14f2690da13ceaaae29cc514c02dcbe629b175661",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.shorebird": "17af7eb3a9aa4d4e1130e9e5351e0f1a4d7adf836e7b3a3cc1de1558fb897581",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.disassemble": "3a745e943f161980ff65fdf7c375e6997c40724e0a2f98a11a91fe9cbb048900",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.dump_blobs": "260aae32e9bdb4556b1592dbf91fc717f067d81943276e63c0ea160afaa71f7a",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.dump_object_pool_link_data": "3a1e3c4e179ab10b8bccbc280170d05450b5b60a4b0fc8f23aeebed506d24a20",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.ours.so": "aff4d56cb7e37db6cefdf20547bfc533f8660c43750441800b4e695bc5b55f3f",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/prog/dd_table_data/out.json": "10ab1bc30614423fa7f9e9d98a799304f78060b328d24be4c6bb99def848288b",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.shorebird": "ace69e29ea6f1e49213c12b88682dd23d11ffec1ddcbd39760cf48b035a5233e",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.disassemble": "70a51f4590188c5241aad1d65ed26aedb9c0202fcb42474a617a1dbfc5e282b5",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.dump_blobs": "0fdb82e4d80fb37085bfd07c20c5ca889905381fe927f27c4f88be9efced6b8b",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.dump_object_pool_link_data": "9deecf80def7725963274693e9a765726681062af8427e0386c6228096ba86ac",
+    "scratchpad/g1_g4_20261016/matrix_final/as.prog.theirs.so": "e9cf933c1005f5ba60e3fd940d7e8e4c83052bf8dc9eed9d0d3447fb79304453",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/ours/base_dd/dd_table_data/out.json": "491ee67b6b2d2837f668a6c6a958a9e5b7e0d71e062d877c70602f71486a6fd7",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.shorebird": "f3c4191734f2c3c86755c88f733541fd0131daf475a246a2f4f72575bf6b1516",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.disassemble": "98a9df4fe2b293a07faa1cea7eb067afd1d7e8c7e673932df839028308cbc8c5",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.dump_blobs": "8936da99f273cb8a57a9f5ededd356ea520a4de8b0dcc9b6a9ca8f0168e67581",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.dump_object_pool_link_data": "30bcff32f0c49df24b004a73bc7b12f275d86bd8d8560dc61810b4aeff0a1028",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.ours.so": "46cb89e57571c2d60f695b7661a4c93ab91a00e2a7be82c192a9ef8babeba8f6",
+    "scratchpad/g1_g4_20261016/matrix_final/m21/theirs/base_dd/dd_table_data/out.json": "ced4401489adb35f2207e56e1d0a65b72f58bc93b9db97a6835e65aaaa7ef6ec",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.shorebird": "e184496d46bde55ebcd2df3fbfa86074312681453ecea489cfe9837674e81079",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.disassemble": "c62928e7e9870bd982f948a41588ca1af65f50816a02ab6ed7bacb5d36b31760",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.dump_blobs": "4af5f07d22ef874b4ab572f754e2375aa32e58c30c931c8ef9052e8bdd5f538d",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.dump_object_pool_link_data": "a7cf3a5d588109f286d8fc4ca06fd825a295b472b95a143d3166c3ea0a2ab3e1",
+    "scratchpad/g1_g4_20261016/matrix_final/as.base_dd.theirs.so": "d04764cd21ff549f524fbd622a072574a821c30bf15e0eed316db54aaf489a04"
+  },
+  "negative_controls": {
+    "dd_table_mutation_detected": true,
+    "blob_mutation_detected": true,
+    "pool_hash_mutation_detected": true,
+    "offset_mutation_detected": true
+  }
+}

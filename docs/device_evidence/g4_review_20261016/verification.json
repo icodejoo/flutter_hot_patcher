@@ -1,0 +1,1244 @@
+{
+ "scope": "read-only re-verification of existing G4 DD evidence; no analyzer, debugger or disassembler was run",
+ "inputs": {
+  "ddt": {
+   "bytes": 3969,
+   "sha256": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+   "sides_identical": true
+  },
+  "ddcl": {
+   "bytes": 54060,
+   "sha256": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e",
+   "sides_identical": true
+  },
+  "ddid": {
+   "bytes": 14925,
+   "sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+   "sides_identical": true
+  }
+ },
+ "fresh_run": [
+  {
+   "side": "ours",
+   "case": "valid_0",
+   "returncode": 0,
+   "signal": null,
+   "disposition": "accepted",
+   "stderr_first_line": ""
+  },
+  {
+   "side": "ours",
+   "case": "table_count_0",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: truncated at entry 67 of 127"
+  },
+  {
+   "side": "ours",
+   "case": "table_empty_0",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: bad entry count"
+  },
+  {
+   "side": "ours",
+   "case": "table_empty_1",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: bad entry count"
+  },
+  {
+   "side": "ours",
+   "case": "table_empty_2",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: bad entry count"
+  },
+  {
+   "side": "ours",
+   "case": "table_trunc1_0",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: bad entry count"
+  },
+  {
+   "side": "ours",
+   "case": "table_trunc2000_0",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD table: truncated at entry 33 of 67"
+  },
+  {
+   "side": "ours",
+   "case": "links_flip20000_0",
+   "returncode": 255,
+   "signal": null,
+   "disposition": "rejected",
+   "stderr_first_line": "Error: DD caller links: truncated at link 349 of 930"
+  },
+  {
+   "side": "theirs",
+   "case": "valid_0",
+   "returncode": 0,
+   "signal": null,
+   "disposition": "accepted",
+   "stderr_first_line": ""
+  },
+  {
+   "side": "theirs",
+   "case": "table_count_0",
+   "returncode": -10,
+   "signal": "SIGBUS",
+   "disposition": "crashed",
+   "stderr_first_line": ""
+  },
+  {
+   "side": "theirs",
+   "case": "table_empty_0",
+   "returncode": -6,
+   "signal": "SIGABRT",
+   "disposition": "crashed",
+   "stderr_first_line": "length_error was thrown in -fno-exceptions mode with message \"vector\""
+  },
+  {
+   "side": "theirs",
+   "case": "table_empty_1",
+   "returncode": -6,
+   "signal": "SIGABRT",
+   "disposition": "crashed",
+   "stderr_first_line": "length_error was thrown in -fno-exceptions mode with message \"vector\""
+  },
+  {
+   "side": "theirs",
+   "case": "table_empty_2",
+   "returncode": -6,
+   "signal": "SIGABRT",
+   "disposition": "crashed",
+   "stderr_first_line": "bad_alloc was thrown in -fno-exceptions mode"
+  },
+  {
+   "side": "theirs",
+   "case": "table_trunc1_0",
+   "returncode": -10,
+   "signal": "SIGBUS",
+   "disposition": "crashed",
+   "stderr_first_line": ""
+  },
+  {
+   "side": "theirs",
+   "case": "table_trunc2000_0",
+   "returncode": -10,
+   "signal": "SIGBUS",
+   "disposition": "crashed",
+   "stderr_first_line": ""
+  },
+  {
+   "side": "theirs",
+   "case": "links_flip20000_0",
+   "returncode": -10,
+   "signal": "SIGBUS",
+   "disposition": "crashed",
+   "stderr_first_line": ""
+  }
+ ],
+ "binaries_sha256": {
+  "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot": "1175947a6c33efc7a4eb57f64713e830ebb04d6ab8677435108f99937d01c775",
+  "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a"
+ },
+ "parser_agreement": {
+  "table_count_0": {
+   "model": "truncated at entry 67 of 127",
+   "ours_stderr_has_it": true
+  },
+  "table_empty_0": {
+   "model": "bad entry count",
+   "ours_stderr_has_it": true
+  },
+  "table_trunc1_0": {
+   "model": "bad entry count",
+   "ours_stderr_has_it": true
+  },
+  "table_trunc2000_0": {
+   "model": "truncated at entry 33 of 67",
+   "ours_stderr_has_it": true
+  },
+  "links_flip20000_0": {
+   "model": "truncated at link 349 of 930",
+   "ours_stderr_has_it": true
+  }
+ },
+ "valid_table": {
+  "count": 67,
+  "consumed": 3969,
+  "trailing": 0
+ },
+ "valid_links": {
+  "count": 930,
+  "consumed": 54060,
+  "trailing": 0
+ },
+ "links_flip20000_field": {
+  "offset": 20000,
+  "before": "0xa8",
+  "after": "0xaa",
+  "xor": "0x2",
+  "terminal_bit_unchanged": true,
+  "field": {
+   "link": 340,
+   "field": "caller_hash.length",
+   "start": 20000,
+   "end": 20001
+  },
+  "field_value_before": 40,
+  "field_value_after": 42,
+  "caller_hash_lengths_in_valid_file": [
+   40
+  ],
+  "desync_trace": [
+   {
+    "link": 340,
+    "start": 20000,
+    "end": 20061,
+    "hash_len": 42,
+    "dd_index": 40,
+    "callee_position": 117
+   },
+   {
+    "link": 341,
+    "start": 20061,
+    "end": 20223,
+    "hash_len": 119,
+    "dd_index": 118,
+    "callee_position": 8290
+   },
+   {
+    "link": 342,
+    "start": 20223,
+    "end": 31488,
+    "hash_len": 8289,
+    "dd_index": 112,
+    "callee_position": 8291
+   },
+   {
+    "link": 343,
+    "start": 31488,
+    "end": 31637,
+    "hash_len": 114,
+    "dd_index": 116,
+    "callee_position": 114
+   },
+   {
+    "link": 344,
+    "start": 31637,
+    "end": 31792,
+    "hash_len": 113,
+    "dd_index": 119,
+    "callee_position": 118
+   },
+   {
+    "link": 345,
+    "start": 31792,
+    "end": 42882,
+    "hash_len": 8289,
+    "dd_index": 112,
+    "callee_position": 44
+   },
+   {
+    "link": 346,
+    "start": 42882,
+    "end": 42888,
+    "hash_len": 2,
+    "dd_index": 8291,
+    "callee_position": 113
+   },
+   {
+    "link": 347,
+    "start": 42888,
+    "end": 43042,
+    "hash_len": 113,
+    "dd_index": 119,
+    "callee_position": 119
+   },
+   {
+    "link": 348,
+    "start": 43042,
+    "end": 43189,
+    "hash_len": 113,
+    "dd_index": 8291,
+    "callee_position": 113
+   },
+   {
+    "link": 349,
+    "start": 43189,
+    "truncated_at": 54060,
+    "reader_position": 54060,
+    "file_length": 54060
+   }
+  ]
+ },
+ "stacks": {
+  "table_count": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-152637.0004.ips",
+   "ips_sha256": "5aa70ca3fb2dcf92ff65d8fe904a2969783596c8764d4f16e76b75d39ba4b8d9",
+   "pid": 16936,
+   "parent": "Python/16920",
+   "capture_time": "2026-10-16 15:26:36.0550 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_BAD_ACCESS",
+    "signal": "SIGBUS",
+    "subtype": "KERN_PROTECTION_FAILURE at 0x00000007fb800000",
+    "codes": "0x0000000000000002, 0x00000007fb800000"
+   },
+   "frames": [
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 436,
+     "imageOffset": 1657344,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 1
+    }
+   ],
+   "pc_minus_image_base": 1657344,
+   "far": "0x7fb800000",
+   "x21": "0x7f",
+   "case": "table_count",
+   "top_dart_frame": "dart::DDTableLinkInfo::ReadFromStream+436"
+  },
+  "table_empty_0": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-152637.ips",
+   "ips_sha256": "690a8b046cbd3caa1de004e9bc08edbe9f0957fa1eb9ee2a49be69c7aa9a1a6f",
+   "pid": 16939,
+   "parent": "Python/16920",
+   "capture_time": "2026-10-16 15:26:36.0784 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_CRASH",
+    "signal": "SIGABRT",
+    "subtype": null,
+    "codes": "0x0000000000000000, 0x0000000000000000"
+   },
+   "frames": [
+    {
+     "symbol": "__pthread_kill",
+     "symbolLocation": 8,
+     "imageOffset": 38376,
+     "imageIndex": 1
+    },
+    {
+     "symbol": "pthread_kill",
+     "symbolLocation": 296,
+     "imageOffset": 26840,
+     "imageIndex": 2
+    },
+    {
+     "symbol": "abort",
+     "symbolLocation": 148,
+     "imageOffset": 493944,
+     "imageIndex": 3
+    },
+    {
+     "symbol": "std::__fl::__libcpp_verbose_abort(char const*, ...)",
+     "symbolLocation": 48,
+     "imageOffset": 222536,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::__throw_length_error[abi:nn210000](char const*)",
+     "symbolLocation": 28,
+     "imageOffset": 51180,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]()",
+     "symbolLocation": 20,
+     "imageOffset": 1658592,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve(unsigned long)",
+     "symbolLocation": 360,
+     "imageOffset": 1658160,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 164,
+     "imageOffset": 1657072,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 4
+    }
+   ],
+   "pc_minus_image_base": 2257077736,
+   "far": "0x0",
+   "x21": "0x1f38e6260",
+   "case": "table_empty_0",
+   "top_dart_frame": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+  },
+  "table_empty_1": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-152637.0002.ips",
+   "ips_sha256": "8647da5ae0f8f975a8bfca35d4014f494770d65f77e062030f8ca2b9a4425993",
+   "pid": 16940,
+   "parent": "Python/16920",
+   "capture_time": "2026-10-16 15:26:36.1028 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_CRASH",
+    "signal": "SIGABRT",
+    "subtype": null,
+    "codes": "0x0000000000000000, 0x0000000000000000"
+   },
+   "frames": [
+    {
+     "symbol": "__pthread_kill",
+     "symbolLocation": 8,
+     "imageOffset": 38376,
+     "imageIndex": 1
+    },
+    {
+     "symbol": "pthread_kill",
+     "symbolLocation": 296,
+     "imageOffset": 26840,
+     "imageIndex": 2
+    },
+    {
+     "symbol": "abort",
+     "symbolLocation": 148,
+     "imageOffset": 493944,
+     "imageIndex": 3
+    },
+    {
+     "symbol": "std::__fl::__libcpp_verbose_abort(char const*, ...)",
+     "symbolLocation": 48,
+     "imageOffset": 222536,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::__throw_length_error[abi:nn210000](char const*)",
+     "symbolLocation": 28,
+     "imageOffset": 51180,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]()",
+     "symbolLocation": 20,
+     "imageOffset": 1658592,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve(unsigned long)",
+     "symbolLocation": 360,
+     "imageOffset": 1658160,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 164,
+     "imageOffset": 1657072,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 4
+    }
+   ],
+   "pc_minus_image_base": 2194523624,
+   "far": "0x0",
+   "x21": "0x1f38e6260",
+   "case": "table_empty_1",
+   "top_dart_frame": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+  },
+  "table_empty_2": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-152637.000.ips",
+   "ips_sha256": "426e0795ba0c3a45fce8ff305eb11f9d1e4bff193a2222366342484399af0c7f",
+   "pid": 16941,
+   "parent": "Python/16920",
+   "capture_time": "2026-10-16 15:26:36.1262 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_CRASH",
+    "signal": "SIGABRT",
+    "subtype": null,
+    "codes": "0x0000000000000000, 0x0000000000000000"
+   },
+   "frames": [
+    {
+     "symbol": "__pthread_kill",
+     "symbolLocation": 8,
+     "imageOffset": 38376,
+     "imageIndex": 1
+    },
+    {
+     "symbol": "pthread_kill",
+     "symbolLocation": 296,
+     "imageOffset": 26840,
+     "imageIndex": 2
+    },
+    {
+     "symbol": "abort",
+     "symbolLocation": 148,
+     "imageOffset": 493944,
+     "imageIndex": 3
+    },
+    {
+     "symbol": "std::__fl::__libcpp_verbose_abort(char const*, ...)",
+     "symbolLocation": 48,
+     "imageOffset": 222536,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__throw_bad_alloc()",
+     "symbolLocation": 20,
+     "imageOffset": 220344,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve(unsigned long)",
+     "symbolLocation": 364,
+     "imageOffset": 1658164,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 164,
+     "imageOffset": 1657072,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 4
+    }
+   ],
+   "pc_minus_image_base": 2253456872,
+   "far": "0x0",
+   "x21": "0x1f38e6260",
+   "case": "table_empty_2",
+   "top_dart_frame": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+  },
+  "table_trunc1": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-152637.0003.ips",
+   "ips_sha256": "c7617052db9985c809d365e5885c05a96b8b964df605c4e1ff2938c32dafd3f6",
+   "pid": 16942,
+   "parent": "Python/16920",
+   "capture_time": "2026-10-16 15:26:36.1524 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_BAD_ACCESS",
+    "signal": "SIGBUS",
+    "subtype": "KERN_PROTECTION_FAILURE at 0x000000010381c000",
+    "codes": "0x0000000000000002, 0x000000010381c000"
+   },
+   "frames": [
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 436,
+     "imageOffset": 1657344,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 1
+    }
+   ],
+   "pc_minus_image_base": 1657344,
+   "far": "0x10381c000",
+   "x21": "0x43",
+   "case": "table_trunc1",
+   "top_dart_frame": "dart::DDTableLinkInfo::ReadFromStream+436"
+  },
+  "table_trunc2000": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-161125.ips",
+   "ips_sha256": "8cf3adb1f82ebd9833080454e18cf2ad38aa2d5bbc166113d2f7b52bc28a6ed0",
+   "pid": 18158,
+   "parent": "Python/18157",
+   "capture_time": "2026-10-16 16:11:24.8405 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_BAD_ACCESS",
+    "signal": "SIGBUS",
+    "subtype": "KERN_PROTECTION_FAILURE at 0x000000010507c000",
+    "codes": "0x0000000000000002, 0x000000010507c000"
+   },
+   "frames": [
+    {
+     "symbol": "dart::DDTableLinkInfo::ReadFromStream(dart::ReadStream*)",
+     "symbolLocation": 436,
+     "imageOffset": 1657344,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 416,
+     "imageOffset": 2438844,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 1
+    }
+   ],
+   "pc_minus_image_base": 1657344,
+   "far": "0x10507c000",
+   "x21": "0x43",
+   "case": "table_trunc2000",
+   "top_dart_frame": "dart::DDTableLinkInfo::ReadFromStream+436"
+  },
+  "links_flip20000": {
+   "ips_filename": "analyze_snapshot_arm64-2026-10-16-161139.ips",
+   "ips_sha256": "09f6181c84c49b88ed8da7a944012b2fd00de504501fc540468b8ee1f8b37450",
+   "pid": 18171,
+   "parent": "Python/18170",
+   "capture_time": "2026-10-16 16:11:39.7374 +0800",
+   "image_uuid": "4c4c4438-5555-3144-a18d-258596bbdfcf",
+   "exception": {
+    "type": "EXC_BAD_ACCESS",
+    "signal": "SIGBUS",
+    "subtype": "KERN_PROTECTION_FAILURE at 0x0000000c0b800000",
+    "codes": "0x0000000000000002, 0x0000000c0b800000"
+   },
+   "frames": [
+    {
+     "symbol": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping(char const*, long, char const*, long, char const*, long, char**, long*)",
+     "symbolLocation": 732,
+     "imageOffset": 2439160,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "main",
+     "symbolLocation": 6012,
+     "imageOffset": 18148,
+     "imageIndex": 0
+    },
+    {
+     "symbol": "start",
+     "symbolLocation": 6992,
+     "imageOffset": 132324,
+     "imageIndex": 1
+    }
+   ],
+   "pc_minus_image_base": 2439160,
+   "far": "0xc0b800000",
+   "x21": "0xc0b800000",
+   "case": "links_flip20000",
+   "top_dart_frame": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping+732"
+  }
+ },
+ "empty_input_abort_kind": {
+  "table_empty_0": "length_error",
+  "table_empty_1": "length_error",
+  "table_empty_2": "bad_alloc"
+ },
+ "ips_by_parent_process": {
+  "Python/86013": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-142715.000.ips",
+    "pid": 86046,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-142715.0002.ips",
+    "pid": 86044,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-142715.ips",
+    "pid": 86045,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-142716.000.ips",
+    "pid": 86047,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-142716.ips",
+    "pid": 86043,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   }
+  ],
+  "Python/14045": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-145115.000.ips",
+    "pid": 14057,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-145115.0002.ips",
+    "pid": 14056,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-145115.0003.ips",
+    "pid": 14055,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-145115.0004.ips",
+    "pid": 14059,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-145115.ips",
+    "pid": 14058,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+   }
+  ],
+  "Python/16061": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-150748.000.ips",
+    "pid": 16076,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-150748.0002.ips",
+    "pid": 16075,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-150748.0003.ips",
+    "pid": 16078,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-150748.ips",
+    "pid": 16077,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-150749.ips",
+    "pid": 16074,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   }
+  ],
+  "Python/16920": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152637.000.ips",
+    "pid": 16941,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152637.0002.ips",
+    "pid": 16940,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152637.0003.ips",
+    "pid": 16942,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152637.0004.ips",
+    "pid": 16936,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152637.ips",
+    "pid": 16939,
+    "signal": "SIGABRT",
+    "top": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20"
+   }
+  ],
+  "launchd/1": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-152907.ips",
+    "pid": 16997,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   },
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-161040.ips",
+    "pid": 17012,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   }
+  ],
+  "Python/18157": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-161125.ips",
+    "pid": 18158,
+    "signal": "SIGBUS",
+    "top": "dart::DDTableLinkInfo::ReadFromStream+436"
+   }
+  ],
+  "Python/18170": [
+   {
+    "ips": "analyze_snapshot_arm64-2026-10-16-161139.ips",
+    "pid": 18171,
+    "signal": "SIGBUS",
+    "top": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping+732"
+   }
+  ]
+ },
+ "checks": [
+  {
+   "check": "input ddt both sides identical, 3969 B, sha256 as recorded",
+   "ok": true,
+   "detail": {
+    "bytes": 3969,
+    "sha256": "6a6645b15903f00e8a80629e64f0646bf1a751cf527edabc1fad70b2ebaa41c7",
+    "sides_identical": true
+   }
+  },
+  {
+   "check": "input ddcl both sides identical, 54060 B, sha256 as recorded",
+   "ok": true,
+   "detail": {
+    "bytes": 54060,
+    "sha256": "6e5441ac2344db164330e165aa4dbb44e9fd5be7948c66d12ba7a46fc97bb74e",
+    "sides_identical": true
+   }
+  },
+  {
+   "check": "input ddid both sides identical, 14925 B, sha256 as recorded",
+   "ok": true,
+   "detail": {
+    "bytes": 14925,
+    "sha256": "a57f0cc0db8b2703e710d364c77a82ae1241faee436b937d063450d8ca592cc6",
+    "sides_identical": true
+   }
+  },
+  {
+   "check": "fresh_run has 16 runs (8 per side)",
+   "ok": true,
+   "detail": 16
+  },
+  {
+   "check": "fresh_run recorded file hashes match disk",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "check": "fresh_run inputs equal the deterministic mutations of the matrix inputs",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "check": "valid input accepted on both sides with identical mapping output",
+   "ok": true,
+   "detail": "e14ae7067b33a96258e3fe5671ca3f8cce7d14ce638f5f4128363fd76eb05479"
+  },
+  {
+   "check": "ours: 7 malformed inputs all rc 255 rejected",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "theirs: 7 malformed inputs crashed, 4 SIGBUS + 3 SIGABRT",
+   "ok": true,
+   "detail": [
+    "SIGABRT",
+    "SIGABRT",
+    "SIGABRT",
+    "SIGBUS",
+    "SIGBUS",
+    "SIGBUS",
+    "SIGBUS"
+   ]
+  },
+  {
+   "check": "fresh_run binaries recorded",
+   "ok": true,
+   "detail": {
+    "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot": "1175947a6c33efc7a4eb57f64713e830ebb04d6ab8677435108f99937d01c775",
+    "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a"
+   }
+  },
+  {
+   "check": "public-format parser reproduces all five distinct ours diagnostics",
+   "ok": true,
+   "detail": {
+    "table_count_0": {
+     "model": "truncated at entry 67 of 127",
+     "ours_stderr_has_it": true
+    },
+    "table_empty_0": {
+     "model": "bad entry count",
+     "ours_stderr_has_it": true
+    },
+    "table_trunc1_0": {
+     "model": "bad entry count",
+     "ours_stderr_has_it": true
+    },
+    "table_trunc2000_0": {
+     "model": "truncated at entry 33 of 67",
+     "ours_stderr_has_it": true
+    },
+    "links_flip20000_0": {
+     "model": "truncated at link 349 of 930",
+     "ours_stderr_has_it": true
+    }
+   }
+  },
+  {
+   "check": "valid inputs parse completely under the public format",
+   "ok": true,
+   "detail": {
+    "table": {
+     "count": 67,
+     "consumed": 3969,
+     "trailing": 0
+    },
+    "links": {
+     "count": 930,
+     "consumed": 54060,
+     "trailing": 0
+    }
+   }
+  },
+  {
+   "check": "offset 20000 lies in exactly one parsed field",
+   "ok": true,
+   "detail": [
+    {
+     "link": 340,
+     "field": "caller_hash.length",
+     "start": 20000,
+     "end": 20001,
+     "value": 40
+    }
+   ]
+  },
+  {
+   "check": "mutation keeps the end-of-varint bit (not a terminator flip)",
+   "ok": true,
+   "detail": {
+    "offset": 20000,
+    "before": "0xa8",
+    "after": "0xaa",
+    "xor": "0x2",
+    "terminal_bit_unchanged": true,
+    "field": {
+     "link": 340,
+     "field": "caller_hash.length",
+     "start": 20000,
+     "end": 20001
+    },
+    "field_value_before": 40,
+    "field_value_after": 42,
+    "caller_hash_lengths_in_valid_file": [
+     40
+    ],
+    "desync_trace": [
+     {
+      "link": 340,
+      "start": 20000,
+      "end": 20061,
+      "hash_len": 42,
+      "dd_index": 40,
+      "callee_position": 117
+     },
+     {
+      "link": 341,
+      "start": 20061,
+      "end": 20223,
+      "hash_len": 119,
+      "dd_index": 118,
+      "callee_position": 8290
+     },
+     {
+      "link": 342,
+      "start": 20223,
+      "end": 31488,
+      "hash_len": 8289,
+      "dd_index": 112,
+      "callee_position": 8291
+     },
+     {
+      "link": 343,
+      "start": 31488,
+      "end": 31637,
+      "hash_len": 114,
+      "dd_index": 116,
+      "callee_position": 114
+     },
+     {
+      "link": 344,
+      "start": 31637,
+      "end": 31792,
+      "hash_len": 113,
+      "dd_index": 119,
+      "callee_position": 118
+     },
+     {
+      "link": 345,
+      "start": 31792,
+      "end": 42882,
+      "hash_len": 8289,
+      "dd_index": 112,
+      "callee_position": 44
+     },
+     {
+      "link": 346,
+      "start": 42882,
+      "end": 42888,
+      "hash_len": 2,
+      "dd_index": 8291,
+      "callee_position": 113
+     },
+     {
+      "link": 347,
+      "start": 42888,
+      "end": 43042,
+      "hash_len": 113,
+      "dd_index": 119,
+      "callee_position": 119
+     },
+     {
+      "link": 348,
+      "start": 43042,
+      "end": 43189,
+      "hash_len": 113,
+      "dd_index": 8291,
+      "callee_position": 113
+     },
+     {
+      "link": 349,
+      "start": 43189,
+      "truncated_at": 54060,
+      "reader_position": 54060,
+      "file_length": 54060
+     }
+    ]
+   }
+  },
+  {
+   "check": "public-format parse of the mutated links desyncs from link 340 and reaches end of file at link 349 (= ours diagnostic)",
+   "ok": true,
+   "detail": {
+    "link": 349,
+    "start": 43189,
+    "truncated_at": 54060,
+    "reader_position": 54060,
+    "file_length": 54060
+   }
+  },
+  {
+   "check": "all_7_crashes_verified.json lists the seven cases",
+   "ok": true,
+   "detail": [
+    "links_flip20000",
+    "table_count",
+    "table_empty_0",
+    "table_empty_1",
+    "table_empty_2",
+    "table_trunc1",
+    "table_trunc2000"
+   ]
+  },
+  {
+   "check": "table_count: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.0004.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_empty_0: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_empty_1: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.0002.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_empty_2: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.000.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_trunc1: agy JSON equals analyze_snapshot_arm64-2026-10-16-152637.0003.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_trunc2000: agy JSON equals analyze_snapshot_arm64-2026-10-16-161125.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "links_flip20000: agy JSON equals analyze_snapshot_arm64-2026-10-16-161139.ips (pid, exception, frames)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "table_count/trunc1/trunc2000 SIGBUS at ReadFromStream+436",
+   "ok": true,
+   "detail": {
+    "table_count": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "table_empty_0": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20",
+    "table_empty_1": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20",
+    "table_empty_2": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364",
+    "table_trunc1": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "table_trunc2000": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "links_flip20000": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping+732"
+   }
+  },
+  {
+   "check": "links_flip20000 SIGBUS frame 0 is Dart_ComputeDDSlotMapping+732, no ReadFromStream frame on its stack",
+   "ok": true,
+   "detail": {
+    "table_count": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "table_empty_0": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20",
+    "table_empty_1": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::__throw_length_error[abi:nn210000]+20",
+    "table_empty_2": "std::__fl::vector<dart::DDEntry, std::__fl::allocator<dart::DDEntry>>::reserve+364",
+    "table_trunc1": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "table_trunc2000": "dart::DDTableLinkInfo::ReadFromStream+436",
+    "links_flip20000": "dart::snapshot_analyzer::Dart_ComputeDDSlotMapping+732"
+   }
+  },
+  {
+   "check": "links_flip20000: pc - image base equals frame 0 imageOffset; far equals x21",
+   "ok": true,
+   "detail": {
+    "pc_minus_image_base": 2439160,
+    "far": "0xc0b800000",
+    "x21": "0xc0b800000"
+   }
+  },
+  {
+   "check": "empty inputs: SIGABRT via vector<DDEntry>::reserve from ReadFromStream+164",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "check": "same reference image in all seven reports",
+   "ok": true,
+   "detail": [
+    "4c4c4438-5555-3144-a18d-258596bbdfcf"
+   ]
+  },
+  {
+   "check": "the fresh_run batch (parent of table_count) left exactly 5 reports",
+   "ok": true,
+   "detail": "Python/16920"
+  },
+  {
+   "check": "table_trunc2000 and links_flip20000 reports come from separate later processes, not the fresh_run batch",
+   "ok": true,
+   "detail": {
+    "table_trunc2000": "Python/18157",
+    "links_flip20000": "Python/18170"
+   }
+  },
+  {
+   "check": "SDK HEAD unchanged",
+   "ok": true,
+   "detail": "8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0"
+  },
+  {
+   "check": "SDK working-tree patch sha256 unchanged (raw git diff bytes)",
+   "ok": true,
+   "detail": "6f1ec5170a0b3da5236b4deb68986c9855f3ea4d42e12b6cc8fedc44c3f74cbd"
+  }
+ ],
+ "failed": []
+}

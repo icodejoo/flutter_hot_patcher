@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "input_sha256": {
+    "ours_nolink": "4f20766fd160b838caf8d979eb8f2b49a252a6a745293ef94dd8156c2410deb7",
+    "ours_linked": "fbe54cfcc27dde77ccef5b6e98c0ff57308d066963cb79c27593e239e6493e99",
+    "ref_nolink": "470f442b3837e3d507364073dc1eb429935ad464920ba3da2fad3bac7bde613f",
+    "ref_linked": "5b3ee421fe7644c1b45a15b519573cacc406be61120f81ab34529efc526d6929"
+  },
+  "snapshot": {
+    "ours": {
+      "nolink": {
+        "bytes": 94134,
+        "header_bytes": 244,
+        "payload_bytes": 93890,
+        "payload_sha256": "17b2c55e84549705648a9d60b5cace0429dd4e33cb1e0f215d4225a1ca99e0c6",
+        "extra_bytes": 173328,
+        "extra_sha256": "827e1bf3f963e36ba914a6b4cdc34f10982517b071c2a4dc813ef41a5e7d2a7a",
+        "symbol_bytes": 267472
+      },
+      "linked": {
+        "bytes": 94593,
+        "header_bytes": 244,
+        "payload_bytes": 94349,
+        "payload_sha256": "072cc2904e65abc301692305cff90e95fff2c74ff903dbc042cd0548f03cc0d6",
+        "extra_bytes": 173328,
+        "extra_sha256": "827e1bf3f963e36ba914a6b4cdc34f10982517b071c2a4dc813ef41a5e7d2a7a",
+        "symbol_bytes": 267984
+      }
+    },
+    "ref": {
+      "nolink": {
+        "bytes": 94084,
+        "header_bytes": 194,
+        "payload_bytes": 93890,
+        "payload_sha256": "17b2c55e84549705648a9d60b5cace0429dd4e33cb1e0f215d4225a1ca99e0c6",
+        "extra_bytes": 173328,
+        "extra_sha256": "ea5a98b0a22f12b56295b4d25b5b9796008da808cba3d0171517d7045b281c63",
+        "symbol_bytes": 267472
+      },
+      "linked": {
+        "bytes": 94543,
+        "header_bytes": 194,
+        "payload_bytes": 94349,
+        "payload_sha256": "072cc2904e65abc301692305cff90e95fff2c74ff903dbc042cd0548f03cc0d6",
+        "extra_bytes": 173328,
+        "extra_sha256": "ea5a98b0a22f12b56295b4d25b5b9796008da808cba3d0171517d7045b281c63",
+        "symbol_bytes": 267920
+      }
+    }
+  },
+  "cross_side_payload_equal_before_and_after": true,
+  "per_side_extra_unchanged": true,
+  "payload_growth_each_side": 459,
+  "feature_string_marker_bytes": 50,
+  "negative_control_detected": true
+}

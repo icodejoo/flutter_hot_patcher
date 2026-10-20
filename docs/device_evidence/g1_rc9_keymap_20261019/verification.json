@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "bound_runs": 16,
+  "isolated_slots": 8,
+  "slot4_different_drop_reason": true,
+  "post_fix_runs": 3,
+  "post_fix_stderr_differs_only_in_first_keymap_count": true
+}

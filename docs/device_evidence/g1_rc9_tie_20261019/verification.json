@@ -1,0 +1,33 @@
+{
+  "source_state": {
+    "sdk_head": "8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0",
+    "sdk_patch_sha256": "bdc3df7330d2a70d22ffbd2ea20e38627c9654e9176cd7fd381fce4a72d753d8",
+    "gen_snapshot_sha256": "eda85d19801d9934c40d7981213c1c341fc1259904c57bc17625caa0a88789e7",
+    "analyze_snapshot_sha256": "5d16a2f10e887aa024877e639ab38f1ed12f688e2bdf4504f589d47b2b79efa3",
+    "reference_gen_snapshot_sha256": "16f44bb7d8e9a69d7548da99c0b6dff6518458aeeded1839b13b4b3365ea67df",
+    "run_vm_tests_sha256": "a0b9821898526f01f8a4e954ef626293222c7663c000eaec6645e99d2d62c7e3",
+    "loop_pause_exists": true
+  },
+  "initial_two_voter_counterexample": {
+    "forward": true,
+    "reverse": true
+  },
+  "sweep40_matched": 40,
+  "sweep40_total": 40,
+  "sweep40_failed_cases": [],
+  "bound_runs_checked": 80,
+  "bound_cases_matched": 40,
+  "bound_failed_cases": [],
+  "unit_tests": {
+    "ResolveDDSlots_WinnerIsTheTargetNotTheCaller": true,
+    "ResolveDDSlots_PluralityVote_TwoVotersSameTarget": true,
+    "ResolveDDSlots_TiedTargetsFollowHashTableOrder": true,
+    "ResolveDDSlots_VerifyOnlyPath_OwnerPreservedOnSecondPass": true,
+    "ResolveDDSlots_RescuePath_PreviousOwnerSurvivesEmptyVote": true
+  },
+  "single_voter_regression": {
+    "hello": true,
+    "prog": true
+  },
+  "negative_control_detected": true
+}

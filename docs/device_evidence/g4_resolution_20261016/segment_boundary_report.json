@@ -1,0 +1,660 @@
+{
+  "scope": "ELF metadata controls, not device acceptance",
+  "binaries_sha256": {
+    "ours": "1175947a6c33efc7a4eb57f64713e830ebb04d6ab8677435108f99937d01c775",
+    "theirs": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a",
+    "direct_ours": "0db4a742e6ca63ff0abb12114cc288ddca8b2f0a43b245554ed307949972745d"
+  },
+  "cases": {
+    "baseline": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/baseline.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303522,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/baseline.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "8d87b9d65d86ab65c96fe9020bc16082424e178cdbd1c80121c45dd966940429",
+        "stdout_sha256": "90a55ea612be0ebc33a644c37581323bf234602aead18b730b9dee114302f195",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/baseline.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "878cd158f6acf1877c335276aeac9c1200a5ac07b72521ce0ab78326f6a5deb7",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303394,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "trailing_byte": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/trailing_byte.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "5a219c04d848102be579fbe4c6c6dafd27c5b38b6a3fdc8986e6ff8654c3e285",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303522,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/trailing_byte.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "5a219c04d848102be579fbe4c6c6dafd27c5b38b6a3fdc8986e6ff8654c3e285",
+        "stdout_sha256": "90a55ea612be0ebc33a644c37581323bf234602aead18b730b9dee114302f195",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/trailing_byte.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "64df318d014ec8f2f9155a7cf4add4e4d501882d742c12c39409d6e1ab26cad5",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303394,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "original_outside_file": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/original_outside_file.so"
+        ],
+        "returncode": 255,
+        "disposition": "rejected",
+        "input_sha256": "cda00caaed3dfa186442c7b4613966154b555632dd2109514a25a11beab0e686",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "2db7ada2a7a6268ea53fa8edba60b9e8b144cedd5329c8ff6049fc7e9df441cd",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 893128,
+            "memsz": 303522,
+            "file_range_valid": false,
+            "filesz_le_memsz": false
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ]
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/original_outside_file.so"
+        ],
+        "returncode": 1,
+        "disposition": "rejected",
+        "input_sha256": "cda00caaed3dfa186442c7b4613966154b555632dd2109514a25a11beab0e686",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "d0eb3dd0c8f08599d12fb5d71faf39af7d998adfe4757cd31c18d593c5e32dad"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/original_outside_file.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "aff75b29bc7260f31f9ef57e6ecb2cee594da786c8534bf1a03354649bde6fdf",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 893128,
+            "memsz": 303394,
+            "file_range_valid": false,
+            "filesz_le_memsz": false
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "filesz_over_memsz_within_file": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/filesz_over_memsz_within_file.so"
+        ],
+        "returncode": 255,
+        "disposition": "rejected",
+        "input_sha256": "b234f5830835583811961082b619bb3f5812dde728ae6a0a8828696434e20bca",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "1bc62a571b049af9ea3810cf50b21929e06998380611e9a883eeb3778ba3c240",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303523,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": false
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ]
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/filesz_over_memsz_within_file.so"
+        ],
+        "returncode": 1,
+        "disposition": "rejected",
+        "input_sha256": "b234f5830835583811961082b619bb3f5812dde728ae6a0a8828696434e20bca",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "0d63418ee81adefa0f69303234a52bcfc85420031ebbaa71d9060e78dd5e7961"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/filesz_over_memsz_within_file.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "5819cf1f676fe2b5c5658d310a71fd097f5f3f6693bdfa91435844c5b2b1597b",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303395,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": false
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 112,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "last_segment_exact_eof": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_exact_eof.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "85a3a7fe12a96224ab86518208b38ea284e9af95af74c08f1dc0a028bcc6bbb4",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303522,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 200904,
+            "memsz": 200904,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_exact_eof.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "85a3a7fe12a96224ab86518208b38ea284e9af95af74c08f1dc0a028bcc6bbb4",
+        "stdout_sha256": "90a55ea612be0ebc33a644c37581323bf234602aead18b730b9dee114302f195",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/last_segment_exact_eof.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "73b7cd377f3a0fff0d9c9f24d5fdf0ddf2f83739cff20509aae717af78b76781",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303394,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 200904,
+            "memsz": 200904,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "last_segment_one_past_eof": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_one_past_eof.so"
+        ],
+        "returncode": 255,
+        "disposition": "rejected",
+        "input_sha256": "a1a102a1ef1fd75e9183ef78706201b85255c94f8cf7e628de0108c6af2b5805",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "2db7ada2a7a6268ea53fa8edba60b9e8b144cedd5329c8ff6049fc7e9df441cd",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303522,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 200905,
+            "memsz": 200905,
+            "file_range_valid": false,
+            "filesz_le_memsz": true
+          }
+        ]
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_one_past_eof.so"
+        ],
+        "returncode": 1,
+        "disposition": "rejected",
+        "input_sha256": "a1a102a1ef1fd75e9183ef78706201b85255c94f8cf7e628de0108c6af2b5805",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "d0eb3dd0c8f08599d12fb5d71faf39af7d998adfe4757cd31c18d593c5e32dad"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/last_segment_one_past_eof.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "b2bfcd20e65e84e08f2f5c54e7b731774d092886b6f0f9530f8846350f3cda55",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303394,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 200905,
+            "memsz": 200905,
+            "file_range_valid": false,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    },
+    "last_segment_one_zero_tail": {
+      "ours": {
+        "command": [
+          "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64/clang_arm64/analyze_snapshot",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_one_zero_tail.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "38a1ef6beaef7e008938d55fc197b547f3ce0d007ba9518a4bc7eb0acbe7da60",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303522,
+            "memsz": 303522,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367280,
+            "memsz": 367280,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 113,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      },
+      "direct_ours": {
+        "command": [
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g1_g4_20261016/direct_loader/g4_load_elf_probe",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/ours/last_segment_one_zero_tail.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "38a1ef6beaef7e008938d55fc197b547f3ce0d007ba9518a4bc7eb0acbe7da60",
+        "stdout_sha256": "90a55ea612be0ebc33a644c37581323bf234602aead18b730b9dee114302f195",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "theirs": {
+        "command": [
+          "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/artifacts/engine/ios-release/analyze_snapshot_arm64",
+          "--dump_class_table",
+          "--out=classes.json",
+          "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g4_resolution_20261016/segment_boundary/theirs/last_segment_one_zero_tail.so"
+        ],
+        "returncode": 0,
+        "disposition": "accepted",
+        "input_sha256": "cec16a52928dee0f734213bebd2a93e34b05e19bbf78ce2a3232c44c805acc2f",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "segments": [
+          {
+            "index": 1,
+            "offset": 0,
+            "filesz": 303394,
+            "memsz": 303394,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 2,
+            "offset": 311296,
+            "filesz": 367264,
+            "memsz": 367264,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          },
+          {
+            "index": 3,
+            "offset": 688128,
+            "filesz": 112,
+            "memsz": 113,
+            "file_range_valid": true,
+            "filesz_le_memsz": true
+          }
+        ],
+        "class_output_sha256": "849cfe12c475194c4b834154b247b3691770641927f532bfc090f98123d141f8"
+      }
+    }
+  },
+  "status": "VERIFIED_STRICT_REJECTION",
+  "failures": []
+}

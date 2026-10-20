@@ -1,0 +1,47 @@
+{
+  "rows": {
+    "theirs": {
+      "bundle": "com.fhp.g4.theirs.badelftypev5",
+      "pid": 5707,
+      "boot_device_pid": 5707,
+      "devicectl_said_exit": 1,
+      "signal": "SIGABRT",
+      "termination": "Abort trap: 6",
+      "flutter_uuid_in_crash": "4c4c44d1-5555-3144-a122-fe190482d47f",
+      "flutter_uuid_installed": "4c4c44d1-5555-3144-a122-fe190482d47f",
+      "faulting_frames": [
+        "libsystem_kernel.dylib:__pthread_kill",
+        "libsystem_pthread.dylib:pthread_kill",
+        "libsystem_c.dylib:abort",
+        "Flutter:0x2996b4",
+        "Flutter:0x2998e0",
+        "Flutter:0x7106f4",
+        "Flutter:0x6fc3ac",
+        "Flutter:0x652bcc"
+      ],
+      "ok": true
+    },
+    "ours": {
+      "bundle": "com.fhp.g4.ours.badelftypev5",
+      "pid": 5715,
+      "boot_device_pid": 5715,
+      "devicectl_said_exit": 0,
+      "signal": "SIGABRT",
+      "termination": "Abort trap: 6",
+      "flutter_uuid_in_crash": "4c4c449a-5555-3144-a1ba-098fe6eae044",
+      "flutter_uuid_installed": "4c4c449a-5555-3144-a1ba-098fe6eae044",
+      "faulting_frames": [
+        "libsystem_kernel.dylib:__pthread_kill",
+        "libsystem_pthread.dylib:pthread_kill",
+        "libsystem_c.dylib:abort",
+        "Flutter:fml::KillProcess()",
+        "Flutter:fml::LogMessage::~LogMessage()",
+        "Flutter:flutter::TryLoadFromPatch(std::__fl::vector<std::__fl::basic_string<char, std::__fl::char_traits<char>, std::__fl::allocator<char>>, std::__fl::allocator<std::__fl::basic_string<char, std::__fl::char_traits<char>, std::__fl::allocator<char>>>> const&, char const*)",
+        "Flutter:flutter::DartSnapshot::IsolateSnapshotFromSettings(flutter::Settings const&)",
+        "Flutter:flutter::Shell::Create(flutter::PlatformData const&, flutter::TaskRunners const&, flutter::Settings, std::__fl::function<std::__fl::unique_ptr<flutter::PlatformView, std::__fl::default_delete<flutter::PlatformView>> (flutter::Shell&)> const&, std::__fl::function<std::__fl::unique_ptr<flutter::Rasterizer, std::__fl::default_delete<flutter::Rasterizer>> (flutter::Shell&)> const&, bool)"
+      ],
+      "ok": true
+    }
+  },
+  "both_sigabrt_and_tied_to_run": true
+}

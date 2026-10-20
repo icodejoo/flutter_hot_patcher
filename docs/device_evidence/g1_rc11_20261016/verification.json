@@ -1,0 +1,63 @@
+{
+  "passed": true,
+  "checks": {
+    "all_16326_compilations_in_same_order": true,
+    "first_function_instruction_words_match_after_padding": true,
+    "padding_closes_major_size_gap": true,
+    "native_and_math_calls_close_remaining_snapshot_size_gap": true,
+    "remaining_function_delta_is_one_ffi_instruction": true,
+    "simulator_ffi_hlt_present_only_in_ours": true,
+    "final_jit_snapshot_reloads_without_instruction_change": true,
+    "ten_debug_vm_tests_pass_with_matching_dfe": true,
+    "aot_hello_text_unchanged": true
+  },
+  "compiled_functions": 16326,
+  "sum_function_bytes": {
+    "before": 8133124,
+    "padded": 9428556,
+    "final": 9430900,
+    "reference": 9430896
+  },
+  "jit_instruction_bytes": {
+    "before": 4201824,
+    "padded": 4911712,
+    "final": 4912240,
+    "reference": 4912240
+  },
+  "padded_delta_counts": {
+    "-4": 1,
+    "0": 15771,
+    "4": 538,
+    "12": 16
+  },
+  "final_delta_counts": {
+    "-4": 1,
+    "0": 16325
+  },
+  "sha256": {
+    "scratchpad/g1_rc11_20261016/ours/compiled/trace.log": "95518d1f93790942af22a787ccafea9430742415dee6caa28ed3e1e3528b9239",
+    "scratchpad/g1_rc11_20261016/ours/padded/stderr.log": "c5b9eee3190d8a6ff17d53b08f7491746781c6096e77d60e82269ea1506bf0a2",
+    "scratchpad/g1_rc11_20261016/ours/final/stderr.log": "5488b41830b3e6d57df0746aaf3d27ec72d80d902f216a300b41140e7a952212",
+    "scratchpad/g1_rc11_20261016/ref/compiled/trace.log": "763c1d0154b5a186204a65b0717111812b7ad3c1b36e95236001f1e022e0a853",
+    "scratchpad/g1_rc11_20261016/ours/compiled/jit_instr.bin": "c41cadec7b2e61719819afd30021bc2a17ea34b17e8b51908bb4053ba726fce8",
+    "scratchpad/g1_rc11_20261016/ours/padded/jit_instr.bin": "7730eef195aafdc24110fe6a9a13838bd1888ee6967001fda161547885c24fcd",
+    "scratchpad/g1_rc11_20261016/ours/final/jit_instr.bin": "b984bb03c053159d0cce5ee8dbe8d3d611adda4f77bed9d1f71ccf7dff3f647b",
+    "scratchpad/g1_rc11_20261016/ref/compiled/jit_instr.bin": "f2f12eb4968d33f7d031869b738f178655c14c39a6bbfe810657631bb8556970",
+    "scratchpad/g1_rc11_20261016/ref/disasm/stderr.log": "7ccda05feb7512b18e378d1f4c38b67a96d8d05363bdcce92e14c858d7c86bbe",
+    "scratchpad/g1_rc11_20261016/ours/residual_disasm/stderr.log": "ac17e9f8848615d327063256593fd0f8884a4bbaaac953e1d2079e14619404b7",
+    "scratchpad/g1_rc11_20261016/ref/residual_disasm/stderr.log": "5818fc233a27db9d0f5a86957e5ee7c12a6e54270f2cf79274cb47414d16107d",
+    "scratchpad/g1_rc11_20261016/ours/final_rejit/jit_instr.bin": "b984bb03c053159d0cce5ee8dbe8d3d611adda4f77bed9d1f71ccf7dff3f647b",
+    "scratchpad/g1_g4_20261016/matrix_final/gs.hello.ours.so": "c6ff1700a91d55a4a122e00553b06e71ddec9a99fb24f49c37b1ad2071b94ffc",
+    "scratchpad/g1_rc11_20261016/ours/final_aot/app.so": "84257b2fbeed3c6dec9ee7ae9397e00ebb72666e545882a93bb72907650fb40c",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/Arm64PadLoadStore.log": "0aed1d6b3e1659e98c0838407b2c74f4bfef2155cd40d780c1a2c4aa49cc4100",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/Arm64PadLoadStoreOnlyPadsPoolAccesses.log": "1e8d4dad3c1f72c3cfbcfe6fe5e871247a5d5ece8d47329708ff8cc732c4d5aa",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/Arm64PadLoadStoreRemainsDecodable.log": "a8a83701dcc25031e671acf58bc59cfcb1a9082108b8d98600e8e8d52aa10f4c",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/Arm64PadLoadStoreDoubleWordRemainsDecodable.log": "13b31939cedc1d36a7511acc80695c1c95c666cb2040644fa94eb75a9190f446",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/IL_IndirectStaticCall_SerializationRoundTrip.log": "c4da7424ca69eecf4ecebad192fb75d3090dda7a21af0d5a0231b7947a620f53",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/IsolateReload_ShapeChange_Const_AddSlot.log": "7d9fd187117f925618c1ab783aff0f9c7e47a1017040ea716689014030166d70",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/DartAPI_NativeFunctionClosure.log": "d0c9192b4a5aa08d1d225eb32074849cf8cae7816ecac8ba392388fe9f9331d5",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/DartAPI_NativeStaticFunctionClosure.log": "6f80a82d80da6fa6d90fb2914ca6ac98fc7144e97442d837ba6f0d93377ef73a",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/DartAPI_SetNativeResolver.log": "5f2f0ee0be8db56d4b7637c895c9630b7be8fcf76afb797ad6b95199df03dc92",
+    "scratchpad/g1_rc11_20261016/ours/final_vm_tests/IRTest_FfiCallInstrLeafDoesntSpill.log": "374e1fc5276a9d2f41d759ecd1e2fc977dfb0c0231cf2bc88c0d769a32dfc878"
+  }
+}

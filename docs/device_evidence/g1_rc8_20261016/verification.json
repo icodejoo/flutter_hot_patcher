@@ -1,0 +1,71 @@
+{
+  "checks": {
+    "all_640_renumbered_loads_preserve_value": true,
+    "pool_reordered_like_reference": true,
+    "nonidentity_report_matches_reference": true,
+    "identity_mapping_preserves_pool": true,
+    "identity_report_matches_reference": true
+  },
+  "renumbered_loads": 640,
+  "preserved_loads": 640,
+  "changed_pool_positions": 630,
+  "oracle_differences": [
+    [
+      650,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      655,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      657,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      659,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      676,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ],
+    [
+      1117,
+      "0x10549c4f8 (unknown)",
+      "0x1076744f4 (unknown)"
+    ]
+  ],
+  "identity_different_positions": [
+    650,
+    655,
+    657,
+    659,
+    676,
+    1117
+  ],
+  "negative_controls": {
+    "changed_linked_pool_value": true,
+    "changed_oracle_comparison": true,
+    "changed_identity_pool": true
+  },
+  "sha256": {
+    "scratchpad/g1_rc8_20261016/nolink_pool.json": "ec730db65d39e8347c3cfb51f3820d315da77f9e6a8f34b202029430b60a304d",
+    "scratchpad/g1_rc8_20261016/op_pool.json": "776e922eaaec4e0d6b19c5b909fc044d6e6c6b90a9ba27c58b1ea240964339b1",
+    "scratchpad/g1_rc8_20261016/patch_nolink_pool.json": "c3c847b113a93f787518f6100fe0c016f4dacd1a2ae4d059a7dd54bbb09942d3",
+    "scratchpad/g1_rc8_20261016/patch_op_pool.json": "db996a38cf7cc451442199d8072b29982e038edb3408c91881a9f6ef8ccbf822",
+    "scratchpad/g1_rc8_20261016/nolink.so": "8cff96feecb6fde9c6f812170d94abb055b188a9f6189e98e3aa02526c9755bc",
+    "scratchpad/g1_rc8_20261016/op.so": "aeba8aa2f3001527c6c91b84c71a3edeeab8f6c083cdb3619e9da699a5da9cf2",
+    "scratchpad/g1_rc8_20261016/patch_nolink.so": "c9c9cfe53beaeb67c37aee3cc5b043071c58a31f7c76b3efe42f787c2ffa3b0d",
+    "scratchpad/g1_rc8_20261016/patch_op.so": "a1965eb042805ec262a22245504debd6586cf6dc7e8d0fe4a49f663645b07e7b",
+    "scratchpad/g1_rc8_20261016/op.log": "cdf745049a48e6017ee04f42f1591d269efe6b861ddb4181fc0e0648a9bc493b",
+    "scratchpad/g1_rc8_20261016/patch_op.log": "b9ab76fb58aa18750beb4222b211c9f77671b9c11ec348b7a42eefe3b4b2cd06",
+    "scratchpad/g1_rootcause_20261016/pool/theirs_op.json": "bc71d6f79930ab55657b4de6de3bc7d716ee8ba6283d7b87e3ba61690b9fad23"
+  },
+  "passed": true
+}

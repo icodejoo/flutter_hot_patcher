@@ -1,0 +1,4 @@
+nolink symbols 1430 1430 same set True differing ['_kDartIsolateSnapshotData', '_kDartSnapshotBuildId', '_kDartVmSnapshotData'] [('_kDartIsolateSnapshotData', True, 20, 51), ('_kDartVmSnapshotData', True, 20, 51)]
+op symbols 1430 1430 same set True differing ['_kDartIsolateSnapshotData', '_kDartSnapshotBuildId', '_kDartVmSnapshotData'] [('_kDartIsolateSnapshotData', True, 20, 51), ('_kDartVmSnapshotData', True, 20, 51)]
+patch_nolink symbols 1430 1430 same set True differing ['_kDartIsolateSnapshotData', '_kDartSnapshotBuildId', '_kDartVmSnapshotData'] [('_kDartIsolateSnapshotData', True, 20, 51), ('_kDartVmSnapshotData', True, 20, 51)]
+patch_op symbols 1430 1430 same set True differing ['_kDartIsolateSnapshotData', '_kDartSnapshotBuildId', '_kDartVmSnapshotData'] [('_kDartIsolateSnapshotData', True, 20, 51), ('_kDartVmSnapshotData', True, 20, 51)]

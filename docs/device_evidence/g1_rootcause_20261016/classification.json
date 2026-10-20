@@ -1,0 +1,1581 @@
+{
+ "root_causes": {
+  "RC1": {
+   "title": "snapshot version hash",
+   "kind": "structural",
+   "evidence": "md5 of 15 VM source files (tools/make_version.py); theirs edited those files, their hash matches neither ours nor upstream; matching it means copying their string"
+  },
+  "RC2": {
+   "title": "features-string token shorebird-native-entry-thr-offsets",
+   "kind": "our addition",
+   "evidence": "SDK ac863d5cd46 (2026-09-28) appends 50 bytes to the AOT features string as a Thread-layout guard; theirs has no such token"
+  },
+  "RC3": {
+   "title": "ResumeStub is 4 bytes longer",
+   "kind": "our addition",
+   "evidence": "one extra instruction in vm and isolate ResumeStub (the Resume safety fix); every other code difference is a branch displacement that lands on the same target"
+  },
+  "RC4": {
+   "title": "build version string",
+   "kind": "build metadata",
+   "evidence": "dart_version carries the source commit date: ours Oct 2 2026 +0800, theirs Jun 11 2026 -0700"
+  },
+  "RC5": {
+   "title": "analyzer process-local addresses",
+   "kind": "structural",
+   "evidence": "native-function pool entries print as process addresses (ASLR); the code_infos hashing those entries differ with them"
+  },
+  "RC6": {
+   "title": "field_table group-internal order",
+   "kind": "known (F128)",
+   "evidence": "heap traversal order; same (id,hash) multiset measured 2026-09-30"
+  },
+  "RC7": {
+   "title": "load_obfuscation_map product not compared",
+   "kind": "test gap",
+   "evidence": "the matrix only checks the map is accepted; no product comparison was made"
+  },
+  "RC8": {
+   "title": "object pool not re-sorted by --base_op_link_data",
+   "kind": "REAL BUG",
+   "evidence": "code accesses are renumbered (ImageWriter::EditObjectPoolAccesses) but the pool itself keeps its order, so renumbered loads read the wrong entry"
+  },
+  "RC9": {
+   "title": "DD slot-mapping pass differs",
+   "kind": "real gap",
+   "evidence": "resolution table size/sentinels, setter-name rendering, key-map size, and the DD table rewrite into the snapshot (theirs +8 B and a \"DD table:\" report line)"
+  },
+  "RC10": {
+   "title": "field-table link on an inserting patch adds 64 B more on ours",
+   "kind": "real gap (small)",
+   "evidence": "identity case is symmetric; base_insert ours +512 B vs theirs +448 B"
+  },
+  "RC11": {
+   "title": "JIT --compile_all code size",
+   "kind": "unexplained",
+   "evidence": "ours 4,201,824 B vs theirs 4,912,240 B instructions; not on the iOS AOT release path"
+  },
+  "RC12": {
+   "title": "linker report lines missing",
+   "kind": "cosmetic",
+   "evidence": "theirs prints \"Sorted ObjectPool, moved N of M entries.\" after op linking"
+  },
+  "AOT": {
+   "title": "AOT snapshot difference carried by the option",
+   "kind": "composite",
+   "evidence": "the cell inherits the baseline AOT difference, which decomposes into RC1+RC2+RC3 plus the data-payload remainder D1"
+  }
+ },
+ "cells_per_root_cause": {
+  "RC6": 6,
+  "RC7": 3,
+  "RC3": 3,
+  "RC1": 27,
+  "RC2": 3,
+  "RC4": 11,
+  "RC5": 3,
+  "AOT": 60,
+  "RC9": 4,
+  "RC10": 1,
+  "RC8": 2,
+  "RC11": 8,
+  "RC12": 6
+ },
+ "cells_per_basis": {
+  "known": 6,
+  "test gap": 3,
+  "proven": 41,
+  "derived, not decomposed": 15,
+  "section deltas": 12,
+  "proven (option output = no-link output on both sides)": 6,
+  "same data growth both sides": 1,
+  "proven (= no-link)": 2,
+  "real gap": 5,
+  "REAL BUG": 2,
+  "unexplained": 8,
+  "proven (= baseline)": 12,
+  "same symbols and size growth both sides": 3,
+  "proven (= baseline) + missing report line": 6
+ },
+ "cells": [
+  {
+   "id": "G1-20261016-001",
+   "source": "matrix",
+   "option": "print_field_table_link_info_to",
+   "input": "hello",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-002",
+   "source": "matrix",
+   "option": "print_field_table_link_debug_info_to",
+   "input": "hello",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-003",
+   "source": "matrix",
+   "option": "print_field_table_link_info_to",
+   "input": "prog",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-004",
+   "source": "matrix",
+   "option": "print_field_table_link_debug_info_to",
+   "input": "prog",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-005",
+   "source": "matrix",
+   "option": "print_field_table_link_info_to",
+   "input": "base_dd",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-006",
+   "source": "matrix",
+   "option": "print_field_table_link_debug_info_to",
+   "input": "base_dd",
+   "root_cause": "RC6",
+   "basis": "known"
+  },
+  {
+   "id": "G1-20261016-007",
+   "source": "matrix",
+   "option": "load_obfuscation_map",
+   "input": "hello",
+   "root_cause": "RC7",
+   "basis": "test gap"
+  },
+  {
+   "id": "G1-20261016-008",
+   "source": "matrix",
+   "option": "load_obfuscation_map",
+   "input": "prog",
+   "root_cause": "RC7",
+   "basis": "test gap"
+  },
+  {
+   "id": "G1-20261016-009",
+   "source": "matrix",
+   "option": "load_obfuscation_map",
+   "input": "base_dd",
+   "root_cause": "RC7",
+   "basis": "test gap"
+  },
+  {
+   "id": "G1-20261016-010",
+   "source": "matrix",
+   "option": "shorebird",
+   "input": "hello",
+   "root_cause": "RC3+RC1+RC2+RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-011",
+   "source": "matrix",
+   "option": "shorebird",
+   "input": "prog",
+   "root_cause": "RC3+RC1+RC2+RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-012",
+   "source": "matrix",
+   "option": "shorebird",
+   "input": "base_dd",
+   "root_cause": "RC3+RC1+RC2+RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-013",
+   "source": "matrix",
+   "option": "dump_object_pool",
+   "input": "hello",
+   "root_cause": "RC5",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-014",
+   "source": "matrix",
+   "option": "dump_object_pool",
+   "input": "prog",
+   "root_cause": "RC5",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-015",
+   "source": "matrix",
+   "option": "dump_object_pool",
+   "input": "base_dd",
+   "root_cause": "RC5",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-016",
+   "source": "matrix",
+   "option": "dump_object_pool_link_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-017",
+   "source": "matrix",
+   "option": "dump_object_pool_link_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-018",
+   "source": "matrix",
+   "option": "dump_object_pool_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-019",
+   "source": "matrix",
+   "option": "dump_blobs",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-020",
+   "source": "matrix",
+   "option": "dump_blobs",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-021",
+   "source": "matrix",
+   "option": "dump_blobs",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-022",
+   "source": "matrix",
+   "option": "disassemble",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-023",
+   "source": "matrix",
+   "option": "disassemble",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-024",
+   "source": "matrix",
+   "option": "disassemble",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-025",
+   "source": "matrix",
+   "option": "version",
+   "input": "gen_snapshot",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-026",
+   "source": "matrix",
+   "option": "sdk_version",
+   "input": "analyze_snapshot",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-027",
+   "source": "matrix",
+   "option": "obfuscate",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-028",
+   "source": "matrix",
+   "option": "strip",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-029",
+   "source": "matrix",
+   "option": "save_debugging_info",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-030",
+   "source": "matrix",
+   "option": "assembly",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-031",
+   "source": "matrix",
+   "option": "macho",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-032",
+   "source": "matrix",
+   "option": "macho_object",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-033",
+   "source": "matrix",
+   "option": "obfuscate",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-034",
+   "source": "matrix",
+   "option": "strip",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-035",
+   "source": "matrix",
+   "option": "save_debugging_info",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-036",
+   "source": "matrix",
+   "option": "assembly",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-037",
+   "source": "matrix",
+   "option": "macho",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-038",
+   "source": "matrix",
+   "option": "macho_object",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-039",
+   "source": "matrix",
+   "option": "obfuscate",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-040",
+   "source": "matrix",
+   "option": "strip",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-041",
+   "source": "matrix",
+   "option": "save_debugging_info",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-042",
+   "source": "matrix",
+   "option": "assembly",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-043",
+   "source": "matrix",
+   "option": "macho",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-044",
+   "source": "matrix",
+   "option": "macho_object",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "section deltas"
+  },
+  {
+   "id": "G1-20261016-045",
+   "source": "matrix",
+   "option": "base_dt_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-046",
+   "source": "matrix",
+   "option": "base_ft_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "same data growth both sides"
+  },
+  {
+   "id": "G1-20261016-047",
+   "source": "matrix",
+   "option": "base_ct_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-048",
+   "source": "matrix",
+   "option": "patch_ct_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-049",
+   "source": "matrix",
+   "option": "base_op_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "proven (= no-link)"
+  },
+  {
+   "id": "G1-20261016-050",
+   "source": "matrix",
+   "option": "patch_op_link_data",
+   "input": "base_patch",
+   "root_cause": "AOT",
+   "basis": "proven (= no-link)"
+  },
+  {
+   "id": "G1-20261016-051",
+   "source": "matrix",
+   "option": "dd_slot_mapping",
+   "input": "base_patch",
+   "root_cause": "RC9",
+   "basis": "real gap"
+  },
+  {
+   "id": "G1-20261016-052",
+   "source": "matrix",
+   "option": "base_dt_link_data",
+   "input": "base_insert",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-053",
+   "source": "matrix",
+   "option": "base_ft_link_data",
+   "input": "base_insert",
+   "root_cause": "RC10",
+   "basis": "real gap"
+  },
+  {
+   "id": "G1-20261016-054",
+   "source": "matrix",
+   "option": "base_ct_link_data",
+   "input": "base_insert",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-055",
+   "source": "matrix",
+   "option": "patch_ct_link_data",
+   "input": "base_insert",
+   "root_cause": "AOT",
+   "basis": "proven (option output = no-link output on both sides)"
+  },
+  {
+   "id": "G1-20261016-056",
+   "source": "matrix",
+   "option": "base_op_link_data",
+   "input": "base_insert",
+   "root_cause": "RC8",
+   "basis": "REAL BUG"
+  },
+  {
+   "id": "G1-20261016-057",
+   "source": "matrix",
+   "option": "patch_op_link_data",
+   "input": "base_insert",
+   "root_cause": "RC8",
+   "basis": "REAL BUG"
+  },
+  {
+   "id": "G1-20261016-058",
+   "source": "matrix",
+   "option": "dd_table_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-059",
+   "source": "matrix",
+   "option": "dd_table_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-060",
+   "source": "matrix",
+   "option": "dd_table_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "derived, not decomposed"
+  },
+  {
+   "id": "G1-20261016-061",
+   "source": "matrix",
+   "option": "vm_snapshot_data",
+   "input": "vm_platform",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-062",
+   "source": "matrix",
+   "option": "isolate_snapshot_data",
+   "input": "vm_platform",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-063",
+   "source": "matrix",
+   "option": "isolate_snapshot_data",
+   "input": "hello_jit",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-064",
+   "source": "matrix",
+   "option": "load_vm_snapshot_data",
+   "input": "hello_jit",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-065",
+   "source": "matrix",
+   "option": "load_vm_snapshot_instructions",
+   "input": "hello_jit",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-066",
+   "source": "matrix",
+   "option": "load_isolate_snapshot_data",
+   "input": "hello_jit",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-20261016-067",
+   "source": "matrix",
+   "option": "load_isolate_snapshot_instructions",
+   "input": "hello_jit",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-20261016-068",
+   "source": "matrix",
+   "option": "compile_all",
+   "input": "hello_jit",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-001",
+   "source": "coverage",
+   "option": "version",
+   "input": "hello",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-002",
+   "source": "coverage",
+   "option": "verbose",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-003",
+   "source": "coverage",
+   "option": "sdk_version",
+   "input": "hello",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-004",
+   "source": "coverage",
+   "option": "vm_snapshot_data",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-005",
+   "source": "coverage",
+   "option": "isolate_snapshot_data",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-006",
+   "source": "coverage",
+   "option": "isolate_snapshot_instructions",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-007",
+   "source": "coverage",
+   "option": "load_vm_snapshot_data",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-008",
+   "source": "coverage",
+   "option": "load_vm_snapshot_instructions",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-009",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_data",
+   "input": "hello",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-010",
+   "source": "coverage",
+   "option": "compile_all",
+   "input": "hello",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-011",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_instructions",
+   "input": "hello",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-012",
+   "source": "coverage",
+   "option": "base_ct_link_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-013",
+   "source": "coverage",
+   "option": "patch_ct_link_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-014",
+   "source": "coverage",
+   "option": "base_dt_link_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-015",
+   "source": "coverage",
+   "option": "base_ft_link_data",
+   "input": "hello",
+   "root_cause": "AOT",
+   "basis": "same symbols and size growth both sides"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-016",
+   "source": "coverage",
+   "option": "base_op_link_data",
+   "input": "hello",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-017",
+   "source": "coverage",
+   "option": "patch_op_link_data",
+   "input": "hello",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-018",
+   "source": "coverage",
+   "option": "dd_slot_mapping",
+   "input": "hello",
+   "root_cause": "RC9",
+   "basis": "real gap"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-019",
+   "source": "coverage",
+   "option": "version",
+   "input": "base_dd",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-020",
+   "source": "coverage",
+   "option": "verbose",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-021",
+   "source": "coverage",
+   "option": "sdk_version",
+   "input": "base_dd",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-022",
+   "source": "coverage",
+   "option": "vm_snapshot_data",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-023",
+   "source": "coverage",
+   "option": "isolate_snapshot_data",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-024",
+   "source": "coverage",
+   "option": "isolate_snapshot_instructions",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-025",
+   "source": "coverage",
+   "option": "load_vm_snapshot_data",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-026",
+   "source": "coverage",
+   "option": "load_vm_snapshot_instructions",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-027",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_data",
+   "input": "base_dd",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-028",
+   "source": "coverage",
+   "option": "compile_all",
+   "input": "base_dd",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-029",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_instructions",
+   "input": "base_dd",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-030",
+   "source": "coverage",
+   "option": "base_ct_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-031",
+   "source": "coverage",
+   "option": "patch_ct_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-032",
+   "source": "coverage",
+   "option": "base_dt_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-033",
+   "source": "coverage",
+   "option": "base_ft_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT",
+   "basis": "same symbols and size growth both sides"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-034",
+   "source": "coverage",
+   "option": "base_op_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-035",
+   "source": "coverage",
+   "option": "patch_op_link_data",
+   "input": "base_dd",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-036",
+   "source": "coverage",
+   "option": "dd_slot_mapping",
+   "input": "base_dd",
+   "root_cause": "RC9",
+   "basis": "real gap"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-037",
+   "source": "coverage",
+   "option": "version",
+   "input": "prog",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-038",
+   "source": "coverage",
+   "option": "verbose",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-039",
+   "source": "coverage",
+   "option": "sdk_version",
+   "input": "prog",
+   "root_cause": "RC4",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-040",
+   "source": "coverage",
+   "option": "vm_snapshot_data",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-041",
+   "source": "coverage",
+   "option": "isolate_snapshot_data",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-042",
+   "source": "coverage",
+   "option": "isolate_snapshot_instructions",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-043",
+   "source": "coverage",
+   "option": "load_vm_snapshot_data",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-044",
+   "source": "coverage",
+   "option": "load_vm_snapshot_instructions",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-045",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_data",
+   "input": "prog",
+   "root_cause": "RC1",
+   "basis": "proven"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-046",
+   "source": "coverage",
+   "option": "compile_all",
+   "input": "prog",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-047",
+   "source": "coverage",
+   "option": "load_isolate_snapshot_instructions",
+   "input": "prog",
+   "root_cause": "RC11",
+   "basis": "unexplained"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-048",
+   "source": "coverage",
+   "option": "base_ct_link_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-049",
+   "source": "coverage",
+   "option": "patch_ct_link_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-050",
+   "source": "coverage",
+   "option": "base_dt_link_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "proven (= baseline)"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-051",
+   "source": "coverage",
+   "option": "base_ft_link_data",
+   "input": "prog",
+   "root_cause": "AOT",
+   "basis": "same symbols and size growth both sides"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-052",
+   "source": "coverage",
+   "option": "base_op_link_data",
+   "input": "prog",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-053",
+   "source": "coverage",
+   "option": "patch_op_link_data",
+   "input": "prog",
+   "root_cause": "AOT+RC12",
+   "basis": "proven (= baseline) + missing report line"
+  },
+  {
+   "id": "G1-COVERAGE-20261016-054",
+   "source": "coverage",
+   "option": "dd_slot_mapping",
+   "input": "prog",
+   "root_cause": "RC9",
+   "basis": "real gap"
+  }
+ ],
+ "checks": [
+  {
+   "check": "RC1 our snapshot hash = md5(15 VM files) and differs from theirs",
+   "ok": true,
+   "detail": {
+    "ours_binary": "9c903bac4c5775bbe606ac2d373a1db1",
+    "ours_from_source": "9c903bac4c5775bbe606ac2d373a1db1",
+    "theirs": "839937ddd3133a1c0758aeeefce5448c"
+   }
+  },
+  {
+   "check": "RC2 our features string = theirs + one 50-byte token",
+   "ok": true,
+   "detail": {
+    "hello": " shorebird-native-entry-thr-offsets=2312,2320,2328",
+    "prog": " shorebird-native-entry-thr-offsets=2312,2320,2328"
+   }
+  },
+  {
+   "check": "RC3 code: only the two Resume stubs differ in size (+4); all other differing words are branches to the same symbol+offset",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "counts": {
+      "identical": 545,
+      "branch_same_target": 2823,
+      "branch_only_functions": 1021
+     },
+     "size_differ": [
+      [
+       "stub Resume",
+       196,
+       192
+      ],
+      [
+       "stub _iso_stub_ResumeStub",
+       196,
+       192
+      ]
+     ],
+     "unpaired": 0
+    },
+    "prog": {
+     "counts": {
+      "identical": 723,
+      "branch_same_target": 7620,
+      "branch_only_functions": 2679
+     },
+     "size_differ": [
+      [
+       "stub Resume",
+       196,
+       192
+      ],
+      [
+       "stub _iso_stub_ResumeStub",
+       196,
+       192
+      ]
+     ],
+     "unpaired": 0
+    }
+   }
+  },
+  {
+   "check": "shorebird JSON x3: 1 size/self_hash diff = ResumeStub; offset diffs = exactly the functions after it (+4); subgraph diffs = exactly the functions reaching it; snapshot_data diffs only version/hash/length fields",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "functions": 1380,
+     "resume_stub_index": 1159,
+     "offset_shifted": 220,
+     "functions_after_stub": 220,
+     "subgraph_differ": [
+      809,
+      813,
+      1159,
+      1245,
+      1260
+     ],
+     "reach_resume_stub": [
+      809,
+      813,
+      1159,
+      1245,
+      1260
+     ],
+     "other_fields_differ": [],
+     "snapshot_data_differ": [
+      "adjusted_vm_instructions_hash",
+      "dart_version",
+      "snapshot_version",
+      "vm_data_hash",
+      "vm_data_length"
+     ],
+     "other_top_level_differ": [],
+     "ok": true
+    },
+    "base_dd": {
+     "functions": 1380,
+     "resume_stub_index": 1159,
+     "offset_shifted": 220,
+     "functions_after_stub": 220,
+     "subgraph_differ": [
+      809,
+      813,
+      1159,
+      1245,
+      1260
+     ],
+     "reach_resume_stub": [
+      809,
+      813,
+      1159,
+      1245,
+      1260
+     ],
+     "other_fields_differ": [],
+     "snapshot_data_differ": [
+      "adjusted_vm_instructions_hash",
+      "dart_version",
+      "snapshot_version",
+      "vm_data_hash",
+      "vm_data_length"
+     ],
+     "other_top_level_differ": [],
+     "ok": true
+    },
+    "prog": {
+     "functions": 3216,
+     "resume_stub_index": 3028,
+     "offset_shifted": 187,
+     "functions_after_stub": 187,
+     "subgraph_differ": [
+      1525,
+      1528,
+      3028,
+      3114,
+      3133
+     ],
+     "reach_resume_stub": [
+      1525,
+      1528,
+      3028,
+      3114,
+      3133
+     ],
+     "other_fields_differ": [],
+     "snapshot_data_differ": [
+      "adjusted_vm_instructions_hash",
+      "dart_version",
+      "snapshot_version",
+      "vm_data_hash",
+      "vm_data_length"
+     ],
+     "other_top_level_differ": [],
+     "ok": true
+    }
+   }
+  },
+  {
+   "check": "RC1-only JIT/core artifacts: same size, every differing byte in 20..51",
+   "ok": true,
+   "detail": {
+    "hello/core/vm_data.bin": {
+     "size": 13636,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "hello/core/iso_data.bin": {
+     "size": 9236236,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "hello/appjit/jit_data.bin": {
+     "size": 9342624,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "base_dd/core/vm_data.bin": {
+     "size": 13636,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "base_dd/core/iso_data.bin": {
+     "size": 9236236,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "base_dd/appjit/jit_data.bin": {
+     "size": 9342624,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "prog/core/vm_data.bin": {
+     "size": 13636,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "prog/core/iso_data.bin": {
+     "size": 9231412,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    },
+    "prog/appjit/jit_data.bin": {
+     "size": 9337760,
+     "differing": 29,
+     "range": [
+      20,
+      51
+     ]
+    }
+   }
+  },
+  {
+   "check": "identity options: output byte-identical to the same side's baseline",
+   "ok": true,
+   "detail": {
+    "hello/ours/verbose": true,
+    "hello/ours/ct": true,
+    "hello/ours/dt": true,
+    "hello/ours/op": true,
+    "hello/theirs/verbose": true,
+    "hello/theirs/ct": true,
+    "hello/theirs/dt": true,
+    "hello/theirs/op": true,
+    "base_dd/ours/verbose": true,
+    "base_dd/ours/ct": true,
+    "base_dd/ours/dt": true,
+    "base_dd/ours/op": true,
+    "base_dd/theirs/verbose": true,
+    "base_dd/theirs/ct": true,
+    "base_dd/theirs/dt": true,
+    "base_dd/theirs/op": true,
+    "prog/ours/verbose": true,
+    "prog/ours/ct": true,
+    "prog/ours/dt": true,
+    "prog/ours/op": true,
+    "prog/theirs/verbose": true,
+    "prog/theirs/ct": true,
+    "prog/theirs/dt": true,
+    "prog/theirs/op": true,
+    "base_patch/ours/ct": true,
+    "base_patch/ours/dt": true,
+    "base_patch/ours/op": true,
+    "base_patch/theirs/ct": true,
+    "base_patch/theirs/dt": true,
+    "base_patch/theirs/op": true,
+    "base_insert/ours/ct": true,
+    "base_insert/ours/dt": true,
+    "base_insert/theirs/ct": true,
+    "base_insert/theirs/dt": true
+   }
+  },
+  {
+   "check": "strip: .text/.rodata/build-id byte-identical to baseline on both sides",
+   "ok": true,
+   "detail": {
+    "hello/ours": true,
+    "hello/theirs": true,
+    "base_dd/ours": true,
+    "base_dd/theirs": true,
+    "prog/ours": true,
+    "prog/theirs": true
+   }
+  },
+  {
+   "check": "ELF option outputs keep the baseline .rodata delta (+128 B)",
+   "ok": true,
+   "detail": {
+    "hello/obfuscate": {
+     "text_delta": 0,
+     "rodata_delta": 128,
+     "baseline_text_delta": 16
+    },
+    "hello/strip": {
+     "text_delta": 16,
+     "rodata_delta": 128,
+     "baseline_text_delta": 16
+    },
+    "base_dd/obfuscate": {
+     "text_delta": 0,
+     "rodata_delta": 128,
+     "baseline_text_delta": 16
+    },
+    "base_dd/strip": {
+     "text_delta": 16,
+     "rodata_delta": 128,
+     "baseline_text_delta": 16
+    },
+    "prog/obfuscate": {
+     "text_delta": 0,
+     "rodata_delta": 128,
+     "baseline_text_delta": 0
+    },
+    "prog/strip": {
+     "text_delta": 0,
+     "rodata_delta": 128,
+     "baseline_text_delta": 0
+    }
+   }
+  },
+  {
+   "check": "RC8 base_insert op: theirs renumbered loads all still read the same object; ours renumbers the same loads but the pool was not re-sorted",
+   "ok": true,
+   "detail": {
+    "ours": {
+     "renumbered_pool_loads": 640,
+     "still_read_same_object": 23,
+     "pool_entries_moved": 6
+    },
+    "theirs": {
+     "renumbered_pool_loads": 640,
+     "still_read_same_object": 640,
+     "pool_entries_moved": 630
+    }
+   }
+  },
+  {
+   "check": "RC9 dd_slot_mapping: theirs rewrites the DD table into the snapshot and reports it, ours does not; first-pass key maps differ in size (resolution tables differ on prog only)",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "theirs_has_dd_table_line": true,
+     "ours_has_dd_table_line": false,
+     "key_map_first_pass": [
+      "2896",
+      "2878"
+     ],
+     "resolution_header": [
+      "# table_size=8 retained=7 rewritten=2 sentinel_filled=1 rewritten_null=0",
+      "# table_size=8 retained=7 rewritten=2 sentinel_filled=1 rewritten_null=0"
+     ],
+     "resolution_differs": false,
+     "so_growth_vs_baseline": [
+      0,
+      8
+     ]
+    },
+    "base_dd": {
+     "theirs_has_dd_table_line": true,
+     "ours_has_dd_table_line": false,
+     "key_map_first_pass": [
+      "2896",
+      "2878"
+     ],
+     "resolution_header": [
+      "# table_size=8 retained=7 rewritten=2 sentinel_filled=1 rewritten_null=0",
+      "# table_size=8 retained=7 rewritten=2 sentinel_filled=1 rewritten_null=0"
+     ],
+     "resolution_differs": false,
+     "so_growth_vs_baseline": [
+      0,
+      8
+     ]
+    },
+    "prog": {
+     "theirs_has_dd_table_line": true,
+     "ours_has_dd_table_line": false,
+     "key_map_first_pass": [
+      "5393",
+      "5253"
+     ],
+     "resolution_header": [
+      "# table_size=8 retained=5 rewritten=1 sentinel_filled=3 rewritten_null=0",
+      "# table_size=7 retained=5 rewritten=1 sentinel_filled=2 rewritten_null=0"
+     ],
+     "resolution_differs": true,
+     "so_growth_vs_baseline": [
+      0,
+      8
+     ]
+    }
+   }
+  },
+  {
+   "check": "RC10 base_ft_link_data: same data growth on base_patch, different on base_insert",
+   "ok": true,
+   "detail": {
+    "base_patch": {
+     "ours": 448,
+     "theirs": 448
+    },
+    "base_insert": {
+     "ours": 512,
+     "theirs": 448
+    }
+   }
+  },
+  {
+   "check": "RC4 version output differs only in the build date part",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "ours": "Dart SDK version: 3.12.2 (stable) (Fri Oct 2 18:05:57 2026 +0800) on \"macos_simarm64\"",
+     "theirs": "Dart SDK version: 3.12.2 (stable) (Thu Jun 11 21:57:33 2026 -0700) on \"macos_simarm64\""
+    },
+    "base_dd": {
+     "ours": "Dart SDK version: 3.12.2 (stable) (Fri Oct 2 18:05:57 2026 +0800) on \"macos_simarm64\"",
+     "theirs": "Dart SDK version: 3.12.2 (stable) (Thu Jun 11 21:57:33 2026 -0700) on \"macos_simarm64\""
+    },
+    "prog": {
+     "ours": "Dart SDK version: 3.12.2 (stable) (Fri Oct 2 18:05:57 2026 +0800) on \"macos_simarm64\"",
+     "theirs": "Dart SDK version: 3.12.2 (stable) (Thu Jun 11 21:57:33 2026 -0700) on \"macos_simarm64\""
+    }
+   }
+  },
+  {
+   "check": "RC11 JIT compile_all instruction images differ in size",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "ours": {
+      "appjit": 64,
+      "compiled": 4201824
+     },
+     "theirs": {
+      "appjit": 64,
+      "compiled": 4912240
+     }
+    },
+    "base_dd": {
+     "ours": {
+      "appjit": 64,
+      "compiled": 4201824
+     },
+     "theirs": {
+      "appjit": 64,
+      "compiled": 4912240
+     }
+    },
+    "prog": {
+     "ours": {
+      "appjit": 64,
+      "compiled": 4201440
+     },
+     "theirs": {
+      "appjit": 64,
+      "compiled": 4911744
+     }
+    }
+   }
+  },
+  {
+   "check": "RC12 theirs prints \"Sorted ObjectPool\"; ours does not",
+   "ok": true,
+   "detail": {
+    "ours": "Link Results 1126\nMappings from Link Results 1118\nMappings from Pair Constraints 293\nMappings from Backfill 10\n",
+    "theirs": "Link Results 1126\nMappings from Link Results 1118\nMappings from Pair Constraints 293\nMappings from Backfill 10\nSorted ObjectPool, moved 0 of 1421 entries.\n"
+   }
+  },
+  {
+   "check": "RC5 dump_object_pool: every differing entry is a process address",
+   "ok": true,
+   "detail": {
+    "hello": {
+     "differing_entries": 6,
+     "all_process_addresses": true,
+     "pairs_equal": true
+    },
+    "base_dd": {
+     "differing_entries": 6,
+     "all_process_addresses": true,
+     "pairs_equal": true
+    },
+    "prog": {
+     "differing_entries": 6,
+     "all_process_addresses": true,
+     "pairs_equal": true
+    }
+   }
+  },
+  {
+   "check": "every gap cell assigned (68 matrix + 54 coverage)",
+   "ok": true,
+   "detail": []
+  }
+ ],
+ "failed": []
+}

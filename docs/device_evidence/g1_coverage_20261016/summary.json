@@ -1,0 +1,59 @@
+{
+  "status": "FIXTURE_COVERAGE_COMPLETE_ARTIFACT_GAPS_REMAIN",
+  "created_at_utc": "2026-10-16T07:38:42.381328+00:00",
+  "before_missing_fixture_combinations": 63,
+  "after_missing_fixture_combinations": 0,
+  "registered_reference_options": 92,
+  "covered_fixture_combinations": 276,
+  "new_tool_calls": 171,
+  "new_behavior_checks": 90,
+  "audit_negative_controls": 6,
+  "supplement_classes": {
+    "byte_equal": 9,
+    "gap": 54
+  },
+  "original_matrix_artifact_gaps": 68,
+  "sdk_head": "8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0",
+  "sdk_diff_sha256": "6f1ec5170a0b3da5236b4deb68986c9855f3ea4d42e12b6cc8fedc44c3f74cbd",
+  "sdk_diff_unchanged": true,
+  "binaries_unchanged": true,
+  "build_freshness": {
+    "command": [
+      "ninja",
+      "-n",
+      "-C",
+      "/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64",
+      "clang_arm64/gen_snapshot",
+      "clang_arm64/analyze_snapshot"
+    ],
+    "returncode": 0,
+    "stdout": "ninja: Entering directory `/Users/Cruz/dart-3122/sdk/xcodebuild/ProductSimIosARM64'\nninja: no work to do.\n"
+  },
+  "pause_present": true,
+  "compiler_source": "pinned released reference Dart SDK CFE, used as common kernel input",
+  "compiler_toolchain_sha256": {
+    "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/dart-sdk/bin/dartaotruntime": "4c9adc366dca04ecf05a82acef973f4fcc3ec0e536039148891f2b3d69d0d372",
+    "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/dart-sdk/bin/snapshots/gen_kernel_aot.dart.snapshot": "ecaf83a7db98ed94bf4d1382ac2a508ff69ded1b00d509ce8fc3a1a011ead2ee",
+    "/Users/Cruz/.shorebird/bin/cache/flutter/c15ef6379403a0a55531a058bdb2c8e55bc05c98/bin/cache/dart-sdk/lib/_internal/vm_platform_product.dill": "44b1cddb909323378c9e960071e76f871e51c95495acb9964335057baab60966"
+  },
+  "files_sha256": {
+    "docs/device_evidence/g1_coverage_20261016/negative_controls.json": "70c42c25145a6ab03ca0287837f2d2c64b571c024af789802f4464dd7a0706c2",
+    "docs/device_evidence/g1_coverage_20261016/report.json": "2b2885bc2bb990b574a7311c31933a6da9611c29ba1df5c9dbc98cea5616121f",
+    "docs/device_evidence/g1_coverage_20261016/run.log": "607f6f08cf37ff59979b126711c0663e416a9edd05b8228c79f35462709a5ef6",
+    "docs/device_evidence/g1_coverage_20261016/audit.log": "46d66bf509ca8e2545589f3cb32c055fcb265756155c5dafd8067cc72a474dbf",
+    "docs/device_evidence/g1_coverage_20261016/negative_controls.log": "f88aa030c78038e72314fdbf846f28d5a091a93902346797b55ed4650df04c98",
+    "docs/device_evidence/g1_coverage_20261016/audit/prog.dump_object_pool.diff.json": "1e386a1c4ede883c10c66e058db3af3ed19e957a426f29f6416856202511e65b",
+    "docs/device_evidence/g1_coverage_20261016/audit/hello.dump_object_pool.diff.json": "939cce46e8cd8db2a2bac3918caa4386d6f3af535c68365c58643380452e4261",
+    "docs/device_evidence/g1_coverage_20261016/audit/report.json": "d4fc0428dc95c98a9680746be6c4308b5a589d6a77d94d2fed23b90d3c6ef6df",
+    "docs/device_evidence/g1_coverage_20261016/audit/hello.shorebird.diff.json": "b497ea193986b19c57a9d1df0b190366fc1913cdf9174ae6251a409d7b9595fc",
+    "docs/device_evidence/g1_coverage_20261016/audit/base_dd.dump_object_pool.diff.json": "48dc0aec56473242c93487874163572c4c42eabf448fc4038308f065498ff5a4",
+    "docs/device_evidence/g1_coverage_20261016/audit/prog.shorebird.diff.json": "0659775b711f3e91fe867f49c066a48290922a79dc4b67af4f357f1b59b61248",
+    "docs/device_evidence/g1_coverage_20261016/audit/base_dd.shorebird.diff.json": "b497ea193986b19c57a9d1df0b190366fc1913cdf9174ae6251a409d7b9595fc",
+    "tools/g1_complete_fixture_coverage.py": "b8a99095d94788fe37667205585e86c7d7ef1cf4406173de84a577b8f28da747",
+    "tools/g1_audit_coverage.py": "4d8a94e89f4368c393a2b82d71198dadd906b74956a60053c56540085ca8c2a5",
+    "docs/G1_COVERAGE_20261016.md": "304a0d81fd0b239fc818e9124943a9b25633259692f6dae1a8c538cd8db0bfc8",
+    "docs/G1_G4_FOLLOWUP_20261016.md": "40a18fb09cc8860484eb3a880ba5687f664c392b0189db2bb81066cdcb449551",
+    "scratchpad/g1_coverage_20261016/negative_controls.py": "1b6cd020c00357304d687fb77c23df8e00efe934f2a34179dacb05fd53ed0e00",
+    "scratchpad/g1_coverage_20261016/archive.py": "1737cd8ca871dbdfd761fbbd804e3e5be26de359babfb7bd887e17c55ede62d2"
+  }
+}

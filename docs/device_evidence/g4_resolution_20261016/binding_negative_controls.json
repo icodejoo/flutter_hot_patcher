@@ -1,0 +1,42 @@
+{
+  "wrong_pid": {
+    "rejected": true,
+    "failures": [
+      "theirs/links_flip20000: crash PID/parent/path/time/signal mismatch"
+    ]
+  },
+  "wrong_parent_pid": {
+    "rejected": true,
+    "failures": [
+      "theirs/links_flip20000: crash PID/parent/path/time/signal mismatch"
+    ]
+  },
+  "wrong_uuid": {
+    "rejected": true,
+    "failures": [
+      "theirs/links_flip20000: crash PID/parent/path/time/signal mismatch"
+    ]
+  },
+  "wrong_input_sha256": {
+    "rejected": true,
+    "failures": [
+      "theirs/links_flip20000: input changed during run: links",
+      "links_flip20000: unequal paired input: links"
+    ]
+  },
+  "missing_valid": {
+    "rejected": true,
+    "failures": [
+      "missing or extra runs",
+      "ours: missing or duplicated case",
+      "theirs: missing or duplicated case"
+    ]
+  },
+  "wrong_case": {
+    "rejected": true,
+    "failures": [
+      "theirs: missing or duplicated case",
+      "theirs/table_empty_0: unexpected reference disposition"
+    ]
+  }
+}

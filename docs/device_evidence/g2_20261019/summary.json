@@ -1,0 +1,193 @@
+{
+  "scope": "G2 upstream C++ and language/corelib differential verification on simarm64; SDK eacf8f1dd0d",
+  "status": "G2_DIFFERENTIAL_PASS",
+  "pairs": {
+    "debug_cc": {
+      "status": "COMPARABLE",
+      "ours_rows": 3319,
+      "stock_rows": 3119,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 10,
+      "ours_only": 200,
+      "ours_only_failures": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_run": {
+        "directory": "scratchpad/g2_runs_20261019_eacf/debug_cc_ours",
+        "git_head": "eacf8f1dd0dddc49121f993c50846b01f4e20d5c",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "tools/test.py",
+          "-m",
+          "debug",
+          "-a",
+          "simarm64",
+          "-c",
+          "dartk",
+          "-r",
+          "vm",
+          "--keep-generated-files",
+          "-j4",
+          "--write-results",
+          "--write-logs",
+          "--print-passing-stdout",
+          "--output-directory=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261019_eacf/debug_cc_ours",
+          "vm/cc/.*"
+        ],
+        "results_sha256": "142c0f893179e3ee30f274d7ee2ce413c7a75a1df4265faa32dcc5befbdcde2e",
+        "started": "2026-10-19T07:18:12.796701+00:00",
+        "finished": "2026-10-19T07:57:00.142165+00:00"
+      },
+      "stock_run": {
+        "directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/debug_cc_stock_v3",
+        "git_head": null,
+        "results_sha256": "d97ca463286fcc4f0fc4d7ce8fbee6a50c363312b6f80cb69f887c366c42f632"
+      },
+      "comparison_sha256": "81c10a79b51903ff9d29cce7e361ba23c5c937a12196a6b3e00256f8391240b7"
+    },
+    "product_cc": {
+      "status": "COMPARABLE",
+      "ours_rows": 3006,
+      "stock_rows": 2806,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 194,
+      "ours_only": 200,
+      "ours_only_failures": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_run": {
+        "directory": "scratchpad/g2_runs_20261019_eacf/product_cc_ours",
+        "git_head": "eacf8f1dd0dddc49121f993c50846b01f4e20d5c",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "tools/test.py",
+          "-m",
+          "product",
+          "-a",
+          "simarm64",
+          "-c",
+          "dartk",
+          "-r",
+          "vm",
+          "--keep-generated-files",
+          "-j4",
+          "--write-results",
+          "--write-logs",
+          "--print-passing-stdout",
+          "--output-directory=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261019_eacf/product_cc_ours",
+          "vm/cc/.*"
+        ],
+        "results_sha256": "21ef775ba73f5afaf8dd74773981c3699b231315a17028dcc72b9c160aae679e",
+        "started": "2026-10-19T07:18:12.796692+00:00",
+        "finished": "2026-10-19T07:36:31.380513+00:00"
+      },
+      "stock_run": {
+        "directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/product_cc_stock",
+        "git_head": null,
+        "results_sha256": "d78ca95e3f4cf77f5f38bd3191fc172912c610845b4b3ca9a8ebdd9c91f72f3a"
+      },
+      "comparison_sha256": "93e67c1d3c043edb27f3eeb26f3d6b18617dacbf69f5ab119d2e179173459a43"
+    },
+    "debug_language": {
+      "status": "COMPARABLE",
+      "ours_rows": 6921,
+      "stock_rows": 6921,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 25,
+      "ours_only": 0,
+      "ours_only_failures": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_run": {
+        "directory": "scratchpad/g2_runs_20261019_eacf/debug_language_ours",
+        "git_head": "eacf8f1dd0dddc49121f993c50846b01f4e20d5c",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "tools/test.py",
+          "-m",
+          "debug",
+          "-a",
+          "simarm64",
+          "-c",
+          "dartk",
+          "-r",
+          "vm",
+          "--keep-generated-files",
+          "-j3",
+          "--write-results",
+          "--write-logs",
+          "--print-passing-stdout",
+          "--output-directory=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261019_eacf/debug_language_ours",
+          "corelib",
+          "language"
+        ],
+        "results_sha256": "aa73c9ba559550d497fd761501d6ca7ec8414b764d822cca6a6e157b65c90693",
+        "started": "2026-10-19T07:57:00.336139+00:00",
+        "finished": "2026-10-19T08:14:02.664253+00:00"
+      },
+      "stock_run": {
+        "directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/debug_language_stock_v2",
+        "git_head": null,
+        "results_sha256": "5fc491fb820cd2769ed51aa60818c0ea798c298436b1f9faaf0e1cc2e12674f7"
+      },
+      "comparison_sha256": "a288a44b4e4b19e1d73ecec20b7bb06dc4e90a1ac6016944b4fc43f85604dc66"
+    },
+    "product_language": {
+      "status": "COMPARABLE",
+      "ours_rows": 6901,
+      "stock_rows": 6901,
+      "ours_worse": 0,
+      "ours_better": 0,
+      "shared_failures": 25,
+      "ours_only": 0,
+      "ours_only_failures": [],
+      "waived_build_args": [
+        "mac_sdk_path = \"/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk\""
+      ],
+      "ours_run": {
+        "directory": "scratchpad/g2_runs_20261019_eacf/product_language_ours",
+        "git_head": "eacf8f1dd0dddc49121f993c50846b01f4e20d5c",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "tools/test.py",
+          "-m",
+          "product",
+          "-a",
+          "simarm64",
+          "-c",
+          "dartkp",
+          "-r",
+          "dart_precompiled",
+          "--keep-generated-files",
+          "-j3",
+          "--write-results",
+          "--write-logs",
+          "--print-passing-stdout",
+          "--output-directory=/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261019_eacf/product_language_ours",
+          "corelib",
+          "language"
+        ],
+        "results_sha256": "ab3dbdb150f70c28b4c2ff0f113bd044045e412755bd23aee561cf7f6d1a00c4",
+        "started": "2026-10-19T07:36:31.602275+00:00",
+        "finished": "2026-10-19T08:19:10.740487+00:00"
+      },
+      "stock_run": {
+        "directory": "/Users/Cruz/Documents/flutter_hot_patcher/scratchpad/g2_runs_20261016/product_language_stock",
+        "git_head": null,
+        "results_sha256": "f2813de7cb70a92d0d6dbd514f5a2d8f7c9f8612f3e29e6cf0eef5f4ea4bf00d"
+      },
+      "comparison_sha256": "bee72fbc16f824faedb2ffc59fd8dba588db2a8ec798564d0c5e4d4d84ae2580"
+    }
+  },
+  "comparator_negative_control": "debug_language: corelib/iterable_skip_test flipped Pass->RuntimeError in a copy => REGRESSION rc 1"
+}

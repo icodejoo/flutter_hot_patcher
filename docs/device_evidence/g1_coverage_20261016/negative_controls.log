@@ -1,0 +1,7 @@
+missing_option True
+one_side_only True
+silent_metadata True
+missing_artifact True
+duplicate_cell True
+missing_cell True
+PASS 6

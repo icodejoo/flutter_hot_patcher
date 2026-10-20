@@ -1,0 +1,24 @@
+{
+  "sdk_head": "41693e90584a86ca9cf5025c6021f3db3ddd5fac",
+  "sdk_worktree_clean": true,
+  "engine_head": "c2515c46c7fca511e39735a615f0f12f3dca6230",
+  "engine_tracked_changes": "",
+  "pause_present": true,
+  "bingoplus_source_head": "3053264d069d7389a9c7a46849457f3d39c16bb9",
+  "device": {
+    "name": "QA-iPhone-YPVYHY2D90",
+    "ios_version": "26.6",
+    "model": "iPhone 14",
+    "udid": "00008110-000E583836F3601E"
+  },
+  "sha256": {
+    "ours_gen_snapshot": "75e17f701438f05bcef0c09727334917d942014fe6042aa5c459349a34454999",
+    "ours_analyze_snapshot": "a5507b49a2a875e8ccbe799adedb1da8fe05570b9f5976ec9d5646d677b00e78",
+    "ours_flutter_runtime": "9d0549c099677188193ffa44082a68d545abdec6038ff127814550bb92e692e2",
+    "sdk_pinned_gen_snapshot": "794dc986aae7b347833c17d9fb41577d83c0d91cd685fa1fc0e40130a87976bf",
+    "ref_gen_snapshot": "21c9452edee1e1b54e5f59136fd53f14acde2302c4dd63480ddf664638eadd3a",
+    "ref_analyze_snapshot": "669423717d6208d23cc24a26d56e7943e272bb374a30d425a696e26d3e9feb1a",
+    "harness_base": "87b13e0fa9f285936239f0d71cd8642f421999282d453a51f1ce2903a2599253",
+    "harness_patch": "f5b1ac8ca075a8de088adcbc7a1c4f657a7c3fbf9f3f610103a411e5e409fd61"
+  }
+}

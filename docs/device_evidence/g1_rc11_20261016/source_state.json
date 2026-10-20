@@ -1,0 +1,33 @@
+{
+  "sdk_head": "8367f9e0ca624cb8d2cc02ce2f38d677a3f1bdf0",
+  "sdk_worktree_patch_sha256": "81ed94283f36d6d402a3cf4c7ab7cba85190c9d15847e1357b666d752ea0cd42",
+  "sdk_modified_tracked_files": [
+    "runtime/BUILD.gn",
+    "runtime/bin/BUILD.gn",
+    "runtime/bin/analyze_snapshot.cc",
+    "runtime/bin/elf_loader.cc",
+    "runtime/bin/mappable.h",
+    "runtime/configs.gni",
+    "runtime/include/analyze_snapshot_api.h",
+    "runtime/vm/analyze_snapshot_api_impl.cc",
+    "runtime/vm/app_snapshot.cc",
+    "runtime/vm/code_comments.h",
+    "runtime/vm/compiler/aot/precompiler.cc",
+    "runtime/vm/compiler/api/print_filter.cc",
+    "runtime/vm/compiler/api/print_filter.h",
+    "runtime/vm/compiler/assembler/assembler_arm64.cc",
+    "runtime/vm/compiler/assembler/disassembler.cc",
+    "runtime/vm/compiler/assembler/disassembler.h",
+    "runtime/vm/compiler/backend/il_arm64.cc",
+    "runtime/vm/globals.h",
+    "runtime/vm/shorebird/linker.cc",
+    "runtime/vm/shorebird/wrapper_stub_test.cc"
+  ],
+  "assembler_file_sha256": "a261d0342ccfa359b06efb01e391491aba23bdb5b16f20698dbcceef3adfc6f4",
+  "il_arm64_file_sha256": "e10d5cfd3ce248b86f5af63b8f4bcb22268ede09ea3c47cfe5d5c60756f9a237",
+  "product_sim_ios_gen_snapshot_sha256": "1f7fd059f144935b60b98cdda6e35547962bf53d13f9d7b0302003b1f25e8b94",
+  "debug_arm64_run_vm_tests_sha256": "b9574313f6193d2d12c3526fef4d117302e0e087125f7ec54883b251673075d3",
+  "final_aot_hello_sha256": "84257b2fbeed3c6dec9ee7ae9397e00ebb72666e545882a93bb72907650fb40c",
+  "loop_pause_exists": true,
+  "committed_or_pushed": false
+}
