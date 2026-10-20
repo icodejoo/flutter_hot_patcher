@@ -23,6 +23,7 @@ gen_snapshot --dwarf-stack-traces --resolve-dwarf-paths --strip --save-debugging
 |---|---|---|---|
 | Wonderous | 7,071 B，与零改动的补丁 ELF 逐字节相同 | 104,102 B | 两项 PASS，`last_booted_patch: 1` |
 | BingoPlus | 18,004 B，与零改动逐字节相同（crlf、comment_eof、fmt_w40 三种格式变体） | 229,571 B | 两项 PASS，`last_booted_patch: 1` |
+| LocalSend | 51,122 B，与零改动逐字节相同（crlf、blank_top_all、comment_eof、fmt_w40 四种格式变体） | 255,540 B | 两项 PASS，`last_booted_patch: 1` |
 
 作为对照，Wonderous 默认构建下 `dart format` 重排的补丁增量：参考 +29,779 B，我方 +39,200 B。参考链在 split 模式下也会增加约 +103 KB，因为它的 aot_tools 会读 kernel 再做一轮链接期优化。
 
@@ -30,7 +31,7 @@ gen_snapshot --dwarf-stack-traces --resolve-dwarf-paths --strip --save-debugging
 
 ## 未覆盖
 
-- LocalSend 尚未完成：首次在参考侧跑 `build ipa` 时，Rust 插件联网失败，现改用 `build ios` 重跑。
+- LocalSend 参考侧用的是 `flutter build ios`（`FMT_REF_BUILD=ios`），不是 shorebird_cli 的 `build ipa`：它的 Rust 插件在 archive 步骤会重新联网拉取工具链清单，这里 TLS 握手失败。Dart 侧（app.dill、gen_snapshot、supplement）走的是同一条 flutter_build 路径。我方链不受影响。
 - 用 `.symbols` 还原崩溃栈未实测。
 - BingoPlus 的 blank_top_all 变体因参考侧 Xcode 偶发失败未测成。
 

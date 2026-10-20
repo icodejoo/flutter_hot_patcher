@@ -203,5 +203,88 @@
     "device": "00008110-000E583836F3601E"
    }
   }
+ },
+ "localsend": {
+  "split_unstripped": {
+   "nochange": {
+    "ref_delta": 3593008,
+    "ours_delta": 2330353,
+    "error": null
+   },
+   "crlf": {
+    "ref_delta": 3593008,
+    "ours_delta": 2330353,
+    "error": null
+   },
+   "blank_top_all": {
+    "ref_delta": 3594134,
+    "ours_delta": 2330265,
+    "error": null
+   },
+   "fmt_w40": {
+    "ref_delta": 3607064,
+    "ours_delta": 2340284,
+    "error": null
+   },
+   "comment_eof": {
+    "ref_delta": 3593008,
+    "ours_delta": 2330353,
+    "error": null
+   },
+   "logic": {
+    "ref_delta": 3545496,
+    "ours_delta": 2532660,
+    "error": null
+   }
+  },
+  "ref_build": "flutter build ios (build ipa fails: Rust plugin re-fetches its toolchain manifest)",
+  "split_stripped": {
+   "nochange": {
+    "delta": 51122,
+    "patch_aot_sha256": "ea6558ac74cc8c846968526f5ded470a963d778d22b96e1bf299e29d6851ab76"
+   },
+   "logic": {
+    "delta": 255540,
+    "patch_aot_sha256": "6e42b1d19f339da281e8f8a49353a0bfbf9f6b1ed3de13a91726f2b58d6801b7"
+   },
+   "fmt_w40": {
+    "delta": 51122,
+    "patch_aot_sha256": "ea6558ac74cc8c846968526f5ded470a963d778d22b96e1bf299e29d6851ab76"
+   },
+   "comment_eof": {
+    "delta": 51122,
+    "patch_aot_sha256": "ea6558ac74cc8c846968526f5ded470a963d778d22b96e1bf299e29d6851ab76"
+   },
+   "blank_top_all": {
+    "delta": 51122,
+    "patch_aot_sha256": "ea6558ac74cc8c846968526f5ded470a963d778d22b96e1bf299e29d6851ab76"
+   },
+   "crlf": {
+    "delta": 51122,
+    "patch_aot_sha256": "ea6558ac74cc8c846968526f5ded470a963d778d22b96e1bf299e29d6851ab76"
+   }
+  },
+  "device_stripped": {
+   "fmt_w40": {
+    "status": "PASS",
+    "delta_bytes": 51122,
+    "boot_marker": [
+     "BASE_V1 logic=23"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   },
+   "logic": {
+    "status": "PASS",
+    "delta_bytes": 255540,
+    "boot_marker": [
+     "PATCH_V2 logic=33"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   }
+  }
  }
 }

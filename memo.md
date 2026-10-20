@@ -23830,3 +23830,9 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - 验证：在干净的上游基点上执行 `git am --empty=keep`，206/206 应用成功，树哈希 `0f33054c…` 与原分支逐字节相同。第 166 个补丁（F37 erratum）是空提交，所以必须加 `--empty=keep`。
 - 另存了一份离线备份 `archive/dartsdk_backup/fhp-dartsdk-3122-20261020.bundle`（795 KB，已被 gitignore；`git bundle verify` 通过，还原测试 206 个提交）。
 - 遗留：做还原测试时，我在 SDK 仓库建了一个临时分支 `fhp-bundle-base`（指向上游基点），删除时被 reference-transaction 钩子拦下，需要操作者手动删：`git -C ~/dart-3122/sdk branch -D fhp-bundle-base`。
+
+### 2026-10-20 晚：LocalSend 补齐，「格式排版变化不产生补丁」在三个真实 app 上全部通过
+
+LocalSend（split + strip，我方链）：crlf、blank_top_all、comment_eof、fmt_w40 四种格式变体编出的补丁 ELF 与零改动逐字节相同，补丁都是 51,122 B；逻辑补丁 255,540 B。真机（QA-iPhone-YPVYHY2D90 / iOS 26.6）两项 PASS，`last_booted_patch: 1`，进程存活，卸载 rc 0。参考侧用 `build ios`：`build ipa` 的 archive 步骤里，Rust 插件联网失败。
+**三个 app 汇总**（格式化补丁与零改动逐字节相同 / 逻辑补丁）：Wonderous 7,071 / 104,102 B；BingoPlus 18,004 / 229,571 B；LocalSend 51,122 / 255,540 B。三个 app 真机全部 PASS。证据在 `docs/device_evidence/fmt_patch_20261020/`。
+仍未覆盖：用 `.symbols` 还原崩溃栈；BingoPlus 的 blank_top_all（参考侧 Xcode 偶发失败）。
