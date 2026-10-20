@@ -1,0 +1,207 @@
+{
+ "wonderous": {
+  "split_unstripped": {
+   "nochange": {
+    "ref_delta": 1726457,
+    "ours_delta": 1167330,
+    "error": null
+   },
+   "nochange_r2": {
+    "ref_delta": 1726457,
+    "ours_delta": 1167330,
+    "error": null
+   },
+   "trailing_space": {
+    "ref_delta": 1726763,
+    "ours_delta": 1167336,
+    "error": null
+   },
+   "crlf": {
+    "ref_delta": 1726763,
+    "ours_delta": 1167336,
+    "error": null
+   },
+   "comment_eof": {
+    "ref_delta": 1828820,
+    "ours_delta": 1167330,
+    "error": null
+   },
+   "blank_top_one": {
+    "ref_delta": 1726485,
+    "ours_delta": 1167319,
+    "error": null
+   },
+   "blank_top_all": {
+    "ref_delta": 1727449,
+    "ours_delta": 1167056,
+    "error": null
+   },
+   "fmt_w40": {
+    "ref_delta": 1829592,
+    "ours_delta": 1167912,
+    "error": null
+   },
+   "logic": {
+    "ref_delta": 1723538,
+    "ours_delta": 1263108,
+    "error": null
+   }
+  },
+  "split_stripped": {
+   "nochange": {
+    "delta": 7071,
+    "patch_aot_sha256": "62e424793ee918de267a518a9453adc624bda27e126fc5c4598892031632c58c"
+   },
+   "logic": {
+    "delta": 104102,
+    "patch_aot_sha256": "7fcaf060636b2c1adde532f8a4cefaf291a2e36fc48cf5c9c965d7e906fcf989"
+   },
+   "fmt_w40": {
+    "delta": 7071,
+    "patch_aot_sha256": "62e424793ee918de267a518a9453adc624bda27e126fc5c4598892031632c58c"
+   }
+  },
+  "device_stripped": {
+   "fmt_w40": {
+    "status": "PASS",
+    "delta_bytes": 7071,
+    "boot_marker": [
+     "BASE_V1 logic=23"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   },
+   "logic": {
+    "status": "PASS",
+    "delta_bytes": 104102,
+    "boot_marker": [
+     "PATCH_V2 logic=33"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   }
+  },
+  "default_mode": {
+   "nochange": {
+    "ref_delta": 2305096,
+    "ours_delta": 1130275
+   },
+   "comment_eof": {
+    "ref_delta": 2312804,
+    "ours_delta": 1130275
+   },
+   "trailing_space": {
+    "ref_delta": 2305178,
+    "ours_delta": 1130302
+   },
+   "blank_top_one": {
+    "ref_delta": 2304163,
+    "ours_delta": 1143913
+   },
+   "blank_top_all": {
+    "ref_delta": 2308574,
+    "ours_delta": 1148783
+   },
+   "crlf": {
+    "ref_delta": 2305178,
+    "ours_delta": 1130302
+   },
+   "fmt_w40": {
+    "ref_delta": 2334875,
+    "ours_delta": 1169475
+   },
+   "logic": {
+    "ref_delta": 2319436,
+    "ours_delta": 1239675
+   },
+   "nochange_r2": {
+    "ref_delta": 2305096,
+    "ours_delta": 1130275
+   },
+   "nochange_r3": {
+    "ref_delta": 2305096,
+    "ours_delta": 1130275
+   }
+  }
+ },
+ "bingoplus": {
+  "split_unstripped": {
+   "nochange": {
+    "ref_delta": 4338715,
+    "ours_delta": 2588187,
+    "error": null
+   },
+   "crlf": {
+    "ref_delta": 4318596,
+    "ours_delta": 2588187,
+    "error": null
+   },
+   "blank_top_all": {
+    "ref_delta": null,
+    "ours_delta": null,
+    "error": "flutter_build_ipa rc=1, see /Users/Cruz/Documents/flutter_hot_patcher/scratchpad/fmt_patch_20261020/bingoplus_split/blank_top_all/ref/flutter_build_ipa.log"
+   },
+   "fmt_w40": {
+    "ref_delta": 4347640,
+    "ours_delta": 2592554,
+    "error": null
+   },
+   "comment_eof": {
+    "ref_delta": 4341065,
+    "ours_delta": 2588187,
+    "error": null
+   },
+   "logic": {
+    "ref_delta": 4304977,
+    "ours_delta": 2798241,
+    "error": null
+   }
+  },
+  "split_stripped": {
+   "nochange": {
+    "delta": 18004,
+    "patch_aot_sha256": "c88c74c538bd597a83ca72e10586d504d0350e8188023b6f4e244787c03226a6"
+   },
+   "logic": {
+    "delta": 229571,
+    "patch_aot_sha256": "49ab65d3542ed2e7ca7202256a5da13952ba7d67126672f75499c13efb97aaf1"
+   },
+   "fmt_w40": {
+    "delta": 18004,
+    "patch_aot_sha256": "c88c74c538bd597a83ca72e10586d504d0350e8188023b6f4e244787c03226a6"
+   },
+   "comment_eof": {
+    "delta": 18004,
+    "patch_aot_sha256": "c88c74c538bd597a83ca72e10586d504d0350e8188023b6f4e244787c03226a6"
+   },
+   "crlf": {
+    "delta": 18004,
+    "patch_aot_sha256": "c88c74c538bd597a83ca72e10586d504d0350e8188023b6f4e244787c03226a6"
+   }
+  },
+  "device_stripped": {
+   "fmt_w40": {
+    "status": "PASS",
+    "delta_bytes": 18004,
+    "boot_marker": [
+     "BASE_V1 logic=23"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   },
+   "logic": {
+    "status": "PASS",
+    "delta_bytes": 229571,
+    "boot_marker": [
+     "PATCH_V2 logic=33"
+    ],
+    "last_booted_patch": 1,
+    "patch_state": "Installed",
+    "device": "00008110-000E583836F3601E"
+   }
+  }
+ }
+}

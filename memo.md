@@ -23812,3 +23812,12 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - **logic（真逻辑改动）：PASS**。补丁启动后显示 `PATCH_V2 logic=33`，`Installed`，`last_booted_patch: 1`。
 - 卸载 rc 均为 0。
 - 限定：只测了我方链；参考链的 split 模式没上真机。崩溃栈要靠 `.symbols` 还原，这一点没测。只测了 Wonderous 一个 app。
+
+### 2026-10-20 晚：「格式排版变化不产生补丁」接进 fhpb（操作者批准的规则 1 例外）
+
+操作者要求只改格式时不产生补丁。Shorebird 做不到：它在 split 模式下格式化补丁仍增加约 100 KB。按规则 1，这类能力默认不进产品，此处由操作者明确要求，记为**例外**。
+- 做法：base 用 `--split-debug-info`；补丁 ELF 用 `--dwarf-stack-traces --resolve-dwarf-paths --strip`。之前那 0.6 KB（ELF 层面 2.7 KB）全部来自没 strip 的 `.debug_info`/`.debug_line`；加 `--strip` 后，格式化补丁与零改动补丁逐字节相同。
+- 读数：Wonderous 格式化补丁 7,071 B、逻辑补丁 104,102 B；BingoPlus 分别为 18,004 B、229,571 B。默认构建下 Wonderous 的逻辑补丁是 1.26 MB。两个 app 真机都 PASS，`last_booted_patch: 1`。证据见 `docs/device_evidence/fmt_patch_20261020/`。
+- fhpb：`release --split-debug-info` 从 App 的特性串读模式，写入 `release.json`，调试符号归档；`patch` 按 release 的模式构建，模式不一致拒绝发布。测试 56/56，4 道新增检查各做过删改测试。
+- 提交时只提交了 `cli.py` 中属于本功能的改动。工作区里原有的公钥 SPKI→PKCS#1 改动（`gen_keypair`、`updater_public_key`、`verify`）不是本次做的，原样留在工作区未提交。已在只含 HEAD + 本次改动的隔离树里跑过测试，56/56。
+- 未完成：LocalSend（改用 build ios 重跑中）；用 `.symbols` 还原崩溃栈未实测；已发布的 release 要从下一个 split 构建的版本才生效。

@@ -35,6 +35,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from typing import NoReturn, Optional
 
@@ -141,6 +142,25 @@ def find_app_dills(app_dir: pathlib.Path):
     if not hits:
         die("找不到 app.dill（先跑一次 release 构建）")
     return sorted(hits, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+DWARF_ARGS = ["--dwarf-stack-traces", "--resolve-dwarf-paths"]
+
+
+def dwarf_mode(snapshot: pathlib.Path) -> Optional[bool]:
+    """快照特性串里记录的 dwarf_stack_traces_mode：True / False / None（读不出）。
+
+    `--split-debug-info` 构建的 App 带 `dwarf_stack_traces_mode`，
+    普通构建带 `no-dwarf_stack_traces_mode`。基线与补丁必须一致：
+    两者生成的机器码不同，链接表会把补丁函数连到错误的基线地址上。
+    """
+    data = snapshot.read_bytes()
+    on, off = data.count(b" dwarf_stack_traces_mode "), data.count(b" no-dwarf_stack_traces_mode ")
+    if on and not off:
+        return True
+    if off and not on:
+        return False
+    return None
 
 
 # ---------------------------------------------------------------- init
@@ -320,12 +340,20 @@ def cmd_release(a) -> int:
     repo = pathlib.Path(a.repo).resolve()
     need(app_dir, "工程目录")
 
+    # 先定 release 目录：--split-debug-info 的调试符号要直接落进归档。
+    rv_pre = a.release_version or (None if a.build else detect_release_version(app_dir))
+    symbols_tmp = None
     if a.build:
         flutter = need(SB_FLUTTER / "bin/flutter", "Shorebird 的 flutter")
-        print("[release] flutter build ios --release …")
-        subprocess.run([str(flutter), "build", "ios", "--release"], cwd=app_dir, check=True)
+        cmd = [str(flutter), "build", "ios", "--release"]
+        if a.split_debug_info:
+            # 先编到临时目录：release 版本号要等构建完从 Info.plist 读。
+            symbols_tmp = pathlib.Path(tempfile.mkdtemp(prefix="fhpb_symbols_"))
+            cmd.append(f"--split-debug-info={symbols_tmp}")
+        print(f"[release] {' '.join(cmd[1:])} …")
+        subprocess.run(cmd, cwd=app_dir, check=True)
 
-    rv = a.release_version or detect_release_version(app_dir)
+    rv = rv_pre or detect_release_version(app_dir)
     rel = release_dir(repo, rv)
     if (rel / "release.json").exists() and not a.force:
         die(f"release {rv} 已存在。改版本号，或加 --force 覆盖。")
@@ -333,6 +361,19 @@ def cmd_release(a) -> int:
     app_bin = need(app_dir / "build/ios/iphoneos/Runner.app/Frameworks/App.framework/App",
                    "App 二进制")
     gen_snapshot = need(pathlib.Path(a.gen_snapshot or DEFAULT_GEN_SNAPSHOT), "gen_snapshot")
+
+    # 构建模式以 App 自己的特性串为准，不以命令行为准：没加 --build 时
+    # App 是谁、怎么编的我们不知道，只有它自己知道。
+    split = dwarf_mode(app_bin)
+    if split is None:
+        die(f"读不出 {app_bin} 的 dwarf_stack_traces_mode，无法确定基线的构建模式")
+    if a.split_debug_info and not split:
+        die("给了 --split-debug-info，但 App 不是 --split-debug-info 构建的"
+            "（特性串是 no-dwarf_stack_traces_mode）。用 --build 让 fhpb 来构建，"
+            "或自己用 flutter build ios --release --split-debug-info=<目录> 重新构建。")
+    if split:
+        print("[release] 基线是 --split-debug-info 构建：格式排版改动不会进补丁；"
+              "崩溃栈需用归档的 symbols/ 还原")
 
     # --force 会重算基线（App.baseline / app.dill / base.aot / base.blob），
     # 而已发布的增量是对着**旧** base.blob 算的 —— 留着它们，设备下载后
@@ -364,8 +405,9 @@ def cmd_release(a) -> int:
     errors = []
     for cand in candidates:
         print(f"[release] 校验 {cand}（kernel v{kernel_version(cand)}）…")
+        dbg = [*DWARF_ARGS, f"--save-debugging-info={rel / 'base.aot.symbols'}"] if split else []
         r = subprocess.run([str(gen_snapshot), "--deterministic",
-                            "--snapshot_kind=app-aot-elf", f"--elf={base_aot}", str(cand)],
+                            "--snapshot_kind=app-aot-elf", *dbg, f"--elf={base_aot}", str(cand)],
                            capture_output=True, text=True)
         if r.returncode == 0:
             app_dill = cand
@@ -377,8 +419,19 @@ def cmd_release(a) -> int:
             "请用发布用的 SDK 重新构建一次 release，再跑 fhpb release。\n"
             + "\n".join(errors))
 
+    # 重新生成的 base ELF 必须与发出去的 App 同一模式，否则链接表连错地址。
+    if dwarf_mode(base_aot) != split:
+        base_aot.unlink(missing_ok=True)
+        die(f"重新生成的 base.aot 模式（dwarf={dwarf_mode(base_aot)}）与 App（dwarf={split}）不一致")
+
     shutil.copy2(app_bin, rel / "App.baseline")
     shutil.copy2(app_dill, rel / "app.dill")
+    if symbols_tmp is not None:
+        shutil.copytree(symbols_tmp, rel / "symbols", dirs_exist_ok=True)
+        shutil.rmtree(symbols_tmp, ignore_errors=True)
+    elif split:
+        print("[warn] App 是 --split-debug-info 构建的，但不是 fhpb --build 编的："
+              "请自行把那次构建的调试符号目录存好，线上崩溃栈要靠它还原。", file=sys.stderr)
 
     analyze = need(pathlib.Path(a.analyze_snapshot or DEFAULT_ANALYZE), "analyze_snapshot")
     base_blob = rel / "base.blob"
@@ -402,6 +455,7 @@ def cmd_release(a) -> int:
         "app_dill_sha256": sha256_hex(rel / "app.dill"),
         "app_dill_kernel_version": kernel_version(rel / "app.dill"),
         "base_blob_bytes": base_blob.stat().st_size,
+        "split_debug_info": split,
     })
     idx = rel / "index.json"
     if not idx.exists():
@@ -541,6 +595,9 @@ def cmd_patch(a) -> int:
     env = dict(os.environ, FHP_BASE_DILL=str(rel / "app.dill"))
     if (rel / "base.aot").exists():
         env["FHP_BASE_AOT"] = str(rel / "base.aot")
+    # 补丁必须与基线同一模式。旧 release.json 没有这个字段 = 普通构建。
+    split = bool(meta.get("split_debug_info", False))
+    env["FHP_SPLIT_DEBUG_INFO"] = "1" if split else "0"
     print(f"[patch] 构建 .vmcode（基线 {rv}）…")
     # FHP_BUILD_SCRIPT 只用于测试注入桩件；生产路径走仓库里的那份。
     build_script = os.environ.get("FHP_BUILD_SCRIPT",
@@ -572,6 +629,10 @@ def cmd_patch(a) -> int:
             "确认这就是预期结果请用 --min-link-pct 显式放低门限。")
 
     vmcode = need(out_dir / "out.vmcode", "out.vmcode")
+    patch_aot = out_dir / "patch.aot"
+    if patch_aot.exists() and dwarf_mode(patch_aot) != split:
+        die(f"补丁 patch.aot 的模式（dwarf={dwarf_mode(patch_aot)}）与 release {rv}"
+            f"（split_debug_info={split}）不一致，拒绝发布")
     idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
     number = a.patch_number or next_patch_number(idx)
 
@@ -580,6 +641,9 @@ def cmd_patch(a) -> int:
                            patch_tool=need(pathlib.Path(a.patch_tool or DEFAULT_PATCH_TOOL),
                                            "patch 工具"),
                            allow_overwrite=a.force)
+
+    if split and (out_dir / "patch.symbols").exists():
+        shutil.copy2(out_dir / "patch.symbols", rel / "patches" / f"{number}.symbols")
 
     ratio = 100 * entry["size_compressed"] / entry["size_uncompressed"]
     print(f"\n[patch] #{entry['number']} → {rel/'patches'/f'{number}.bin'}\n"
@@ -802,6 +866,9 @@ def main() -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--release-version", default=None, help="默认从 Info.plist 读")
     p.add_argument("--build", action="store_true", help="先跑 flutter build ios --release")
+    p.add_argument("--split-debug-info", action="store_true",
+                   help="用 --split-debug-info 构建基线：只改格式排版不再产生补丁；"
+                        "调试符号归档到 releases/<版本>/symbols，崩溃栈靠它还原")
     p.add_argument("--app-dill", default=None, help="指定基线 kernel，默认自动挑选并校验")
     p.add_argument("--analyze-snapshot", default=None)
     p.add_argument("--gen-snapshot", default=None)

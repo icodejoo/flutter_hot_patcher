@@ -32,13 +32,14 @@ SH
 # gen_snapshot 桩件：只接受 kernel v130 的 dill，模拟真实工具链对版本的挑剔
 cat > "$BIN/gen_snapshot" <<SH
 #!/usr/bin/env bash
-for a in "\$@"; do case "\$a" in --elf=*) ELF="\${a#--elf=}";; *.dill) DILL="\$a";; esac; done
+MODE="no-dwarf_stack_traces_mode"
+for a in "\$@"; do case "\$a" in --elf=*) ELF="\${a#--elf=}";; *.dill) DILL="\$a";; --dwarf-stack-traces) MODE="dwarf_stack_traces_mode";; esac; done
 VER=\$("$PY" -c "import sys;print(int.from_bytes(open(sys.argv[1],'rb').read(8)[4:8],'big'))" "\$DILL")
 if [ "\$VER" != "130" ]; then
   echo "Can't load Kernel binary: Invalid kernel binary format version (expected 130, found \$VER)." >&2
   exit 253
 fi
-head -c 32768 /dev/zero > "\$ELF"
+{ head -c 32768 /dev/zero; printf 'product no-code_comments %s dedup_instructions ' "\$MODE"; } > "\$ELF"
 SH
 chmod +x "$BIN/analyze_snapshot" "$BIN/patch" "$BIN/gen_snapshot"
 
@@ -49,7 +50,9 @@ app = pathlib.Path(sys.argv[1])
 p = app/"build/ios/iphoneos/Runner.app/Info.plist"
 p.write_bytes(plistlib.dumps({"CFBundleShortVersionString":"1.2.3","CFBundleVersion":"7"}))
 PY
-head -c 4096 /dev/urandom > "$APP/build/ios/iphoneos/Runner.app/Frameworks/App.framework/App"
+# 真实 App 的快照特性串里记着构建模式；fhpb release 据此决定基线是否 split。
+{ head -c 4096 /dev/urandom; printf 'product no-code_comments no-dwarf_stack_traces_mode dedup_instructions '; } \
+  > "$APP/build/ios/iphoneos/Runner.app/Frameworks/App.framework/App"
 # 两份 app.dill：新的那份是别的工具链留下的 v121，正确的是 v130。
 # release 必须选 v130 那份，而不是 mtime 最新的那份。
 mkdir -p "$APP/.dart_tool/flutter_build/good" "$APP/.dart_tool/flutter_build/stale"
@@ -364,6 +367,55 @@ PY
 "$PY" "$CLI" list --repo "$REPO" >"$TMP/list.txt" 2>&1 \
   && grep -q "release 1.2.3+7" "$TMP/list.txt" \
   && pass "list 输出 release" || { fail "list 失败"; cat "$TMP/list.txt"; }
+
+# --- 8) --split-debug-info 基线：模式由 App 的特性串决定，补丁必须同一模式 -------
+# 一个 split 构建的 App（特性串 dwarf_stack_traces_mode）。
+SAPP="$TMP/sapp"; SREPO="$TMP/srepo"
+mkdir -p "$SAPP/build/ios/iphoneos/Runner.app/Frameworks/App.framework" "$SAPP/.dart_tool/flutter_build/good"
+cp "$APP/build/ios/iphoneos/Runner.app/Info.plist" "$SAPP/build/ios/iphoneos/Runner.app/Info.plist"
+cp "$APP/.dart_tool/flutter_build/good/app.dill" "$SAPP/.dart_tool/flutter_build/good/app.dill"
+cp "$APP/shorebird.yaml" "$SAPP/shorebird.yaml"
+{ head -c 4096 /dev/urandom; printf 'product no-code_comments dwarf_stack_traces_mode dedup_instructions '; } \
+  > "$SAPP/build/ios/iphoneos/Runner.app/Frameworks/App.framework/App"
+srel(){ "$PY" "$CLI" release --app-dir "$SAPP" --repo "$SREPO" \
+          --analyze-snapshot "$BIN/analyze_snapshot" --gen-snapshot "$BIN/gen_snapshot" "$@"; }
+srel >"$TMP/sr.txt" 2>&1 || { fail "split 基线 release 失败"; cat "$TMP/sr.txt"; }
+"$PY" -c "import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))['split_debug_info'] is True else 1)" \
+  "$SREPO/releases/1.2.3+7/release.json" && pass "split 基线被识别并记入 release.json" \
+  || fail "release.json 没记下 split_debug_info=true"
+# 重新生成的 base.aot 也必须是 dwarf 模式（gen_snapshot 桩件只有收到 --dwarf-stack-traces 才这样写）
+grep -q " dwarf_stack_traces_mode " "$SREPO/releases/1.2.3+7/base.aot" \
+  && pass "split 基线的 base.aot 带 --dwarf-stack-traces 重新生成" \
+  || fail "split 基线的 base.aot 没带 dwarf 参数（链接会连错地址）"
+grep -q "split_debug_info.: false" "$REPO/releases/1.2.3+7/release.json" \
+  && pass "普通基线记为 split_debug_info=false" || fail "普通基线没记 split_debug_info=false"
+# 普通 App 却要求 --split-debug-info：拒绝（不能只信命令行）
+"$PY" "$CLI" release --app-dir "$APP" --repo "$TMP/srepo2" --split-debug-info \
+   --analyze-snapshot "$BIN/analyze_snapshot" --gen-snapshot "$BIN/gen_snapshot" >"$TMP/sr2.txt" 2>&1 \
+  && fail "普通 App 加 --split-debug-info 竟然归档了" \
+  || { grep -q "no-dwarf_stack_traces_mode" "$TMP/sr2.txt" && pass "普通 App 加 --split-debug-info 被拒绝" \
+       || { fail "拒绝了但没说明原因"; cat "$TMP/sr2.txt"; }; }
+# 补丁构建：fhpb 必须把模式传给构建脚本，且模式不符的补丁不许发布
+cat > "$BIN/build_mode.sh" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$3"; head -c 4096 /dev/urandom > "$3/out.vmcode"
+M=no-dwarf_stack_traces_mode; [ "${FHP_SPLIT_DEBUG_INFO:-0}" = "1" ] && M=dwarf_stack_traces_mode
+[ -n "${FORCE_MODE:-}" ] && M="$FORCE_MODE"
+printf 'product %s dedup_instructions ' "$M" > "$3/patch.aot"
+echo "seen FHP_SPLIT_DEBUG_INFO=${FHP_SPLIT_DEBUG_INFO:-unset}" > "$3/env.txt"
+echo "link%: 100.00%"
+SH
+chmod +x "$BIN/build_mode.sh"
+spatch(){ FHP_BUILD_SCRIPT="$BIN/build_mode.sh" "$PY" "$CLI" patch --app-dir "$SAPP" --repo "$SREPO" \
+            --private-key "$KEYS/patch_private.pem" --patch-tool "$BIN/patch" \
+            --base-url "http://127.0.0.1:$PORT" --out-dir "$TMP/sout" "$@"; }
+spatch >"$TMP/sp.txt" 2>&1 && grep -q "FHP_SPLIT_DEBUG_INFO=1" "$TMP/sout/env.txt" \
+  && pass "split 基线的补丁构建收到 FHP_SPLIT_DEBUG_INFO=1" \
+  || { fail "split 基线的补丁构建没收到模式"; cat "$TMP/sp.txt"; }
+FORCE_MODE=no-dwarf_stack_traces_mode spatch >"$TMP/sp2.txt" 2>&1 \
+  && fail "模式不符的补丁竟然发布了" \
+  || { grep -q "模式" "$TMP/sp2.txt" && pass "模式与基线不符的补丁被拒绝" \
+       || { fail "拒绝了但不是因为模式"; cat "$TMP/sp2.txt"; }; }
 
 echo "---"
 [ "$FAILS" -eq 0 ] && { echo "ALL PASS"; exit 0; } || { echo "$FAILS FAILURE(S)"; exit 1; }

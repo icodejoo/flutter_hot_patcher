@@ -41,6 +41,22 @@ BASE_DILL="${FHP_BASE_DILL:-$(find "$APP_DIR/.dart_tool/flutter_build" -name "ap
 
 mkdir -p "$OUT_DIR"
 
+# FHP_SPLIT_DEBUG_INFO=1：基线是 --split-debug-info 构建的（fhpb 从
+# release.json 传入）。补丁与本地重新生成的 base 必须带同样的参数，否则
+# 机器码不同、链接表连错地址。行号信息进 .symbols 而不进快照，
+# 所以只改格式排版不会产生补丁。参数与 shorebird_cli 的
+# ApplePatcherMixin.splitDebugInfoArgs 相同。
+DWARF_BASE=()
+DWARF_PATCH=()
+if [ "${FHP_SPLIT_DEBUG_INFO:-0}" = "1" ]; then
+    DWARF_BASE=(--dwarf-stack-traces --resolve-dwarf-paths "--save-debugging-info=$OUT_DIR/base.symbols")
+    # 补丁 ELF 还要 --strip：不 strip 时 gen_snapshot 仍把 .debug_info /
+    # .debug_line（行号表）留在 ELF 里，.vmcode 又内嵌整个 ELF，格式改动会
+    # 经由它们进补丁（Wonderous 实测：dart format 重排 +582 B，零改动底噪
+    # 1.17 MB；strip 后两者逐字节相同、都是 7 KB）。调试信息照样进 .symbols。
+    DWARF_PATCH=(--dwarf-stack-traces --resolve-dwarf-paths --strip "--save-debugging-info=$OUT_DIR/patch.symbols")
+fi
+
 # FHP_BASE_AOT：release 归档时已经产过并验过的 base ELF。直接复用可省一次
 # gen_snapshot，也保证补丁对的就是当初归档的那份基线（fhpb release 会传它）。
 if [ -n "${FHP_BASE_AOT:-}" ]; then
@@ -50,6 +66,7 @@ else
     echo "[0/5] base kernel -> base ELF"
     "$GEN_SNAPSHOT" --deterministic \
         --snapshot_kind=app-aot-elf \
+        ${DWARF_BASE[@]+"${DWARF_BASE[@]}"} \
         --elf="$OUT_DIR/base.aot" \
         "$BASE_DILL"
     BASE_APP="$OUT_DIR/base.aot"
@@ -98,6 +115,7 @@ fi
 echo "[2/5] gen_snapshot -> patch ELF（.vmcode 内嵌必须是 ELF）"
 "$GEN_SNAPSHOT" --deterministic \
     --snapshot_kind=app-aot-elf \
+    ${DWARF_PATCH[@]+"${DWARF_PATCH[@]}"} \
     --elf="$OUT_DIR/patch.aot" \
     "$OUT_DIR/patch.dill"
 
