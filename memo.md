@@ -23784,3 +23784,23 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 - **差异的来源已定位**：参考的 aot_tools link 会读 kernel，再做一轮 DD 重新优化（preDdOptimized → ddOnly → optimized），我方流水线没有这一步。comment_eof 在参考侧，`out.aot` 和全部 link 表都与 nochange 逐字节相同，只在 `ddOnly`/`optimized`/`vmcode` 上分叉。这和 G3 链接率差异是同一个缺口，都在链接器层（aot_tools 闭源，`tools/linker.py` 是我们的替代）。
 - **订正 G3 的读法**：参考的链接率在源码零改动时也是 23.27%，所以它不反映改了多少代码。G3 里「我们 100% 对参考 15–32%」不能读成「我们比参考多链接了 77%」，两边量的不是同一种东西。
 - 限定：只测了 Wonderous 一个 app。
+
+### 2026-10-20 晚：用 `--split-debug-info` 修「格式变化产生补丁」（Wonderous，宿主侧，未上真机）
+
+操作者：「格式排版变化不产生补丁」。方案按 shorebird_cli 原样复现，不违反规则 1：参考侧用 `flutter build ipa --split-debug-info`，并在 aot_tools link 后面加 `-- --dwarf-stack-traces --resolve-dwarf-paths --save-debugging-info`（`ApplePatcherMixin.splitDebugInfoArgs`）；我方侧 base 和 patch 都用同样的 DWARF 参数重编。脚本 `run.py` 设 `FMT_SPLIT_DEBUG=1`，结果在 `wonderous_split/{summary.json,table.txt}`。
+
+各变体的补丁增量（字节，相对同一侧的 nochange；默认 → split）：
+
+| 变体 | 参考 默认 → split | 我方 默认 → split |
+|---|---|---|
+| trailing_space、crlf | +82 → +306 | +27 → **+6** |
+| blank_top_one | −933 → +28 | +13,638 → **−11** |
+| blank_top_all | +3,478 → +992 | +18,508 → **−274** |
+| fmt_w40 | +29,779 → **+103,135** | +39,200 → **+582** |
+| comment_eof | +7,708 → **+102,363** | 0 → 0 |
+| logic（真逻辑改动） | +14,340 → −2,919 | +109,400 → +95,778 |
+
+- **我方链开 split 后，所有格式变体的增量都 ≤ 0.6 KB**，只有真逻辑改动仍是约 96 KB。修法在我方链上有效。快照本身并不完全相同（fmt_w40 的 patch.aot 大 2.7 KB），残余部分未定位，但对补丁的影响 ≤ 582 B。
+- **参考链开 split 后，行号类变体降到 ≤1 KB，但只要 kernel 变了（comment_eof、fmt_w40），补丁反而涨到 +102 KB**。它的 logic 补丁比 nochange 还小，说明参考补丁的大小主要由 aot_tools 读 kernel 后的再优化决定，不由改动内容决定。参考链接率从 23% 变成 56.8%（nochange）/ 56.1%（kernel 有变的变体）。⇒ **Shorebird 自己开 split-debug-info 也不能消除格式化带来的补丁**，我方链在这一点上与参考不同，原因仍是缺的那一轮链接期再优化。
+- 我方 logic 补丁在 split 下链接率 37.34%，默认是 100%，未解释。
+- **未核验**：split 模式构建的 base 和补丁在真机上能否启动、能否生效；崩溃栈要用 `.symbols` 还原。
