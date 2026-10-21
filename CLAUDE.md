@@ -483,6 +483,10 @@ Shorebird 是这个问题域的生产级实现。功能边界、集成形状、�
 **推论**：Shorebird 没有的能力，默认不进产品。例如 A-route（KBC 字节码 via `loadDynamicModule`）Shorebird 不做，
 它只能留作研究能力，不作为交付路径。
 
+**例外（2026-10-20 操作者要求）：只改格式排版不产生补丁。** Shorebird 做不到（它开 split-debug-info 后格式化补丁仍增加约 100 KB）。
+`fhpb release --split-debug-info`：base 用 `--split-debug-info`，补丁 ELF 加 `--strip`；三个真实 app 上格式化补丁与零改动逐字节相同，iOS 26.6 真机通过。
+用法见 `docs/RUNBOOK_ROUTE_B.md`，证据见 `docs/device_evidence/fmt_patch_20261020/`。用 `.symbols` 还原崩溃栈未实测。
+
 ## 规则 2：Shorebird 已开源的部分，直接拿来用，不要重复实现
 
 动手写任何东西之前，先确认 Shorebird 是否已经开源了它。开源了就用它的，不要自己写一遍。

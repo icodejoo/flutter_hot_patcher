@@ -1,6 +1,6 @@
 # 真机验证状态（主任务：复刻 Shorebird 的 dart-sdk）
 
-**最后实测：2026-09-30** · 设备 iPhone 14 / iOS 26.6 / UDID `00008110-000E583836F3601E`（QA-iPhone-YPVYHY2D90）
+**最后实测：2026-10-20** · 设备 iPhone 14 / iOS 26.6 / UDID `00008110-000E583836F3601E`（QA-iPhone-YPVYHY2D90）
 （此前：2026-09-03 · iPhone 13 / iOS 26.5.2 / UDID `00008110-000868212686601E`）
 
 这份文档只记**在一台真手机上实际观测到的东西**，以及每条结论的可复核物证。
@@ -10,6 +10,22 @@
 > 退出码 / app 自己的输出，要么标着「未测」。没有第三种。
 
 ---
+
+## 00. 2026-10-20：只改格式的补丁在三个真实 app 上生效（split-debug-info）
+
+设备同上（QA-iPhone-YPVYHY2D90，iOS 26.6）。只测了我方链：原生壳来自 G3 参考构建，配上我方 Flutter 运行时，补丁经 loopback 送达。
+base 用 `--split-debug-info` 构建，补丁 ELF 加 `--dwarf-stack-traces --resolve-dwarf-paths --strip`。
+
+| app | 只改格式的补丁（与零改动逐字节相同） | 真机 | 逻辑补丁 | 真机 |
+|---|---:|---|---:|---|
+| Wonderous | 7,071 B | `BASE_V1 logic=23`，`last_booted_patch: 1` | 104,102 B | `PATCH_V2 logic=33` |
+| BingoPlus | 18,004 B | 同上 | 229,571 B | 同上 |
+| LocalSend | 51,122 B | 同上 | 255,540 B | 同上 |
+
+物证与复跑脚本：`docs/device_evidence/fmt_patch_20261020/`（`summary.json`、`device_split.py`）。
+**未测**：用 `.symbols` 还原崩溃栈；BingoPlus 的 blank_top_all 变体（参考侧 Xcode 偶发失败）。
+
+G3、G4 的真机证据不在本文件里，分别见 `docs/device_evidence/g3_20261019/`、`docs/device_evidence/g4_rerun_20261019/`、`docs/device_evidence/g2_g4_followup_20261020/`。
 
 ## 0. 2026-09-30：端到端补丁在真机上生效（第二阶段 D0–D4 全部满足）
 

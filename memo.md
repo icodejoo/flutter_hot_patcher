@@ -23836,3 +23836,11 @@ G3 揭出 SDK Mach-O `--dump_blobs` 漏计 Shorebird 附加块，修复提交 `4
 LocalSend（split + strip，我方链）：crlf、blank_top_all、comment_eof、fmt_w40 四种格式变体编出的补丁 ELF 与零改动逐字节相同，补丁都是 51,122 B；逻辑补丁 255,540 B。真机（QA-iPhone-YPVYHY2D90 / iOS 26.6）两项 PASS，`last_booted_patch: 1`，进程存活，卸载 rc 0。参考侧用 `build ios`：`build ipa` 的 archive 步骤里，Rust 插件联网失败。
 **三个 app 汇总**（格式化补丁与零改动逐字节相同 / 逻辑补丁）：Wonderous 7,071 / 104,102 B；BingoPlus 18,004 / 229,571 B；LocalSend 51,122 / 255,540 B。三个 app 真机全部 PASS。证据在 `docs/device_evidence/fmt_patch_20261020/`。
 仍未覆盖：用 `.symbols` 还原崩溃栈；BingoPlus 的 blank_top_all（参考侧 Xcode 偶发失败）。
+
+### 2026-10-21：格式化修复写进用户文档；推送状态
+
+- 文档：`docs/RUNBOOK_ROUTE_B.md` 加了 `fhpb release --split-debug-info` 一节（三个 app 读数、模式以 App 特性串为准、两条新护栏、split 模式多出的 `symbols/`、`base.aot.symbols`、`patches/<n>.symbols`、测试 56 项、崩溃栈还原未验）；`docs/DEVICE_VERIFICATION.md` 加 10-20 一节；`CLAUDE.md` 规则 1 下写明这条操作者要求的例外。
+- 运维手册里公钥 SPKI→PKCS#1 那一行是工作区原有的改动，不是本次做的，没有一起提交（与 `cli.py` 同样处理）。
+- 上面 10-20「接进 fhpb」一节的「未完成：LocalSend（重跑中）」已过期：LocalSend 已补齐，见 10-20 LocalSend 一节。
+- 推送：v1 已推到 `6dca2956`（操作者「推送」）；`96aab9de` 及之后的提交在本地，未推。研究树 `route-a-research`（`fe791c19`，领先远端 875 个提交）按操作者「不推」**不推送**。
+- 仍待操作者手动执行：`git -C ~/dart-3122/sdk branch -D fhp-bundle-base`（钩子拦下的临时分支）。

@@ -78,6 +78,48 @@ tools/fhpb release --app-dir <你的工程> --repo /srv/patches --build
 同名 release 默认拒绝覆盖（覆盖基线会让已下发的补丁全部错位），
 确需重来时加 `--force`。
 
+### 只改格式时不产生补丁：`--split-debug-info`（推荐）
+
+```bash
+tools/fhpb release --app-dir <你的工程> --repo /srv/patches --build --split-debug-info
+```
+
+默认构建会把源码行号编进快照，于是只改格式（`dart format` 重排、加空行、
+换 CRLF、加注释）也会让大批函数变样、补丁变大 —— Wonderous 实测
+`dart format` 一次补丁增加约 39 KB。加 `--split-debug-info` 后，行号移到
+单独的调试符号里，补丁 ELF 再加 `--strip`，**只改格式的补丁与源码零改动时
+逐字节相同**。三个真实 app 实测（iOS 26.6 真机通过）：
+
+| app | 只改格式 = 零改动 | 真实逻辑改动 |
+|---|---:|---:|
+| Wonderous | 7,071 B | 104,102 B |
+| BingoPlus | 18,004 B | 229,571 B |
+| LocalSend | 51,122 B | 255,540 B |
+
+这是 Shorebird 没有的能力（它开 split-debug-info 后格式化补丁仍会增加约
+100 KB），按操作者决定作为规则 1 的例外加入。证据：
+`docs/device_evidence/fmt_patch_20261020/`。
+
+要点：
+- **构建模式以 App 自己为准**：`release` 从 `App` 的快照特性串读出它是不是
+  split 构建（`dwarf_stack_traces_mode`），写进 `release.json` 的
+  `split_debug_info`。之后 `fhpb patch` 自动用同一模式编补丁，无需再传参数。
+- 给了 `--split-debug-info` 但 App 不是 split 构建的 → 拒绝。用 `--build`
+  让 fhpb 构建，或自己用 `flutter build ios --release --split-debug-info=<目录>` 重编。
+- 不加 `--build`、但 App 本身是 split 构建的 → 照 split 模式归档，并提醒你
+  自己保存那次构建的调试符号目录。
+- **已发布的普通 release 不会因此变化**：要从下一个用 split 构建、上架的版本开始才生效。
+- 崩溃栈变成 DWARF 地址，要用归档的调试符号还原（见下面的归档内容）。
+  ⚠️ 用这些符号还原崩溃栈**还没有实测过**。
+
+split 模式下归档里多两项：
+
+```
+releases/<release_version>/
+    symbols/             flutter build 产出的调试符号（--build 时）
+    base.aot.symbols     重新生成 base.aot 时的调试符号
+```
+
 ## 发布补丁
 
 改完源码后：
@@ -102,6 +144,7 @@ tools/fhpb patch --app-dir <你的工程> --repo /srv/patches \
 ```
 releases/<ver>/patches/<n>.bin     zstd 压缩的 bipatch 增量（下发的就是它）
 releases/<ver>/patches/<n>.json    该补丁的元数据
+releases/<ver>/patches/<n>.symbols 补丁的调试符号（仅 split 模式；不随补丁下发）
 releases/<ver>/index.json          服务端据此应答
 ```
 
@@ -131,6 +174,8 @@ tools/fhpb verify --repo /srv/patches --app-dir <你的工程>
 | `app_id` 与 release 不符 | 补丁会被发给错误的应用 | `--force` |
 | 补丁号已存在 | 已装该号的设备不会重下，新旧设备就此分叉 | `--force`（通常应直接发下一号）|
 | 已有补丁时 `release --force` | 基线重算后旧增量必然失效 | `--discard-patches` |
+| 补丁与 release 的 split 模式不一致 | 两种模式生成的机器码不同，链接表会把补丁函数连到错误的基线地址 | 无 |
+| `release --split-debug-info` 但 App 不是 split 构建 | 归档的基线会和发出去的 App 不同源 | 用 `--build`，或自己加 `--split-debug-info` 重编 |
 
 `--discard-patches` 作废旧补丁后，**新补丁不会从 1 重新编号**。
 `index.json` 记着 `high_water`，编号只增不减 —— 否则装了旧 #1 的设备
@@ -188,7 +233,7 @@ release 1.0.0+1   app_id=1111…   建于 2026-08-18T01:47:21+00:00
 
 ```bash
 bash tools/tests/test_broute_server.sh      # 协议一致性，9 项
-bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 换钥 + 协议兼容，50 项
+bash tools/tests/test_fhpb_lifecycle.sh     # 全生命周期 + 护栏 + 换钥 + 协议兼容 + split 模式，56 项
 ```
 
 ## 排障
@@ -251,6 +296,9 @@ tools/fhpb rotate-key --app-dir <你的工程>
 - 打包链路：`release` + `patch` 已在真实 app 上跑通（link% 100%，
   `.vmcode` 4,423,848 B，增量 402,153 B）✅
 - 设备侧补丁应用：USB 注入完整验证过（`BASELINE_V1` → `OTA_PATCHED_V2`）✅
+- split 模式（只改格式不产生补丁）：Wonderous / BingoPlus / LocalSend 三个 app，
+  格式化补丁与逻辑补丁在 iOS 26.6 真机上都生效（`last_booted_patch: 1`）✅
+- split 模式下用调试符号还原崩溃栈：**未验** ❌
 - **设备经网络下载并 inflate 增量：仍未验过**。本地没有 inflate 实现
   （`fhpb verify` 只能验签名与 hash，验不了增量还原），且本机网络环境
   阻断设备→Mac 直连。部署到可达的 HTTPS 端点后需复验一次这条路径。
