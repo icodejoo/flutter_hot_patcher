@@ -9,6 +9,16 @@ Shorebird 的 dart-sdk（`shorebirdtech/dart-sdk`）是私有仓库，没有公�
 
 复刻完成判据 G1–G4 已在 `41693e90584` 上按限定条件满足（2026-10-20）。依据见仓库根目录 `CLAUDE.md` 规则 0、`memo.md` 2026-10-19 至 10-20 各节，以及 `docs/device_evidence/`。限定条件：G1 只覆盖 92 个选项 × 3 组 fixture；G3 只在 iOS 26 的一台设备上验证；C1 对 RC3 有一个窄例外。
 
+## 完整仓库
+
+带完整历史的 git 仓库在 <https://github.com/icodejoo/flutter_sdk>，分支 `shorebird-3.12.2`（2026-10-22 推送）。它的末端就是 `41693e90584`，在 `d684a576a6a` 之上正好多出这 206 个提交，所以直接克隆它，和用下面的补丁还原，得到的是同一棵树：
+
+```bash
+git clone -b shorebird-3.12.2 --single-branch https://github.com/icodejoo/flutter_sdk.git dart-sdk
+```
+
+该仓库的 `main` 分支不是 SDK。
+
 ## 还原
 
 ```bash
