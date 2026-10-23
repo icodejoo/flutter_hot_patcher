@@ -317,3 +317,26 @@ tools/fhpb rotate-key --app-dir <你的工程>
   签名与公钥均为 base64；公钥是 DER SPKI
 - 已下线（`rolled_back`）的补丁不得下发，且 `rolled_back_patch_numbers`
   必须照常带给设备，否则已装该补丁的设备卸不掉
+
+
+## 走控制台 API（可选）
+
+配置了控制台后，`release / patch / list / rollback / verify` 改走 API，补丁号由服务端分配；
+没配置时行为不变（本地补丁仓库 + `fhpb serve`）。`FHPB_MODE=local` 可强制本地模式。
+
+```
+# 第一把 key 在服务器本机签发：python -m app create-key --data-dir <数据目录> --email <邮箱> --name laptop
+fhpb console login --server https://控制台地址 --api-key sb_api_...    # 验证后存到 ~/.fhpb/console.json（0600）
+fhpb console create-key --name ci                                      # 用当前 key 再签一把（明文只显示一次，默认存为当前配置）
+fhpb console import --repo /srv/patches --data-dir <服务端数据目录> --server-dir <服务端代码目录>   # 一次性导入旧仓库并自证
+```
+
+- CI 可用环境变量 `FHPB_SERVER` + `FHPB_API_KEY`，优先于配置文件。
+- App 必须先存在于服务端：旧 App 用 `console import` 导入；新 App 在控制台建好，用它的 app_id 执行 `fhpb init --app-id`。
+- `release` 把 `App.baseline` 与 `app.dill / base.aot / base.blob / release.json / symbols.tar` 作为 release 产物上传；
+  `patch` 按 release 拉这些产物（按 sha256 缓存在 `<repo>/.cache/`），本地出增量、签名、自验后才上传。
+  所以 CI 只要有 API key 和私钥就能出补丁。
+- 补丁号只能由服务端分配，`--patch-number` 会被拒绝；`release --force` 先回滚该 release 全部补丁再删产物重传，
+  编号不回绕。
+- `list / rollback / verify` 需要知道 app_id：`--app-id`，或 `--app-dir`，或本地仓库里 release.json 记的。
+  控制台模式的 `verify` 经设备协议 `check` 取设备此刻会收到的那份补丁复核，只能验通道当前最新的补丁。

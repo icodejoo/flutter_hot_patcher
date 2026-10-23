@@ -10,6 +10,11 @@
     fhpb rollback  下线某个补丁（设备下次 check 时卸载）
     fhpb rotate-key 换签名私钥（旧钥归档；必须重新发版才生效）
     fhpb serve     起分发服务端
+    fhpb console   login / create-key / import：配置控制台 API、导入旧仓库
+
+配置了控制台（fhpb console login，或环境变量 FHPB_SERVER + FHPB_API_KEY）后，
+release / patch / list / rollback / verify 改走控制台 API，补丁号由服务端分配；
+没配置时行为与以前完全一致（本地补丁仓库 + fhpb serve）。FHPB_MODE=local 可强制本地模式。
 
 补丁仓库布局（--repo）：
 
@@ -27,17 +32,24 @@
 import argparse
 import base64
 import datetime
+import getpass
 import hashlib
 import json
 import os
 import pathlib
+import platform
 import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import urllib.parse
 import uuid
 from typing import NoReturn, Optional
+
+import console_client
+from console_client import Console, ConsoleError
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SB_REV = "c15ef6379403a0a55531a058bdb2c8e55bc05c98"
@@ -161,6 +173,196 @@ def dwarf_mode(snapshot: pathlib.Path) -> Optional[bool]:
     if off and not on:
         return False
     return None
+
+
+# ---------------------------------------------------------------- 控制台模式（API）
+
+# release 产物在服务端的登记方式：平台固定 ios，App.baseline 用真实架构，
+# 其余伴随文件用 "fhpb:<名字>" 作 arch（服务端按 平台+arch 去重）。
+SIDECAR_PREFIX = "fhpb:"
+BASELINE_ARCH = "aarch64"
+BASELINE_NAME = "App.baseline"
+# 出补丁必需的伴随文件（base.aot 旧 release 可能没有，可选）
+REQUIRED_SIDECARS = ("release.json", "app.dill", "base.blob")
+OPTIONAL_SIDECARS = ("base.aot", "base.aot.symbols")
+SYMBOLS_TAR = "symbols.tar"
+FLUTTER_REVISION = SB_REV
+
+
+def console_for() -> Optional[Console]:
+    """已配置控制台就返回客户端，否则 None（走本地仓库模式）。"""
+    cfg = console_client.resolve()
+    return Console(*cfg) if cfg else None
+
+
+def con_call(fn, *args, **kw):
+    """调控制台 API，服务端错误转成 fhpb 的退出报错。"""
+    try:
+        return fn(*args, **kw)
+    except ConsoleError as e:
+        die(f"控制台: {e}")
+
+
+def resolve_app_ids(a, repo: pathlib.Path, rv: Optional[str] = None) -> list:
+    """确定要操作的 App：--app-id > --app-dir 的 shorebird.yaml > 本地仓库 release.json 里记的（去重）。"""
+    if getattr(a, "app_id", None):
+        return [a.app_id]
+    if getattr(a, "app_dir", None):
+        yid = read_yaml_field(pathlib.Path(a.app_dir) / "shorebird.yaml", "app_id")
+        if yid:
+            return [yid]
+    ids = []
+    for v in ([rv] if rv else list_releases(repo)):
+        meta = load_json(release_dir(repo, v) / "release.json", {})
+        if meta.get("app_id") and meta["app_id"] not in ids:
+            ids.append(meta["app_id"])
+    return ids
+
+
+def resolve_app_id(a, repo: pathlib.Path, rv: Optional[str] = None) -> str:
+    """同 resolve_app_ids，但要求结果唯一。"""
+    ids = resolve_app_ids(a, repo, rv)
+    if len(ids) != 1:
+        die("拿不到唯一的 app_id：给 --app-id，或 --app-dir（读它的 shorebird.yaml）")
+    return ids[0]
+
+
+def pick_remote_release(con: Console, app_id: str, rv: Optional[str]) -> dict:
+    """按版本号取服务端 release；没给版本且只有一个 release 时取它。"""
+    if rv:
+        rel = con_call(con.find_release, app_id, rv)
+        if rel is None:
+            die(f"服务端没有 release {rv}（app_id={app_id}；先跑 fhpb release）")
+        return rel
+    rels = con_call(con.releases, app_id)
+    if len(rels) != 1:
+        die("有多个 release，必须指定 --release-version" if rels else f"app_id={app_id} 还没有 release")
+    return rels[0]
+
+
+def release_upload_plan(rel: pathlib.Path, tmp: pathlib.Path) -> list:
+    """要上传的 release 产物清单 [(arch, 文件路径)]；symbols 目录先打成 tar。"""
+    plan = [(BASELINE_ARCH, rel / BASELINE_NAME)]
+    for name in (*REQUIRED_SIDECARS, *OPTIONAL_SIDECARS):
+        if (rel / name).exists():
+            plan.append((SIDECAR_PREFIX + name, rel / name))
+    if (rel / "symbols").is_dir():
+        tar = tmp / SYMBOLS_TAR
+        with tarfile.open(tar, "w") as t:
+            t.add(rel / "symbols", arcname="symbols")
+        plan.append((SIDECAR_PREFIX + SYMBOLS_TAR, tar))
+    return plan
+
+
+def live_remote_patches(con: Console, app_id: str, rid: int) -> list:
+    """release 下还没回滚的补丁。"""
+    return [p for p in con_call(con.patches, app_id, rid) if not p["is_rolled_back"]]
+
+
+def publish_release_remote(con: Console, app_id: str, rv: str, rel: pathlib.Path, force: bool) -> None:
+    """把归档好的基线上传到服务端：createRelease → createReleaseArtifact → 上传。
+
+    force 时先回滚该 release 全部补丁，再 deleteReleaseArtifacts 重传。
+    """
+    r = con_call(con.find_release, app_id, rv)
+    if r is None:
+        r = con_call(con.create_release, app_id, rv, FLUTTER_REVISION)
+    elif force:
+        live = live_remote_patches(con, app_id, r["id"])
+        for p in live:
+            con_call(con.rollback, app_id, r["id"], p["id"])
+        con_call(con.delete_release_artifacts, app_id, r["id"])
+        if live:
+            top = max(p["number"] for p in con_call(con.patches, app_id, r["id"]))
+            print(f"[release] 已回滚旧补丁 {[p['number'] for p in live]}（基线已变）；"
+                  f"新补丁将从 #{top + 1} 起编号")
+    with tempfile.TemporaryDirectory(prefix="fhpb_up_") as td:
+        for arch, path in release_upload_plan(rel, pathlib.Path(td)):
+            size = path.stat().st_size
+            art = con_call(con.create_release_artifact, app_id, r["id"], arch=arch, platform="ios",
+                           hash=sha256_hex(path), size=size, filename=path.name)
+            con_call(con.upload, art["url"], path, size)
+            print(f"[release] 已上传 {path.name} ({size:,} B) → 服务端 release {rv}")
+
+
+def fetch_release_files(con: Console, app_id: str, rv: str, repo: pathlib.Path):
+    """按 release 拉服务端产物到本地工作目录，返回 (release, 工作目录, release.json 内容)。
+
+    产物按 sha256 缓存在 <repo>/.cache/，命中且校验通过就不再下载。
+    """
+    r = pick_remote_release(con, app_id, rv)
+    arts = {x["arch"]: x for x in con_call(con.release_artifacts, app_id, r["id"])}
+    work = repo / ".console" / app_id / r["version"]
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    cache = repo / ".cache"
+    for name in (*REQUIRED_SIDECARS, *OPTIONAL_SIDECARS):
+        art = arts.get(SIDECAR_PREFIX + name)
+        if art is None:
+            if name in REQUIRED_SIDECARS:
+                die(f"服务端 release {r['version']} 的产物不全：缺 {name}（重新跑 fhpb release --force）")
+            continue
+        cached = cache / art["hash"]
+        if not cached.exists() or console_client.sha256_file(cached) != art["hash"]:
+            con_call(con.download, art["url"], cached, art["hash"])
+        try:
+            os.link(cached, work / name)
+        except OSError:
+            shutil.copyfile(cached, work / name)
+    return r, work, load_json(work / "release.json", {})
+
+
+def ensure_remote_channel(con: Console, app_id: str, name: str) -> dict:
+    """取渠道，没有就建（本地模式允许任意渠道名，这里保持一致）。"""
+    for ch in con_call(con.channels, app_id):
+        if ch["name"] == name:
+            return ch
+    return con_call(con.create_channel, app_id, name)
+
+
+def public_key_of_private(key_path: pathlib.Path) -> str:
+    """从私钥推出 base64(DER SPKI) 公钥（没有别的信任根可用时的兜底）。"""
+    from cryptography.hazmat.primitives import serialization
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    return base64.b64encode(key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
+
+
+def publish_vmcode_remote(con: Console, app_id: str, release: dict, vmcode: pathlib.Path,
+                          base_blob: pathlib.Path, *, channel: str, private_key: Optional[pathlib.Path],
+                          pub_b64: Optional[str], note: Optional[str], patch_tool: pathlib.Path,
+                          metadata: dict, out_dir: pathlib.Path, platform: str = "ios",
+                          arch: str = BASELINE_ARCH, number: Optional[int] = None) -> dict:
+    """把 .vmcode 变成增量并发布到服务端，返回条目（含服务端分配的 number）。
+
+    顺序：本地出增量 + 签名 → 本地自验 → createPatch → createPatchArtifact → 上传 → promote。
+    自验不过就在碰服务端之前退出。补丁号只能由服务端分配，传 number 直接报错。
+    """
+    if number is not None:
+        die("补丁号由服务端分配，不接受 --patch-number")
+    delta = out_dir / "delta.bin"
+    run([patch_tool, base_blob, vmcode, delta])
+    # hash 是解压后文件（.vmcode）的 sha256，不是增量的
+    h = sha256_hex(vmcode)
+    entry = {"hash": h, "size_compressed": delta.stat().st_size,
+             "size_uncompressed": vmcode.stat().st_size, "channel": channel}
+    if private_key:
+        entry["hash_signature"] = sign_hash(h, private_key)
+        # 与设备同规则自验（验签 + hash + 大小），不过不上传
+        pub = pub_b64 or public_key_of_private(private_key)
+        if verify_entry(entry, delta, pub, vmcode, f"{release['version']} 待发布") != 0:
+            die("自验未通过，拒绝上传")
+    ch = ensure_remote_channel(con, app_id, channel)
+    p = con_call(con.create_patch, app_id, release["id"], metadata)
+    sig = {"hash_signature": entry["hash_signature"]} if "hash_signature" in entry else {}
+    art = con_call(con.create_patch_artifact, app_id, p["id"], arch=arch, platform=platform, hash=h,
+                   size=entry["size_compressed"], **sig)
+    con_call(con.upload, art["url"], delta, entry["size_compressed"])
+    con_call(con.promote, app_id, p["id"], ch["id"])
+    if note:
+        con_call(con.set_notes, app_id, release["id"], p["id"], note)
+    entry["number"] = p["number"]
+    return entry
 
 
 # ---------------------------------------------------------------- init
@@ -358,6 +560,27 @@ def cmd_release(a) -> int:
     if (rel / "release.json").exists() and not a.force:
         die(f"release {rv} 已存在。改版本号，或加 --force 覆盖。")
 
+    # 控制台模式：先问清服务端状态，免得白白构建；破坏性动作（回滚、删产物）留到本地归档成功之后
+    con = console_for()
+    app_id = a.app_id or read_yaml_field(app_dir / "shorebird.yaml", "app_id")
+    remote_rel = None
+    if con:
+        if not app_id:
+            die("控制台模式需要 app_id：给 --app-id，或先 fhpb init 生成 shorebird.yaml")
+        try:
+            con.get_app(app_id)
+        except ConsoleError as e:
+            die(f"控制台: {e}\n  App 必须先存在于服务端：fhpb console import 导入旧仓库，"
+                "或在控制台建 App 后用它的 app_id 重新 fhpb init --app-id。")
+        remote_rel = con_call(con.find_release, app_id, rv)
+        if remote_rel and not a.force and con_call(con.release_artifacts, app_id, remote_rel["id"]):
+            die(f"服务端已有 release {rv}。改版本号，或加 --force 覆盖（上次上传中断也用 --force 重传）。")
+        live = live_remote_patches(con, app_id, remote_rel["id"]) if remote_rel and a.force else []
+        if live and not a.discard_patches:
+            die(f"release {rv} 下已有补丁 {[p['number'] for p in live]}，"
+                "而 --force 会重算基线，这些补丁的增量将全部失效。\n"
+                "确认要作废它们请加 --discard-patches；否则请改用新的版本号。")
+
     app_bin = need(app_dir / "build/ios/iphoneos/Runner.app/Frameworks/App.framework/App",
                    "App 二进制")
     gen_snapshot = need(pathlib.Path(a.gen_snapshot or DEFAULT_GEN_SNAPSHOT), "gen_snapshot")
@@ -378,7 +601,8 @@ def cmd_release(a) -> int:
     # --force 会重算基线（App.baseline / app.dill / base.aot / base.blob），
     # 而已发布的增量是对着**旧** base.blob 算的 —— 留着它们，设备下载后
     # inflate 出来的字节对不上 hash，补丁永远装不上，且现场毫无提示。
-    old_idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
+    old_idx = {"patches": [], "rolled_back": []} if con else \
+        load_json(rel / "index.json", {"patches": [], "rolled_back": []})
     if old_idx["patches"]:
         if not a.discard_patches:
             die(f"release {rv} 下已有补丁 {[p['number'] for p in old_idx['patches']]}，"
@@ -438,13 +662,6 @@ def cmd_release(a) -> int:
     print("[release] analyze_snapshot --dump_blobs → base.blob …")
     run([analyze, "--dump_blobs", f"--out={base_blob}", rel / "App.baseline"])
 
-    app_id = None
-    ycfg = app_dir / "shorebird.yaml"
-    if ycfg.exists():
-        for line in ycfg.read_text().splitlines():
-            if line.startswith("app_id:"):
-                app_id = line.split(":", 1)[1].strip()
-
     write_json(rel / "release.json", {
         "app_id": app_id,
         "release_version": rv,
@@ -458,8 +675,11 @@ def cmd_release(a) -> int:
         "split_debug_info": split,
     })
     idx = rel / "index.json"
-    if not idx.exists():
+    if not con and not idx.exists():
         write_json(idx, {"patches": [], "rolled_back": []})
+
+    if con:
+        publish_release_remote(con, app_id, rv, rel, a.force)
 
     print(f"\n[release] {rv} 已归档到 {rel}\n"
           f"          App.baseline {app_bin.stat().st_size:,} B\n"
@@ -551,15 +771,29 @@ def cmd_patch(a) -> int:
     app_dir = pathlib.Path(a.app_dir).resolve()
     repo = pathlib.Path(a.repo).resolve()
     rv = a.release_version or detect_release_version(app_dir)
-    rel = release_dir(repo, rv)
-    meta = load_json(need(rel / "release.json", f"release {rv}（先跑 fhpb release）"))
+    yaml_app_id = read_yaml_field(app_dir / "shorebird.yaml", "app_id")
 
-    # 补丁必须发给它自己那个 app。装错 app 的补丁 = 往设备推一份完全不同的
-    # 快照，后果比装不上严重得多，所以这里硬拦。
-    app_id = read_yaml_field(app_dir / "shorebird.yaml", "app_id")
-    if meta.get("app_id") and app_id and app_id != meta["app_id"] and not a.force:
-        die(f"app_id 不匹配：工程是 {app_id}，release {rv} 是 {meta['app_id']}。\n"
-            "补丁会被发给错误的应用。确认无误请加 --force。")
+    # 控制台模式：release 产物从服务端拉（按 sha256 缓存），工作目录替代本地仓库里的 release 目录
+    con = console_for()
+    remote_rel = None
+    if con:
+        app_id = a.app_id or yaml_app_id
+        if not app_id:
+            die("控制台模式需要 app_id：给 --app-id，或先 fhpb init 生成 shorebird.yaml")
+        if a.app_id and yaml_app_id and a.app_id != yaml_app_id and not a.force:
+            die(f"app_id 不匹配：工程是 {yaml_app_id}，--app-id 给的是 {a.app_id}。\n"
+                "补丁会被发给错误的应用。确认无误请加 --force。")
+        remote_rel, rel, meta = fetch_release_files(con, app_id, rv, repo)
+        rv = remote_rel["version"]
+    else:
+        rel = release_dir(repo, rv)
+        meta = load_json(need(rel / "release.json", f"release {rv}（先跑 fhpb release）"))
+
+        # 补丁必须发给它自己那个 app。装错 app 的补丁 = 往设备推一份完全不同的
+        # 快照，后果比装不上严重得多，所以这里硬拦。
+        if meta.get("app_id") and yaml_app_id and yaml_app_id != meta["app_id"] and not a.force:
+            die(f"app_id 不匹配：工程是 {yaml_app_id}，release {rv} 是 {meta['app_id']}。\n"
+                "补丁会被发给错误的应用。确认无误请加 --force。")
 
     key = pathlib.Path(a.private_key).resolve() if a.private_key else None
     if key:
@@ -568,13 +802,13 @@ def cmd_patch(a) -> int:
         die("必须给 --private-key；确实要发未签名补丁请显式加 --unsigned")
 
     base_url = a.base_url
-    if not base_url:
+    if not base_url and not con:
         ycfg = app_dir / "shorebird.yaml"
         if ycfg.exists():
             for line in ycfg.read_text().splitlines():
                 if line.startswith("base_url:"):
                     base_url = line.split(":", 1)[1].strip()
-    if not base_url:
+    if not base_url and not con:
         die("拿不到 base_url：给 --base-url，或在 shorebird.yaml 里配好")
 
     # channel 来自 app 自己的 shorebird.yaml，是**构建期**属性
@@ -633,20 +867,31 @@ def cmd_patch(a) -> int:
     if patch_aot.exists() and dwarf_mode(patch_aot) != split:
         die(f"补丁 patch.aot 的模式（dwarf={dwarf_mode(patch_aot)}）与 release {rv}"
             f"（split_debug_info={split}）不一致，拒绝发布")
-    idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
-    number = a.patch_number or next_patch_number(idx)
+    patch_tool = need(pathlib.Path(a.patch_tool or DEFAULT_PATCH_TOOL), "patch 工具")
 
-    entry = publish_vmcode(repo, rv, vmcode, number=number, base_url=base_url,
-                           channel=a.channel, private_key=key, note=a.note,
-                           patch_tool=need(pathlib.Path(a.patch_tool or DEFAULT_PATCH_TOOL),
-                                           "patch 工具"),
-                           allow_overwrite=a.force)
-
-    if split and (out_dir / "patch.symbols").exists():
-        shutil.copy2(out_dir / "patch.symbols", rel / "patches" / f"{number}.symbols")
+    if con:
+        # 补丁号由服务端分配；元数据照 spec 的口子放进 metadata
+        entry = publish_vmcode_remote(
+            con, app_id, remote_rel, vmcode, rel / "base.blob", channel=a.channel, private_key=key,
+            pub_b64=read_yaml_field(app_dir / "shorebird.yaml", "patch_public_key"), note=a.note,
+            patch_tool=patch_tool, out_dir=out_dir, number=a.patch_number,
+            platform=meta.get("platform", "ios"), arch=meta.get("arch", BASELINE_ARCH),
+            metadata={"link%": link_pct, "split_debug_info": split, "release_version": rv,
+                      "size_uncompressed": vmcode.stat().st_size, "build_host": platform.node()})
+        number = entry["number"]
+        where = f"服务端 {con.server}（补丁号由服务端分配）"
+    else:
+        idx = load_json(rel / "index.json", {"patches": [], "rolled_back": []})
+        number = a.patch_number or next_patch_number(idx)
+        entry = publish_vmcode(repo, rv, vmcode, number=number, base_url=base_url,
+                               channel=a.channel, private_key=key, note=a.note,
+                               patch_tool=patch_tool, allow_overwrite=a.force)
+        if split and (out_dir / "patch.symbols").exists():
+            shutil.copy2(out_dir / "patch.symbols", rel / "patches" / f"{number}.symbols")
+        where = str(rel / "patches" / f"{number}.bin")
 
     ratio = 100 * entry["size_compressed"] / entry["size_uncompressed"]
-    print(f"\n[patch] #{entry['number']} → {rel/'patches'/f'{number}.bin'}\n"
+    print(f"\n[patch] #{entry['number']} → {where}\n"
           f"        release  {rv}   channel {entry['channel']}\n"
           f"        link%    {link_pct}\n"
           f"        增量     {entry['size_compressed']:,} B / "
@@ -659,8 +904,56 @@ def cmd_patch(a) -> int:
 # ---------------------------------------------------------------- list
 
 
+def print_release_patches(patches: list) -> None:
+    """按统一格式打印一个 release 的补丁表。patches 元素需含 number/channel/rolled/size/created_at/note。"""
+    live = [p for p in patches if not p["rolled"]]
+    latest = live[-1]["number"] if live else None
+    print(f"  {'补丁':<5}{'通道':<9}{'状态':<8}{'增量':>12}  创建时间")
+    for p in patches:
+        state = "已下线" if p["rolled"] else ("当前" if p["number"] == latest else "历史")
+        print(f"  #{p['number']:<4}{p['channel']:<9}{state:<8}"
+              f"{p['size']:>11,}B  {p['created_at']}" + (f"  {p['note']}" if p.get("note") else ""))
+
+
+def remote_patch_rows(patches: list) -> list:
+    """把服务端 ReleasePatch 列表转成 print_release_patches 要的行。"""
+    rows = []
+    for p in patches:
+        art = p["artifacts"][0] if p["artifacts"] else {}
+        rows.append({"number": p["number"], "channel": p.get("channel") or "(未晋升)",
+                     "rolled": p["is_rolled_back"], "size": art.get("size", 0),
+                     "created_at": art.get("created_at", "-"), "note": p.get("notes")})
+    return rows
+
+
+def cmd_list_remote(a, con: Console, repo: pathlib.Path) -> int:
+    """控制台模式的 list：getReleases / getReleasePatches。"""
+    app_ids = resolve_app_ids(a, repo, a.release_version)
+    if not app_ids:
+        die("拿不到 app_id：给 --app-id，或 --app-dir（读它的 shorebird.yaml）")
+    shown = 0
+    for app_id in app_ids:
+        rels = con_call(con.releases, app_id)
+        if a.release_version:
+            rels = [r for r in rels if r["version"] == a.release_version]
+        for r in sorted(rels, key=lambda r: r["version"]):
+            shown += 1
+            print(f"\nrelease {r['version']}   app_id={app_id}   建于 {r['created_at']}")
+            rows = remote_patch_rows(con_call(con.patches, app_id, r["id"]))
+            if not rows:
+                print("  （无补丁）")
+                continue
+            print_release_patches(rows)
+    if not shown:
+        print(f"（服务端 app_id={'、'.join(app_ids)} 还没有 release）")
+    return 0
+
+
 def cmd_list(a) -> int:
     repo = pathlib.Path(a.repo).resolve()
+    con = console_for()
+    if con:
+        return cmd_list_remote(a, con, repo)
     versions = [a.release_version] if a.release_version else list_releases(repo)
     if not versions:
         print(f"（{repo} 里还没有 release）")
@@ -678,22 +971,68 @@ def cmd_list(a) -> int:
         if not idx["patches"]:
             print("  （无补丁）")
             continue
-        live = [p for p in idx["patches"] if p["number"] not in rolled]
-        latest = live[-1]["number"] if live else None
-        print(f"  {'补丁':<5}{'通道':<9}{'状态':<8}{'增量':>12}  创建时间")
-        for p in idx["patches"]:
-            state = "已下线" if p["number"] in rolled else ("当前" if p["number"] == latest else "历史")
-            print(f"  #{p['number']:<4}{p.get('channel','stable'):<9}{state:<8}"
-                  f"{p.get('size_compressed',0):>11,}B  {p.get('created_at','-')}"
-                  + (f"  {p['note']}" if p.get("note") else ""))
+        print_release_patches([
+            {"number": p["number"], "channel": p.get("channel", "stable"),
+             "rolled": p["number"] in rolled, "size": p.get("size_compressed", 0),
+             "created_at": p.get("created_at", "-"), "note": p.get("note")}
+            for p in idx["patches"]])
     return 0
 
 
 # ---------------------------------------------------------------- rollback
 
 
+def print_rollback_tail(verb: str, rolled: list, undo: bool, rows: list) -> None:
+    """回滚/恢复后的说明。rows 是各补丁 {number, channel, rolled}，rolled 为当前全部下线号。"""
+    if undo:
+        print("服务端恢复下发它；未装的设备下次 check 即可取得。")
+        return
+    # 说清楚两段式：先卸载回基线，再在后续 check 里取到仍可用的最新补丁。
+    # 不是「立刻落到上一个补丁」—— 中间会有一次运行在基线上。
+    print(f"服务端立即停止下发它，并把 rolled_back={rolled} 带给设备。")
+    print("已装该补丁的设备：下次 check 卸载它 → 先回到基线运行，"
+          "再由后续 check 取得仍可用的最新补丁。")
+    by_channel = {}
+    for p in rows:
+        if not p["rolled"]:
+            by_channel[p["channel"]] = p["number"]
+    if by_channel:
+        print("各通道当前仍可下发：" +
+              "、".join(f"{c} → #{n}" for c, n in sorted(by_channel.items())))
+    else:
+        print("已无可下发补丁，设备将停留在基线。")
+
+
+def cmd_rollback_remote(a, con: Console, repo: pathlib.Path) -> int:
+    """控制台模式的 rollback：POST rollback / rollforward。"""
+    app_id = resolve_app_id(a, repo, a.release_version)
+    rel = pick_remote_release(con, app_id, a.release_version)
+    rv = rel["version"]
+    patches = con_call(con.patches, app_id, rel["id"])
+    target = next((p for p in patches if p["number"] == a.patch), None)
+    if target is None:
+        die(f"release {rv} 里没有补丁 #{a.patch}（现有：{[p['number'] for p in patches] or '无'}）")
+    if a.undo:
+        if not con_call(con.rollforward, app_id, rel["id"], target["id"]):
+            print(f"补丁 #{a.patch} 本来就没下线，无需操作")
+            return 0
+        verb = "已恢复"
+    else:
+        if not con_call(con.rollback, app_id, rel["id"], target["id"]):
+            print(f"补丁 #{a.patch} 已是下线状态")
+            return 0
+        verb = "已下线"
+    print(f"补丁 #{a.patch} {verb}（release {rv}）")
+    fresh = remote_patch_rows(con_call(con.patches, app_id, rel["id"]))
+    print_rollback_tail(verb, [p["number"] for p in fresh if p["rolled"]], a.undo, fresh)
+    return 0
+
+
 def cmd_rollback(a) -> int:
     repo = pathlib.Path(a.repo).resolve()
+    con = console_for()
+    if con:
+        return cmd_rollback_remote(a, con, repo)
     rv = a.release_version
     if not rv:
         versions = list_releases(repo)
@@ -724,28 +1063,108 @@ def cmd_rollback(a) -> int:
     write_json(idx_path, idx)
 
     print(f"补丁 #{a.patch} {verb}（release {rv}）")
-    if a.undo:
-        print("服务端恢复下发它；未装的设备下次 check 即可取得。")
-        return 0
-
-    # 说清楚两段式：先卸载回基线，再在后续 check 里取到仍可用的最新补丁。
-    # 不是「立刻落到上一个补丁」—— 中间会有一次运行在基线上。
-    print(f"服务端立即停止下发它，并把 rolled_back={idx['rolled_back']} 带给设备。")
-    print("已装该补丁的设备：下次 check 卸载它 → 先回到基线运行，"
-          "再由后续 check 取得仍可用的最新补丁。")
-    by_channel = {}
-    for p in idx["patches"]:
-        if p["number"] not in rolled:
-            by_channel[p.get("channel", "stable")] = p["number"]
-    if by_channel:
-        print("各通道当前仍可下发：" +
-              "、".join(f"{c} → #{n}" for c, n in sorted(by_channel.items())))
-    else:
-        print("已无可下发补丁，设备将停留在基线。")
+    print_rollback_tail(verb, idx["rolled_back"], a.undo,
+                        [{"number": p["number"], "channel": p.get("channel", "stable"),
+                          "rolled": p["number"] in rolled} for p in idx["patches"]])
     return 0
 
 
 # ---------------------------------------------------------------- verify
+
+
+def find_public_key(cli_key: Optional[str], app_dir) -> Optional[str]:
+    """公钥来源：命令行 > app 的 shorebird.yaml（端上信任根就是它）> 仓库自带的 keys 目录。"""
+    if cli_key:
+        return cli_key
+    if app_dir:
+        ycfg = pathlib.Path(app_dir) / "shorebird.yaml"
+        if ycfg.exists():
+            for line in ycfg.read_text().splitlines():
+                if line.startswith("patch_public_key:"):
+                    return line.split(":", 1)[1].strip()
+    keyfile = REPO_ROOT / "tools/broute/keys/patch_public_key.b64"
+    return keyfile.read_text().strip() if keyfile.exists() else None
+
+
+def verify_entry(entry: dict, delta: Optional[pathlib.Path], pub_b64: Optional[str],
+                 vmcode: Optional[pathlib.Path], label: str, delta_size: Optional[int] = None) -> int:
+    """按设备侧规则复核一个补丁条目（增量存在与大小、验签、可选的 .vmcode hash），返回未通过项数。
+
+    entry 需含 hash，可含 hash_signature / size_compressed。delta 为 None 时用 delta_size 比大小。
+    """
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.exceptions import InvalidSignature
+
+    fails = 0
+
+    def check(ok: bool, what: str, detail: str = "") -> None:
+        nonlocal fails
+        print(f"  {'✓' if ok else '✗'} {what}{('  ' + detail) if detail else ''}")
+        if not ok:
+            fails += 1
+
+    print(f"校验 {label}")
+    if delta is not None:
+        check(delta.exists(), "增量文件存在", str(delta))
+        if delta.exists():
+            delta_size = delta.stat().st_size
+    if delta_size is not None:
+        check(delta_size == entry.get("size_compressed"),
+              "增量大小与登记一致", f"{delta_size:,} B")
+
+    sig = entry.get("hash_signature")
+    if not sig:
+        check(False, "补丁已签名", "没有 hash_signature")
+    elif not pub_b64:
+        check(False, "拿到公钥", "给 --public-key 或 --app-dir")
+    else:
+        key = serialization.load_der_public_key(base64.b64decode(pub_b64))
+        try:
+            key.verify(base64.b64decode(sig), entry["hash"].encode(),
+                       padding.PKCS1v15(), hashes.SHA256())
+            check(True, "签名验签通过", "RSA_PKCS1_2048_8192_SHA256 over hex hash")
+        except InvalidSignature:
+            check(False, "签名验签通过", "公钥与签名私钥不配对")
+
+    if vmcode:
+        check(sha256_hex(vmcode) == entry["hash"], "hash 匹配给定的 .vmcode")
+    return fails
+
+
+def cmd_verify_remote(a, con: Console, repo: pathlib.Path) -> int:
+    """控制台模式的 verify：补丁产物的签名不在 API 里，所以走设备协议 check 取设备会收到的那一份来复核。"""
+    app_id = resolve_app_id(a, repo, a.release_version)
+    rel = pick_remote_release(con, app_id, a.release_version)
+    patches = [p for p in con_call(con.patches, app_id, rel["id"]) if p["artifacts"]]
+    number = a.patch or max((p["number"] for p in patches), default=None)
+    if number is None:
+        die(f"release {rel['version']} 下没有补丁")
+    target = next((p for p in patches if p["number"] == number), None)
+    if target is None:
+        die(f"release {rel['version']} 里没有补丁 #{number}")
+    art = target["artifacts"][0]
+    ans = con_call(con.device_check, {
+        "app_id": app_id, "release_version": rel["version"], "platform": art["platform"], "arch": art["arch"],
+        "channel": target.get("channel") or "stable", "client_id": "fhpb-verify"})
+    got = ans.get("patch") if ans.get("patch_available") else None
+    if got is None or got["number"] != number:
+        die(f"补丁 #{number} 不是通道 {target.get('channel') or '(未晋升)'} 当前下发的那个"
+            "（已下线、被更新的补丁取代或未晋升），无法经设备路径复核")
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="fhpb_verify_"))
+    try:
+        dest = tmp / f"{number}.bin"
+        con_call(con.download, got["download_url"], dest)
+        entry = {"hash": got["hash"], "hash_signature": got.get("hash_signature"),
+                 "size_compressed": art["size"]}
+        vm = pathlib.Path(a.vmcode) if a.vmcode else None
+        fails = verify_entry(entry, dest, find_public_key(a.public_key, a.app_dir), vm,
+                             f"release {rel['version']} 补丁 #{number}（服务端 {con.server}）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"\n{'全部通过' if fails == 0 else str(fails) + ' 项未通过'}")
+    print("注意：增量 inflate 还原只能在设备上验，本地无 inflate 实现。")
+    return 0 if fails == 0 else 1
 
 
 def cmd_verify(a) -> int:
@@ -755,11 +1174,10 @@ def cmd_verify(a) -> int:
     第三件（inflate 增量还原出 .vmcode）需要 Shorebird 的 inflate 实现，
     本地没有对应工具，只能在设备上验 —— 见 docs/RUNBOOK_ROUTE_B.md 的验证边界。
     """
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
-    from cryptography.exceptions import InvalidSignature
-
     repo = pathlib.Path(a.repo).resolve()
+    con = console_for()
+    if con:
+        return cmd_verify_remote(a, con, repo)
     rv = a.release_version
     if not rv:
         versions = list_releases(repo)
@@ -775,57 +1193,74 @@ def cmd_verify(a) -> int:
     if entry is None:
         die(f"release {rv} 里没有补丁 #{number}")
 
-    fails = 0
-
-    def check(ok: bool, label: str, detail: str = "") -> None:
-        nonlocal fails
-        print(f"  {'✓' if ok else '✗'} {label}{('  ' + detail) if detail else ''}")
-        if not ok:
-            fails += 1
-
-    print(f"校验 release {rv} 补丁 #{number}")
-
-    delta = rel / "patches" / f"{number}.bin"
-    check(delta.exists(), "增量文件存在", str(delta))
-    if delta.exists():
-        check(delta.stat().st_size == entry.get("size_compressed"),
-              "增量大小与 index.json 一致",
-              f"{delta.stat().st_size:,} B")
-
-    # 公钥：优先命令行，其次 app 的 shorebird.yaml —— 端上信任根就是它。
-    pub_b64 = a.public_key
-    if not pub_b64 and a.app_dir:
-        ycfg = pathlib.Path(a.app_dir) / "shorebird.yaml"
-        if ycfg.exists():
-            for line in ycfg.read_text().splitlines():
-                if line.startswith("patch_public_key:"):
-                    pub_b64 = line.split(":", 1)[1].strip()
-    if not pub_b64:
-        keyfile = REPO_ROOT / "tools/broute/keys/patch_public_key.b64"
-        if keyfile.exists():
-            pub_b64 = keyfile.read_text().strip()
-
-    sig = entry.get("hash_signature")
-    if not sig:
-        check(False, "补丁已签名", "index.json 里没有 hash_signature")
-    elif not pub_b64:
-        check(False, "拿到公钥", "给 --public-key 或 --app-dir")
-    else:
-        key = serialization.load_der_public_key(base64.b64decode(pub_b64))
-        try:
-            key.verify(base64.b64decode(sig), entry["hash"].encode(),
-                       padding.PKCS1v15(), hashes.SHA256())
-            check(True, "签名验签通过", "RSA_PKCS1_2048_8192_SHA256 over hex hash")
-        except InvalidSignature:
-            check(False, "签名验签通过", "公钥与签名私钥不配对")
-
-    if a.vmcode:
-        vm = need(pathlib.Path(a.vmcode), ".vmcode")
-        check(sha256_hex(vm) == entry["hash"], "hash 匹配给定的 .vmcode")
-
+    vm = need(pathlib.Path(a.vmcode), ".vmcode") if a.vmcode else None
+    fails = verify_entry(entry, rel / "patches" / f"{number}.bin", find_public_key(a.public_key, a.app_dir),
+                         vm, f"release {rv} 补丁 #{number}")
     print(f"\n{'全部通过' if fails == 0 else str(fails) + ' 项未通过'}")
     print("注意：增量 inflate 还原只能在设备上验，本地无 inflate 实现。")
     return 0 if fails == 0 else 1
+
+
+# ---------------------------------------------------------------- console
+
+
+def warn_plain_http(server: str) -> None:
+    """明文 http 且不是本机回环时提醒：API key 会明文过网。"""
+    u = urllib.parse.urlsplit(server)
+    if u.scheme == "http" and u.hostname not in ("127.0.0.1", "localhost", "::1"):
+        print("[warn] 服务地址是明文 http，API key 会在网络上明文传输；公网请用 https。", file=sys.stderr)
+
+
+def cmd_console_login(a) -> int:
+    """保存 server 地址与 API key（先调一次 API 验证能用，再落盘 0600）。"""
+    server = a.server.rstrip("/")
+    if not server.startswith(("http://", "https://")):
+        die("--server 须以 http:// 或 https:// 开头")
+    key = a.api_key or os.environ.get(console_client.KEY_ENV) or getpass.getpass("API key: ").strip()
+    if not key.startswith(console_client.KEY_PREFIX):
+        die(f"API key 应以 {console_client.KEY_PREFIX} 开头")
+    keys = con_call(Console(server, key).whoami_keys)
+    warn_plain_http(server)
+    path = console_client.save_config(server, key)
+    print(f"[console] key 可用（该账号现有 {len(keys)} 把 key），已保存到 {path}（权限 0600）")
+    return 0
+
+
+def cmd_console_create_key(a) -> int:
+    """用当前凭据在服务端签发一把新 API key，明文只显示这一次，默认存为当前配置。
+
+    第一把 key 要在服务器本机用 `python -m app create-key` 签发（没有任何 key 时没有鉴权可用）。
+    """
+    cfg = console_client.resolve()
+    server = (a.server or (cfg[0] if cfg else None))
+    key = a.api_key or (cfg[1] if cfg else None)
+    if not (server and key):
+        die("没有可用凭据：先 fhpb console login，或给 --server 与 --api-key。"
+            "第一把 key 请在服务器本机 python -m app create-key 签发。")
+    days = None if a.never_expires else a.expires_in_days
+    res = con_call(Console(server, key).create_key, a.name, days)
+    print(f"key id={res['id']} name={res['name']}，明文只显示这一次：\n{res['api_key']}")
+    if not a.no_save:
+        path = console_client.save_config(server, res["api_key"])
+        print(f"[console] 已存为当前配置 {path}（旧 key 仍有效，不用时请在控制台吊销）")
+    return 0
+
+
+def cmd_console_import(a) -> int:
+    """导入旧补丁仓库：直接调服务端的 `python -m app.importer`（导入后自证新旧答复逐字节相同）。
+
+    不包成 API：导入要保留旧补丁号、回滚次序、高水位占位和原下载地址，
+    这些公开 API 都表达不了；走同一份导入代码，自证逻辑也不会有第二份。
+    """
+    server_dir = a.server_dir or os.environ.get("FHPB_SERVER_DIR")
+    if not server_dir:
+        die("须给 --server-dir（服务端代码目录，含 app/ 包）或设环境变量 FHPB_SERVER_DIR")
+    server_dir = need(pathlib.Path(server_dir).resolve(), "服务端代码目录")
+    cmd = [a.python or sys.executable, "-m", "app.importer",
+           "--repo", str(pathlib.Path(a.repo).resolve()), "--data-dir", str(pathlib.Path(a.data_dir).resolve())]
+    if a.app_id:
+        cmd += ["--app-id", a.app_id]
+    return subprocess.call(cmd, cwd=server_dir)
 
 
 # ---------------------------------------------------------------- serve
@@ -875,6 +1310,7 @@ def main() -> int:
     p.add_argument("--force", action="store_true", help="覆盖同名 release")
     p.add_argument("--discard-patches", action="store_true",
                    help="配合 --force：作废该 release 下已发布的补丁（基线变了它们必然失效）")
+    p.add_argument("--app-id", default=None, help="控制台模式：指定 App，默认读 --app-dir 的 shorebird.yaml 或本地仓库记录")
     p.set_defaults(func=cmd_release)
 
     p = sub.add_parser("patch", help="生成、签名并发布一个补丁")
@@ -882,7 +1318,8 @@ def main() -> int:
     p.add_argument("--repo", required=True)
     p.add_argument("--source-dir", default=None, help="含改动后 lib/ 的目录，默认同 --app-dir")
     p.add_argument("--release-version", default=None)
-    p.add_argument("--patch-number", type=int, default=None, help="默认自增")
+    p.add_argument("--patch-number", type=int, default=None, help="默认自增（控制台模式由服务端分配，不接受）")
+    p.add_argument("--app-id", default=None, help="控制台模式：指定 App，默认读 --app-dir 的 shorebird.yaml 或本地仓库记录")
     p.add_argument("--channel", default="stable")
     p.add_argument("--private-key", default=None)
     p.add_argument("--unsigned", action="store_true", help="显式发未签名补丁")
@@ -899,6 +1336,8 @@ def main() -> int:
     p = sub.add_parser("list", help="查看 release 与补丁状态")
     p.add_argument("--repo", required=True)
     p.add_argument("--release-version", default=None)
+    p.add_argument("--app-dir", default=None, help="控制台模式：从它的 shorebird.yaml 取 app_id")
+    p.add_argument("--app-id", default=None, help="控制台模式：指定 App，默认读 --app-dir 的 shorebird.yaml 或本地仓库记录")
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("rollback", help="下线某个补丁")
@@ -906,6 +1345,8 @@ def main() -> int:
     p.add_argument("--patch", type=int, required=True)
     p.add_argument("--release-version", default=None)
     p.add_argument("--undo", action="store_true", help="撤销下线")
+    p.add_argument("--app-dir", default=None, help="控制台模式：从它的 shorebird.yaml 取 app_id")
+    p.add_argument("--app-id", default=None, help="控制台模式：指定 App，默认读 --app-dir 的 shorebird.yaml 或本地仓库记录")
     p.set_defaults(func=cmd_rollback)
 
     p = sub.add_parser("verify", help="按设备侧规则复核已发布的补丁")
@@ -915,6 +1356,7 @@ def main() -> int:
     p.add_argument("--app-dir", default=None, help="从它的 shorebird.yaml 取公钥")
     p.add_argument("--public-key", default=None, help="base64 DER SPKI")
     p.add_argument("--vmcode", default=None, help="比对 hash 用")
+    p.add_argument("--app-id", default=None, help="控制台模式：指定 App，默认读 --app-dir 的 shorebird.yaml 或本地仓库记录")
     p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("serve", help="起分发服务端")
@@ -923,6 +1365,28 @@ def main() -> int:
     p.add_argument("--bind", default="0.0.0.0")
     p.add_argument("--app-id", default=None)
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("console", help="控制台：login / create-key / import")
+    csub = p.add_subparsers(dest="console_cmd", required=True)
+    c = csub.add_parser("login", help="保存 server 地址与 API key")
+    c.add_argument("--server", required=True, help="控制台地址，如 https://hot.example.com")
+    c.add_argument("--api-key", default=None, help="sb_api_ 开头；省略则读 FHPB_API_KEY 或交互输入")
+    c.set_defaults(func=cmd_console_login)
+    c = csub.add_parser("create-key", help="用当前凭据签发新 API key（明文只显示一次）")
+    c.add_argument("--name", required=True)
+    c.add_argument("--expires-in-days", type=int, default=365)
+    c.add_argument("--never-expires", action="store_true")
+    c.add_argument("--no-save", action="store_true", help="只打印，不存为当前配置")
+    c.add_argument("--server", default=None)
+    c.add_argument("--api-key", default=None)
+    c.set_defaults(func=cmd_console_create_key)
+    c = csub.add_parser("import", help="导入旧补丁仓库到服务端（调服务端 app.importer）")
+    c.add_argument("--repo", required=True)
+    c.add_argument("--data-dir", required=True, help="服务端数据目录")
+    c.add_argument("--server-dir", default=None, help="服务端代码目录，默认读 FHPB_SERVER_DIR")
+    c.add_argument("--python", default=None, help="跑服务端代码的 Python，默认当前解释器")
+    c.add_argument("--app-id", default=None)
+    c.set_defaults(func=cmd_console_import)
 
     a = ap.parse_args()
     return a.func(a)
