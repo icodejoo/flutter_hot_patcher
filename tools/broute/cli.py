@@ -33,7 +33,6 @@ import argparse
 import base64
 import datetime
 import getpass
-import hashlib
 import json
 import os
 import pathlib
@@ -66,14 +65,6 @@ DEFAULT_PATCH_TOOL = SB_ROOT / "artifacts/patch/patch"
 def die(msg: str) -> NoReturn:
     print(f"fhpb: {msg}", file=sys.stderr)
     sys.exit(1)
-
-
-def sha256_hex(p: pathlib.Path) -> str:
-    h = hashlib.sha256()
-    with p.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def now_iso() -> str:
@@ -280,7 +271,7 @@ def publish_release_remote(con: Console, app_id: str, rv: str, rel: pathlib.Path
         for arch, path in release_upload_plan(rel, pathlib.Path(td)):
             size = path.stat().st_size
             art = con_call(con.create_release_artifact, app_id, r["id"], arch=arch, platform="ios",
-                           hash=sha256_hex(path), size=size, filename=path.name)
+                           hash=console_client.sha256_file(path), size=size, filename=path.name)
             con_call(con.upload, art["url"], path, size)
             print(f"[release] 已上传 {path.name} ({size:,} B) → 服务端 release {rv}")
 
@@ -343,7 +334,7 @@ def publish_vmcode_remote(con: Console, app_id: str, release: dict, vmcode: path
     delta = out_dir / "delta.bin"
     run([patch_tool, base_blob, vmcode, delta])
     # hash 是解压后文件（.vmcode）的 sha256，不是增量的
-    h = sha256_hex(vmcode)
+    h = console_client.sha256_file(vmcode)
     entry = {"hash": h, "size_compressed": delta.stat().st_size,
              "size_uncompressed": vmcode.stat().st_size, "channel": channel}
     if private_key:
@@ -668,8 +659,8 @@ def cmd_release(a) -> int:
         "created_at": now_iso(),
         "platform": "ios",
         "arch": "aarch64",
-        "app_baseline_sha256": sha256_hex(rel / "App.baseline"),
-        "app_dill_sha256": sha256_hex(rel / "app.dill"),
+        "app_baseline_sha256": console_client.sha256_file(rel / "App.baseline"),
+        "app_dill_sha256": console_client.sha256_file(rel / "app.dill"),
         "app_dill_kernel_version": kernel_version(rel / "app.dill"),
         "base_blob_bytes": base_blob.stat().st_size,
         "split_debug_info": split,
@@ -733,7 +724,7 @@ def publish_vmcode(repo: pathlib.Path, rv: str, vmcode: pathlib.Path, *,
     run([patch_tool, base_blob, vmcode, delta])
 
     # hash 是**解压后**文件的 sha256，即 .vmcode 本身，不是增量。
-    h = sha256_hex(vmcode)
+    h = console_client.sha256_file(vmcode)
     entry = {
         "number": number,
         "hash": h,
@@ -1128,7 +1119,7 @@ def verify_entry(entry: dict, delta: Optional[pathlib.Path], pub_b64: Optional[s
             check(False, "签名验签通过", "公钥与签名私钥不配对")
 
     if vmcode:
-        check(sha256_hex(vmcode) == entry["hash"], "hash 匹配给定的 .vmcode")
+        check(console_client.sha256_file(vmcode) == entry["hash"], "hash 匹配给定的 .vmcode")
     return fails
 
 

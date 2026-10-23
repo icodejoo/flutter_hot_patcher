@@ -110,29 +110,38 @@ class Console:
         except (ValueError, AttributeError):
             return ConsoleError(status, "http_error", raw[:200].decode("utf-8", "replace"))
 
+    def _roundtrip(self, method: str, path: str, data: Optional[bytes] = None,
+                   headers: Optional[dict] = None) -> tuple:
+        """发一次普通（非流式）请求并读完响应。返回: (状态码, 响应体字节)；连不上抛 ConsoleError(0, "unreachable")。
+
+        参数: path 为服务基址之后的部分（可带查询串）；data 为请求体字节；headers 由调用方给全
+        （鉴权、Accept、Content-Type 各端点不一样，这里不替它们加）。
+        """
+        conn, rel = self._conn(self.server + path)
+        try:
+            conn.request(method, rel, body=data, headers=headers or {})
+            r = conn.getresponse()
+            return r.status, r.read()
+        except OSError as e:
+            raise ConsoleError(0, "unreachable", f"连不上 {self.server}: {e}")
+        finally:
+            conn.close()
+
     def call(self, method: str, path: str, body=None, query: Optional[dict] = None, ok=(200, 201, 204)):
         """调一个 API。返回解码后的 JSON（204/304/空体返回 None）。
 
         参数: ok 为视为成功的状态码集合（rollback 的 304 要放行）；其余状态抛 ConsoleError。
         """
-        url = self.server + path + (("?" + urllib.parse.urlencode(query)) if query else "")
         headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
         data = None
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
-        conn, rel = self._conn(url)
-        try:
-            conn.request(method, rel, body=data, headers=headers)
-            r = conn.getresponse()
-            raw = r.read()
-        except OSError as e:
-            raise ConsoleError(0, "unreachable", f"连不上 {self.server}: {e}")
-        finally:
-            conn.close()
-        if r.status not in ok:
-            raise self._error(r.status, raw)
-        return json.loads(raw) if raw and r.status not in (204, 304) else None
+        status, raw = self._roundtrip(method, path + (("?" + urllib.parse.urlencode(query)) if query else ""),
+                                      data, headers)
+        if status not in ok:
+            raise self._error(status, raw)
+        return json.loads(raw) if raw and status not in (204, 304) else None
 
     def pages(self, path: str, key: str):
         """按 cursor 翻完一个列表端点，返回 key 下的全部元素。"""
@@ -274,35 +283,18 @@ class Console:
 
     def _flip(self, app_id: str, rid: int, pid: int, verb: str) -> bool:
         """rollback / rollforward 的共同实现。"""
-        path = f"/api/v1/apps/{app_id}/releases/{rid}/patches/{pid}/{verb}"
-        url = self.server + path
-        conn, rel = self._conn(url)
-        try:
-            conn.request("POST", rel, headers={"Authorization": f"Bearer {self.api_key}"})
-            r = conn.getresponse()
-            raw = r.read()
-        except OSError as e:
-            raise ConsoleError(0, "unreachable", f"连不上 {self.server}: {e}")
-        finally:
-            conn.close()
-        if r.status == 304:
+        status, raw = self._roundtrip("POST", f"/api/v1/apps/{app_id}/releases/{rid}/patches/{pid}/{verb}",
+                                      headers={"Authorization": f"Bearer {self.api_key}"})
+        if status == 304:
             return False
-        if r.status != 204:
-            raise self._error(r.status, raw)
+        if status != 204:
+            raise self._error(status, raw)
         return True
 
     def device_check(self, req: dict) -> dict:
         """走设备协议 check（无需鉴权），用来复核设备实际会收到什么。"""
-        conn, rel = self._conn(self.server + "/api/v1/patches/check")
-        try:
-            conn.request("POST", rel, body=json.dumps(req).encode(),
-                         headers={"Content-Type": "application/json"})
-            r = conn.getresponse()
-            raw = r.read()
-        except OSError as e:
-            raise ConsoleError(0, "unreachable", f"连不上 {self.server}: {e}")
-        finally:
-            conn.close()
-        if r.status != 200:
-            raise self._error(r.status, raw)
+        status, raw = self._roundtrip("POST", "/api/v1/patches/check", json.dumps(req).encode(),
+                                      {"Content-Type": "application/json"})
+        if status != 200:
+            raise self._error(status, raw)
         return json.loads(raw)
