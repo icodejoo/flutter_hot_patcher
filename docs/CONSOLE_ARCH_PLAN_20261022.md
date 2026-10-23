@@ -169,7 +169,7 @@ device_hours(app_id, client_id, hour_utc, release_version,        -- UNIQUE(app_
 - Caddy 监听两个地址：公网域名只开 §2.1 那四条路径，内网地址全开。
 - **切换**：已装机 App 的 `base_url` 指向哪台主机，新服务就得接管那台主机（同域名、同路径）。`fhpb init` 写的是什么域名，就用什么域名。
 - 备份：每晚 `sqlite3 console.db ".backup"`；`blobs/` 只增不改，rsync 增量即可。
-- 首个管理员：`fhpb console create-admin`，只能在服务器本机执行（spec §3）。
+- 首个管理员：`python -m app create-admin`，只能在服务器本机执行（spec §3）。
 
 ---
 
